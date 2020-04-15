@@ -66,6 +66,8 @@ pub use self::query::{
 pub use self::value::{ExtractField, IntervalValue, Value};
 use std::path::PathBuf;
 
+use crate::keywords::is_reserved_keyword;
+
 struct DisplaySeparated<'a, T>
 where
     T: AstDisplay,
@@ -102,60 +104,71 @@ where
     DisplaySeparated { slice, sep: ", " }
 }
 
-/// An identifier, decomposed into its value or character data and the quote style.
+/// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Ident {
-    /// The value of the identifier without quotes.
-    pub value: String,
-    /// The starting quote if any. Valid quote characters are the single quote,
-    /// double quote, backtick, and opening square bracket.
-    pub quote_style: Option<char>,
-}
+pub struct Ident(String);
 
 impl Ident {
-    /// Create a new identifier with the given value and no quotes.
+    /// Create a new identifier with the given value.
     pub fn new<S>(value: S) -> Self
     where
         S: Into<String>,
     {
-        Ident {
-            value: value.into(),
-            quote_style: None,
-        }
+        Ident(value.into())
     }
 
-    /// Create a new quoted identifier with the given quote and value. This function
-    /// panics if the given quote is not a valid quote character.
-    pub fn with_quote<S>(quote: char, value: S) -> Self
+    /// Creates a new identifier with the normalized form of the given value. This should only be
+    /// used on identifiers read from SQL that were not quoted.
+    pub fn new_normalized<S>(value: S) -> Self
     where
         S: Into<String>,
     {
-        assert!(quote == '\'' || quote == '"' || quote == '`' || quote == '[');
-        Ident {
-            value: value.into(),
-            quote_style: Some(quote),
-        }
+        Ident(value.into().to_lowercase())
+    }
+
+    /// An identifier can be printed in bare mode if
+    ///  * it matches the regex [a-z_][a-z0-9_]* and
+    ///  * it is not a "reserved keyword."
+    pub fn can_be_printed_bare(&self) -> bool {
+        let mut chars = self.0.chars();
+        chars
+            .next()
+            .map(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_'))
+            .unwrap_or(false)
+            && chars.all(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_') || (ch >= '0' && ch <= '9'))
+            && !is_reserved_keyword(&self.0)
+    }
+
+    pub fn as_str<'a>(&'a self) -> &'a str {
+        &self.0
     }
 }
 
 impl From<&str> for Ident {
     fn from(value: &str) -> Self {
-        Ident {
-            value: value.to_string(),
-            quote_style: None,
-        }
+        Ident(value.to_string())
     }
 }
 
+/// More-or-less a direct translation of the Postgres function for doing the same thing:
+///
+///   https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/ruleutils.c#L10730-L10812
+///
+/// Quotation is forced when printing in Stable mode.
 impl AstDisplay for Ident {
     fn fmt(&self, f: &mut AstFormatter) {
-        match self.quote_style {
-            Some(q) if q == '"' || q == '\'' || q == '`' => {
-                f.write_str(format!("{}{}{}", q, self.value, q))
+        if self.can_be_printed_bare() && !f.stable() {
+            f.write_str(&self.0);
+        } else {
+            f.write_str("\"");
+            for ch in self.0.chars() {
+                // Double up on double-quotes.
+                if ch == '"' {
+                    f.write_str("\"");
+                }
+                f.write_str(ch);
             }
-            Some(q) if q == '[' => f.write_str(format!("[{}]", self.value)),
-            None => f.write_str(&self.value),
-            _ => panic!("unexpected quote style"),
+            f.write_str("\"");
         }
     }
 }

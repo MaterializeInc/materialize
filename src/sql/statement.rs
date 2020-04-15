@@ -186,7 +186,7 @@ pub fn describe_statement(
             vec![],
         ),
         Statement::ShowVariable { variable, .. } => {
-            if variable.value == unicase::Ascii::new("ALL") {
+            if variable.as_str() == unicase::Ascii::new("ALL") {
                 (
                     Some(
                         RelationDesc::empty()
@@ -198,7 +198,7 @@ pub fn describe_statement(
                 )
             } else {
                 (
-                    Some(RelationDesc::empty().add_column(variable.value, ScalarType::String)),
+                    Some(RelationDesc::empty().add_column(variable.as_str(), ScalarType::String)),
                     vec![],
                 )
             }
@@ -317,16 +317,16 @@ fn handle_set_variable(
         value: match value {
             SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
             SetVariableValue::Literal(lit) => lit.to_string(),
-            SetVariableValue::Ident(ident) => ident.value,
+            SetVariableValue::Ident(ident) => ident.to_string(),
         },
     })
 }
 
 fn handle_show_variable(_: &StatementContext, variable: Ident) -> Result<Plan, failure::Error> {
-    if variable.value == unicase::Ascii::new("ALL") {
+    if variable.as_str() == unicase::Ascii::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
-        Ok(Plan::ShowVariable(variable.value))
+        Ok(Plan::ShowVariable(variable.to_string()))
     }
 }
 

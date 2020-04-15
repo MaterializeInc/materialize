@@ -177,13 +177,10 @@ fn parse_no_table_name() {
 
 #[test]
 fn parse_delete_statement() {
-    let sql = "DELETE FROM \"table\"";
+    let sql = "DELETE FROM table";
     match verified_stmt(sql) {
         Statement::Delete { table_name, .. } => {
-            assert_eq!(
-                ObjectName(vec![Ident::with_quote('"', "table")]),
-                table_name
-            );
+            assert_eq!(ObjectName(vec![Ident::new("table")]), table_name);
         }
         _ => unreachable!(),
     }
@@ -300,7 +297,7 @@ fn parse_select_wildcard() {
 #[test]
 fn parse_count_wildcard() {
     verified_only_select(
-        "SELECT COUNT(Employee.*) FROM Order JOIN Employee ON Order.employee = Employee.id",
+        "SELECT count(employee.*) FROM \"order\" JOIN employee ON \"order\".employee = employee.id",
     );
 }
 
@@ -328,11 +325,11 @@ fn parse_column_aliases() {
 
 #[test]
 fn parse_concat_function() {
-    let sql = "SELECT CONCAT('CONCAT', ' ', 'function')";
+    let sql = "SELECT concat('CONCAT', ' ', 'function')";
     let _select = verified_only_select(sql);
-    let sql = "SELECT CONCAT(first_name, ' ', last_name) FROM customer";
+    let sql = "SELECT concat(first_name, ' ', last_name) FROM customer";
     let _select = verified_only_select(sql);
-    let sql = "SELECT CONCAT('Concat with ', NULL) AS result_string";
+    let sql = "SELECT concat('Concat with ', NULL) AS result_string";
     let _select = verified_only_select(sql);
     let sql = "SELECT first_name, concat('A', 3, 'chars') FROM customer";
     let _select = verified_only_select(sql);
@@ -365,11 +362,11 @@ Expected an identifier after AS, found: EOF"
 
 #[test]
 fn parse_select_count_wildcard() {
-    let sql = "SELECT COUNT(*) FROM customer";
+    let sql = "SELECT count(*) FROM customer";
     let select = verified_only_select(sql);
     assert_eq!(
         &Expr::Function(Function {
-            name: ObjectName(vec![Ident::new("COUNT")]),
+            name: ObjectName(vec![Ident::new("count")]),
             args: vec![Expr::Wildcard],
             filter: None,
             over: None,
@@ -381,11 +378,11 @@ fn parse_select_count_wildcard() {
 
 #[test]
 fn parse_select_count_filter() {
-    let sql = "SELECT COUNT(*) FILTER (WHERE foo) FROM customer";
+    let sql = "SELECT count(*) FILTER (WHERE foo) FROM customer";
     let select = verified_only_select(sql);
     assert_eq!(
         &Expr::Function(Function {
-            name: ObjectName(vec![Ident::new("COUNT")]),
+            name: ObjectName(vec![Ident::new("count")]),
             args: vec![Expr::Wildcard],
             filter: Some(Box::new(Expr::Identifier(Ident::new("foo")))),
             over: None,
@@ -397,11 +394,11 @@ fn parse_select_count_filter() {
 
 #[test]
 fn parse_select_count_distinct() {
-    let sql = "SELECT COUNT(DISTINCT + x) FROM customer";
+    let sql = "SELECT count(DISTINCT + x) FROM customer";
     let select = verified_only_select(sql);
     assert_eq!(
         &Expr::Function(Function {
-            name: ObjectName(vec![Ident::new("COUNT")]),
+            name: ObjectName(vec![Ident::new("count")]),
             args: vec![Expr::UnaryOp {
                 op: UnaryOperator::Plus,
                 expr: Box::new(Expr::Identifier(Ident::new("x")))
@@ -414,18 +411,18 @@ fn parse_select_count_distinct() {
     );
 
     one_statement_parses_to(
-        "SELECT COUNT(ALL + x) FROM customer",
-        "SELECT COUNT(+ x) FROM customer",
+        "SELECT count(ALL + x) FROM customer",
+        "SELECT count(+ x) FROM customer",
     );
 
-    let sql = "SELECT COUNT(ALL DISTINCT + x) FROM customer";
+    let sql = "SELECT count(ALL DISTINCT + x) FROM customer";
     let res = parse_sql_statements(sql);
     assert_eq!(
         ("\
 Parse error:
-SELECT COUNT(ALL DISTINCT + x) FROM customer
+SELECT count(ALL DISTINCT + x) FROM customer
              ^^^^^^^^^^^^
-Cannot specify both ALL and DISTINCT in function: COUNT"
+Cannot specify both ALL and DISTINCT in function: count"
             .to_string()),
         format!("{}", res.unwrap_err())
     );
@@ -972,12 +969,12 @@ fn parse_select_group_by() {
 
 #[test]
 fn parse_select_having() {
-    let sql = "SELECT foo FROM bar GROUP BY foo HAVING COUNT(*) > 1";
+    let sql = "SELECT foo FROM bar GROUP BY foo HAVING count(*) > 1";
     let select = verified_only_select(sql);
     assert_eq!(
         Some(Expr::BinaryOp {
             left: Box::new(Expr::Function(Function {
-                name: ObjectName(vec![Ident::new("COUNT")]),
+                name: ObjectName(vec![Ident::new("count")]),
                 args: vec![Expr::Wildcard],
                 filter: None,
                 over: None,
@@ -1258,11 +1255,11 @@ fn parse_alter_table_constraints() {
         "CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) \
          REFERENCES public.address(address_id)",
     );
-    check_one("CONSTRAINT ck CHECK (rtrim(ltrim(REF_CODE)) <> '')");
+    check_one("CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> '')");
 
     check_one("PRIMARY KEY (foo, bar)");
     check_one("UNIQUE (id)");
-    check_one("FOREIGN KEY (foo, bar) REFERENCES AnotherTable(foo, bar)");
+    check_one("FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar)");
     check_one("CHECK (end_date > start_date OR end_date IS NULL)");
 
     fn check_one(constraint_text: &str) {
@@ -1354,7 +1351,7 @@ fn parse_window_functions() {
 
 #[test]
 fn parse_aggregate_with_group_by() {
-    let sql = "SELECT a, COUNT(1), MIN(b), MAX(b) FROM foo GROUP BY a";
+    let sql = "SELECT a, count(1), min(b), max(b) FROM foo GROUP BY a";
     let _ast = verified_only_select(sql);
     //TODO: assertions
 }
@@ -1661,9 +1658,9 @@ fn parse_simple_math_expr_minus() {
 
 #[test]
 fn parse_delimited_identifiers() {
-    // check that quoted identifiers in any position remain quoted after serialization
+    // check that identifiers requiring quotation are quoted
     let select = verified_only_select(
-        r#"SELECT "alias"."bar baz", "myfun"(), "simple id" AS "column alias" FROM "a table" AS "alias""#,
+        r#"SELECT alias."bar baz", myfun(), "simple id" AS "column alias" FROM "a table" AS alias"#,
     );
     // check FROM
     match only(select.from).relation {
@@ -1673,8 +1670,8 @@ fn parse_delimited_identifiers() {
             args,
             with_hints,
         } => {
-            assert_eq!(vec![Ident::with_quote('"', "a table")], name.0);
-            assert_eq!(Ident::with_quote('"', "alias"), alias.unwrap().name);
+            assert_eq!(vec![Ident::new("a table")], name.0);
+            assert_eq!(Ident::new("alias"), alias.unwrap().name);
             assert!(args.is_empty());
             assert!(with_hints.is_empty());
         }
@@ -1683,15 +1680,12 @@ fn parse_delimited_identifiers() {
     // check SELECT
     assert_eq!(3, select.projection.len());
     assert_eq!(
-        &Expr::CompoundIdentifier(vec![
-            Ident::with_quote('"', "alias"),
-            Ident::with_quote('"', "bar baz")
-        ]),
+        &Expr::CompoundIdentifier(vec![Ident::new("alias"), Ident::new("bar baz")]),
         expr_from_projection(&select.projection[0]),
     );
     assert_eq!(
         &Expr::Function(Function {
-            name: ObjectName(vec![Ident::with_quote('"', "myfun")]),
+            name: ObjectName(vec![Ident::new("myfun")]),
             args: vec![],
             filter: None,
             over: None,
@@ -1701,14 +1695,14 @@ fn parse_delimited_identifiers() {
     );
     match &select.projection[2] {
         SelectItem::ExprWithAlias { expr, alias } => {
-            assert_eq!(&Expr::Identifier(Ident::with_quote('"', "simple id")), expr);
-            assert_eq!(&Ident::with_quote('"', "column alias"), alias);
+            assert_eq!(&Expr::Identifier(Ident::new("simple id")), expr);
+            assert_eq!(&Ident::new("column alias"), alias);
         }
         _ => panic!("Expected ExprWithAlias"),
     }
 
-    verified_stmt(r#"CREATE TABLE "foo" ("bar" int)"#);
-    verified_stmt(r#"ALTER TABLE foo ADD CONSTRAINT "bar" PRIMARY KEY (baz)"#);
+    verified_stmt(r#"CREATE TABLE foo (bar int)"#);
+    verified_stmt(r#"ALTER TABLE foo ADD CONSTRAINT bar PRIMARY KEY (baz)"#);
     //TODO verified_stmt(r#"UPDATE foo SET "bar" = 5"#);
 }
 
@@ -2086,7 +2080,7 @@ fn parse_simple_case_expr() {
 
 #[test]
 fn parse_from_advanced() {
-    let sql = "SELECT * FROM fn(1, 2) AS foo, schema.bar AS bar WITH (NOLOCK)";
+    let sql = "SELECT * FROM fn(1, 2) AS foo, schema.bar AS bar WITH (nolock)";
     let _select = verified_only_select(sql);
 }
 
@@ -2578,7 +2572,10 @@ fn parse_union() {
     verified_stmt("WITH cte AS (SELECT 1 AS foo) (SELECT foo FROM cte ORDER BY 1 LIMIT 1)");
     verified_stmt("SELECT 1 UNION (SELECT 2 ORDER BY 1 LIMIT 1)");
     verified_stmt("SELECT 1 UNION SELECT 2 INTERSECT SELECT 3"); // Union[1, Intersect[2,3]]
-    verified_stmt("SELECT foo FROM tab UNION SELECT bar FROM TAB");
+    one_statement_parses_to(
+        "SELECT foo FROM tab UNION SELECT bar FROM TAB",
+        "SELECT foo FROM tab UNION SELECT bar FROM tab",
+    );
     verified_stmt("(SELECT * FROM new EXCEPT SELECT * FROM old) UNION ALL (SELECT * FROM old EXCEPT SELECT * FROM new) ORDER BY 1");
 }
 
@@ -4016,7 +4013,7 @@ fn lateral_derived() {
         let lateral_str = if lateral_in { "LATERAL " } else { "" };
         let sql = format!(
             "SELECT * FROM customer LEFT JOIN {}\
-             (SELECT * FROM order WHERE order.customer = customer.id LIMIT 3) AS order ON true",
+             (SELECT * FROM \"order\" WHERE \"order\".customer = customer.id LIMIT 3) AS \"order\" ON true",
             lateral_str
         );
         let select = verified_only_select(&sql);
@@ -4037,7 +4034,7 @@ fn lateral_derived() {
             assert_eq!(Ident::new("order"), alias.name);
             assert_eq!(
                 subquery.to_string(),
-                "SELECT * FROM order WHERE order.customer = customer.id LIMIT 3"
+                "SELECT * FROM \"order\" WHERE \"order\".customer = customer.id LIMIT 3"
             );
         } else {
             unreachable!()
@@ -4253,28 +4250,22 @@ fn parse_explain() {
         "EXPLAIN OPTIMIZED PLAN FOR SELECT 665",
     );
 
-    let ast = verified_stmt("EXPLAIN OPTIMIZED PLAN FOR VIEW FOO");
+    let ast = verified_stmt("EXPLAIN OPTIMIZED PLAN FOR VIEW foo");
     assert_eq!(
         ast,
         Statement::Explain {
             stage: ExplainStage::OptimizedPlan,
-            explainee: Explainee::View(ObjectName(vec![Ident {
-                value: "FOO".to_owned(),
-                quote_style: None
-            }])),
+            explainee: Explainee::View(ObjectName(vec![Ident::new("foo")])),
             options: ExplainOptions { typed: false },
         }
     );
 
-    let ast = verified_stmt("EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW FOO");
+    let ast = verified_stmt("EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo");
     assert_eq!(
         ast,
         Statement::Explain {
             stage: ExplainStage::OptimizedPlan,
-            explainee: Explainee::View(ObjectName(vec![Ident {
-                value: "FOO".to_owned(),
-                quote_style: None
-            }])),
+            explainee: Explainee::View(ObjectName(vec![Ident::new("foo")])),
             options: ExplainOptions { typed: true },
         }
     );
@@ -4416,7 +4407,7 @@ fn parse_create_table_with_defaults() {
                     ColumnDef {
                         name: "last_name".into(),
                         data_type: DataType::Varchar(Some(45)),
-                        collation: Some(ObjectName(vec![Ident::with_quote('"', "es_ES")])),
+                        collation: Some(ObjectName(vec![Ident::new("es_ES")])),
                         options: vec![ColumnOptionDef {
                             name: None,
                             option: ColumnOption::NotNull,
@@ -4642,13 +4633,13 @@ fn parse_set() {
         }
     );
 
-    let stmt = verified_stmt("SET a = DEFAULT");
+    let stmt = verified_stmt("SET a = default");
     assert_eq!(
         stmt,
         Statement::SetVariable {
             local: false,
             variable: "a".into(),
-            value: SetVariableValue::Ident("DEFAULT".into()),
+            value: SetVariableValue::Ident("default".into()),
         }
     );
 
@@ -4718,11 +4709,12 @@ fn parse_show() {
         }
     );
 
-    let stmt = verified_stmt("SHOW ALL");
+    // TODO(justin): parse "SHOW all" as its own thing so that we can format this without downcasing.
+    let stmt = verified_stmt("SHOW all");
     assert_eq!(
         stmt,
         Statement::ShowVariable {
-            variable: "ALL".into()
+            variable: "all".into()
         }
     )
 }
@@ -4841,6 +4833,35 @@ FROM bar+1 ORDER
 Expected end of statement, found: +"
             .to_string(),
     );
+}
+
+#[test]
+fn format_ident() {
+    let cases = vec![
+        ("foo", "foo", "\"foo\""),
+        ("_foo", "_foo", "\"_foo\""),
+        ("foo_bar", "foo_bar", "\"foo_bar\""),
+        ("foo1", "foo1", "\"foo1\""),
+        // Contains disallowed character.
+        ("Foo", "\"Foo\"", "\"Foo\""),
+        ("a b", "\"a b\"", "\"a b\""),
+        ("\"", "\"\"\"\"", "\"\"\"\""),
+        ("foo\"bar", "\"foo\"\"bar\"", "\"foo\"\"bar\""),
+        ("foo$bar", "\"foo$bar\"", "\"foo$bar\""),
+        // Digit at the beginning.
+        ("1foo", "\"1foo\"", "\"1foo\""),
+        // Non-reserved keyword.
+        ("floor", "floor", "\"floor\""),
+        // Reserved keyword.
+        ("order", "\"order\"", "\"order\""),
+        // Empty string allowed by Materialize but not PG.
+        // TODO(justin): disallow this!
+        ("", "\"\"", "\"\""),
+    ];
+    for (name, formatted, forced_quotation) in cases {
+        assert_eq!(formatted, format!("{}", Ident::new(name)));
+        assert_eq!(forced_quotation, format!("{:#}", Ident::new(name)));
+    }
 }
 
 pub fn run_parser_method<F, T>(sql: &str, f: F) -> T

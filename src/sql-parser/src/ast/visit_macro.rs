@@ -1846,7 +1846,7 @@ mod tests {
 
         impl<'a> Visit<'a> for Visitor<'a> {
             fn visit_ident(&mut self, ident: &'a Ident) {
-                self.seen_idents.push(&ident.value);
+                self.seen_idents.push(ident.as_str());
             }
         }
 
@@ -1856,7 +1856,7 @@ mod tests {
 
         impl<'a> VisitMut<'a> for VisitorMut<'a> {
             fn visit_ident(&mut self, ident: &'a mut Ident) {
-                self.seen_idents.push(&ident.value);
+                self.seen_idents.push(ident.as_str());
             }
         }
 
