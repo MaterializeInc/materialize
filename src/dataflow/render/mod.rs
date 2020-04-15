@@ -351,8 +351,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         .predicates
                                         .iter()
                                         .map(|predicate| predicate.eval(&datums, &temp_storage))
-                                        .filter(|result| result != &Ok(Datum::True))
-                                        .next();
+                                        .find(|result| result != &Ok(Datum::True));
                                     match pred_eval {
                                         None => {
                                             Some(Ok(Row::pack(position_or.iter().map(|pos_or| {
