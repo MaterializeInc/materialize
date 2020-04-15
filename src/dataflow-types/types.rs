@@ -120,7 +120,7 @@ impl DataflowDesc {
     pub fn add_dependency(&mut self, view_id: GlobalId, dependent_id: GlobalId) {
         self.dependent_objects
             .entry(view_id)
-            .or_insert_with(|| Vec::new())
+            .or_insert_with(Vec::new)
             .push(dependent_id);
     }
 
@@ -575,7 +575,7 @@ impl DataflowDesc {
             let input_id = sink.from.0;
             demand
                 .entry(Id::Global(input_id))
-                .or_insert(HashSet::new())
+                .or_insert_with(HashSet::new)
                 .extend(0..self.arity_of(&input_id));
         }
 
@@ -584,7 +584,7 @@ impl DataflowDesc {
             let input_id = desc.on_id;
             demand
                 .entry(Id::Global(input_id))
-                .or_insert(HashSet::new())
+                .or_insert_with(HashSet::new)
                 .extend(0..self.arity_of(&input_id));
         }
 
