@@ -18,18 +18,12 @@ fn bench_sort_datums(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
 }
 
 fn bench_sort_row(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
-    let rows = rows
-        .into_iter()
-        .map(|row| Row::pack(row))
-        .collect::<Vec<_>>();
+    let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
 }
 
 fn bench_sort_iter(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
-    let rows = rows
-        .into_iter()
-        .map(|row| Row::pack(row))
-        .collect::<Vec<_>>();
+    let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
         |mut rows| {
@@ -47,10 +41,7 @@ fn bench_sort_iter(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
 }
 
 fn bench_sort_unpack(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
-    let rows = rows
-        .into_iter()
-        .map(|row| Row::pack(row))
-        .collect::<Vec<_>>();
+    let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
         |mut rows| {
@@ -61,10 +52,7 @@ fn bench_sort_unpack(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
 
 fn bench_sort_unpacked(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     let arity = rows[0].len();
-    let rows = rows
-        .into_iter()
-        .map(|row| Row::pack(row))
-        .collect::<Vec<_>>();
+    let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
         |rows| {
@@ -74,19 +62,13 @@ fn bench_sort_unpacked(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
             }
             let mut slices = unpacked.chunks(arity).collect::<Vec<_>>();
             slices.sort();
-            slices
-                .into_iter()
-                .map(|slice| Row::pack(slice))
-                .collect::<Vec<_>>()
+            slices.into_iter().map(Row::pack).collect::<Vec<_>>()
         },
     )
 }
 
 fn bench_filter_unpacked(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
-    let rows = rows
-        .into_iter()
-        .map(|row| Row::pack(row))
-        .collect::<Vec<_>>();
+    let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
         |mut rows| rows.retain(|row| row.unpack()[0] == filter),
@@ -95,10 +77,7 @@ fn bench_filter_unpacked(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) 
 
 fn bench_filter_packed(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     let filter = Row::pack(&[filter]);
-    let rows = rows
-        .into_iter()
-        .map(|row| Row::pack(row))
-        .collect::<Vec<_>>();
+    let rows = rows.into_iter().map(Row::pack).collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
         |mut rows| rows.retain(|row| row.unpack()[0] == filter.unpack_first()),
@@ -106,7 +85,7 @@ fn bench_filter_packed(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
 }
 
 fn bench_pack_pack(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
-    b.iter(|| rows.iter().map(|row| Row::pack(row)).collect::<Vec<_>>())
+    b.iter(|| rows.iter().map(Row::pack).collect::<Vec<_>>())
 }
 
 fn seeded_rng() -> rand_chacha::ChaChaRng {

@@ -112,7 +112,7 @@ pub fn construct<A: Allocate>(
                                 // version when the host dataflow is dropped.
                                 channels_data
                                     .entry((event.scope_addr[0], worker))
-                                    .or_insert_with(|| Vec::new())
+                                    .or_insert_with(Vec::new)
                                     .push(event.clone());
 
                                 // Present channel description.

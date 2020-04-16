@@ -487,7 +487,7 @@ impl Catalog {
         if let CatalogItem::Index(index) = entry.item() {
             self.indexes
                 .entry(index.on)
-                .or_insert_with(|| Vec::new())
+                .or_insert_with(Vec::new)
                 .push(index.keys.clone());
         }
         self.get_schemas_mut(&entry.name.database)

@@ -357,7 +357,7 @@ fn push_column(
             row.push(string.as_deref().into());
         }
         DataType::SmallInt => {
-            let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(|i| i32::from(i));
+            let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
             row.push(i.into());
         }
         DataType::Int => {
@@ -370,7 +370,7 @@ fn push_column(
         }
         DataType::Float(p) => {
             if p.unwrap_or(53) <= 24 {
-                let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(|f| f64::from(f));
+                let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f64::from);
                 row.push(f.into());
             } else {
                 let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
@@ -378,7 +378,7 @@ fn push_column(
             }
         }
         DataType::Real => {
-            let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(|f| f64::from(f));
+            let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f64::from);
             row.push(f.into());
         }
         DataType::Double => {

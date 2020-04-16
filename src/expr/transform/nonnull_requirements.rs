@@ -57,7 +57,7 @@ impl NonNullRequirements {
                 columns.iter().all(|c| datums[*c] != repr::Datum::Null)
             }),
             RelationExpr::Get { id, .. } => {
-                gets.entry(*id).or_insert_with(|| Vec::new()).push(columns);
+                gets.entry(*id).or_insert_with(Vec::new).push(columns);
             }
             RelationExpr::Let { id, value, body } => {
                 // Let harvests any non-null requirements from its body,

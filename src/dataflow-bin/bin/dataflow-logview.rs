@@ -102,7 +102,7 @@ fn main() {
             .enumerate()
             .filter(|(i, _)| *i % peers == index)
             .map(move |(_, s)| s.take().unwrap())
-            .map(|r| EventReader::<Duration, (Duration, WorkerIdentifier, TimelyEvent), _>::new(r))
+            .map(EventReader::<Duration, (Duration, WorkerIdentifier, TimelyEvent), _>::new)
             .collect::<Vec<_>>();
         worker.dataflow::<Duration, _, _>(|scope| {
             replayers

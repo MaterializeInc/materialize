@@ -578,10 +578,7 @@ impl RelationExpr {
     pub fn reduce(self, group_key: Vec<usize>, aggregates: Vec<AggregateExpr>) -> Self {
         RelationExpr::Reduce {
             input: Box::new(self),
-            group_key: group_key
-                .into_iter()
-                .map(|c| ScalarExpr::Column(c))
-                .collect(),
+            group_key: group_key.into_iter().map(ScalarExpr::Column).collect(),
             aggregates,
         }
     }

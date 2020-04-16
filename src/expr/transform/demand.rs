@@ -59,9 +59,7 @@ impl Demand {
                 // Nothing clever to do with constants, that I can think of.
             }
             RelationExpr::Get { id, .. } => {
-                gets.entry(*id)
-                    .or_insert_with(|| HashSet::new())
-                    .extend(columns);
+                gets.entry(*id).or_insert_with(HashSet::new).extend(columns);
             }
             RelationExpr::Let { id, value, body } => {
                 // Let harvests any requirements of get from its body,

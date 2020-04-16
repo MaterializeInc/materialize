@@ -198,7 +198,7 @@ where
     ) {
         self.local
             .entry(relation_expr.clone())
-            .or_insert_with(|| BTreeMap::new())
+            .or_insert_with(BTreeMap::new)
             .insert(keys.to_vec(), arranged);
     }
 
@@ -226,7 +226,7 @@ where
     ) {
         self.trace
             .entry(relation_expr.clone())
-            .or_insert_with(|| BTreeMap::new())
+            .or_insert_with(BTreeMap::new)
             .insert(keys.to_vec(), (gid, arranged.0, arranged.1));
     }
 

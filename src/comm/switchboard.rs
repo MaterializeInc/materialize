@@ -182,7 +182,7 @@ where
                     futures.push(Box::pin(
                         TryConnectFuture::new(addr.clone(), timeout)
                             .and_then(move |conn| protocol::send_rendezvous_handshake(conn, id))
-                            .map_ok(|conn| Some(conn)),
+                            .map_ok(Some),
                     ));
                 }
             }

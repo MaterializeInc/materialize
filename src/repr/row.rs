@@ -1100,7 +1100,7 @@ mod tests {
     #[test]
     fn test_dict_errors() -> Result<(), Box<dyn std::error::Error>> {
         let packer = RowPacker::new();
-        let packer = packer.try_push_dict_with(|packer| Ok(packer))?;
+        let packer = packer.try_push_dict_with(Ok)?;
         let _ = packer.finish();
 
         assert!(RowPacker::new()
