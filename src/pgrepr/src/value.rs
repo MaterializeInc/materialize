@@ -83,11 +83,15 @@ impl Value {
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
-            (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
-                list.iter()
-                    .map(|elem| Value::from_datum(elem, elem_type))
-                    .collect(),
-            )),
+            (Datum::List(list), ScalarType::List(elem_type)) => {
+                //
+                let col_type = ColumnType::new((**elem_type).clone()).nullable(true);
+                Some(Value::List(
+                    list.iter()
+                        .map(|elem| Value::from_datum(elem, &col_type))
+                        .collect(),
+                ))
+            }
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -147,7 +151,7 @@ impl Value {
                 (
                     buf.push_row(Row::pack(typed_elems.into_iter().map(|et| et.0)))
                         .unpack_first(),
-                    ScalarType::List(Box::new(ColumnType::new(elem_type).nullable(true))),
+                    ScalarType::List(Box::new(elem_type)),
                 )
             }
         }

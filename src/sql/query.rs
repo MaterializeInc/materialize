@@ -1481,7 +1481,7 @@ fn plan_expr_returning_name<'a>(
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
             Expr::List(exprs) => {
                 let elem_type_hint = if let Some(ScalarType::List(elem_type_hint)) = type_hint {
-                    Some(elem_type_hint.scalar_type)
+                    Some(*elem_type_hint)
                 } else {
                     None
                 };
@@ -1489,29 +1489,27 @@ fn plan_expr_returning_name<'a>(
                     .iter()
                     .map(|expr| plan_expr(ecx, expr, elem_type_hint.clone()))
                     .collect::<Result<Vec<_>, _>>()?;
-                let elem_scalar_types = exprs
+                let elem_types = exprs
                     .iter()
                     .map(|expr| ecx.scalar_type(expr))
                     .collect::<Vec<_>>();
-                let elem_scalar_type =
-                    if let Some(elem_scalar_type) = elem_scalar_types.iter().next() {
-                        &elem_scalar_type
-                    } else if let Some(elem_type_hint) = &elem_type_hint {
-                        elem_type_hint
-                    } else {
-                        bail!("Cannot assign type to this empty list")
-                    };
-                if let Some(pos) = elem_scalar_types
+                let elem_type = if let Some(elem_type) = elem_types.iter().next() {
+                    &elem_type
+                } else if let Some(elem_type_hint) = &elem_type_hint {
+                    elem_type_hint
+                } else {
+                    bail!("Cannot assign type to this empty list")
+                };
+                if let Some(pos) = elem_types
                     .iter()
-                    .position(|est| (est != elem_scalar_type) && (*est != ScalarType::Unknown))
+                    .position(|est| (est != elem_type) && (*est != ScalarType::Unknown))
                 {
-                    bail!("Cannot create list with mixed types. Element 1 has type {} but element {} has type {}", elem_scalar_type, pos+1, &elem_scalar_types[pos])
+                    bail!("Cannot create list with mixed types. Element 1 has type {} but element {} has type {}", elem_type, pos+1, &elem_types[pos])
                 }
                 (
                     ScalarExpr::CallVariadic {
                         func: VariadicFunc::ListCreate {
-                            // surprise! list elements are always nullable
-                            elem_type: ColumnType::new(elem_scalar_type.clone()).nullable(true),
+                            elem_type: elem_type.clone(),
                         },
                         exprs,
                     },
@@ -3587,9 +3585,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
         DataType::Jsonb => ScalarType::Jsonb,
-        DataType::List(elem_type) => ScalarType::List(Box::new(
-            ColumnType::new(scalar_type_from_sql(elem_type)?).nullable(true),
-        )),
+        DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
         other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
         | other @ DataType::Clob(_)

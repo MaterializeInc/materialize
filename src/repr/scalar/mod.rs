@@ -339,9 +339,9 @@ impl<'a> Datum<'a> {
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ScalarType::String) => true,
                     (Datum::String(_), _) => false,
-                    (Datum::List(list), ScalarType::List(t)) => {
-                        list.iter().all(|e| e.is_instance_of(t))
-                    }
+                    (Datum::List(list), ScalarType::List(t)) => list
+                        .iter()
+                        .all(|e| e.is_null() || is_instance_of_scalar(e, t)),
                     (Datum::List(_), _) => false,
                     (Datum::Dict(_), _) => false,
                     (Datum::JsonNull, _) => false,
@@ -587,9 +587,10 @@ pub enum ScalarType {
     /// Json behaves like postgres' jsonb type but is stored as Datum::JsonNull/True/False/String/Float64/List/Dict.
     /// The sql type system is responsible for preventing these being used as normal sql datums without casting.
     Jsonb,
-    /// Postgres-style arrays (but we only support 1d arrays)
+    /// A sensible array type (named List to leave the door open for supporting the postgres array type as Array)
     /// Backed by a DatumList
-    List(Box<ColumnType>),
+    /// Due to limits of sql type syntax, List elements are always allowed to be null
+    List(Box<ScalarType>),
 }
 
 impl<'a> ScalarType {
