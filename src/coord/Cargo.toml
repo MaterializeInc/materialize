@@ -28,7 +28,7 @@ log = "0.4"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 repr = { path = "../repr" }
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.3.4"
 rusoto_core = "0.43.0"
 rusoto_credential = "0.43.0"
