@@ -158,16 +158,11 @@ impl Value {
     }
 
     /// Serializes this value to `buf` in the specified `format`.
-    pub fn encode(
-        &self,
-        format: Format,
-        buf: &mut BytesMut,
-    ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    pub fn encode(&self, format: Format, buf: &mut BytesMut) {
         match format {
             Format::Text => self.encode_text(buf),
-            Format::Binary => self.encode_binary(buf)?,
+            Format::Binary => self.encode_binary(buf),
         }
-        Ok(())
     }
 
     /// Serializes this value to `buf` using the [text encoding
@@ -207,7 +202,7 @@ impl Value {
 
     /// Serializes this value to `buf` using the [binary encoding
     /// format](Format::Binary).
-    pub fn encode_binary(&self, buf: &mut BytesMut) -> Result<(), Box<dyn Error + Sync + Send>> {
+    pub fn encode_binary(&self, buf: &mut BytesMut) {
         let is_null = match self {
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
@@ -224,16 +219,15 @@ impl Value {
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(jsonb) => jsonb.as_serde_json().to_sql(&PgType::JSONB, buf),
             Value::List(_) => {
-                return Err(
-                    failure::format_err!("Cannot encode LIST using the binary format").into(),
-                )
+                // for now just use text encoding
+                self.encode_text(buf);
+                Ok(postgres_types::IsNull::No)
             }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
             panic!("encode_binary impossibly called on a null value")
         }
-        Ok(())
     }
 
     /// Deserializes a value of type `ty` from `raw` using the specified
