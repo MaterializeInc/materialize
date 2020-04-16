@@ -43,7 +43,7 @@ impl Action for UpdateShardCountAction {
             stream_name, self.target_shard_count
         );
 
-        state
+        let out = state
             .kinesis_client
             .update_shard_count(UpdateShardCountInput {
                 scaling_type: "UNIFORM_SCALING".to_owned(),
@@ -52,6 +52,7 @@ impl Action for UpdateShardCountAction {
             })
             .await
             .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
+        dbg!(&out);
 
         // Verify the current shard count.
         retry::retry(|| async {
