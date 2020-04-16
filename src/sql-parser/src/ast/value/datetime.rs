@@ -18,6 +18,7 @@ use std::fmt;
 use repr::datetime::DateTimeField;
 
 use super::ValueError;
+use crate::ast::display::{AstDisplay, AstFormatter};
 
 /// An intermediate value for Intervals, which tracks all data from
 /// the user, as well as the computed ParsedDateTime.
@@ -87,8 +88,8 @@ pub enum ExtractField {
     Epoch,
 }
 
-impl fmt::Display for ExtractField {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for ExtractField {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             ExtractField::Millenium => f.write_str("MILLENIUM"),
             ExtractField::Century => f.write_str("CENTURY"),
@@ -115,6 +116,7 @@ impl fmt::Display for ExtractField {
         }
     }
 }
+impl_display!(ExtractField);
 
 use std::str::FromStr;
 

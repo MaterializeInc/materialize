@@ -20,6 +20,8 @@
 
 //! SQL Abstract Syntax Tree (AST) types
 
+#[macro_use]
+pub mod display;
 mod data_type;
 mod ddl;
 mod operator;
@@ -55,6 +57,7 @@ pub use self::data_type::DataType;
 pub use self::ddl::{
     AlterTableOperation, ColumnDef, ColumnOption, ColumnOptionDef, TableConstraint,
 };
+use self::display::{AstDisplay, AstFormatter};
 pub use self::operator::{BinaryOperator, UnaryOperator};
 pub use self::query::{
     Cte, Fetch, Join, JoinConstraint, JoinOperator, OrderByExpr, Query, Select, SelectItem,
@@ -65,37 +68,36 @@ use std::path::PathBuf;
 
 struct DisplaySeparated<'a, T>
 where
-    T: fmt::Display,
+    T: AstDisplay,
 {
     slice: &'a [T],
     sep: &'static str,
 }
 
-impl<'a, T> fmt::Display for DisplaySeparated<'a, T>
+impl<'a, T> AstDisplay for DisplaySeparated<'a, T>
 where
-    T: fmt::Display,
+    T: AstDisplay,
 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut AstFormatter) {
         let mut delim = "";
         for t in self.slice {
-            write!(f, "{}", delim)?;
+            f.write_str(delim);
             delim = self.sep;
-            write!(f, "{}", t)?;
+            t.fmt(f);
         }
-        Ok(())
     }
 }
 
 fn display_separated<'a, T>(slice: &'a [T], sep: &'static str) -> DisplaySeparated<'a, T>
 where
-    T: fmt::Display,
+    T: AstDisplay,
 {
     DisplaySeparated { slice, sep }
 }
 
 fn display_comma_separated<T>(slice: &[T]) -> DisplaySeparated<'_, T>
 where
-    T: fmt::Display,
+    T: AstDisplay,
 {
     DisplaySeparated { slice, sep: ", " }
 }
@@ -145,24 +147,34 @@ impl From<&str> for Ident {
     }
 }
 
-impl fmt::Display for Ident {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Ident {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self.quote_style {
-            Some(q) if q == '"' || q == '\'' || q == '`' => write!(f, "{}{}{}", q, self.value, q),
-            Some(q) if q == '[' => write!(f, "[{}]", self.value),
+            Some(q) if q == '"' || q == '\'' || q == '`' => {
+                f.write_str(format!("{}{}{}", q, self.value, q))
+            }
+            Some(q) if q == '[' => f.write_str(format!("[{}]", self.value)),
             None => f.write_str(&self.value),
             _ => panic!("unexpected quote style"),
         }
     }
 }
+impl_display!(Ident);
 
 /// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectName(pub Vec<Ident>);
 
-impl fmt::Display for ObjectName {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", display_separated(&self.0, "."))
+impl AstDisplay for ObjectName {
+    fn fmt(&self, f: &mut AstFormatter) {
+        display_separated(&self.0, ".").fmt(f);
+    }
+}
+impl_display!(ObjectName);
+
+impl AstDisplay for &ObjectName {
+    fn fmt(&self, f: &mut AstFormatter) {
+        display_separated(&self.0, ".").fmt(f);
     }
 }
 
@@ -272,97 +284,174 @@ pub enum Expr {
     },
 }
 
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Expr {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Expr::Identifier(s) => write!(f, "{}", s),
+            Expr::Identifier(s) => f.write_node(s),
             Expr::Wildcard => f.write_str("*"),
-            Expr::QualifiedWildcard(q) => write!(f, "{}.*", display_separated(q, ".")),
-            Expr::CompoundIdentifier(s) => write!(f, "{}", display_separated(s, ".")),
-            Expr::Parameter(n) => write!(f, "${}", n),
-            Expr::IsNull(ast) => write!(f, "{} IS NULL", ast),
-            Expr::IsNotNull(ast) => write!(f, "{} IS NOT NULL", ast),
+            Expr::QualifiedWildcard(q) => {
+                f.write_node(&display_separated(q, "."));
+                f.write_str(".*");
+            }
+            Expr::CompoundIdentifier(s) => f.write_node(&display_separated(s, ".")),
+            Expr::Parameter(n) => f.write_str(&format!("${}", n)),
+            Expr::IsNull(ast) => {
+                f.write_node(&ast);
+                f.write_str(" IS NULL");
+            }
+            Expr::IsNotNull(ast) => {
+                f.write_node(&ast);
+                f.write_str(" IS NOT NULL");
+            }
             Expr::InList {
                 expr,
                 list,
                 negated,
-            } => write!(
-                f,
-                "{} {}IN ({})",
-                expr,
-                if *negated { "NOT " } else { "" },
-                display_comma_separated(list)
-            ),
+            } => {
+                f.write_node(&expr);
+                f.write_str(" ");
+                if *negated {
+                    f.write_str("NOT ");
+                }
+                f.write_str("IN (");
+                f.write_node(&display_comma_separated(list));
+                f.write_str(")");
+            }
             Expr::InSubquery {
                 expr,
                 subquery,
                 negated,
-            } => write!(
-                f,
-                "{} {}IN ({})",
-                expr,
-                if *negated { "NOT " } else { "" },
-                subquery
-            ),
+            } => {
+                f.write_node(&expr);
+                f.write_str(" ");
+                if *negated {
+                    f.write_str("NOT ");
+                }
+                f.write_str("IN (");
+                f.write_node(&subquery);
+                f.write_str(")");
+            }
             Expr::Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => write!(
-                f,
-                "{} {}BETWEEN {} AND {}",
-                expr,
-                if *negated { "NOT " } else { "" },
-                low,
-                high
-            ),
-            Expr::BinaryOp { left, op, right } => write!(f, "{} {} {}", left, op, right),
-            Expr::UnaryOp { op, expr } => write!(f, "{} {}", op, expr),
-            Expr::Cast { expr, data_type } => write!(f, "CAST({} AS {})", expr, data_type),
-            Expr::Extract { field, expr } => write!(f, "EXTRACT({} FROM {})", field, expr),
-            Expr::Collate { expr, collation } => write!(f, "{} COLLATE {}", expr, collation),
-            Expr::Nested(ast) => write!(f, "({})", ast),
-            Expr::Value(v) => write!(f, "{}", v),
-            Expr::Function(fun) => write!(f, "{}", fun),
+            } => {
+                f.write_node(&expr);
+                if *negated {
+                    f.write_str(" NOT");
+                }
+                f.write_str(" BETWEEN ");
+                f.write_node(&low);
+                f.write_str(" AND ");
+                f.write_node(&high);
+            }
+            Expr::BinaryOp { left, op, right } => {
+                f.write_node(&left);
+                f.write_str(" ");
+                f.write_str(op);
+                f.write_str(" ");
+                f.write_node(&right);
+            }
+            Expr::UnaryOp { op, expr } => {
+                f.write_str(op);
+                f.write_str(" ");
+                f.write_node(&expr);
+            }
+            Expr::Cast { expr, data_type } => {
+                f.write_str("CAST(");
+                f.write_node(&expr);
+                f.write_str(" AS ");
+                f.write_node(data_type);
+                f.write_str(")");
+            }
+            Expr::Extract { field, expr } => {
+                f.write_str("EXTRACT(");
+                f.write_node(field);
+                f.write_str(" FROM ");
+                f.write_node(&expr);
+                f.write_str(")");
+            }
+            Expr::Collate { expr, collation } => {
+                f.write_node(&expr);
+                f.write_str(" COLLATE ");
+                f.write_node(&collation);
+            }
+            Expr::Nested(ast) => {
+                f.write_str("(");
+                f.write_node(&ast);
+                f.write_str(")");
+            }
+            Expr::Value(v) => {
+                f.write_node(v);
+            }
+            Expr::Function(fun) => {
+                f.write_node(fun);
+            }
             Expr::Case {
                 operand,
                 conditions,
                 results,
                 else_result,
             } => {
-                f.write_str("CASE")?;
+                f.write_str("CASE");
                 if let Some(operand) = operand {
-                    write!(f, " {}", operand)?;
+                    f.write_str(" ");
+                    f.write_node(&operand);
                 }
                 for (c, r) in conditions.iter().zip(results) {
-                    write!(f, " WHEN {} THEN {}", c, r)?;
+                    f.write_str(" WHEN ");
+                    f.write_node(c);
+                    f.write_str(" THEN ");
+                    f.write_node(r);
                 }
 
                 if let Some(else_result) = else_result {
-                    write!(f, " ELSE {}", else_result)?;
+                    f.write_str(" ELSE ");
+                    f.write_node(&else_result);
                 }
                 f.write_str(" END")
             }
-            Expr::Exists(s) => write!(f, "EXISTS ({})", s),
-            Expr::Subquery(s) => write!(f, "({})", s),
+            Expr::Exists(s) => {
+                f.write_str("EXISTS (");
+                f.write_node(&s);
+                f.write_str(")");
+            }
+            Expr::Subquery(s) => {
+                f.write_str("(");
+                f.write_node(&s);
+                f.write_str(")");
+            }
             Expr::Any {
                 left,
                 op,
                 right,
                 some,
-            } => write!(
-                f,
-                "{} {} {} ({})",
-                left,
-                op,
-                if *some { "SOME" } else { "ANY" },
-                right
-            ),
-            Expr::All { left, op, right } => write!(f, "{} {} ALL ({})", left, op, right),
+            } => {
+                f.write_node(&left);
+                f.write_str(" ");
+                f.write_str(op);
+                if *some {
+                    f.write_str(" SOME ");
+                } else {
+                    f.write_str(" ANY ");
+                }
+                f.write_str("(");
+                f.write_node(&right);
+                f.write_str(")");
+            }
+            Expr::All { left, op, right } => {
+                f.write_node(&left);
+                f.write_str(" ");
+                f.write_str(op);
+                f.write_str(" ALL (");
+                f.write_node(&right);
+                f.write_str(")");
+            }
         }
     }
 }
+impl_display!(Expr);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -372,38 +461,38 @@ pub struct WindowSpec {
     pub window_frame: Option<WindowFrame>,
 }
 
-impl fmt::Display for WindowSpec {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for WindowSpec {
+    fn fmt(&self, f: &mut AstFormatter) {
         let mut delim = "";
         if !self.partition_by.is_empty() {
             delim = " ";
-            write!(
-                f,
-                "PARTITION BY {}",
-                display_comma_separated(&self.partition_by)
-            )?;
+            f.write_str("PARTITION BY ");
+            f.write_node(&display_comma_separated(&self.partition_by));
         }
         if !self.order_by.is_empty() {
-            f.write_str(delim)?;
+            f.write_str(delim);
             delim = " ";
-            write!(f, "ORDER BY {}", display_comma_separated(&self.order_by))?;
+            f.write_str("ORDER BY ");
+            f.write_node(&display_comma_separated(&self.order_by));
         }
         if let Some(window_frame) = &self.window_frame {
             if let Some(end_bound) = &window_frame.end_bound {
-                f.write_str(delim)?;
-                write!(
-                    f,
-                    "{} BETWEEN {} AND {}",
-                    window_frame.units, window_frame.start_bound, end_bound
-                )?;
+                f.write_str(delim);
+                f.write_node(&window_frame.units);
+                f.write_str(" BETWEEN ");
+                f.write_node(&window_frame.start_bound);
+                f.write_str(" AND ");
+                f.write_node(&*end_bound);
             } else {
-                f.write_str(delim)?;
-                write!(f, "{} {}", window_frame.units, window_frame.start_bound)?;
+                f.write_str(delim);
+                f.write_node(&window_frame.units);
+                f.write_str(" ");
+                f.write_node(&window_frame.start_bound);
             }
         }
-        Ok(())
     }
 }
+impl_display!(WindowSpec);
 
 /// Specifies the data processed by a window function, e.g.
 /// `RANGE UNBOUNDED PRECEDING` or `ROWS BETWEEN 5 PRECEDING AND CURRENT ROW`.
@@ -428,8 +517,8 @@ pub enum WindowFrameUnits {
     Groups,
 }
 
-impl fmt::Display for WindowFrameUnits {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for WindowFrameUnits {
+    fn fmt(&self, f: &mut AstFormatter) {
         f.write_str(match self {
             WindowFrameUnits::Rows => "ROWS",
             WindowFrameUnits::Range => "RANGE",
@@ -437,6 +526,7 @@ impl fmt::Display for WindowFrameUnits {
         })
     }
 }
+impl_display!(WindowFrameUnits);
 
 impl FromStr for WindowFrameUnits {
     type Err = String;
@@ -462,17 +552,24 @@ pub enum WindowFrameBound {
     Following(Option<u64>),
 }
 
-impl fmt::Display for WindowFrameBound {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for WindowFrameBound {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             WindowFrameBound::CurrentRow => f.write_str("CURRENT ROW"),
             WindowFrameBound::Preceding(None) => f.write_str("UNBOUNDED PRECEDING"),
             WindowFrameBound::Following(None) => f.write_str("UNBOUNDED FOLLOWING"),
-            WindowFrameBound::Preceding(Some(n)) => write!(f, "{} PRECEDING", n),
-            WindowFrameBound::Following(Some(n)) => write!(f, "{} FOLLOWING", n),
+            WindowFrameBound::Preceding(Some(n)) => {
+                f.write_str(n);
+                f.write_str(" PRECEDING");
+            }
+            WindowFrameBound::Following(Some(n)) => {
+                f.write_str(n);
+                f.write_str(" FOLLOWING");
+            }
         }
     }
 }
+impl_display!(WindowFrameBound);
 
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -487,8 +584,8 @@ pub enum ExplainStage {
     OptimizedPlan,
 }
 
-impl fmt::Display for ExplainStage {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for ExplainStage {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             ExplainStage::Sql => f.write_str("SQL"),
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
@@ -497,6 +594,7 @@ impl fmt::Display for ExplainStage {
         }
     }
 }
+impl_display!(ExplainStage);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -504,20 +602,25 @@ pub enum Schema {
     Inline(String),
 }
 
-impl fmt::Display for Schema {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Schema {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Self::File(path) => write!(
-                f,
-                "SCHEMA FILE '{}'",
-                value::escape_single_quote_string(&path.display().to_string())
-            ),
+            Self::File(path) => {
+                f.write_str("SCHEMA FILE '");
+                f.write_node(&value::escape_single_quote_string(
+                    &path.display().to_string(),
+                ));
+                f.write_str("'");
+            }
             Self::Inline(inner) => {
-                write!(f, "SCHEMA '{}'", value::escape_single_quote_string(inner))
+                f.write_str("SCHEMA '");
+                f.write_node(&value::escape_single_quote_string(inner));
+                f.write_str("'");
             }
         }
     }
 }
+impl_display!(Schema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema {
@@ -525,24 +628,23 @@ pub enum AvroSchema {
     Schema(Schema),
 }
 
-impl fmt::Display for AvroSchema {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for AvroSchema {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::CsrUrl { url, seed } => {
-                write!(
-                    f,
-                    "CONFLUENT SCHEMA REGISTRY '{}'",
-                    value::escape_single_quote_string(url)
-                )?;
+                f.write_str("CONFLUENT SCHEMA REGISTRY '");
+                f.write_node(&value::escape_single_quote_string(url));
+                f.write_str("'");
                 if let Some(seed) = seed {
-                    write!(f, " {}", seed)?;
+                    f.write_str(" ");
+                    f.write_node(seed);
                 }
-                Ok(())
             }
             Self::Schema(schema) => schema.fmt(f),
         }
     }
 }
+impl_display!(AvroSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -550,23 +652,20 @@ pub struct CsrSeed {
     pub value_schema: String,
 }
 
-impl fmt::Display for CsrSeed {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("SEED")?;
+impl AstDisplay for CsrSeed {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SEED");
         if let Some(key_schema) = &self.key_schema {
-            write!(
-                f,
-                " KEY SCHEMA '{}'",
-                value::escape_single_quote_string(key_schema)
-            )?;
+            f.write_str(" KEY SCHEMA '");
+            f.write_node(&value::escape_single_quote_string(key_schema));
+            f.write_str("'");
         }
-        write!(
-            f,
-            " VALUE SCHEMA '{}'",
-            value::escape_single_quote_string(&self.value_schema)
-        )
+        f.write_str(" VALUE SCHEMA '");
+        f.write_node(&value::escape_single_quote_string(&self.value_schema));
+        f.write_str("'");
     }
 }
+impl_display!(CsrSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Format {
@@ -599,68 +698,74 @@ impl Default for Envelope {
     }
 }
 
-impl fmt::Display for Envelope {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Envelope {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::None => {
                 // this is unreachable as long as the default is None, but include it in case we ever change that
-                write!(f, "NONE")?;
+                f.write_str("NONE");
             }
             Self::Debezium => {
-                write!(f, "DEBEZIUM")?;
+                f.write_str("DEBEZIUM");
             }
             Self::Upsert(format) => {
-                write!(f, "UPSERT")?;
+                f.write_str("UPSERT");
                 if let Some(format) = format {
-                    write!(f, " FORMAT {}", format)?;
+                    f.write_str(" FORMAT ");
+                    f.write_node(format);
                 }
             }
         }
-        Ok(())
     }
 }
+impl_display!(Envelope);
 
-impl fmt::Display for Format {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Format {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Self::Bytes => write!(f, "BYTES"),
-            Self::Avro(inner) => write!(f, "AVRO USING {}", inner),
+            Self::Bytes => f.write_str("BYTES"),
+            Self::Avro(inner) => {
+                f.write_str("AVRO USING ");
+                f.write_node(inner);
+            }
             Self::Protobuf {
                 message_name,
                 schema,
-            } => write!(
-                f,
-                "PROTOBUF MESSAGE '{}' USING {}",
-                value::escape_single_quote_string(message_name),
-                schema
-            ),
-            Self::Regex(regex) => write!(f, "REGEX '{}'", value::escape_single_quote_string(regex)),
+            } => {
+                f.write_str("PROTOBUF MESSAGE '");
+                f.write_node(&value::escape_single_quote_string(message_name));
+                f.write_str("' USING ");
+                f.write_str(schema);
+            }
+            Self::Regex(regex) => {
+                f.write_str("REGEX '");
+                f.write_node(&value::escape_single_quote_string(regex));
+                f.write_str("'");
+            }
             Self::Csv {
                 header_row,
                 n_cols,
                 delimiter,
-            } => write!(
-                f,
-                "CSV WITH {}{}",
+            } => {
+                f.write_str("CSV WITH ");
                 if *header_row {
-                    "HEADER".to_owned()
+                    f.write_str("HEADER");
                 } else {
-                    format!("{} COLUMNS", n_cols.unwrap())
-                },
-                if *delimiter == ',' {
-                    "".to_owned()
-                } else {
-                    format!(
-                        " DELIMITED BY '{}'",
-                        value::escape_single_quote_string(&delimiter.to_string())
-                    )
+                    f.write_str(n_cols.unwrap());
+                    f.write_str(" COLUMNS");
                 }
-            ),
-            Self::Json => write!(f, "JSON"),
-            Self::Text => write!(f, "TEXT"),
+                if *delimiter != ',' {
+                    f.write_str(" DELIMITED BY '");
+                    f.write_node(&value::escape_single_quote_string(&delimiter.to_string()));
+                    f.write_str("'");
+                }
+            }
+            Self::Json => f.write_str("JSON"),
+            Self::Text => f.write_str("TEXT"),
         }
     }
 }
+impl_display!(Format);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector {
@@ -680,37 +785,36 @@ pub enum Connector {
     },
 }
 
-impl fmt::Display for Connector {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Connector {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Connector::File { path } => {
-                write!(f, "FILE '{}'", value::escape_single_quote_string(path))?;
-                Ok(())
+                f.write_str("FILE '");
+                f.write_node(&value::escape_single_quote_string(path));
+                f.write_str("'");
             }
             Connector::Kafka { broker, topic } => {
-                write!(
-                    f,
-                    "KAFKA BROKER '{}' TOPIC '{}'",
-                    value::escape_single_quote_string(broker),
-                    value::escape_single_quote_string(topic),
-                )?;
-                Ok(())
+                f.write_str("KAFKA BROKER '");
+                f.write_node(&value::escape_single_quote_string(broker));
+                f.write_str("'");
+                f.write_str(" TOPIC '");
+                f.write_node(&value::escape_single_quote_string(topic));
+                f.write_str("'");
             }
             Connector::Kinesis { arn } => {
-                write!(
-                    f,
-                    "KINESIS ARN '{}'",
-                    value::escape_single_quote_string(arn),
-                )?;
-                Ok(())
+                f.write_str("KINESIS ARN '");
+                f.write_node(&value::escape_single_quote_string(arn));
+                f.write_str("'");
             }
             Connector::AvroOcf { path } => {
-                write!(f, "AVRO OCF '{}'", value::escape_single_quote_string(path))?;
-                Ok(())
+                f.write_str("AVRO OCF '");
+                f.write_node(&value::escape_single_quote_string(path));
+                f.write_str("'");
             }
         }
     }
 }
+impl_display!(Connector);
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
@@ -936,90 +1040,99 @@ pub struct ExplainOptions {
     pub typed: bool,
 }
 
-impl fmt::Display for Statement {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Statement {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Statement::Query(s) => write!(f, "{}", s),
+            Statement::Query(s) => f.write_node(&s),
             Statement::Insert {
                 table_name,
                 columns,
                 source,
             } => {
-                write!(f, "INSERT INTO {} ", table_name)?;
+                f.write_str("INSERT INTO ");
+                f.write_node(&table_name);
                 if !columns.is_empty() {
-                    write!(f, "({}) ", display_comma_separated(columns))?;
+                    f.write_str(" (");
+                    f.write_node(&display_comma_separated(columns));
+                    f.write_str(")");
                 }
-                write!(f, "{}", source)
+                f.write_str(" ");
+                f.write_node(&source);
             }
             Statement::Copy {
                 table_name,
                 columns,
                 values,
             } => {
-                write!(f, "COPY {}", table_name)?;
+                f.write_str("COPY ");
+                f.write_node(&table_name);
                 if !columns.is_empty() {
-                    write!(f, " ({})", display_comma_separated(columns))?;
+                    f.write_str("(");
+                    f.write_node(&display_comma_separated(columns));
+                    f.write_str(")");
                 }
-                write!(f, " FROM stdin; ")?;
+                f.write_str(" FROM stdin; ");
                 if !values.is_empty() {
-                    writeln!(f)?;
+                    f.write_str("\n");
                     let mut delim = "";
                     for v in values {
-                        write!(f, "{}", delim)?;
+                        f.write_str(delim);
                         delim = "\t";
                         if let Some(v) = v {
-                            write!(f, "{}", v)?;
+                            f.write_str(v);
                         } else {
-                            write!(f, "\\N")?;
+                            f.write_str("\\N");
                         }
                     }
                 }
-                write!(f, "\n\\.")
+                f.write_str("\n\\.");
             }
             Statement::Update {
                 table_name,
                 assignments,
                 selection,
             } => {
-                write!(f, "UPDATE {}", table_name)?;
+                f.write_str("UPDATE ");
+                f.write_node(&table_name);
                 if !assignments.is_empty() {
-                    write!(f, " SET ")?;
-                    write!(f, "{}", display_comma_separated(assignments))?;
+                    f.write_str(" SET ");
+                    f.write_node(&display_comma_separated(assignments));
                 }
                 if let Some(selection) = selection {
-                    write!(f, " WHERE {}", selection)?;
+                    f.write_str(" WHERE ");
+                    f.write_node(selection);
                 }
-                Ok(())
             }
             Statement::Delete {
                 table_name,
                 selection,
             } => {
-                write!(f, "DELETE FROM {}", table_name)?;
+                f.write_str("DELETE FROM ");
+                f.write_node(&table_name);
                 if let Some(selection) = selection {
-                    write!(f, " WHERE {}", selection)?;
+                    f.write_str(" WHERE ");
+                    f.write_node(selection);
                 }
-                Ok(())
             }
             Statement::CreateDatabase {
                 name,
                 if_not_exists,
             } => {
-                write!(f, "CREATE DATABASE ")?;
+                f.write_str("CREATE DATABASE ");
                 if *if_not_exists {
-                    write!(f, "IF NOT EXISTS ")?;
+                    f.write_str("IF NOT EXISTS ");
                 }
-                write!(f, "{}", name)
+                f.write_node(name);
             }
             Statement::CreateSchema {
                 name,
                 if_not_exists,
             } => {
-                write!(f, "CREATE SCHEMA ")?;
+                f.write_str("CREATE SCHEMA ");
                 if *if_not_exists {
-                    write!(f, "IF NOT EXISTS ")?;
+                    f.write_str("IF NOT EXISTS ");
                 }
-                write!(f, "{}", name)
+                f.write_node(&name);
             }
             Statement::CreateSource {
                 name,
@@ -1031,29 +1144,36 @@ impl fmt::Display for Statement {
                 if_not_exists,
                 materialized,
             } => {
-                write!(f, "CREATE ")?;
+                f.write_str("CREATE ");
                 if *materialized {
-                    write!(f, "MATERIALIZED ")?;
+                    f.write_str("MATERIALIZED ");
                 }
-                write!(f, "SOURCE ")?;
+                f.write_str("SOURCE ");
                 if *if_not_exists {
-                    write!(f, "IF NOT EXISTS ")?;
+                    f.write_str("IF NOT EXISTS ");
                 }
-                write!(f, "{} ", name)?;
+                f.write_node(&name);
+                f.write_str(" ");
                 if !col_names.is_empty() {
-                    write!(f, "({}) ", display_comma_separated(col_names))?;
+                    f.write_str("(");
+                    f.write_node(&display_comma_separated(col_names));
+                    f.write_str(") ");
                 }
-                write!(f, "FROM {}", connector,)?;
+                f.write_str("FROM ");
+                f.write_node(connector);
                 if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                    f.write_str(" WITH (");
+                    f.write_node(&display_comma_separated(with_options));
+                    f.write_str(")");
                 }
                 if let Some(format) = format {
-                    write!(f, " FORMAT {}", format)?;
+                    f.write_str(" FORMAT ");
+                    f.write_node(format);
                 }
                 if *envelope != Default::default() {
-                    write!(f, " ENVELOPE {}", envelope)?;
+                    f.write_str(" ENVELOPE ");
+                    f.write_node(envelope);
                 }
-                Ok(())
             }
             Statement::CreateSink {
                 name,
@@ -1062,15 +1182,19 @@ impl fmt::Display for Statement {
                 format,
                 if_not_exists,
             } => {
-                write!(f, "CREATE SINK ")?;
+                f.write_str("CREATE SINK ");
                 if *if_not_exists {
-                    write!(f, "IF NOT EXISTS ")?;
+                    f.write_str("IF NOT EXISTS ");
                 }
-                write!(f, "{} FROM {} INTO {}", name, from, connector)?;
+                f.write_node(&name);
+                f.write_str(" FROM ");
+                f.write_node(&from);
+                f.write_str(" INTO ");
+                f.write_node(connector);
                 if let Some(format) = format {
-                    write!(f, " FORMAT {}", format)?;
+                    f.write_str(" FORMAT ");
+                    f.write_node(format);
                 }
-                Ok(())
             }
             Statement::CreateView {
                 name,
@@ -1080,31 +1204,37 @@ impl fmt::Display for Statement {
                 if_exists,
                 with_options,
             } => {
-                write!(f, "CREATE")?;
+                f.write_str("CREATE");
                 if *if_exists == IfExistsBehavior::Replace {
-                    write!(f, " OR REPLACE")?;
+                    f.write_str(" OR REPLACE");
                 }
                 if *materialized {
-                    write!(f, " MATERIALIZED")?;
+                    f.write_str(" MATERIALIZED");
                 }
 
-                write!(f, " VIEW")?;
+                f.write_str(" VIEW");
 
                 if *if_exists == IfExistsBehavior::Skip {
-                    write!(f, " IF NOT EXISTS")?;
+                    f.write_str(" IF NOT EXISTS");
                 }
 
-                write!(f, " {}", name)?;
+                f.write_str(" ");
+                f.write_node(&name);
 
                 if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                    f.write_str(" WITH (");
+                    f.write_node(&display_comma_separated(with_options));
+                    f.write_str(")");
                 }
 
                 if !columns.is_empty() {
-                    write!(f, " ({})", display_comma_separated(columns))?;
+                    f.write_str(" (");
+                    f.write_node(&display_comma_separated(columns));
+                    f.write_str(")");
                 }
 
-                write!(f, " AS {}", query)
+                f.write_str(" AS ");
+                f.write_node(&query);
             }
             Statement::CreateTable {
                 name,
@@ -1113,20 +1243,24 @@ impl fmt::Display for Statement {
                 with_options,
                 if_not_exists,
             } => {
-                write!(f, "CREATE TABLE ")?;
+                f.write_str("CREATE TABLE ");
                 if *if_not_exists {
-                    write!(f, "IF NOT EXISTS ")?;
+                    f.write_str("IF NOT EXISTS ");
                 }
-                write!(f, "{} ({}", name, display_comma_separated(columns))?;
+                f.write_node(&name);
+                f.write_str(" (");
+                f.write_node(&display_comma_separated(columns));
                 if !constraints.is_empty() {
-                    write!(f, ", {}", display_comma_separated(constraints))?;
+                    f.write_str(", ");
+                    f.write_node(&display_comma_separated(constraints));
                 }
-                write!(f, ")")?;
+                f.write_str(")");
 
                 if !with_options.is_empty() {
-                    write!(f, " WITH ({})", display_comma_separated(with_options))?;
+                    f.write_str(" WITH (");
+                    f.write_node(&display_comma_separated(with_options));
+                    f.write_str(")");
                 }
-                Ok(())
             }
             Statement::CreateIndex {
                 name,
@@ -1134,60 +1268,70 @@ impl fmt::Display for Statement {
                 key_parts,
                 if_not_exists,
             } => {
-                write!(f, "CREATE INDEX ")?;
+                f.write_str("CREATE INDEX ");
                 if *if_not_exists {
-                    write!(f, "IF NOT EXISTS ")?;
+                    f.write_str("IF NOT EXISTS ");
                 }
-                write!(
-                    f,
-                    "{} ON {} ({})",
-                    name,
-                    on_name,
-                    display_comma_separated(key_parts),
-                )?;
-                Ok(())
+                f.write_node(name);
+                f.write_str(" ON ");
+                f.write_node(&on_name);
+                f.write_str(" (");
+                f.write_node(&display_comma_separated(key_parts));
+                f.write_str(")");
             }
             Statement::AlterTable { name, operation } => {
-                write!(f, "ALTER TABLE {} {}", name, operation)
+                f.write_str("ALTER TABLE ");
+                f.write_node(&name);
+                f.write_str(" ");
+                f.write_node(operation);
             }
             Statement::DropDatabase { name, if_exists } => {
-                write!(f, "DROP DATABASE ")?;
+                f.write_str("DROP DATABASE ");
                 if *if_exists {
-                    write!(f, "IF EXISTS ")?;
+                    f.write_str("IF EXISTS ");
                 }
-                write!(f, "{}", name)
+                f.write_node(name);
             }
             Statement::DropObjects {
                 object_type,
                 if_exists,
                 names,
                 cascade,
-            } => write!(
-                f,
-                "DROP {}{} {}{}",
-                object_type,
-                if *if_exists { " IF EXISTS" } else { "" },
-                display_comma_separated(names),
-                if *cascade { " CASCADE" } else { "" },
-            ),
+            } => {
+                f.write_str("DROP ");
+                f.write_node(object_type);
+                f.write_str(" ");
+                if *if_exists {
+                    f.write_str("IF EXISTS ");
+                }
+                f.write_node(&display_comma_separated(names));
+                if *cascade {
+                    f.write_str(" CASCADE");
+                }
+            }
             Statement::SetVariable {
                 local,
                 variable,
                 value,
             } => {
-                f.write_str("SET ")?;
+                f.write_str("SET ");
                 if *local {
-                    f.write_str("LOCAL ")?;
+                    f.write_str("LOCAL ");
                 }
-                write!(f, "{} = {}", variable, value)
+                f.write_node(variable);
+                f.write_str(" = ");
+                f.write_node(value);
             }
-            Statement::ShowVariable { variable } => write!(f, "SHOW {}", variable),
+            Statement::ShowVariable { variable } => {
+                f.write_str("SHOW ");
+                f.write_node(variable);
+            }
             Statement::ShowDatabases { filter } => {
-                f.write_str("SHOW DATABASES")?;
+                f.write_str("SHOW DATABASES");
                 if let Some(filter) = filter {
-                    write!(f, " {}", filter)?;
+                    f.write_str(" ");
+                    f.write_node(filter);
                 }
-                Ok(())
             }
             Statement::ShowObjects {
                 object_type,
@@ -1197,50 +1341,49 @@ impl fmt::Display for Statement {
                 from,
                 extended,
             } => {
-                f.write_str("SHOW")?;
+                f.write_str("SHOW");
                 if *extended {
-                    f.write_str(" EXTENDED")?;
+                    f.write_str(" EXTENDED");
                 }
                 if *full {
-                    f.write_str(" FULL")?;
+                    f.write_str(" FULL");
                 }
                 if *materialized {
-                    f.write_str(" MATERIALIZED")?;
+                    f.write_str(" MATERIALIZED");
                 }
-                write!(
-                    f,
-                    " {}",
-                    match object_type {
-                        ObjectType::Schema => "SCHEMAS",
-                        ObjectType::Table => "TABLES",
-                        ObjectType::View => "VIEWS",
-                        ObjectType::Source => "SOURCES",
-                        ObjectType::Sink => "SINKS",
-                        ObjectType::Index => unreachable!(),
-                    }
-                )?;
+                f.write_str(" ");
+                f.write_str(match object_type {
+                    ObjectType::Schema => "SCHEMAS",
+                    ObjectType::Table => "TABLES",
+                    ObjectType::View => "VIEWS",
+                    ObjectType::Source => "SOURCES",
+                    ObjectType::Sink => "SINKS",
+                    ObjectType::Index => unreachable!(),
+                });
                 if let Some(from) = from {
-                    write!(f, " FROM {}", from)?;
+                    f.write_str(" FROM ");
+                    f.write_node(&from);
                 }
                 if let Some(filter) = filter {
-                    write!(f, " {}", filter)?;
+                    f.write_str(" ");
+                    f.write_node(filter);
                 }
-                Ok(())
             }
             Statement::ShowIndexes {
                 table_name,
                 extended,
                 filter,
             } => {
-                write!(f, "SHOW ")?;
+                f.write_str("SHOW ");
                 if *extended {
-                    f.write_str("EXTENDED ")?;
+                    f.write_str("EXTENDED ");
                 }
-                write!(f, "INDEXES FROM {}", table_name)?;
+                f.write_str("INDEXES FROM ");
+                f.write_node(&table_name);
                 if let Some(filter) = filter {
-                    write!(f, " {}", filter)?;
+                    f.write_str(" ");
+                    f.write_node(filter);
                 }
-                Ok(())
             }
             Statement::ShowColumns {
                 extended,
@@ -1248,68 +1391,92 @@ impl fmt::Display for Statement {
                 table_name,
                 filter,
             } => {
-                f.write_str("SHOW ")?;
+                f.write_str("SHOW ");
                 if *extended {
-                    f.write_str("EXTENDED ")?;
+                    f.write_str("EXTENDED ");
                 }
                 if *full {
-                    f.write_str("FULL ")?;
+                    f.write_str("FULL ");
                 }
-                write!(f, "COLUMNS FROM {}", table_name)?;
+                f.write_str("COLUMNS FROM ");
+                f.write_node(&table_name);
                 if let Some(filter) = filter {
-                    write!(f, " {}", filter)?;
+                    f.write_str(" ");
+                    f.write_node(filter);
                 }
-                Ok(())
             }
-            Statement::ShowCreateView { view_name } => write!(f, "SHOW CREATE VIEW {}", view_name),
+            Statement::ShowCreateView { view_name } => {
+                f.write_str("SHOW CREATE VIEW ");
+                f.write_node(&view_name);
+            }
             Statement::ShowCreateSource { source_name } => {
-                write!(f, "SHOW CREATE SOURCE {}", source_name)
+                f.write_str("SHOW CREATE SOURCE ");
+                f.write_node(&source_name);
             }
-            Statement::ShowCreateSink { sink_name } => write!(f, "SHOW CREATE SINK {}", sink_name),
+            Statement::ShowCreateSink { sink_name } => {
+                f.write_str("SHOW CREATE SINK ");
+                f.write_node(&sink_name);
+            }
             Statement::StartTransaction { modes } => {
-                write!(f, "START TRANSACTION")?;
+                f.write_str("START TRANSACTION");
                 if !modes.is_empty() {
-                    write!(f, " {}", display_comma_separated(modes))?;
+                    f.write_str(" ");
+                    f.write_node(&display_comma_separated(modes));
                 }
-                Ok(())
             }
             Statement::SetTransaction { modes } => {
-                write!(f, "SET TRANSACTION")?;
+                f.write_str("SET TRANSACTION");
                 if !modes.is_empty() {
-                    write!(f, " {}", display_comma_separated(modes))?;
+                    f.write_str(" ");
+                    f.write_node(&display_comma_separated(modes));
                 }
-                Ok(())
             }
             Statement::Commit { chain } => {
-                write!(f, "COMMIT{}", if *chain { " AND CHAIN" } else { "" },)
+                f.write_str("COMMIT");
+                if *chain {
+                    f.write_str(" AND CHAIN");
+                }
             }
             Statement::Rollback { chain } => {
-                write!(f, "ROLLBACK{}", if *chain { " AND CHAIN" } else { "" },)
+                f.write_str("ROLLBACK");
+                if *chain {
+                    f.write_str(" AND CHAIN");
+                }
             }
-            Statement::Tail { name } => write!(f, "TAIL {}", name),
+            Statement::Tail { name } => {
+                f.write_str("TAIL ");
+                f.write_node(&name);
+            }
             Statement::Explain {
                 stage,
                 explainee,
                 options,
-            } => write!(
-                f,
-                "EXPLAIN {}{} FOR {}",
-                if options.typed { "TYPED " } else { "" },
-                stage,
-                explainee
-            ),
+            } => {
+                f.write_str("EXPLAIN ");
+                if options.typed {
+                    f.write_str("TYPED ");
+                }
+                f.write_node(stage);
+                f.write_str(" FOR ");
+                f.write_node(explainee);
+            }
         }
     }
 }
+impl_display!(Statement);
 
-impl fmt::Display for Explainee {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Explainee {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Explainee::View(name) => write!(f, "VIEW {}", name),
-            Explainee::Query(query) => write!(f, "{}", query),
+            Explainee::View(name) => {
+                f.write_str("VIEW ");
+                f.write_node(&name);
+            }
+            Explainee::Query(query) => f.write_node(query),
         }
     }
 }
+impl_display!(Explainee);
 
 /// SQL assignment `foo = expr` as used in SQLUpdate
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1318,11 +1485,14 @@ pub struct Assignment {
     pub value: Expr,
 }
 
-impl fmt::Display for Assignment {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} = {}", self.id, self.value)
+impl AstDisplay for Assignment {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&self.id);
+        f.write_str(" = ");
+        f.write_node(&self.value);
     }
 }
+impl_display!(Assignment);
 
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1336,24 +1506,28 @@ pub struct Function {
     pub distinct: bool,
 }
 
-impl fmt::Display for Function {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}({}{})",
-            self.name,
-            if self.distinct { "DISTINCT " } else { "" },
-            display_comma_separated(&self.args),
-        )?;
+impl AstDisplay for Function {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&self.name);
+        f.write_str("(");
+        if self.distinct {
+            f.write_str("DISTINCT ")
+        }
+        f.write_node(&display_comma_separated(&self.args));
+        f.write_str(")");
         if let Some(filter) = &self.filter {
-            write!(f, " FILTER (WHERE {})", filter)?;
+            f.write_str(" FILTER (WHERE ");
+            f.write_node(&filter);
+            f.write_str(")");
         }
         if let Some(o) = &self.over {
-            write!(f, " OVER ({})", o)?;
+            f.write_str(" OVER (");
+            f.write_node(o);
+            f.write_str(")");
         }
-        Ok(())
     }
 }
+impl_display!(Function);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum ObjectType {
@@ -1365,8 +1539,8 @@ pub enum ObjectType {
     Index,
 }
 
-impl fmt::Display for ObjectType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for ObjectType {
+    fn fmt(&self, f: &mut AstFormatter) {
         f.write_str(match self {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Table => "TABLE",
@@ -1377,6 +1551,7 @@ impl fmt::Display for ObjectType {
         })
     }
 }
+impl_display!(ObjectType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SqlOption {
@@ -1384,11 +1559,14 @@ pub struct SqlOption {
     pub value: Value,
 }
 
-impl fmt::Display for SqlOption {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} = {}", self.name, self.value)
+impl AstDisplay for SqlOption {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&self.name);
+        f.write_str(" = ");
+        f.write_node(&self.value);
     }
 }
+impl_display!(SqlOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionMode {
@@ -1396,15 +1574,19 @@ pub enum TransactionMode {
     IsolationLevel(TransactionIsolationLevel),
 }
 
-impl fmt::Display for TransactionMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for TransactionMode {
+    fn fmt(&self, f: &mut AstFormatter) {
         use TransactionMode::*;
         match self {
-            AccessMode(access_mode) => write!(f, "{}", access_mode),
-            IsolationLevel(iso_level) => write!(f, "ISOLATION LEVEL {}", iso_level),
+            AccessMode(access_mode) => f.write_node(access_mode),
+            IsolationLevel(iso_level) => {
+                f.write_str("ISOLATION LEVEL ");
+                f.write_node(iso_level);
+            }
         }
     }
 }
+impl_display!(TransactionMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionAccessMode {
@@ -1412,8 +1594,8 @@ pub enum TransactionAccessMode {
     ReadWrite,
 }
 
-impl fmt::Display for TransactionAccessMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for TransactionAccessMode {
+    fn fmt(&self, f: &mut AstFormatter) {
         use TransactionAccessMode::*;
         f.write_str(match self {
             ReadOnly => "READ ONLY",
@@ -1421,6 +1603,7 @@ impl fmt::Display for TransactionAccessMode {
         })
     }
 }
+impl_display!(TransactionAccessMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionIsolationLevel {
@@ -1430,8 +1613,8 @@ pub enum TransactionIsolationLevel {
     Serializable,
 }
 
-impl fmt::Display for TransactionIsolationLevel {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for TransactionIsolationLevel {
+    fn fmt(&self, f: &mut AstFormatter) {
         use TransactionIsolationLevel::*;
         f.write_str(match self {
             ReadUncommitted => "READ UNCOMMITTED",
@@ -1441,6 +1624,7 @@ impl fmt::Display for TransactionIsolationLevel {
         })
     }
 }
+impl_display!(TransactionIsolationLevel);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ShowStatementFilter {
@@ -1448,15 +1632,23 @@ pub enum ShowStatementFilter {
     Where(Expr),
 }
 
-impl fmt::Display for ShowStatementFilter {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for ShowStatementFilter {
+    fn fmt(&self, f: &mut AstFormatter) {
         use ShowStatementFilter::*;
         match self {
-            Like(pattern) => write!(f, "LIKE '{}'", value::escape_single_quote_string(pattern)),
-            Where(expr) => write!(f, "WHERE {}", expr),
+            Like(pattern) => {
+                f.write_str("LIKE '");
+                f.write_node(&value::escape_single_quote_string(pattern));
+                f.write_str("'");
+            }
+            Where(expr) => {
+                f.write_str("WHERE ");
+                f.write_node(expr);
+            }
         }
     }
 }
+impl_display!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SetVariableValue {
@@ -1464,15 +1656,16 @@ pub enum SetVariableValue {
     Literal(Value),
 }
 
-impl fmt::Display for SetVariableValue {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for SetVariableValue {
+    fn fmt(&self, f: &mut AstFormatter) {
         use SetVariableValue::*;
         match self {
-            Ident(ident) => write!(f, "{}", ident),
-            Literal(literal) => write!(f, "{}", literal),
+            Ident(ident) => f.write_node(ident),
+            Literal(literal) => f.write_node(literal),
         }
     }
 }
+impl_display!(SetVariableValue);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IfExistsBehavior {

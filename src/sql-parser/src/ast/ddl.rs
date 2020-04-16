@@ -21,6 +21,7 @@
 //! AST types specific to CREATE/ALTER variants of [Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
 use super::{display_comma_separated, DataType, Expr, Ident, ObjectName};
+use crate::ast::display::{AstDisplay, AstFormatter};
 use std::fmt;
 
 /// An `ALTER TABLE` (`Statement::AlterTable`) operation
@@ -32,14 +33,21 @@ pub enum AlterTableOperation {
     DropConstraint { name: Ident },
 }
 
-impl fmt::Display for AlterTableOperation {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for AlterTableOperation {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            AlterTableOperation::AddConstraint(c) => write!(f, "ADD {}", c),
-            AlterTableOperation::DropConstraint { name } => write!(f, "DROP CONSTRAINT {}", name),
+            AlterTableOperation::AddConstraint(c) => {
+                f.write_str("ADD ");
+                f.write_node(c);
+            }
+            AlterTableOperation::DropConstraint { name } => {
+                f.write_str("DROP CONSTRAINT ");
+                f.write_node(name);
+            }
         }
     }
 }
+impl_display!(AlterTableOperation);
 
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.
@@ -67,39 +75,49 @@ pub enum TableConstraint {
     },
 }
 
-impl fmt::Display for TableConstraint {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for TableConstraint {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             TableConstraint::Unique {
                 name,
                 columns,
                 is_primary,
-            } => write!(
-                f,
-                "{}{} ({})",
-                display_constraint_name(name),
-                if *is_primary { "PRIMARY KEY" } else { "UNIQUE" },
-                display_comma_separated(columns)
-            ),
+            } => {
+                f.write_node(&display_constraint_name(name));
+                if *is_primary {
+                    f.write_str("PRIMARY KEY ");
+                } else {
+                    f.write_str("UNIQUE ");
+                }
+                f.write_str("(");
+                f.write_node(&display_comma_separated(columns));
+                f.write_str(")");
+            }
             TableConstraint::ForeignKey {
                 name,
                 columns,
                 foreign_table,
                 referred_columns,
-            } => write!(
-                f,
-                "{}FOREIGN KEY ({}) REFERENCES {}({})",
-                display_constraint_name(name),
-                display_comma_separated(columns),
-                foreign_table,
-                display_comma_separated(referred_columns)
-            ),
+            } => {
+                f.write_node(&display_constraint_name(name));
+                f.write_str("FOREIGN KEY (");
+                f.write_node(&display_comma_separated(columns));
+                f.write_str(") REFERENCES ");
+                f.write_node(foreign_table);
+                f.write_str("(");
+                f.write_node(&display_comma_separated(referred_columns));
+                f.write_str(")");
+            }
             TableConstraint::Check { name, expr } => {
-                write!(f, "{}CHECK ({})", display_constraint_name(name), expr)
+                f.write_node(&display_constraint_name(name));
+                f.write_str("CHECK (");
+                f.write_node(&expr);
+                f.write_str(")");
             }
         }
     }
 }
+impl_display!(TableConstraint);
 
 /// SQL column definition
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -110,15 +128,18 @@ pub struct ColumnDef {
     pub options: Vec<ColumnOptionDef>,
 }
 
-impl fmt::Display for ColumnDef {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} {}", self.name, self.data_type)?;
+impl AstDisplay for ColumnDef {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_node(&self.data_type);
         for option in &self.options {
-            write!(f, " {}", option)?;
+            f.write_str(" ");
+            f.write_node(option);
         }
-        Ok(())
     }
 }
+impl_display!(ColumnDef);
 
 /// An optionally-named `ColumnOption`: `[ CONSTRAINT <name> ] <column-option>`.
 ///
@@ -142,11 +163,13 @@ pub struct ColumnOptionDef {
     pub option: ColumnOption,
 }
 
-impl fmt::Display for ColumnOptionDef {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}", display_constraint_name(&self.name), self.option)
+impl AstDisplay for ColumnOptionDef {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&display_constraint_name(&self.name));
+        f.write_node(&self.option);
     }
 }
+impl_display!(ColumnOptionDef);
 
 /// `ColumnOption`s are modifiers that follow a column definition in a `CREATE
 /// TABLE` statement.
@@ -172,38 +195,52 @@ pub enum ColumnOption {
     Check(Expr),
 }
 
-impl fmt::Display for ColumnOption {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for ColumnOption {
+    fn fmt(&self, f: &mut AstFormatter) {
         use ColumnOption::*;
         match self {
-            Null => write!(f, "NULL"),
-            NotNull => write!(f, "NOT NULL"),
-            Default(expr) => write!(f, "DEFAULT {}", expr),
+            Null => f.write_str("NULL"),
+            NotNull => f.write_str("NOT NULL"),
+            Default(expr) => {
+                f.write_str("DEFAULT ");
+                f.write_node(expr);
+            }
             Unique { is_primary } => {
-                write!(f, "{}", if *is_primary { "PRIMARY KEY" } else { "UNIQUE" })
+                if *is_primary {
+                    f.write_str("PRIMARY KEY");
+                } else {
+                    f.write_str("UNIQUE");
+                }
             }
             ForeignKey {
                 foreign_table,
                 referred_columns,
-            } => write!(
-                f,
-                "REFERENCES {} ({})",
-                foreign_table,
-                display_comma_separated(referred_columns)
-            ),
-            Check(expr) => write!(f, "CHECK ({})", expr),
+            } => {
+                f.write_str("REFERENCES ");
+                f.write_node(foreign_table);
+                f.write_str(" (");
+                f.write_node(&display_comma_separated(referred_columns));
+                f.write_str(")");
+            }
+            Check(expr) => {
+                f.write_str("CHECK (");
+                f.write_node(expr);
+                f.write_str(")");
+            }
         }
     }
 }
+impl_display!(ColumnOption);
 
-fn display_constraint_name<'a>(name: &'a Option<Ident>) -> impl fmt::Display + 'a {
+fn display_constraint_name<'a>(name: &'a Option<Ident>) -> impl AstDisplay + 'a {
     struct ConstraintName<'a>(&'a Option<Ident>);
-    impl<'a> fmt::Display for ConstraintName<'a> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    impl<'a> AstDisplay for ConstraintName<'a> {
+        fn fmt(&self, f: &mut AstFormatter) {
             if let Some(name) = self.0 {
-                write!(f, "CONSTRAINT {} ", name)?;
+                f.write_str("CONSTRAINT ");
+                f.write_node(name);
+                f.write_str(" ");
             }
-            Ok(())
         }
     }
     ConstraintName(name)
