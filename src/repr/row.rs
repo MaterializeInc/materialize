@@ -670,12 +670,25 @@ impl RowPacker {
         self.data.extend(&*row.data);
     }
 
-    /// Finish packing and return a `Row`
+    /// Finish packing and return a `Row`.
     pub fn finish(self) -> Row {
         Row {
             // drop excess capacity
             data: self.data.into_boxed_slice(),
         }
+    }
+
+    /// Finish packing and return a `Row`.
+    ///
+    /// Unlike [`RowPacker::finish`], this method uses `self.data` to right-size an
+    /// allocation for the new `Row` copied from `self.data`, rather than
+    /// move the allocation (and potentially re-alloc to resize it).
+    /// In principle this can reduce the amount of interaction with the
+    /// allocator, as opposed to creating new row packers for each row.
+    pub fn finish_and_reuse(&mut self) -> Row {
+        let data = Box::<[u8]>::from(&self.data[..]);
+        self.data.clear();
+        Row { data }
     }
 
     /// Start packing a `DatumList`.
