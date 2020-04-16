@@ -87,6 +87,7 @@ case "$cmd" in
                 --volume "/var/run/docker.sock:/var/run/docker.sock"
                 --volume "$HOME/.cargo:/cargo"
                 --volume "$HOME/.docker/config.json:/docker/config.json"
+                --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
                 --env "CARGO_HOME=/cargo"
                 --env "DOCKER_CONFIG=/docker"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
