@@ -3055,7 +3055,7 @@ pub enum VariadicFunc {
     JsonbBuildObject,
     ListCreate {
         // we need to know this to type exprs with empty lists
-        elem_type: ColumnType,
+        elem_type: ScalarType,
     },
 }
 
@@ -3124,8 +3124,8 @@ impl VariadicFunc {
                 debug_assert!(
                     input_types
                         .iter()
-                        .all(|t| t.scalar_type == elem_type.scalar_type
-                            || (t.scalar_type == ScalarType::Unknown && elem_type.nullable)),
+                        .all(|t| t.scalar_type == *elem_type
+                            || (t.scalar_type == ScalarType::Unknown)),
                     "Args to ListCreate should have types that are compatible with the elem_type"
                 );
                 ColumnType::new(ScalarType::List(Box::new(elem_type.clone())))
