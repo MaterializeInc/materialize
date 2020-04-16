@@ -142,7 +142,12 @@ pub fn plan_show_where(
     Ok((
         row_expr,
         RowSetFinishing {
-            order_by: vec![],
+            order_by: (0..num_cols)
+                .map(|c| ColumnOrder {
+                    column: c,
+                    desc: false,
+                })
+                .collect(),
             limit: None,
             offset: 0,
             project: (0..num_cols).collect(),
