@@ -64,6 +64,7 @@ where
             // of the operator and its arrangement).
 
             let keys_clone = group_key.clone();
+            let relation_expr_clone = relation_expr.clone();
 
             self.ensure_rendered(input, scope, worker_index);
             let (ok_input, err_input) = self.collection(input).unwrap();
@@ -145,11 +146,12 @@ where
                             // case, rather than panic, though we surely want to see what is up.
                             // XXX: This panic reports user-supplied data!
                             panic!(
-                                "ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}\n\tKey:{:?}",
+                                "ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}\n\tKey:{:?}\nRelationExpr:\n{}",
                                 (0..aggregates_len).collect::<Vec<_>>(),
                                 input.iter().map(|((p,_),_)| p).collect::<Vec<_>>(),
                                 aggregates_clone,
                                 key,
+                                relation_expr_clone.pretty(),
                             );
                         }
                         let mut result = RowPacker::new();
@@ -274,9 +276,16 @@ where
         // The same code should work on data that can not be hierarchically reduced.
         partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
             move |key, source, target| {
-                if source.iter().any(|(_val, cnt)| cnt <= &0) {
-                    // TODO(frank): Consider reporting the actual offending data.
-                    log::error!("Negative accumulation in ReduceInaccumulable");
+                // Negative counts would be surprising, but until we are 100% certain we wont
+                // see them, we should report when we do. We may want to bake even more info
+                // in here in the future.
+                if source.iter().any(|(_val, cnt)| cnt < &0) {
+                    // XXX: This reports user data, which we perhaps should not do!
+                    for (val, cnt) in source.iter() {
+                        if cnt < &0 {
+                            log::error!("Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
+                        }
+                    }
                 } else {
                     // We respect the multiplicity here (unlike in hierarchical aggregation)
                     // because we don't know that the aggregation method is not sensitive
