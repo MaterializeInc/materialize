@@ -68,7 +68,7 @@ copyright_files=$(grep -vE \
     -e '\.(md|json|asc|png|jpe?g|svg|avro|pb)$' \
     -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^www/static/_redirects$' \
-    -e '^misc/ci-builder/(ssh_known_hosts|stable.stamp|nightly.stamp)$' \
+    -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp)$' \
     -e 'demo/chbench/chbench' \
     -e 'src/billing-demo/resources/views/.*\.sql\.in' \
     -e 'gen/.*\.rs' \
@@ -80,7 +80,7 @@ copyright_files=$(grep -vE \
 # a trailing newline to the text file instead.
 newline_files=$(grep -vE '\.(png|jpe?g|pb|avro)$' <<< "$files")
 
-shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.md'))
+shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.*'))
 
 try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
 try xargs misc/lint/trailing-newline.sh <<< "$newline_files"

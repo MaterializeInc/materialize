@@ -17,6 +17,8 @@ rust-gdb / rust-lldb
 locally
 * [metabase-demo.md](metabase-demo.md) contains instructions for setting up and viewing
 Metabase dashboards with Materialize
+* [mzbuild.md](mzbuild.md) describes the custom build system we use to manage
+  our Docker images and Docker Compose configurations.
 * [project-management.md](project-management.md) tries to describe our current
 process for managing Github issues and milestones. Note that while all of these
 docs are subject to change, this one is _especially_ subject to change.

@@ -15,12 +15,6 @@ cd "$(dirname "$0")"
 
 . ../../misc/shlib/shlib.bash
 
-IMAGES=(
-    materialize/materialized:latest
-    materialize/peeker:latest
-    materialize/chbenchmark:latest
-)
-
 NOW="$(date +%Y%m%d_%H%M%S)"
 
 BACKUP_DIRS=(
@@ -28,10 +22,10 @@ BACKUP_DIRS=(
     prometheus/data
 )
 
-# docker-compose env vars
-export MZ_IMG=materialize/materialized:latest
+# mzcompose env vars
 export MZ_THREADS=1
-export PEEKER_IMG=materialize/peeker:latest
+export MZBUILD_MATERIALIZED_TAG
+export MZBUILD_PEEKER_TAG
 
 # cli options
 HELP=n
@@ -145,21 +139,21 @@ parse_opts() {
             # selecting which version to run
             --tag)
                 local tag="${1:?--tag requires an argument}" && shift
-                MZ_IMG=materialize/materialized:"${tag}"
-                PEEKER_IMG=materialize/peeker:"${tag}"
+                MZBUILD_MATERIALIZED_TAG=${tag}
+                MZBUILD_PEEKER_TAG=${tag}
                 ;;
             --commit)
                 local sha="${1:?--commit requires an argument}" && shift
-                MZ_IMG=materialize/materialized:unstable-"${sha}"
-                PEEKER_IMG=materialize/peeker:unstable-"${sha}"
+                MZBUILD_MATERIALIZED_TAG=unstable-${sha}
+                MZBUILD_PEEKER_TAG=unstable-${sha}
                 ;;
             --mz-docker-tag)
                 local tag="${1:?--mz-docker-tag requires an argument}" && shift
-                MZ_IMG=materialize/materialized:"${tag}"
+                MZBUILD_MATERIALIZED_TAG=${tag}
                 ;;
             --peeker-docker-tag)
                 local tag="${1:?--peeker-docker-tag requires an argument}" && shift
-                PEEKER_IMG=materialize/peeker:"${tag}"
+                MZBUILD_PEEKER_TAG=${tag}
                 ;;
             --peeker-opts)
                 local peeker_opts="${1:?--peeker opts requires one argument}" && shift
@@ -211,11 +205,11 @@ Possible COMMANDs:
     `us status`            Show cluster status
 
  Individual service commands:
-    `us run SERVICE \[ARGS..\]`          Equivalent of 'docker-compose run ..ARGS' -- leaves the terminal
+    `us run SERVICE \[ARGS..\]`          Equivalent of './mzcompose run ..ARGS' -- leaves the terminal
                                     connected and running
     `us restart \(SERVICE\|all\)`         Restart either SERVICE or all services. This preserves data in
                                     volumes (kafka, debezium, etc)
-    `us logs SERVICE \[NUM LINES..\]`    Equivalent of 'docker-compose logs SERVICE'. To print a limited
+    `us logs SERVICE \[NUM LINES..\]`    Equivalent of './mzcompose logs SERVICE'. To print a limited
                                     number of log messages, enter the number after the SERVICE.
 
  Load test commands:
@@ -258,23 +252,16 @@ bring_up() {
 }
 
 bring_up_source_data() {
-    for image in "${IMAGES[@]}"; do
-        # if we are running with `:local` images then we don't need to pull, so check
-        # that `<tag>:latest` is actually in the compose file
-        if (grep "${image}" docker-compose.yml chbench/Dockerfile >/dev/null 2>&1); then
-            runv docker pull "$image"
-        fi
-    done
     dc_up materialized mysql
     dc_run_wait_cmd \
             mysql \
             mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
-    runv docker-compose logs --tail 5 materialized
-    runv docker-compose logs --tail 5 mysql
+    runv ./mzcompose --mz-quiet logs --tail 5 materialized
+    runv ./mzcompose --mz-quiet logs --tail 5 mysql
     dc_up connector
     echo "Waiting for schema registry to be fully up"
     sleep 5
-    docker-compose logs --tail 5 schema-registry
+    ./mzcompose --mz-quiet logs --tail 5 schema-registry
 }
 
 bring_up_introspection() {
@@ -295,7 +282,7 @@ initialize_warehouse() {
             mysql \
             mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
     fi
-    runv docker-compose run chbench gen --warehouses=1
+    runv ./mzcompose --mz-quiet run chbench gen --warehouses=1
 }
 
 # helper/individual step commands
@@ -303,12 +290,12 @@ initialize_warehouse() {
 # Start a single service and all its dependencies
 dc_up() {
     parse_opts "$@"
-    runv docker-compose up -d --build "${OPTIONS[@]}"
+    runv ./mzcompose --mz-quiet up -d --build "${OPTIONS[@]}"
 }
 
-# Stop the named docker-compose service
+# Stop the named mzcompose service
 #
-# This can stop multiple services, but services started by 'docker-compose run -d'/'dc.sh
+# This can stop multiple services, but services started by 'mzcompose run -d'/'dc.sh
 # run -d' must be stopped one at at time.
 dc_stop() {
     if [[ $# -eq 1 ]]; then
@@ -319,18 +306,18 @@ dc_stop() {
             runv docker stop "$run_cmd"
             return
         elif [[ -n $is_up ]]; then
-            runv docker-compose stop "$1"
+            runv ./mzcompose --mz-quiet stop "$1"
             return
         else
             echo "No running container"
             return
         fi
     fi
-    runv docker-compose stop "$@"
+    runv ./mzcompose --mz-quiet stop "$@"
 }
 
 dc_run() {
-    runv docker-compose run --use-aliases --service-ports "$@"
+    runv ./mzcompose --mz-quiet run --use-aliases --service-ports "$@"
 }
 
 dc_logs() {
@@ -346,7 +333,7 @@ dc_logs() {
     if [[ -n $run_cmd ]]; then
         runv docker logs "${args[@]}" "$run_cmd"
     else
-        runv docker-compose logs "${args[@]}" "${cmd[@]}"
+        runv ./mzcompose --mz-quiet logs "${args[@]}" "${cmd[@]}"
     fi
 }
 
@@ -384,7 +371,7 @@ dc_status_inner() {
     set +e
     for proc in "${procs[@]}" ; do
         local port
-        port="$(grep -o "&$proc.*" docker-compose.yml | sed -E -e "s/&$proc//" -e 's/:[0-9]+//')"
+        port="$(grep -o "&$proc.*" mzcompose.yml | sed -E -e "s/&$proc//" -e 's/:[0-9]+//')"
         echo "$proc $port"
     done
     set -e
@@ -402,7 +389,7 @@ dc_is_running() {
 dc_run_query() {
     local query=$1
     # shellcheck disable=SC2059
-    (printf "$query\n" | docker-compose run cli psql -q -h materialized -p 6875 -d materialize) || true
+    (printf "$query\n" | ./mzcompose --mz-quiet run cli psql -q -h materialized -p 6875 -d materialize) || true
 }
 
 dc_check_query() {
@@ -443,7 +430,7 @@ dc_ensure_stays_up() {
 dc_run_wait_cmd() {
     local service=$1 && shift
     echo -n "Waiting for $service to be up"
-    while ! docker-compose run "$@" >/dev/null 2>&1; do
+    while ! ./mzcompose run "$@" >/dev/null 2>&1; do
         echo -n '.'
         sleep 0.2
     done
@@ -456,13 +443,13 @@ dc_chbench_containers() {
 }
 
 shut_down() {
-    runv docker-compose down
+    runv ./mzcompose --mz-quiet down
 }
 
 restart() {
     local service="$1" && shift
     if [[ $service != all ]]; then
-        runv docker-compose stop "$service"
+        runv ./mzcompose --mz-quiet stop "$service"
         dc_up "$service"
     else
         shut_down
@@ -501,8 +488,6 @@ drop_kafka_topics() {
 ci() {
     bring_up_source_data
     drop_kafka_topics
-    export MZ_IMG=materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
-    export PEEKER_IMG=materialize/ci-peeker:${BUILDKITE_BUILD_NUMBER}
     dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \

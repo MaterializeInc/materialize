@@ -18,7 +18,7 @@ production readiness.
   v0.2.3 would be called v0.2.3-rc1.
 
 - [ ] Update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-      and commit that change.
+      and [`LICENSE`](/LICENSE) and commit that change.
 
   ```diff
   diff --git a/src/materialized/Cargo.toml b/src/materialized/Cargo.toml
@@ -34,7 +34,30 @@ production readiness.
   edition = "2018"
   publish = false
   default-run = "materialized"
+
+  diff --git a/LICENSE b/LICENSE
+  index 9ca12b61..04c40820 100644
+  --- a/LICENSE
+  +++ b/LICENSE
+  @@ -13,7 +13,7 @@ Business Source License 1.1
+
+   Licensor:                  Materialize, Inc.
+
+  -Licensed Work:             Materialize Version 0.1
+  +Licensed Work:             Materialize Version 0.1.1
+                              The Licensed Work is © 2020 Materialize, Inc.
+
+   Additional Use Grant:      You may use one single server instance of the
+  @@ -29,7 +29,7 @@ Additional Use Grant:      You may use one single server instance of the
+                              functionality of the Licensed Work by creating views
+                              whose schemas are controlled by such third parties.
+
+  -Change Date:               February 1, 2024
+  +Change Date:               <RELEASE DATE + 4 YEARS>
+
+   Change License:            Apache License, Version 2.0
   ```
+
 
 - [ ] Create the release tag on the current commit.
 
@@ -84,7 +107,7 @@ production readiness.
 
     ```shell
     cd src/billing-demo
-    # Manually edit the docker-compose.yml to have `--message-count 100000000`
+    # Manually edit the mzcompose.yml to have `--message-count 100000000`
     # Follow the rest of the instructions in README.md
     ```
 
@@ -132,8 +155,11 @@ production readiness.
   updating the links appropriately.
 
 - [ ] On **master**, update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-      to `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on
-      master to `v0.1.3-dev`.
+  to `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on
+  master to `v0.1.3-dev`.
+
+   Also update the [`LICENSE`](/LICENSE) file with the changes from the
+   release branch, so that it reflects the latest release of Materialize.
 
 [homebrew-guide]: https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md
 [new-github-release]: https://github.com/MaterializeInc/materialize/releases/new

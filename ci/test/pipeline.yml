@@ -36,9 +36,8 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - MaterializeInc/uid#master: ~
-      - docker-compose#v3.3.0:
-          config: ci/test/cargo-test.compose.yml
+      - ./ci/plugins/mzcompose:
+          config: ci/test/cargo-test.mzcompose.yml
           run: app
     if: $CHANGED_RUST
 
@@ -55,9 +54,8 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - MaterializeInc/uid#master: ~
-      - docker-compose#v3.3.0:
-          config: ci/test/testdrive.compose.yml
+      - ./ci/plugins/mzcompose:
+          config: test/testdrive/mzcompose.yml
           run: testdrive
     if: $CHANGED_RUST || $CHANGED_TESTDRIVE
 
@@ -69,9 +67,8 @@ steps:
     env:
       SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
     plugins:
-      - MaterializeInc/uid#master: ~
-      - docker-compose#v3.3.0:
-          config: ci/slt/docker-compose.yml
+      - ./ci/plugins/mzcompose:
+          config: test/sqllogictest/mzcompose.yml
           run: sqllogictest
     if: $CHANGED_RUST || $CHANGED_SLT
 
@@ -80,19 +77,16 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - MaterializeInc/uid#master: ~
-      - docker-compose#v3.3.0:
-          config: ci/test/streaming-demo.compose.yml
+      - ./ci/plugins/mzcompose:
+          config: src/billing-demo/mzcompose.yml
           run: billing-demo
     if: $CHANGED_RUST
 
   - id: chbench-demo
     label: "chbench sanity check"
     depends_on: build
-    command: demo/chbench/dc.sh ci
+    command: bin/ci-builder run stable demo/chbench/dc.sh ci
     timeout_in_minutes: 30
-    plugins:
-      - MaterializeInc/uid#master: ~
     if: $CHANGED_RUST || $CHANGED_CHBENCH
 
   - id: catalog-compat
@@ -100,9 +94,8 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - MaterializeInc/uid#master: ~
-      - docker-compose#v3.3.0:
-          config: ci/test/catalog-compat.compose.yml
+      - ./ci/plugins/mzcompose:
+          config: test/catalog-compat/mzcompose.yml
           run: catalog-compat
     if: $CHANGED_RUST
 
@@ -111,31 +104,18 @@ steps:
     depends_on: build
     timeout_in_minutes: 10
     plugins:
-      - MaterializeInc/uid#master: ~
-      - docker-compose#v3.3.0:
-          config: ci/test/metabase-demo.compose.yml
+      - ./ci/plugins/mzcompose:
+          config: test/metabase/mzcompose.yml
           run: healthcheck
     if: $CHANGED_RUST
-
-  - id: full-sqllogictest
-    label: ":bulb: :bulb: Full SQL logic tests"
-    depends_on: build
-    trigger: sql-logic-tests
-    async: true
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
 
   - id: lang-js
     label: ":javascript: tests"
     depends_on: build
     timeout_in_minutes: 10
     plugins:
-      - MaterializeInc/uid#master: ~
-      - docker-compose#v3.3.0:
-          config: ci/test/lang.js.compose.yml
+      - ./ci/plugins/mzcompose:
+          config: test/lang/js/mzcompose.yml
           run: js
     if: $CHANGED_RUST || $CHANGED_JS
 
