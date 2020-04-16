@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rusoto_kinesis::{DescribeStreamInput, Kinesis, Shard, UpdateShardCountInput};
+use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -45,7 +46,7 @@ impl Action for UpdateShardCountAction {
             stream_name, self.target_shard_count
         );
 
-        let out = state
+        state
             .kinesis_client
             .update_shard_count(UpdateShardCountInput {
                 scaling_type: "UNIFORM_SCALING".to_owned(),
@@ -54,7 +55,6 @@ impl Action for UpdateShardCountAction {
             })
             .await
             .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
-        dbg!(&out);
 
         // Verify the current shard count.
         retry::retry_max_backoff(Duration::from_secs(30), || async {
@@ -76,18 +76,18 @@ impl Action for UpdateShardCountAction {
                 ));
             }
 
-            dbg!(&description.shards);
-            let active_shards: Vec<&Shard> = description
-                .shards
-                .iter()
-                .filter(|shard| shard.sequence_number_range.ending_sequence_number.is_none())
-                .collect();
-            //https://stackoverflow.com/questions/28273169/how-do-i-convert-between-numeric-types-safely-and-idiomatically
-            if active_shards.len() as i64 != self.target_shard_count {
+            let active_shards_len = i64::try_from(
+                description
+                    .shards
+                    .iter()
+                    .filter(|shard| shard.sequence_number_range.ending_sequence_number.is_none())
+                    .count(),
+            )
+            .map_err(|e| format!("converting shard length to i64: {}", e))?;
+            if active_shards_len != self.target_shard_count {
                 return Err(format!(
                     "Expected {} shards, found {}",
-                    self.target_shard_count,
-                    active_shards.len()
+                    self.target_shard_count, active_shards_len
                 ));
             }
             Ok(())

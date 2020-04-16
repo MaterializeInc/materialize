@@ -161,7 +161,9 @@ where
                     activator.activate();
                 }
             }
-            // todo@jdlaughlin: Should have a check here! Describe stream.
+            // todo@jdlaughlin: Revisit when Kinesis sources should be marked as done.
+            // Should switch to when we fail to get a stream description (the stream is
+            // closed)?
             SourceStatus::Done
         }
     });
