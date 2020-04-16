@@ -51,7 +51,7 @@ lazy_static! {
     static ref LIST: postgres_types::Type = postgres_types::Type::new(
         "LIST".to_owned(),
         // OID chosen at random
-        72794149,
+        72_794_149,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
