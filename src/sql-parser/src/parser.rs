@@ -347,10 +347,7 @@ impl Parser {
             return parser_err!(
                 self,
                 all_range.start..distinct_range.end,
-                format!(
-                    "Cannot specify both ALL and DISTINCT in function: {}",
-                    name.to_string(),
-                )
+                format!("Cannot specify both ALL and DISTINCT in function: {}", name)
             );
         }
         let args = self.parse_optional_args()?;

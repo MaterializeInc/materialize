@@ -66,28 +66,28 @@ impl Action for SqlAction {
             Statement::CreateSchema { name, .. } => {
                 self.try_drop(
                     &mut state.pgclient,
-                    &format!("DROP SCHEMA IF EXISTS {} CASCADE", name.to_string()),
+                    &format!("DROP SCHEMA IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
             Statement::CreateSource { name, .. } => {
                 self.try_drop(
                     &mut state.pgclient,
-                    &format!("DROP SOURCE IF EXISTS {} CASCADE", name.to_string()),
+                    &format!("DROP SOURCE IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
             Statement::CreateView { name, .. } => {
                 self.try_drop(
                     &mut state.pgclient,
-                    &format!("DROP VIEW IF EXISTS {} CASCADE", name.to_string()),
+                    &format!("DROP VIEW IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
             Statement::CreateTable { name, .. } => {
                 self.try_drop(
                     &mut state.pgclient,
-                    &format!("DROP TABLE IF EXISTS {} CASCADE", name.to_string()),
+                    &format!("DROP TABLE IF EXISTS {} CASCADE", name),
                 )
                 .await
             }

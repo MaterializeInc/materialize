@@ -403,10 +403,7 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
                 }
                 types = if let Some(types) = types {
                     if types.len() != value_exprs.len() {
-                        bail!(
-                            "VALUES expression has varying number of columns: {}",
-                            q.to_string()
-                        );
+                        bail!("VALUES expression has varying number of columns: {}", q);
                     }
                     Some(
                         types
@@ -3107,9 +3104,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             }
         }
         Value::SingleQuotedString(s) => (Datum::String(s), ScalarType::String),
-        Value::HexStringLiteral(_) => {
-            bail!("x'' string literals are not supported: {}", l.to_string())
-        }
+        Value::HexStringLiteral(_) => bail!("x'' string literals are not supported: {}", l),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
@@ -3131,7 +3126,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Unknown),
-        Value::Array(_) => bail!("ARRAY literals are not supported: {}", l.to_string()),
+        Value::Array(_) => bail!("ARRAY literals are not supported: {}", l),
     })
 }
 
