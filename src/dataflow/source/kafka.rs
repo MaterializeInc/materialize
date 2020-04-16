@@ -264,7 +264,7 @@ where
                                 bytes_read += out.len() as i64;
                                 output
                                     .session(&cap)
-                                    .give((key, (out, Some(message.offset()))));
+                                    .give((key, (out, Some(message.offset))));
 
                                 downgrade_capability(
                                     &id,
