@@ -38,7 +38,7 @@ mod kafka;
 mod kinesis;
 mod sql;
 
-const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 
 /// User-settable configuration parameters.
 #[derive(Debug)]

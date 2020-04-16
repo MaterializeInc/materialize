@@ -56,7 +56,7 @@ impl Action for UpdateShardCountAction {
 
         // Verify the current shard count.
         retry::retry(|| async {
-            let current_shard_count = state
+            let shards = state
                 .kinesis_client
                 .describe_stream(DescribeStreamInput {
                     exclusive_start_shard_id: None,
@@ -66,13 +66,14 @@ impl Action for UpdateShardCountAction {
                 .await
                 .map_err(|e| format!("getting current shard count: {}", e))?
                 .stream_description
-                .shards
-                .len();
+                .shards;
+            dbg!(&shards);
             //https://stackoverflow.com/questions/28273169/how-do-i-convert-between-numeric-types-safely-and-idiomatically
-            if current_shard_count as i64 != self.target_shard_count {
+            if shards.len() as i64 != self.target_shard_count {
                 return Err(format!(
                     "Expected {} shards, found {}",
-                    self.target_shard_count, current_shard_count
+                    self.target_shard_count,
+                    shards.len()
                 ));
             }
             Ok(())
