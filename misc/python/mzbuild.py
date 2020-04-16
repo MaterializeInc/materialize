@@ -98,7 +98,9 @@ class PreImage:
         runv(["git", "clean", "-ffdX", path])
 
     def depends(self, root: Path, path: Path) -> List[bytes]:
-        pass
+        # HACK(benesch): all Rust code implicitly depends on the ci-builder
+        # version. Can we express this with less hardcoding?
+        return [b"ci/builder/stable.stamp", b"ci/builder/nightly.stamp"]
 
 
 class CargoBuild(PreImage):
@@ -123,7 +125,7 @@ class CargoBuild(PreImage):
     def depends(self, root: Path, path: Path) -> List[bytes]:
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
-        return git_ls_files(root, "src/**", "Cargo.toml", "Cargo.lock")
+        return super().depends(root, path) + git_ls_files(root, "src/**", "Cargo.toml", "Cargo.lock")
 
 
 # TODO(benesch): make this less hardcoded and custom.
@@ -182,7 +184,7 @@ class CargoTest(PreImage):
     def depends(self, root: Path, path: Path) -> List[bytes]:
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
-        return git_ls_files(root, "src/**", "Cargo.toml", "Cargo.lock")
+        return super().depends(root, path) + git_ls_files(root, "src/**", "Cargo.toml", "Cargo.lock")
 
 
 class Image:
