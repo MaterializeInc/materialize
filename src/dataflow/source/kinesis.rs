@@ -17,7 +17,7 @@ use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
     GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorInput, Kinesis,
-    KinesisClient, ListShardsInput, Shard,
+    KinesisClient, ListShardsInput,
 };
 
 use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
@@ -202,14 +202,13 @@ fn create_state(
     let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
     let client = KinesisClient::new_with(http_client, provider, c.region);
 
-    let mut shard_set: HashSet<String> = HashSet::new();
+    let shard_set: HashSet<String> = get_shard_ids(&client, &c.stream_name)?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
-    for shard in list_shards(&client, &c.stream_name)? {
-        shard_set.insert(shard.shard_id.clone());
+    for shard_id in &shard_set {
         shard_queue.push_back((
-            shard.shard_id.clone(),
-            get_shard_iterator(&client, &shard.shard_id, &c.stream_name, "TRIM_HORIZON")?,
-        ));
+            shard_id.clone(),
+            get_shard_iterator(&client, shard_id, &c.stream_name, "TRIM_HORIZON")?,
+        ))
     }
     Ok((client, c.stream_name.clone(), shard_set, shard_queue))
 }
@@ -269,19 +268,24 @@ fn update_shard_information(
     shard_set: &mut HashSet<String>,
     shard_queue: &mut VecDeque<(String, Option<String>)>,
 ) -> Result<(), failure::Error> {
-    for shard in list_shards(&client, stream_name)? {
-        if !shard_set.contains(&shard.shard_id) {
-            shard_set.insert(shard.shard_id.clone());
-            shard_queue.push_back((
-                shard.shard_id.clone(),
-                get_shard_iterator(&client, &shard.shard_id, stream_name, "TRIM_HORIZON")?,
-            ));
-        }
+    let new_shards: HashSet<String> = get_shard_ids(&client, stream_name)?
+        .difference(shard_set)
+        .map(|shard_id| shard_id.to_owned())
+        .collect();
+    for shard_id in new_shards {
+        shard_set.insert(shard_id.clone());
+        shard_queue.push_back((
+            shard_id.clone(),
+            get_shard_iterator(&client, &shard_id, stream_name, "TRIM_HORIZON")?,
+        ));
     }
     Ok(())
 }
 
-fn list_shards(client: &KinesisClient, stream_name: &str) -> Result<Vec<Shard>, failure::Error> {
+fn get_shard_ids(
+    client: &KinesisClient,
+    stream_name: &str,
+) -> Result<HashSet<String>, failure::Error> {
     match block_on(client.list_shards(ListShardsInput {
         exclusive_start_shard_id: None,
         max_results: None,
@@ -292,7 +296,7 @@ fn list_shards(client: &KinesisClient, stream_name: &str) -> Result<Vec<Shard>, 
     .with_context(|e| format!("fetching shard list: {}", e))?
     .shards
     {
-        Some(shards) => Ok(shards),
+        Some(shards) => Ok(shards.iter().map(|shard| shard.shard_id.clone()).collect()),
         None => bail!("kinesis stream {} does not contain any shards", stream_name),
     }
 }
