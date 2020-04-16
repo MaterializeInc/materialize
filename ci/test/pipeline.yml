@@ -109,17 +109,6 @@ steps:
           run: healthcheck
     if: $CHANGED_RUST
 
-  - id: full-sqllogictest
-    label: ":bulb: :bulb: Full SQL logic tests"
-    depends_on: build
-    trigger: sql-logic-tests
-    async: true
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
-
   - id: lang-js
     label: ":javascript: tests"
     depends_on: build
