@@ -2081,6 +2081,7 @@ dependencies = [
  "chrono",
  "expr",
  "failure",
+ "lazy_static",
  "postgres-types",
  "repr",
  "serde_json",
