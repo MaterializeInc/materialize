@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::iter;
-
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::hashable::Hashable;
@@ -25,7 +23,7 @@ use expr::{AggregateExpr, AggregateFunc, EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
-use crate::operator::CollectionExt;
+use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Arrangement;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
@@ -66,6 +64,7 @@ where
             // of the operator and its arrangement).
 
             let keys_clone = group_key.clone();
+            let relation_expr_clone = relation_expr.clone();
 
             self.ensure_rendered(input, scope, worker_index);
             let (ok_input, err_input) = self.collection(input).unwrap();
@@ -134,15 +133,30 @@ where
                 // in differential dataflow.
                 let oks = differential_dataflow::collection::concatenate(scope, ok_partials)
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
+                    let aggregates_clone = aggregates.clone();
                     let aggregates_len = aggregates.len();
                     move |key, input, output| {
                         // The intent, unless things are terribly wrong, is that `input`
-                        // contains, in order, the values to drop into `output`.
-                        assert_eq!(input.len(), aggregates_len);
+                        // contains, in order, the values to drop into `output`. If this
+                        // is not the case, we should express our specific discontent.
+                        if input.len() != aggregates_len || input.iter().enumerate().any(|(i,((p,_),_))| &i != p) {
+                            // TODO(frank): Arguably, the absence of one aggregate is evidence
+                            // that the key doesn't exist (the others could be phantoms due to
+                            // negative input records); we could just suppress the output in that
+                            // case, rather than panic, though we surely want to see what is up.
+                            // XXX: This panic reports user-supplied data!
+                            panic!(
+                                "ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}\n\tKey:{:?}\nRelationExpr:\n{}",
+                                (0..aggregates_len).collect::<Vec<_>>(),
+                                input.iter().map(|((p,_),_)| p).collect::<Vec<_>>(),
+                                aggregates_clone,
+                                key,
+                                relation_expr_clone.pretty(),
+                            );
+                        }
                         let mut result = RowPacker::new();
                         result.extend(key.iter());
-                        for (index, ((pos, val), cnt)) in input.iter().enumerate() {
-                            assert_eq!(*pos, index);
+                        for ((_pos, val), cnt) in input.iter() {
                             assert_eq!(*cnt, 1);
                             result.push(val.unpack().pop().unwrap());
                         }
@@ -179,18 +193,65 @@ where
         distinct,
     } = aggr.clone();
 
-    // The `partial` collection contains `(key, val)` pairs.
-    let (mut partial, err_partial) = ok_input.map_fallible({
-        let group_key = group_key.to_vec();
-        move |row| {
-            let temp_storage = RowArena::new();
-            let datums = row.unpack();
-            Ok::<_, EvalError>((
-                Row::try_pack(group_key.iter().map(|i| i.eval(&datums, &temp_storage)))?,
-                Row::try_pack(iter::once(expr.eval(&datums, &temp_storage)))?,
-            ))
-        }
-    });
+    // It is important that in the case of an error in the value selector we still provide a
+    // value, so that the aggregation produces an aggregate with the correct key. If we do not,
+    // the `ReduceCollation` operator panics.
+    use timely::dataflow::channels::pact::Pipeline;
+    let (partial, err_partial) =
+        ok_input
+            .inner
+            .unary_fallible(Pipeline, "ReduceStagePreparation", |_cap, _info| {
+                let group_key = group_key.to_vec();
+                let mut storage = Vec::new();
+                move |input, ok_output, err_output| {
+                    input.for_each(|time, data| {
+                        let temp_storage = RowArena::new();
+                        let mut ok_session = ok_output.session(&time);
+                        let mut err_session = err_output.session(&time);
+                        data.swap(&mut storage);
+                        for (row, t, diff) in storage.drain(..) {
+                            // First, evaluate the key selector expressions.
+                            // If any error we produce their errors as output and note
+                            // the fact that the key was not correctly produced.
+                            let mut key_packer = RowPacker::new();
+                            let mut error_free = true;
+                            let datums = row.unpack();
+                            for expr in group_key.iter() {
+                                match expr.eval(&datums, &temp_storage) {
+                                    Ok(val) => key_packer.push(val),
+                                    Err(e) => {
+                                        err_session.give((e, t.clone(), diff));
+                                        error_free = false;
+                                    }
+                                }
+                            }
+                            // Second, evaluate the value selector.
+                            // If any error occurs we produce both the error as output,
+                            // but also a `Datum::Null` value to avoid causing the later
+                            // "ReduceCollation" operator to panic due to absent aggregates.
+                            if error_free {
+                                let key = key_packer.finish();
+                                match expr.eval(&datums, &temp_storage) {
+                                    Ok(val) => {
+                                        ok_session.give(((key, Row::pack(Some(val))), t, diff));
+                                    }
+                                    Err(e) => {
+                                        ok_session.give((
+                                            (key, Row::pack(Some(Datum::Null))),
+                                            t.clone(),
+                                            diff,
+                                        ));
+                                        err_session.give((e, t, diff));
+                                    }
+                                }
+                            }
+                        }
+                    })
+                }
+            });
+
+    let mut partial = partial.as_collection();
+    let err_partial = err_partial.as_collection();
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
@@ -215,18 +276,30 @@ where
         // The same code should work on data that can not be hierarchically reduced.
         partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
             move |key, source, target| {
-                // We respect the multiplicity here (unlike in hierarchical aggregation)
-                // because we don't know that the aggregation method is not sensitive
-                // to the number of records.
-                let iter = source.iter().flat_map(|(v, w)| {
-                    std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
-                });
-                let mut packer = RowPacker::new();
-                if prepend_key {
-                    packer.extend(key.iter());
+                // Negative counts would be surprising, but until we are 100% certain we wont
+                // see them, we should report when we do. We may want to bake even more info
+                // in here in the future.
+                if source.iter().any(|(_val, cnt)| cnt < &0) {
+                    // XXX: This reports user data, which we perhaps should not do!
+                    for (val, cnt) in source.iter() {
+                        if cnt < &0 {
+                            log::error!("Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
+                        }
+                    }
+                } else {
+                    // We respect the multiplicity here (unlike in hierarchical aggregation)
+                    // because we don't know that the aggregation method is not sensitive
+                    // to the number of records.
+                    let iter = source.iter().flat_map(|(v, w)| {
+                        std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
+                    });
+                    let mut packer = RowPacker::new();
+                    if prepend_key {
+                        packer.extend(key.iter());
+                    }
+                    packer.push(func.eval(iter, &RowArena::new()));
+                    target.push((packer.finish(), 1));
                 }
-                packer.push(func.eval(iter, &RowArena::new()));
-                target.push((packer.finish(), 1));
             }
         })
     };
@@ -315,6 +388,14 @@ where
                 let agg1 = accum.element2.element1;
                 let agg2 = accum.element2.element2;
 
+                if tot == 0 && (agg1 != 0 || agg2 != 0) {
+                    // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
+                    // operator, when this key is presented but matching aggregates are not found. We will
+                    // suppress the output for inputs without net-positive records, which *should* avoid
+                    // that panic.
+                    log::error!("ReduceAccumulable observed net-zero records with non-zero accumulation: {:?}: {:?}, {:?}", aggr, agg1, agg2);
+                }
+
                 // The finished value depends on the aggregation function in a variety of ways.
                 let value = match (&aggr, agg2) {
                     (AggregateFunc::Count, _) => Datum::Int64(agg2 as i64),
@@ -354,13 +435,19 @@ where
                     (AggregateFunc::SumNull, _) => Datum::Null,
                     x => panic!("Unexpected accumulable aggregation: {:?}", x),
                 };
-                // Pack the value with the key as the result.
-                let mut packer = RowPacker::new();
-                if prepend_key {
-                    packer.extend(key.iter());
+
+                // If net zero records, we probably shouldn't be here (negative inputs)
+                // but in any case we should suppress the output to attempt to avoid a
+                // panic in ReduceCollation.
+                if tot != 0 {
+                    // Pack the value with the key as the result.
+                    let mut packer = RowPacker::new();
+                    if prepend_key {
+                        packer.extend(key.iter());
+                    }
+                    packer.push(value);
+                    output.push((packer.finish(), 1));
                 }
-                packer.push(value);
-                output.push((packer.finish(), 1));
             },
         )
 }
@@ -400,11 +487,17 @@ where
         .map(move |((key, hash), row)| ((key, hash % modulus), row))
         .reduce_named("ReduceHierarchical", {
             move |_key, source, target| {
-                // We ignore the count here under the belief that it cannot affect
-                // hierarchical aggregations; should that belief be incorrect, we
-                // should certainly revise this implementation.
-                let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
-                target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+                // Should negative accumulations reach us, we should loudly complain.
+                if source.iter().any(|(_val, cnt)| cnt <= &0) {
+                    // TODO(frank): Consider reporting the actual offending data.
+                    log::error!("Negative accumulation in ReduceHierarchical");
+                } else {
+                    // We ignore the count here under the belief that it cannot affect
+                    // hierarchical aggregations; should that belief be incorrect, we
+                    // should certainly revise this implementation.
+                    let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
+                    target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+                }
             }
         })
 }
