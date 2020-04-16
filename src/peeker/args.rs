@@ -101,7 +101,7 @@ fn load_config(config_path: Option<String>, cli_queries: Option<String>) -> Resu
     // load and parse th toml
     let config_file = config_path
         .as_ref()
-        .map(|config_file| std::fs::read_to_string(config_file))
+        .map(std::fs::read_to_string)
         .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
     let conf = match &config_file {
         Ok(contents) => toml::from_str::<RawConfig>(&contents).map_err(|e| {
@@ -236,7 +236,7 @@ impl TryFrom<RawConfig> for Config {
             .groups
             .into_iter()
             .map(|g| QueryGroup::from_group_config(g, &queries_by_name))
-            .chain(queries.iter().cloned().map(|q| Ok(q)))
+            .chain(queries.iter().cloned().map(Ok))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Config {

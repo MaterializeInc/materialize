@@ -120,7 +120,7 @@ impl DataflowDesc {
     pub fn add_dependency(&mut self, view_id: GlobalId, dependent_id: GlobalId) {
         self.dependent_objects
             .entry(view_id)
-            .or_insert_with(|| Vec::new())
+            .or_insert_with(Vec::new)
             .push(dependent_id);
     }
 

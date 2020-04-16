@@ -67,9 +67,7 @@ impl JoinImplementation {
                 RelationExpr::Reduce { group_key, .. } => {
                     arranged.insert(
                         Id::Local(*id),
-                        vec![(0..group_key.len())
-                            .map(|c| ScalarExpr::Column(c))
-                            .collect()],
+                        vec![(0..group_key.len()).map(ScalarExpr::Column).collect()],
                     );
                 }
                 _ => {}
@@ -136,11 +134,8 @@ impl JoinImplementation {
                     }
                     RelationExpr::Reduce { group_key, .. } => {
                         // The first `keys.len()` columns form an arrangement key.
-                        available_arrangements[index].push(
-                            (0..group_key.len())
-                                .map(|c| ScalarExpr::Column(c))
-                                .collect(),
-                        );
+                        available_arrangements[index]
+                            .push((0..group_key.len()).map(ScalarExpr::Column).collect());
                     }
                     _ => {}
                 }

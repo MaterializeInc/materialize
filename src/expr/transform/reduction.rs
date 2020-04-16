@@ -78,7 +78,7 @@ impl FoldConstants {
                                     .eval(&datums, &temp_storage)?]))
                             })
                             .collect::<Result<Vec<_>, _>>()?;
-                        let entry = groups.entry(key).or_insert_with(|| Vec::new());
+                        let entry = groups.entry(key).or_insert_with(Vec::new);
                         for _ in 0..*diff {
                             entry.push(val.clone());
                         }

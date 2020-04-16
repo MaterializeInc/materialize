@@ -68,7 +68,7 @@ impl Jsonb {
                     }
                 }
                 Datum::String(s) => Value::String(s.to_owned()),
-                Datum::List(list) => Value::Array(list.iter().map(|e| inner(e)).collect()),
+                Datum::List(list) => Value::Array(list.iter().map(inner).collect()),
                 Datum::Dict(dict) => {
                     Value::Object(dict.iter().map(|(k, v)| (k.to_owned(), inner(v))).collect())
                 }

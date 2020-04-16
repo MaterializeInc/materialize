@@ -272,7 +272,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         })
         .collect::<Result<_, io::Error>>()?;
 
-    let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
+    let logging_config = config.logging_granularity.map(LoggingConfig::new);
 
     // Initialize command queue and sql planner, but only on the primary.
     let coord_thread = if is_primary {

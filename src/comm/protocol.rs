@@ -232,10 +232,7 @@ where
 {
     /// Attempts to retrieve an existing connection that is connected to `addr`.
     fn get(&mut self, addr: C::Addr) -> Option<Framed<C>> {
-        self.0
-            .entry(addr)
-            .or_insert_with(|| VecDeque::new())
-            .pop_front()
+        self.0.entry(addr).or_insert_with(VecDeque::new).pop_front()
     }
 
     /// Returns a framed connection to the pool so that it can be reused.
@@ -244,7 +241,7 @@ where
             Ok(addr) => self
                 .0
                 .entry(addr)
-                .or_insert_with(|| VecDeque::new())
+                .or_insert_with(VecDeque::new)
                 .push_back(conn),
             Err(e) => {
                 // An error while calling `peer_addr` typically indicates that

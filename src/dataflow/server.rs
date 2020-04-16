@@ -200,10 +200,7 @@ where
     let log_fn = Box::new(|_| None);
     let (builders, guard) = initialize_networking_from_sockets(sockets, process, threads, log_fn)
         .map_err(|err| format!("failed to initialize networking: {}", err))?;
-    let builders = builders
-        .into_iter()
-        .map(|x| GenericBuilder::ZeroCopy(x))
-        .collect();
+    let builders = builders.into_iter().map(GenericBuilder::ZeroCopy).collect();
 
     timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
         executor.enter(|| {
