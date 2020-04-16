@@ -111,8 +111,10 @@ use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
+use timely::dataflow::operators::aggregation::Aggregate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
+use timely::dataflow::Stream;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
@@ -126,7 +128,7 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::SourceToken;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::decode::{decode_avro_values, decode_key_values, decode_values};
+use crate::decode::{decode_avro_values, decode_upsert, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::CollectionExt;
 use crate::server::LocalInput;
@@ -259,7 +261,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     read_from_kafka,
                                 );
                                 let arranged = arrange_from_upsert(
-                                    &decode_key_values(&source, encoding, key_encoding),
+                                    &decode_upsert(
+                                        &prepare_upsert_by_max_offset(&source),
+                                        encoding,
+                                        key_encoding,
+                                    ),
                                     &format!("UpsertArrange: {}", src_id.to_string()),
                                 );
                                 let keys = src.desc.typ().keys[0]
@@ -585,6 +591,42 @@ pub(crate) fn build_dataflow<A: Allocate>(
             }
         });
     })
+}
+
+/// `arrange_from_upsert` may not behave as intended if multiple rows
+/// with the same key and timestamp are sent because it cannot determine
+/// which row was the last update. Resolve this confusion for
+/// `arrange_from_upsert` by deleting all rows except the one with the
+/// highest offset if multiple rows with the same key will have the
+/// same timestamp.
+fn prepare_upsert_by_max_offset<G>(
+    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
+) -> Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    use differential_dataflow::hashable::Hashable;
+    // This approach works as long as there is a 1:1 correspondence between
+    // Timely capabilities and Differential timestamps.
+    // Change the code if the assumption no longer holds.
+    stream.aggregate::<_, (Vec<u8>, Option<i64>), _, _, _>(
+        |_key, val, agg| {
+            // All offsets are assumed to be Some(...).
+            // Offsets are always Some(...) for Kafka and file sources.
+            // Kinesis offsets are already None.
+            if let Some(new_offset) = val.1 {
+                if let Some(offset) = agg.1 {
+                    if offset < new_offset {
+                        *agg = val;
+                    }
+                } else {
+                    *agg = val;
+                }
+            }
+        },
+        |key, agg| (key, agg),
+        |key| key.hashed(),
+    )
 }
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>

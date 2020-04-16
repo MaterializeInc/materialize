@@ -13,7 +13,7 @@ use timely::dataflow::{
     channels::pushers::buffer::Session,
     channels::pushers::Counter as PushCounter,
     channels::pushers::Tee,
-    operators::{aggregation::Aggregate, map::Map, Operator},
+    operators::{map::Map, Operator},
     Scope, Stream,
 };
 
@@ -185,7 +185,11 @@ impl<F: Fn(&[u8]) -> Datum> DecoderState for OffsetDecoderState<F> {
     fn log_error_count(&self) {}
 }
 
-fn decode_key_values_inner<G, K, V>(
+/// Inner method for decoding an upsert source
+/// Mostly, this inner method exists that way static dispatching
+/// can be used for different combinations of key-value decoders
+/// as opposed to dynamic dispatching
+fn decode_upsert_inner<G, K, V>(
     stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     mut key_decoder_state: K,
     mut value_decoder_state: V,
@@ -196,62 +200,46 @@ where
     K: DecoderState + 'static,
     V: DecoderState + 'static,
 {
-    stream
-        .aggregate::<_, (Vec<u8>, Option<i64>), _, _, _>(
-            |_key, val, agg| {
-                if let Some(new_offset) = val.1 {
-                    if let Some(offset) = agg.1 {
-                        if offset < new_offset {
-                            *agg = val;
+    stream.unary(
+        Exchange::new(|x: &(Vec<u8>, (_, _))| (x.0).hashed()),
+        &op_name,
+        move |_, _| {
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for (key, (payload, aux_num)) in data.iter() {
+                        if key.is_empty() {
+                            error!("{}", "Encountered empty key");
+                            continue;
                         }
-                    } else {
-                        *agg = val;
+                        match key_decoder_state.decode_key(key) {
+                            Ok(key) => {
+                                if payload.is_empty() {
+                                    session.give((key, None, *cap.time()));
+                                } else {
+                                    value_decoder_state.give_key_value(
+                                        key,
+                                        payload,
+                                        *aux_num,
+                                        &mut session,
+                                        *cap.time(),
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                error!("{}", err);
+                            }
+                        }
                     }
-                }
-            },
-            |key, agg| (key, agg),
-            |key| key.hashed(),
-        )
-        .unary(
-            Exchange::new(|x: &(Vec<u8>, (_, _))| (x.0).hashed()),
-            &op_name,
-            move |_, _| {
-                move |input, output| {
-                    input.for_each(|cap, data| {
-                        let mut session = output.session(&cap);
-                        for (key, (payload, aux_num)) in data.iter() {
-                            if key.is_empty() {
-                                error!("{}", "Encountered empty key");
-                                continue;
-                            }
-                            match key_decoder_state.decode_key(key) {
-                                Ok(key) => {
-                                    if payload.is_empty() {
-                                        session.give((key, None, *cap.time()));
-                                    } else {
-                                        value_decoder_state.give_key_value(
-                                            key,
-                                            payload,
-                                            *aux_num,
-                                            &mut session,
-                                            *cap.time(),
-                                        );
-                                    }
-                                }
-                                Err(err) => {
-                                    error!("{}", err);
-                                }
-                            }
-                        }
-                    });
-                    key_decoder_state.log_error_count();
-                    value_decoder_state.log_error_count();
-                }
-            },
-        )
+                });
+                key_decoder_state.log_error_count();
+                value_decoder_state.log_error_count();
+            }
+        },
+    )
 }
 
-pub fn decode_key_values<G>(
+pub fn decode_upsert<G>(
     stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     value_encoding: DataEncoding,
     key_encoding: DataEncoding,
@@ -265,7 +253,7 @@ where
         value_encoding.op_name()
     );
     let decoded_stream = match (key_encoding, value_encoding) {
-        (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+        (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: bytes_to_datum,
@@ -277,7 +265,7 @@ where
             ),
             &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+        (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: text_to_datum,
@@ -289,7 +277,7 @@ where
             ),
             &op_name,
         ),
-        (DataEncoding::Avro(key_enc), DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+        (DataEncoding::Avro(key_enc), DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
             avro::AvroDecoderState::new(
                 &key_enc.value_schema,
@@ -303,7 +291,7 @@ where
             ),
             &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Bytes) => decode_key_values_inner(
+        (DataEncoding::Text, DataEncoding::Bytes) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: text_to_datum,
@@ -313,7 +301,7 @@ where
             },
             &op_name,
         ),
-        (DataEncoding::Bytes, DataEncoding::Bytes) => decode_key_values_inner(
+        (DataEncoding::Bytes, DataEncoding::Bytes) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: bytes_to_datum,
@@ -323,7 +311,7 @@ where
             },
             &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Text) => decode_key_values_inner(
+        (DataEncoding::Text, DataEncoding::Text) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: text_to_datum,
