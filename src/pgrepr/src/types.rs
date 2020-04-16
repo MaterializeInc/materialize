@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use lazy_static::lazy_static;
 use repr::ScalarType;
 
 /// The type of a [`Value`](crate::Value).
@@ -46,6 +47,16 @@ pub enum Type {
     Unknown,
 }
 
+lazy_static! {
+    static ref LIST: postgres_types::Type = postgres_types::Type::new(
+        "LIST".to_owned(),
+        // OID chosen at random
+        72794149,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    );
+}
+
 impl Type {
     pub(crate) fn inner(&self) -> &'static postgres_types::Type {
         match self {
@@ -63,7 +74,7 @@ impl Type {
             Type::Time => &postgres_types::Type::TIME,
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
-            Type::List(_) => unimplemented!("jamii/list"),
+            Type::List(_) => &LIST,
             Type::Unknown => &postgres_types::Type::UNKNOWN,
         }
     }
