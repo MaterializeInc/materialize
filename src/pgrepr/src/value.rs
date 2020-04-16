@@ -16,7 +16,7 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
-use repr::{strconv, ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
+use repr::{strconv, ColumnType, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 use crate::{Format, Interval, Numeric, Type};
 
@@ -103,7 +103,7 @@ impl Value {
     /// not the datum.
     ///
     /// To construct a null datum, see the [`null_datum`] function.
-    pub fn into_datum<'a>(self, buf: &'a RowArena) -> (Datum<'a>, ScalarType) {
+    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: Type) -> (Datum<'a>, ScalarType) {
         match self {
             Value::Bool(true) => (Datum::True, ScalarType::Bool),
             Value::Bool(false) => (Datum::False, ScalarType::Bool),
@@ -127,30 +127,18 @@ impl Value {
                 ScalarType::Jsonb,
             ),
             Value::List(elems) => {
-                let typed_elems = elems
-                    .into_iter()
-                    .map(|elem| {
-                        elem.map_or((Datum::Null, ScalarType::Unknown), |elem| {
-                            elem.into_datum(buf)
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let mut elem_type = ScalarType::Unknown;
-                for (_, typ) in &typed_elems {
-                    if *typ == ScalarType::Unknown {
-                        // uninformative
-                    } else if elem_type == ScalarType::Unknown {
-                        elem_type = typ.clone();
-                    } else if elem_type != *typ {
-                        panic!(
-                            "Received a list with mixed types: {} and {}",
-                            elem_type, typ
-                        );
-                    }
-                }
+                let elem_pg_type = match typ {
+                    Type::List(t) => *t,
+                    _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
+                };
+                let (_, elem_type) = null_datum(elem_pg_type.clone());
+                let mut packer = RowPacker::new();
+                packer.push_list(elems.into_iter().map(|elem| match elem {
+                    Some(elem) => elem.into_datum(buf, elem_pg_type.clone()).0,
+                    None => Datum::Null,
+                }));
                 (
-                    buf.push_row(Row::pack(typed_elems.into_iter().map(|et| et.0)))
-                        .unpack_first(),
+                    buf.push_row(packer.finish()).unpack_first(),
                     ScalarType::List(Box::new(elem_type)),
                 )
             }
@@ -262,6 +250,7 @@ impl Value {
             Type::Text => Value::Text(raw.to_owned()),
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(strconv::parse_jsonb(raw)?),
+            Type::List(_) => unimplemented!("jamii/list"),
             Type::Unknown => panic!("cannot decode unknown type"),
         })
     }
@@ -287,6 +276,10 @@ impl Value {
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
+            Type::List(_) => {
+                // just using the text encoding for now
+                Value::decode_text(ty, raw)
+            }
             Type::Unknown => panic!("cannot decode unknown type"),
         }
     }
@@ -309,6 +302,10 @@ pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
         Type::Time => ScalarType::Time,
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
+        Type::List(t) => {
+            let (_, elem_type) = null_datum(*t);
+            ScalarType::List(Box::new(elem_type))
+        }
         Type::Unknown => ScalarType::Unknown,
     };
     (Datum::Null, ty)
