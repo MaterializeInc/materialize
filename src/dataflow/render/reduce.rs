@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::iter;
-
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::DiffPair;
 use differential_dataflow::hashable::Hashable;
@@ -25,7 +23,7 @@ use expr::{AggregateExpr, AggregateFunc, EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
-use crate::operator::CollectionExt;
+use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Arrangement;
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
@@ -193,18 +191,65 @@ where
         distinct,
     } = aggr.clone();
 
-    // The `partial` collection contains `(key, val)` pairs.
-    let (mut partial, err_partial) = ok_input.map_fallible({
-        let group_key = group_key.to_vec();
-        move |row| {
-            let temp_storage = RowArena::new();
-            let datums = row.unpack();
-            Ok::<_, EvalError>((
-                Row::try_pack(group_key.iter().map(|i| i.eval(&datums, &temp_storage)))?,
-                Row::try_pack(iter::once(expr.eval(&datums, &temp_storage)))?,
-            ))
-        }
-    });
+    // It is important that in the case of an error in the value selector we still provide a
+    // value, so that the aggregation produces an aggregate with the correct key. If we do not,
+    // the `ReduceCollation` operator panics.
+    use timely::dataflow::channels::pact::Pipeline;
+    let (partial, err_partial) =
+        ok_input
+            .inner
+            .unary_fallible(Pipeline, "ReduceStagePreparation", |_cap, _info| {
+                let group_key = group_key.to_vec();
+                let mut storage = Vec::new();
+                move |input, ok_output, err_output| {
+                    input.for_each(|time, data| {
+                        let temp_storage = RowArena::new();
+                        let mut ok_session = ok_output.session(&time);
+                        let mut err_session = err_output.session(&time);
+                        data.swap(&mut storage);
+                        for (row, t, diff) in storage.drain(..) {
+                            // First, evaluate the key selector expressions.
+                            // If any error we produce their errors as output and note
+                            // the fact that the key was not correctly produced.
+                            let mut key_packer = RowPacker::new();
+                            let mut error_free = true;
+                            let datums = row.unpack();
+                            for expr in group_key.iter() {
+                                match expr.eval(&datums, &temp_storage) {
+                                    Ok(val) => key_packer.push(val),
+                                    Err(e) => {
+                                        err_session.give((e, t.clone(), diff));
+                                        error_free = false;
+                                    }
+                                }
+                            }
+                            // Second, evaluate the value selector.
+                            // If any error occurs we produce both the error as output,
+                            // but also a `Datum::Null` value to avoid causing the later
+                            // "ReduceCollation" operator to panic due to absent aggregates.
+                            if error_free {
+                                let key = key_packer.finish();
+                                match expr.eval(&datums, &temp_storage) {
+                                    Ok(val) => {
+                                        ok_session.give(((key, Row::pack(Some(val))), t, diff));
+                                    }
+                                    Err(e) => {
+                                        ok_session.give((
+                                            (key, Row::pack(Some(Datum::Null))),
+                                            t.clone(),
+                                            diff,
+                                        ));
+                                        err_session.give((e, t, diff));
+                                    }
+                                }
+                            }
+                        }
+                    })
+                }
+            });
+
+    let mut partial = partial.as_collection();
+    let err_partial = err_partial.as_collection();
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
