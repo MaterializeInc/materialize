@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
-use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
+use rusoto_kinesis::{DescribeStreamInput, Kinesis, Shard, UpdateShardCountInput};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -55,8 +57,9 @@ impl Action for UpdateShardCountAction {
         dbg!(&out);
 
         // Verify the current shard count.
-        retry::retry(|| async {
-            let shards = state
+        retry::retry_max_backoff(Duration::from_secs(30), || async {
+            // Wait for shards to stop updating.
+            let description = state
                 .kinesis_client
                 .describe_stream(DescribeStreamInput {
                     exclusive_start_shard_id: None,
@@ -65,15 +68,26 @@ impl Action for UpdateShardCountAction {
                 })
                 .await
                 .map_err(|e| format!("getting current shard count: {}", e))?
-                .stream_description
-                .shards;
-            dbg!(&shards);
+                .stream_description;
+            if description.stream_status != "ACTIVE" {
+                return Err(format!(
+                    "stream {} is not active, is {}",
+                    stream_name, description.stream_status
+                ));
+            }
+
+            dbg!(&description.shards);
+            let active_shards: Vec<&Shard> = description
+                .shards
+                .iter()
+                .filter(|shard| shard.sequence_number_range.ending_sequence_number.is_none())
+                .collect();
             //https://stackoverflow.com/questions/28273169/how-do-i-convert-between-numeric-types-safely-and-idiomatically
-            if shards.len() as i64 != self.target_shard_count {
+            if active_shards.len() as i64 != self.target_shard_count {
                 return Err(format!(
                     "Expected {} shards, found {}",
                     self.target_shard_count,
-                    shards.len()
+                    active_shards.len()
                 ));
             }
             Ok(())
