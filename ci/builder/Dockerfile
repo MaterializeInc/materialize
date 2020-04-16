@@ -134,9 +134,10 @@ RUN mkdir rust \
 # Step 2d. Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
-COPY requirements.txt /workdir/requirements.txt
+COPY requirements.txt requirements-dev.txt /workdir/
 
-RUN pip3 install -r /workdir/requirements.txt && rm /workdir/requirements.txt
+RUN pip3 install -r /workdir/requirements.txt -r /workdir/requirements-dev.txt \
+    && rm /workdir/requirements*.txt
 
 # Step 2e. Hardcode some known SSH hosts, or else SSH will ask whether the host
 # is trustworthy on the first connection.

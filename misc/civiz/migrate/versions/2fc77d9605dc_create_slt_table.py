@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = '2fc77d9605dc'
+revision = "2fc77d9605dc"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -21,8 +21,12 @@ def upgrade():
     op.create_table(
         "slt",
         sa.Column("commit", sa.Text, primary_key=True),
-        sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False,
-            server_default=sa.func.now()),
+        sa.Column(
+            "timestamp",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.Column("unsupported", sa.BigInteger, nullable=False),
         sa.Column("parse_failure", sa.BigInteger, nullable=False),
         sa.Column("plan_failure", sa.BigInteger, nullable=False),
