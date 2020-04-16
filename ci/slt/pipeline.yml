@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - block: ":vertical_traffic_light: Go"
   - command: ci/slt/slt.sh
     timeout_in_minutes: 300
     artifact_paths: target/slt-summary.json
