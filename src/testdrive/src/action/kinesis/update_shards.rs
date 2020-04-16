@@ -12,6 +12,7 @@ use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+use crate::util::retry;
 
 pub struct UpdateShardCountAction {
     stream_name: String,
@@ -53,26 +54,28 @@ impl Action for UpdateShardCountAction {
             .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
 
         // Verify the current shard count.
-        let current_shard_count = state
-            .kinesis_client
-            .describe_stream(DescribeStreamInput {
-                exclusive_start_shard_id: None,
-                limit: None,
-                stream_name: stream_name.clone(),
-            })
-            .await
-            .map_err(|e| format!("getting current shard count: {}", e))?
-            .stream_description
-            .shards
-            .len();
-        //https://stackoverflow.com/questions/28273169/how-do-i-convert-between-numeric-types-safely-and-idiomatically
-        if current_shard_count as i64 != self.target_shard_count {
-            return Err(format!(
-                "Expected {} shards, found {}",
-                self.target_shard_count, current_shard_count
-            ));
-        }
-
-        Ok(())
+        retry::retry(|| async {
+            let current_shard_count = state
+                .kinesis_client
+                .describe_stream(DescribeStreamInput {
+                    exclusive_start_shard_id: None,
+                    limit: None,
+                    stream_name: stream_name.clone(),
+                })
+                .await
+                .map_err(|e| format!("getting current shard count: {}", e))?
+                .stream_description
+                .shards
+                .len();
+            //https://stackoverflow.com/questions/28273169/how-do-i-convert-between-numeric-types-safely-and-idiomatically
+            if current_shard_count as i64 != self.target_shard_count {
+                return Err(format!(
+                    "Expected {} shards, found {}",
+                    self.target_shard_count, current_shard_count
+                ));
+            }
+            Ok(())
+        })
+        .await
     }
 }

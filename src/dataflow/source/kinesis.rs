@@ -292,6 +292,7 @@ fn update_shard_information(
     let shards = get_shards_list_wrapper(&client, stream_name)?;
     for shard in shards {
         if !shard_set.contains(&shard.shard_id) {
+            shard_set.insert(shard.shard_id.clone());
             shard_queue.push_back((
                 shard.shard_id.clone(),
                 block_on(get_shard_iterator(
