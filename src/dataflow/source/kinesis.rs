@@ -106,8 +106,9 @@ where
                         Ok(output) => {
                             shard_iterator = output.next_shard_iterator.clone();
                             if let Some(millis) = output.millis_behind_latest {
-                                let mut shard_metrics: IntGauge =
-                                    MILLIS_TRAILING_RAW.with_label_values(&[&shard_id]).set(millis);
+                                let shard_metrics: IntGauge =
+                                    MILLIS_BEHIND_LATEST.with_label_values(&[&shard_id]);
+                                shard_metrics.set(millis);
                             }
                             output
                         }
