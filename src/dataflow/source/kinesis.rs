@@ -12,7 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use failure::{bail, ResultExt};
 use futures::executor::block_on;
+use lazy_static::lazy_static;
 use log::{error, warn};
+use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
@@ -29,6 +31,15 @@ use timely::scheduling::Activator;
 use super::util::source;
 use super::{SourceStatus, SourceToken};
 use crate::server::{TimestampChanges, TimestampHistories};
+
+lazy_static! {
+    static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kinesis_shard_millis_behind_latest",
+        "How far the shard is behind the tip of the stream",
+        &["shard_id"]
+    )
+    .expect("Can construct an intgauge for millis_behind_latest");
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
@@ -94,6 +105,10 @@ where
                     let get_records_output = match block_on(get_records(&client, &iterator)) {
                         Ok(output) => {
                             shard_iterator = output.next_shard_iterator.clone();
+                            if let Some(millis) = output.millis_behind_latest {
+                                let mut shard_metrics: IntGauge =
+                                    MILLIS_TRAILING_RAW.with_label_values(&[&shard_id]).set(millis);
+                            }
                             output
                         }
                         Err(RusotoError::HttpDispatch(e)) => {
