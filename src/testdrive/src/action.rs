@@ -38,7 +38,7 @@ mod kafka;
 mod kinesis;
 mod sql;
 
-const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -250,6 +250,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "kafka-verify" => Box::new(kafka::build_verify(builtin).map_err(wrap_err)?),
                     "kinesis-create-stream" => {
                         Box::new(kinesis::build_create_stream(builtin).map_err(wrap_err)?)
+                    }
+                    "kinesis-update-shards" => {
+                        Box::new(kinesis::build_update_shards(builtin).map_err(wrap_err)?)
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),

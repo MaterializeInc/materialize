@@ -30,3 +30,22 @@ where
         backoff *= 2;
     }
 }
+
+/// Retries a fallible operation `f` with a maximum backoff.
+pub async fn retry_max_backoff<F, U, T>(max_backoff: Duration, mut f: F) -> Result<T, String>
+where
+    F: FnMut() -> U,
+    U: Future<Output = Result<T, String>>,
+{
+    let mut backoff = Duration::from_millis(200);
+    loop {
+        match f().await {
+            Ok(t) => return Ok(t),
+            Err(e) if backoff > max_backoff => return Err(e),
+            Err(_) => {
+                time::delay_for(backoff).await;
+                backoff *= 2;
+            }
+        }
+    }
+}

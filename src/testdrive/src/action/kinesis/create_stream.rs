@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
-use rand::Rng;
 use rusoto_kinesis::{CreateStreamInput, DeleteStreamInput, Kinesis, ListStreamsInput};
 
 use crate::action::{Action, State};
@@ -16,13 +15,18 @@ use crate::parser::BuiltinCommand;
 
 pub struct CreateStreamAction {
     stream_name: String,
+    shard_count: i64,
 }
 
 pub fn build_create_stream(mut cmd: BuiltinCommand) -> Result<CreateStreamAction, String> {
     let stream_name = format!("testdrive-{}", cmd.args.string("stream")?);
+    let shard_count = cmd.args.parse("shards")?;
     cmd.args.done()?;
 
-    Ok(CreateStreamAction { stream_name })
+    Ok(CreateStreamAction {
+        stream_name,
+        shard_count,
+    })
 }
 
 #[async_trait]
@@ -58,9 +62,8 @@ impl Action for CreateStreamAction {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!("creating Kinesis stream {}", stream_name);
 
-        let random_shard_count = rand::thread_rng().gen_range(1, 10);
         let create_stream_input = CreateStreamInput {
-            shard_count: random_shard_count,
+            shard_count: self.shard_count,
             stream_name,
         };
         state

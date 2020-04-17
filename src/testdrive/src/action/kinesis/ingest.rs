@@ -7,19 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::io::{self, Write};
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
-use tokio::time::{self, Duration};
 
-use crate::action::kinesis::DEFAULT_KINESIS_TIMEOUT;
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+use crate::util::retry;
 
 pub struct IngestAction {
     stream_prefix: String,
@@ -65,33 +62,19 @@ impl Action for IngestAction {
 
             // The Kinesis stream might not be immediately available,
             // be prepared to back off.
-            let mut total_backoff = Duration::from_millis(0);
-            let mut backoff = Duration::from_millis(100);
-            loop {
+            retry::retry(|| async {
                 match state.kinesis_client.put_record(put_input.clone()).await {
-                    Ok(_output) => {
-                        println!();
-                        break;
-                    }
+                    Ok(_output) => Ok(()),
                     Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {
-                        if total_backoff == Duration::from_millis(0) {
-                            print!("unable to write to kinesis stream; retrying {:?}", backoff);
-                        } else if total_backoff < DEFAULT_KINESIS_TIMEOUT {
-                            backoff *= 2;
-                            print!(" {:?}", backoff);
-                            io::stdout().flush().unwrap();
-                        } else {
-                            println!();
-                            return Err(err);
-                        }
+                        return Err(format!("resource not found: {}", err))
                     }
                     Err(err) => {
                         return Err(format!("unable to put Kinesis record: {}", err.to_string()))
                     }
                 }
-                time::delay_for(backoff).await;
-                total_backoff += backoff;
-            }
+            })
+            .await
+            .map_err(|e| format!("trying to put Kinesis record: {}", e))?;
         }
         Ok(())
     }
