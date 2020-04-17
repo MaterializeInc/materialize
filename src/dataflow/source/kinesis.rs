@@ -36,7 +36,7 @@ lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
         "mz_kinesis_shard_millis_behind_latest",
         "How far the shard is behind the tip of the stream",
-        &["shard_id"]
+        &["stream_name", "shard_id"]
     )
     .expect("Can construct an intgauge for millis_behind_latest");
 }
@@ -106,8 +106,8 @@ where
                         Ok(output) => {
                             shard_iterator = output.next_shard_iterator.clone();
                             if let Some(millis) = output.millis_behind_latest {
-                                let shard_metrics: IntGauge =
-                                    MILLIS_BEHIND_LATEST.with_label_values(&[&shard_id]);
+                                let shard_metrics: IntGauge = MILLIS_BEHIND_LATEST
+                                    .with_label_values(&[&stream_name, &shard_id]);
                                 shard_metrics.set(millis);
                             }
                             output
