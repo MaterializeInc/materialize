@@ -16,6 +16,7 @@ app.config["APPLICATION_ROOT"] = "/civiz/"
 
 db = sqlalchemy.create_engine("postgres:///buildkite")
 
+
 @app.route("/")
 def slt():
     rows = db.execute("SELECT * FROM slt")

@@ -20,6 +20,7 @@ import numpy as np
 import time
 import sys
 
+
 class State(Enum):
     GATEWAY = 0
     SEARCH = auto()
@@ -40,7 +41,7 @@ def gen_items(n):
         old_len = len(names)
         x = ""
         while len(names) == old_len:
-            x = ''.join(random.choices(alnum, k=8))
+            x = "".join(random.choices(alnum, k=8))
             names.add(x)
         assert x
         return x
@@ -71,7 +72,7 @@ DEFAULT_BEHAVIOR = [
     [10, 2, 2, 0, 0],  # quit (used for new user)
 ]
 
-DEFAULT_URL = 'http://server:5000'
+DEFAULT_URL = "http://server:5000"
 
 DEFAULT_ITEMS = gen_items(1000000)
 
@@ -79,14 +80,17 @@ DEFAULT_NEW_USERS_PER_TICK = 100
 
 DEFAULT_TICK_SLEEP_SECONDS = 1
 
-with open('./words.txt') as f:
+with open("./words.txt") as f:
     WORDS = f.read().splitlines()
+
 
 def path_for_state(state):
     if state == State.GATEWAY:
         return "/"
     if state == State.SEARCH:
-        return "/search/?kw={}+{}+{}".format(random.choice(WORDS), random.choice(WORDS), random.choice(WORDS))
+        return "/search/?kw={}+{}+{}".format(
+            random.choice(WORDS), random.choice(WORDS), random.choice(WORDS)
+        )
     if state == State.DETAIL:
         return "/detail/{}".format(get_item(DEFAULT_ITEMS))
     assert False  # This should not be called for other states
@@ -96,11 +100,11 @@ class User:
     def __init__(self, behavior=DEFAULT_BEHAVIOR):
         self.behavior = behavior
         self.state = next_state(self.behavior, State.QUIT)
-        self.ip = '{}.{}.{}.{}'.format(
+        self.ip = "{}.{}.{}.{}".format(
             random.randint(0, 127),
             random.randint(0, 127),
             random.randint(0, 127),
-            random.randint(0, 127)
+            random.randint(0, 127),
         )
 
     def take_action(self, base_url=DEFAULT_URL):
@@ -110,9 +114,9 @@ class User:
             assert self.state != State.DO_NOTHING
         else:
             self.old_state = self.state
-            url = '{}{}'.format(base_url, path_for_state(self.state))
+            url = "{}{}".format(base_url, path_for_state(self.state))
             # TODO - throughput can be higher if this is made async
-            requests.get(url, headers={'X-Forwarded-For': self.ip})
+            requests.get(url, headers={"X-Forwarded-For": self.ip})
             self.state = next_state(self.behavior, self.state)
 
 
@@ -122,20 +126,26 @@ class Simulation:
 
     def tick(self):
         time_begin = time.time()
-        self.users.extend((User() for _ in range(np.random.poisson(DEFAULT_NEW_USERS_PER_TICK))))
+        self.users.extend(
+            (User() for _ in range(np.random.poisson(DEFAULT_NEW_USERS_PER_TICK)))
+        )
         old_len_users = len(self.users)
         random.shuffle(self.users)
         for u in self.users:
             u.take_action()
         self.users = [u for u in self.users if u.state != State.QUIT]
         elapsed = time.time() - time_begin
-        print("{} users acted in {}s. {} quit.".format(old_len_users, elapsed, old_len_users - len(self.users)))
+        print(
+            "{} users acted in {}s. {} quit.".format(
+                old_len_users, elapsed, old_len_users - len(self.users)
+            )
+        )
         sys.stdout.flush()
         if elapsed < DEFAULT_TICK_SLEEP_SECONDS:
             time.sleep(DEFAULT_TICK_SLEEP_SECONDS - elapsed)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     s = Simulation()
     while True:
         s.tick()

@@ -20,8 +20,10 @@ cd "$(dirname "$0")/.."
 failed=false
 
 try() {
+    last_failed=false
     if ! "$@"; then
         failed=true
+        last_failed=true
     fi
 }
 
@@ -88,6 +90,14 @@ try xargs git --no-pager diff --check "$empty_tree" <<< "$newline_files"
 
 if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
     try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"
+fi
+
+if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
+    try bin/mypy
+    try bin/pyfmt --diff --check
+    if $last_failed; then
+        echo "$(uf hint): run bin/pyfmt"
+    fi
 fi
 
 if $failed; then
