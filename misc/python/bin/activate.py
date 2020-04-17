@@ -71,7 +71,7 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     # have a working virtualenv. Instead we use the presence of the
     # `stamp_path`, as that indicates the virtualenv was once working enough to
     # have dependencies installed into it.
-    if subprocess.run([python, "-c", ""]).returncode != 0:
+    if not venv_dir.exists() or subprocess.run([python, "-c", ""]).returncode != 0:
         print("==> Initializing virtualenv in {}".format(venv_dir))
         venv.create(py_dir / "venv", with_pip=True, clear=True)
 
