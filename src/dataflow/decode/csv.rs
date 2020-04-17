@@ -15,9 +15,10 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use super::EVENTS_COUNTER;
 use dataflow_types::{Diff, Timestamp};
 use repr::{Datum, Row};
+
+use crate::metrics::EVENTS_COUNTER;
 
 pub fn csv<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,

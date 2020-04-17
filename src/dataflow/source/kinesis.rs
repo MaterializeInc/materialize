@@ -12,7 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use failure::{bail, ResultExt};
 use futures::executor::block_on;
+use lazy_static::lazy_static;
 use log::{error, warn};
+use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGauge, IntGaugeVec};
 use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
@@ -28,7 +30,25 @@ use timely::scheduling::Activator;
 
 use super::util::source;
 use super::{SourceStatus, SourceToken};
+use crate::metrics::EVENTS_COUNTER;
 use crate::server::{TimestampChanges, TimestampHistories};
+
+lazy_static! {
+    static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kinesis_shard_millis_behind_latest",
+        "How far the shard is behind the tip of the stream",
+        &["stream_name", "shard_id"]
+    )
+    .expect("Can construct an intgauge for millis_behind_latest");
+}
+
+lazy_static! {
+    static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
+        "mz_kinesis_bytes_read_total",
+        "Count of kinesis bytes we have read from the wire"
+    )
+    .unwrap();
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
@@ -94,6 +114,11 @@ where
                     let get_records_output = match block_on(get_records(&client, &iterator)) {
                         Ok(output) => {
                             shard_iterator = output.next_shard_iterator.clone();
+                            if let Some(millis) = output.millis_behind_latest {
+                                let shard_metrics: IntGauge = MILLIS_BEHIND_LATEST
+                                    .with_label_values(&[&stream_name, &shard_id]);
+                                shard_metrics.set(millis);
+                            }
                             output
                         }
                         Err(RusotoError::HttpDispatch(e)) => {
@@ -139,11 +164,17 @@ where
                         }
                     };
 
+                    let mut events_success = 0;
+                    let mut bytes_read = 0;
                     for record in get_records_output.records {
                         let data = record.data.as_ref().to_vec();
+                        bytes_read += data.len() as i64;
                         output.session(&cap).give((data, None));
+                        events_success += 1;
                     }
                     downgrade_capability(cap, &name);
+                    EVENTS_COUNTER.raw.success.inc_by(events_success);
+                    BYTES_READ_COUNTER.inc_by(bytes_read);
 
                     if get_records_output.millis_behind_latest == Some(0)
                         || timer.elapsed().as_millis() > 10
