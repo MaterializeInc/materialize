@@ -13,7 +13,8 @@ use dataflow_types::{Diff, Timestamp};
 use interchange::protobuf::{self, Decoder};
 use repr::Row;
 
-use super::{DecoderState, PushSession, EVENTS_COUNTER};
+use super::{DecoderState, PushSession};
+use crate::metrics::EVENTS_COUNTER;
 
 pub struct ProtobufDecoderState {
     decoder: Decoder,

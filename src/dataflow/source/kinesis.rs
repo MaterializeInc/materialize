@@ -14,7 +14,7 @@ use failure::{bail, ResultExt};
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, warn};
-use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
+use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGauge, IntGaugeVec};
 use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
@@ -30,6 +30,7 @@ use timely::scheduling::Activator;
 
 use super::util::source;
 use super::{SourceStatus, SourceToken};
+use crate::metrics::EVENTS_COUNTER;
 use crate::server::{TimestampChanges, TimestampHistories};
 
 lazy_static! {
@@ -39,6 +40,14 @@ lazy_static! {
         &["stream_name", "shard_id"]
     )
     .expect("Can construct an intgauge for millis_behind_latest");
+}
+
+lazy_static! {
+    static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
+        "mz_kinesis_bytes_read_total",
+        "Count of kinesis bytes we have read from the wire"
+    )
+    .unwrap();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -155,11 +164,17 @@ where
                         }
                     };
 
+                    let mut events_success = 0;
+                    let mut bytes_read = 0;
                     for record in get_records_output.records {
                         let data = record.data.as_ref().to_vec();
+                        bytes_read += data.len() as i64;
                         output.session(&cap).give((data, None));
+                        events_success += 1;
                     }
                     downgrade_capability(cap, &name);
+                    EVENTS_COUNTER.bytes.success.inc_by(events_success);
+                    BYTES_READ_COUNTER.inc_by(bytes_read);
 
                     if get_records_output.millis_behind_latest == Some(0)
                         || timer.elapsed().as_millis() > 10

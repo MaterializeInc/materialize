@@ -7,11 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use lazy_static::lazy_static;
-
 use differential_dataflow::hashable::Hashable;
-use prometheus::{register_int_counter_vec, IntCounterVec};
-use prometheus_static_metric::make_static_metric;
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract, Pipeline},
     channels::pushers::buffer::Session,
@@ -37,23 +33,6 @@ use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
 
 use log::error;
 use std::iter;
-
-make_static_metric! {
-    pub struct EventsRead: IntCounter {
-        "format" => { avro, csv, protobuf },
-        "status" => { success, error }
-    }
-}
-
-lazy_static! {
-    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
-        "mz_dataflow_events_read_total",
-        "Count of events we have read from the wire",
-        &["format", "status"]
-    )
-    .unwrap();
-    static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
-}
 
 /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
 /// and each time is the current Timely timestamp.

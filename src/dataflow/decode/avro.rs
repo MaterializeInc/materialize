@@ -9,10 +9,12 @@
 
 use log::error;
 
-use super::{DecoderState, PushSession, EVENTS_COUNTER};
+use super::{DecoderState, PushSession};
 use dataflow_types::{Diff, Timestamp};
 use interchange::avro::{Decoder, EnvelopeType};
 use repr::Row;
+
+use crate::metrics::EVENTS_COUNTER;
 
 pub struct AvroDecoderState {
     decoder: Decoder,
