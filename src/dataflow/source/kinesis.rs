@@ -173,7 +173,7 @@ where
                         events_success += 1;
                     }
                     downgrade_capability(cap, &name);
-                    EVENTS_COUNTER.bytes.success.inc_by(events_success);
+                    EVENTS_COUNTER.raw.success.inc_by(events_success);
                     BYTES_READ_COUNTER.inc_by(bytes_read);
 
                     if get_records_output.millis_behind_latest == Some(0)

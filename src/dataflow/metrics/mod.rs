@@ -14,7 +14,7 @@ use prometheus_static_metric::make_static_metric;
 
 make_static_metric! {
     pub struct EventsRead: IntCounter {
-        "format" => { avro, bytes, csv, protobuf },
+        "format" => { avro, csv, protobuf, raw },
         "status" => { success, error }
     }
 }
