@@ -53,7 +53,7 @@ impl Action for CreateStreamAction {
                 .delete_stream(delete_stream_input)
                 .await
                 .map_err(|e| format!("deleting Kinesis stream: {}", e))?;
-            println!("deleted stale Kinesis stream: {}", &stream_name);
+            println!("Deleted stale Kinesis stream: {}", &stream_name);
         }
         Ok(())
     }
