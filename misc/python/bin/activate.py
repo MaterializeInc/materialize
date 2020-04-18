@@ -71,7 +71,21 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
     # have a working virtualenv. Instead we use the presence of the
     # `stamp_path`, as that indicates the virtualenv was once working enough to
     # have dependencies installed into it.
-    if not venv_dir.exists() or subprocess.run([python, "-c", ""]).returncode != 0:
+    try:
+        subprocess.check_call([python, "-c", ""])
+    except Exception as e:
+        print("==> Checking for existing virtualenv")
+        if isinstance(e, FileNotFoundError):
+            print("no existing virtualenv detected")
+        else:
+            # Usually just an indication that the user has upgraded the system
+            # Python that the virtualenv is referring to. Not important to
+            # bubble up the error here. If it's persistent, it'll occur in the
+            # new virtual env and bubble up when we exec later.
+            print(
+                "warning: existing virtualenv is unable to execute python; will recreate"
+            )
+            logger.info(f"python exec error: {e}")
         print("==> Initializing virtualenv in {}".format(venv_dir))
         venv.create(py_dir / "venv", with_pip=True, clear=True)
 
