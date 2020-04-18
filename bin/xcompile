@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-root=$(dirname "$0")/..
+root=$(cd "$(dirname "$0")/.." && pwd)
 
 # shellcheck source=SCRIPTDIR/../misc/shlib/shlib.bash
 . "$root/misc/shlib/shlib.bash"
@@ -61,6 +61,7 @@ do_cargo() {
     export TARGET_CXX=$CXX
     export TARGET_CFLAGS=$CFLAGS
     export TARGET_CXXFLAGS=$CXXFLAGS
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$CC
 
     cargo "$subcommand" --target=x86_64-unknown-linux-gnu "$@"
 }
