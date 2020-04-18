@@ -98,11 +98,15 @@ def xcargo_target_dir(root: Path) -> Path:
         return root / "target" / "x86_64-unknown-linux-gnu"
 
 
-def xstrip(root: Path) -> str:
+def xbinutil(tool: str) -> str:
     if sys.platform == "linux":
-        return "strip"
+        return tool
     else:
-        return "x86_64-unknown-linux-gnu-strip"
+        return f"x86_64-unknown-linux-gnu-{tool}"
+
+
+xobjcopy = xbinutil("objcopy")
+xstrip = xbinutil("strip")
 
 
 def docker_images() -> Set[str]:
@@ -157,13 +161,32 @@ class CargoBuild(PreImage):
             # down CI, since we're packaging these binaries up into Docker
             # images and shipping them around. A bit unfortunate, since it'd be
             # nice to have useful backtraces if the binary crashes.
-            runv([xstrip(root), path / self.bin])
+            runv([xstrip, path / self.bin])
+        else:
+            # Even if we've been asked not to strip the binary, remove the
+            # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
+            # indexes that speed up launching a debugger against the binary,
+            # and we're happy to have slower debugger start up in exchange for
+            # smaller binaries. Plus the sections have been obsoleted by a
+            # `.debug_names` section in DWARF 5, and so debugger support for
+            # `.debug_pubnames`/`.debug_pubtypes` is minimal anyway.
+            # See: https://github.com/rust-lang/rust/issues/46034
+            runv(
+                [
+                    xobjcopy,
+                    "-R",
+                    ".debug_pubnames",
+                    "-R",
+                    ".debug_pubtypes",
+                    path / self.bin,
+                ]
+            )
 
     def depends(self, root: Path, path: Path) -> List[bytes]:
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().depends(root, path) + git_ls_files(
-            root, "src/**", "Cargo.toml", "Cargo.lock"
+            root, "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
         )
 
 
@@ -216,7 +239,7 @@ class CargoTest(PreImage):
         with open(path / "tests" / "manifest", "w") as manifest:
             for (executable, slug, crate_path) in tests:
                 shutil.copy(executable, path / "tests" / slug)
-                runv([xstrip(root), path / "tests" / slug])
+                runv([xstrip, path / "tests" / slug])
                 manifest.write(f"{slug} {crate_path}\n")
         shutil.move(str(path / "testdrive"), path / "tests")
         shutil.copy(
@@ -229,7 +252,7 @@ class CargoTest(PreImage):
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().depends(root, path) + git_ls_files(
-            root, "src/**", "Cargo.toml", "Cargo.lock"
+            root, "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
         )
 
 

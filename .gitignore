@@ -11,7 +11,6 @@
 
 target
 miri-target
-/.cargo
 .mtrlz.log
 **/*.rs.bk
 .netlify

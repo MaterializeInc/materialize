@@ -23,7 +23,13 @@ members = [
 ]
 
 [profile.release]
-debug = true
+# Emit only the line info tables, not full debug info, in release builds, to
+# substantially reduce the size of the debug info. Line info tables are enough
+# to symbolicate a backtrace, but not enough to use a debugger interactively.
+# This seems to be the right tradeoff for release builds: it's unlikely we're
+# going to get interactive access to a debugger in production installations, but
+# we still want useful crash reports.
+debug = 1
 
 [patch.crates-io]
 # Waiting on a release with this commit:

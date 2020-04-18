@@ -60,6 +60,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)\.gitmodules$' \
     -e '(^|/)go\.sum$' \
     -e '(^|/)Cargo\.toml$' \
+    -e '^\.cargo/config$' \
     -e '^Cargo\.lock$' \
     -e '^deny\.toml$' \
     -e '^netlify\.toml$' \
