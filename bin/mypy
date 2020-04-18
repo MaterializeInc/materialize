@@ -19,6 +19,6 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 . "$root"/misc/shlib/shlib.bash
 
 py_files=
-mapfile_shim py_files < <(git ls-files "misc/python/*.py")
+mapfile_shim py_files < <(git ls-files "ci/*.py" "misc/python/*.py")
 
-exec python3 "$root"/misc/python/bin/activate.py --dev -m mypy "${py_files[@]}"
+exec "$root"/bin/pyactivate --dev -m mypy "${py_files[@]}"

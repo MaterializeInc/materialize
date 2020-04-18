@@ -11,6 +11,4 @@
 #
 # mzcompose — runs Docker Compose with Materialize customizations.
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-
-exec python3 "$root"/misc/python/bin/{activate,mzcompose}.py "$@"
+exec "$(dirname "$0")"/pyactivate -m bin.mzcompose "$@"

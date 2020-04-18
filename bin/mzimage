@@ -13,6 +13,4 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-
-exec python3 "$root"/misc/python/bin/{activate,mzimage}.py "$@"
+exec "$(dirname "$0")"/pyactivate -m bin.mzimage "$@"
