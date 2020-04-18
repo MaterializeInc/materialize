@@ -1,0 +1,8 @@
+[target."x86_64-unknown-linux-gnu"]
+# Compressing debug information can yield hundreds of megabytes of savings.
+# The Rust toolchain does not currently perform dead code elimination on
+# debug info.
+#
+# See: https://github.com/rust-lang/rust/issues/56068
+# See: https://reviews.llvm.org/D74169#1990180
+rustflags = ["-C", "link-arg=-Wl,--compress-debug-sections=zlib-gabi"]
