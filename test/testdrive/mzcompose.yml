@@ -21,7 +21,7 @@ services:
       --schema-registry-url=http://schema-registry:8081
       --materialized-url=postgres://ignored@materialized:6875
       --validate-catalog=/share/mzdata
-      test/testdrive/*.td test/testdrive/ci-only/*.td"
+      test/testdrive/ci-only/*.td test/testdrive/*.td"
     environment:
     - TMPDIR=/share/tmp
     volumes:
