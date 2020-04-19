@@ -11,9 +11,9 @@
 #
 # mzimage.py — builds Materialize-specific Docker images.
 
+from materialize import mzbuild
 from pathlib import Path
 from typing import List
-import mzbuild
 import os
 import sys
 
