@@ -17,9 +17,9 @@ use rusoto_kinesis::{
     GetRecordsInput, GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput,
 };
 
-use crate::action::kinesis::DEFAULT_KINESIS_TIMEOUT;
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+use crate::util::kinesis::DEFAULT_KINESIS_TIMEOUT;
 
 pub struct VerifyAction {
     stream_prefix: String,
@@ -80,7 +80,7 @@ impl Action for VerifyAction {
                     // Unable to read all Kinesis records in the default
                     // time allotted -- fail.
                     return Err(format!(
-                        "Timeout reading from Kinesis stream: {}",
+                        "timeout reading from Kinesis stream: {}",
                         stream_name
                     ));
                 }

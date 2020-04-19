@@ -42,7 +42,7 @@ impl Action for UpdateShardCountAction {
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!(
-            "updating Kinesis stream {} to have {} shards",
+            "Updating Kinesis stream {} to have {} shards",
             stream_name, self.target_shard_count
         );
 
