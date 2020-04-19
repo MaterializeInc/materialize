@@ -63,12 +63,12 @@ fn run() -> Result<(), failure::Error> {
         "",
         "timestamp-frequency",
         "timestamp advancement frequency (default 10ms)",
-        "DURATION/\"off\"",
+        "DURATION",
     );
     opts.optopt(
         "",
         "batch-size",
-        "maximum number of messages with same timestamp (default 5000) ",
+        "maximum number of messages with same timestamp (default 10000) ",
         "SIZE",
     );
     opts.optopt(
@@ -140,9 +140,8 @@ fn run() -> Result<(), failure::Error> {
     };
 
     let timestamp_frequency = match popts.opt_str("timestamp-frequency").as_deref() {
-        None => Some(parse_duration::parse("10ms")?),
-        Some("off") => None,
-        Some(d) => Some(parse_duration::parse(&d)?),
+        None => parse_duration::parse("10ms")?,
+        Some(d) => parse_duration::parse(&d)?,
     };
 
     let log_file = popts.opt_str("log-file");

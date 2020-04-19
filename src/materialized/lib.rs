@@ -86,7 +86,7 @@ pub struct Config {
     /// about its state.
     pub logging_granularity: Option<Duration>,
     /// The interval at which sources should be timestamped.
-    pub timestamp_frequency: Option<Duration>,
+    pub timestamp_frequency: Duration,
     /// The maximum size of a timestamp batch.
     pub max_increment_ts_size: i64,
     /// The historical window in which distinctions are maintained for arrangements.
@@ -282,12 +282,9 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             symbiosis_url: config.symbiosis_url.as_deref(),
             logging: logging_config.as_ref(),
             data_directory: config.data_directory.as_deref(),
-            timestamp: match config.timestamp_frequency {
-                Some(freq) => Some(coord::TimestampConfig {
-                    frequency: freq,
-                    max_size: config.max_increment_ts_size,
-                }),
-                None => None,
+            timestamp: coord::TimestampConfig {
+                frequency: config.timestamp_frequency,
+                max_size: config.max_increment_ts_size,
             },
             logical_compaction_window: config.logical_compaction_window,
             executor: &executor,
@@ -304,7 +301,6 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         config.process,
         switchboard,
         executor,
-        config.timestamp_frequency.is_some(),
         logging_config,
     )
     .map_err(|s| format_err!("{}", s))?;

@@ -92,7 +92,7 @@ where
     pub logging: Option<&'a LoggingConfig>,
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
-    pub timestamp: Option<TimestampConfig>,
+    pub timestamp: TimestampConfig,
     pub logical_compaction_window: Option<Duration>,
 }
 
@@ -116,7 +116,7 @@ where
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
     active_tails: HashMap<u32, GlobalId>,
-    timestamp_config: Option<TimestampConfig>,
+    timestamp_config: TimestampConfig,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
@@ -284,18 +284,15 @@ where
         });
 
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-        let _timestamper_thread = if let Some(config) = &self.timestamp_config {
-            let mut timestamper = Timestamper::new(
-                config,
-                self.catalog.storage_handle(),
-                internal_cmd_tx.clone(),
-                ts_rx,
-            );
-            let executor = self.executor.clone();
-            Some(thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop())
-        } else {
-            None
-        };
+        let mut timestamper = Timestamper::new(
+            &self.timestamp_config,
+            self.catalog.storage_handle(),
+            internal_cmd_tx.clone(),
+            ts_rx,
+        );
+        let executor = self.executor.clone();
+        let _timestamper_thread =
+            thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
