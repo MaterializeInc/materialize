@@ -23,8 +23,14 @@ fi
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy.
-echo "--- :docker: Starting dependencies"
+echo "--- :docker: Starting dependencies" >&2
 mzcompose up -d --scale "$service=0" "$service"
 
 echo "+++ :docker: Running command in mzcompose service: $service" >&2
-mzcompose run "${run_args[@]}"
+
+if ! mzcompose --mz-quiet run "${run_args[@]}"; then
+    echo "Command failed! Uploading logs for debugging." >&2
+    mzcompose --mz-quiet logs --no-color > services.log
+    buildkite-agent artifact upload services.log
+    exit 1
+fi

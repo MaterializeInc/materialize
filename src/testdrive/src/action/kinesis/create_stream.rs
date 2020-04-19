@@ -12,6 +12,7 @@ use rusoto_kinesis::{CreateStreamInput, DeleteStreamInput, Kinesis, ListStreamsI
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
+use crate::util;
 
 pub struct CreateStreamAction {
     stream_name: String,
@@ -43,28 +44,30 @@ impl Action for CreateStreamAction {
             .map_err(|e| format!("listing Kinesis streams: {}", e))?
             .stream_names;
 
-        for stream_name in stream_names {
-            let delete_stream_input = DeleteStreamInput {
-                enforce_consumer_deletion: Some(true),
-                stream_name: stream_name.clone(),
-            };
-            state
-                .kinesis_client
-                .delete_stream(delete_stream_input)
-                .await
-                .map_err(|e| format!("deleting Kinesis stream: {}", e))?;
-            println!("Deleted stale Kinesis stream: {}", &stream_name);
+        if !stream_names.is_empty() {
+            println!("Deleting stale Kinesis topics {}", stream_names.join(", "));
+            for stream_name in stream_names {
+                let delete_stream_input = DeleteStreamInput {
+                    enforce_consumer_deletion: Some(true),
+                    stream_name: stream_name.clone(),
+                };
+                state
+                    .kinesis_client
+                    .delete_stream(delete_stream_input)
+                    .await
+                    .map_err(|e| format!("deleting Kinesis stream: {}", e))?;
+            }
         }
         Ok(())
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
-        println!("creating Kinesis stream {}", stream_name);
+        println!("Creating Kinesis stream {}", stream_name);
 
         let create_stream_input = CreateStreamInput {
             shard_count: self.shard_count,
-            stream_name,
+            stream_name: stream_name.clone(),
         };
         state
             .kinesis_client
@@ -72,6 +75,7 @@ impl Action for CreateStreamAction {
             .await
             .map_err(|e| format!("creating stream: {}", e))?;
 
-        Ok(())
+        util::kinesis::wait_for_stream_shards(&state.kinesis_client, stream_name, self.shard_count)
+            .await
     }
 }

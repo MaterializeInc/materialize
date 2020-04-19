@@ -8,5 +8,6 @@
 // by the Apache License, Version 2.0.
 
 pub mod aws;
+pub mod kinesis;
 pub mod postgres;
 pub mod retry;
