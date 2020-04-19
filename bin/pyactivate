@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# activate.py — runs a script in the Materialize Python virtualenv.
+# pyactivate — runs a script in the Materialize Python virtualenv.
 
 from typing import List
 from pathlib import Path
@@ -37,8 +37,9 @@ def main(args: List[str]) -> int:
         )
         return 1
 
-    py_dir = Path(__file__).parent.parent
-    logger.debug("py_dir={}".format(py_dir))
+    root_dir = Path(__file__).parent.parent
+    py_dir = root_dir / "misc" / "python"
+    logger.debug("root_dir={} py_dir={}".format(root_dir, py_dir))
 
     dev = False
     if len(args) > 0 and args[0] == "--dev":
@@ -55,7 +56,7 @@ def main(args: List[str]) -> int:
 
     # Reinvoke with the interpreter from the virtualenv.
     os.environ["PYTHONPATH"] = str(py_dir.resolve())
-    os.environ["MZ_ROOT"] = str(py_dir.parent.parent.resolve())
+    os.environ["MZ_ROOT"] = str(root_dir.resolve())
     os.execvp(python, [python, *args])
 
 

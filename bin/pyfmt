@@ -11,7 +11,4 @@
 #
 # pyfmt — formats Python code with Black.
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-
-exec python3 "$root"/misc/python/bin/activate.py --dev \
-    -m black --target-version py36 . "$@"
+exec "$(dirname "$0")"/pyactivate --dev -m black --target-version py36 . "$@"

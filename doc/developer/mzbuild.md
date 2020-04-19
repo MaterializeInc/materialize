@@ -311,8 +311,8 @@ mzbuild is a Python 3 library that lives in
 [misc/python/mzbuild.py](/misc/python). Its only dependency is Python 3.5+,
 which is easy to find or pre-installed on most Linux distributions, and
 pre-installed on recent versions of macOS, too. Python dependencies are
-automatically installed into a virtualenv by the [activate.py wrapper
-script](/misc/python/bin/activate.py).
+automatically installed into a virtualenv by the [pyactivate wrapper
+script](/bin/pyactivate).
 
 Using Python 3.6 would be a good bit more convenient, but our CI image runs on
 Ubuntu 16.04, which is still shipping Python 3.5. Supporting the oldest Ubuntu

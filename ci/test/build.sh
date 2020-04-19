@@ -42,4 +42,4 @@ if [[ "$BUILDKITE_BRANCH" = master ]]; then
     curl -f -T target/debian/materialized.deb -u ci@materialize:"$BINTRAY_API_KEY" "https://api.bintray.com/content/materialize/apt/materialized-unstable/dev-$commit_index-$commit_hash/materialized-$commit_hash.deb;deb_distribution=generic;deb_component=main;deb_architecture=amd64"
 fi
 
-bin/ci-builder run stable misc/python/bin/activate.py ci/test/build-docker.py
+bin/ci-builder run stable bin/pyactivate ci/test/build-docker.py
