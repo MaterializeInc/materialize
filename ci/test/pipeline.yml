@@ -59,6 +59,18 @@ steps:
           run: testdrive
     if: $CHANGED_RUST || $CHANGED_TESTDRIVE
 
+  - id: testdrive-purgatory
+    label: ":racing_car: testdrive purgatory"
+    depends_on: build
+    command: test/testdrive/ci-only/*.td
+    timeout_in_minutes: 30
+    soft_fail: true
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/testdrive/mzcompose.yml
+          run: testdrive
+    if: $CHANGED_RUST || $CHANGED_TESTDRIVE
+
   - id: short-sqllogictest
     label: ":bulb: Short SQL logic tests"
     depends_on: build
