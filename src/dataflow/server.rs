@@ -175,7 +175,6 @@ pub fn serve<C>(
     process: usize,
     switchboard: comm::Switchboard<C>,
     executor: tokio::runtime::Handle,
-    advance_timestamp: bool,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
@@ -221,7 +220,6 @@ where
                 local_inputs: HashMap::new(),
                 reported_frontiers: HashMap::new(),
                 metrics: Metrics::for_worker_id(worker_idx),
-                advance_timestamp,
                 ts_histories: Default::default(),
                 ts_source_mapping: HashMap::new(),
                 ts_source_drops: Default::default(),
@@ -256,7 +254,6 @@ where
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
-    advance_timestamp: bool,
     ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
     ts_histories: TimestampHistories,
     ts_source_drops: TimestampChanges,
@@ -516,7 +513,6 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.sink_tokens,
-                        self.advance_timestamp,
                         &mut self.ts_source_mapping,
                         self.ts_histories.clone(),
                         self.ts_source_drops.clone(),
@@ -932,5 +928,5 @@ impl PendingPeek {
 /// doesn't really become slower, because you needed to instantiate these
 /// templates anyway to run tests.
 pub fn __explicit_instantiation__() {
-    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _, _, _) -> _);
+    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _, _, _, _) -> _);
 }

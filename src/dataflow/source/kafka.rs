@@ -21,8 +21,7 @@ use log::{error, info, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::Offset::Offset;
-use rdkafka::{ClientConfig, ClientContext, Statistics};
-use rdkafka::{Message, Timestamp as KafkaTimestamp};
+use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
@@ -67,7 +66,6 @@ pub fn kafka<G>(
     name: String,
     connector: KafkaSourceConnector,
     id: SourceInstanceId,
-    advance_timestamp: bool,
     timestamp_histories: TimestampHistories,
     timestamp_tx: TimestampChanges,
     consistency: Consistency,
@@ -159,224 +157,151 @@ where
         move |cap, output| {
             // Accumulate updates to BYTES_READ_COUNTER;
             let mut bytes_read = 0;
-            if advance_timestamp {
-                if let Some(consumer) = consumer.as_mut() {
-                    // Repeatedly interrogate Kafka for messages. Cease when
-                    // Kafka stops returning new data, or after 10 milliseconds.
-                    let timer = std::time::Instant::now();
+            if let Some(consumer) = consumer.as_mut() {
+                // Repeatedly interrogate Kafka for messages. Cease when
+                // Kafka stops returning new data, or after 10 milliseconds.
+                let timer = std::time::Instant::now();
 
-                    // Check if the capability can be downgraded (this is independent of whether
-                    // there are new messages that can be processed) as timestamps can become
-                    // closed in the absence of messages
-                    downgrade_capability(
-                        &id,
-                        cap,
-                        &mut last_processed_offsets,
-                        &mut next_partition_ts,
-                        &timestamp_histories,
-                        &mut expected_partition_count,
-                        consumer,
-                        &topic,
-                        &mut last_closed_ts,
-                    );
+                // Check if the capability can be downgraded (this is independent of whether
+                // there are new messages that can be processed) as timestamps can become
+                // closed in the absence of messages
+                downgrade_capability(
+                    &id,
+                    cap,
+                    &mut last_processed_offsets,
+                    &mut next_partition_ts,
+                    &timestamp_histories,
+                    &mut expected_partition_count,
+                    consumer,
+                    &topic,
+                    &mut last_closed_ts,
+                );
 
-                    // Check if there was a message buffered and if we can now process it
-                    // If we can now process it, clear the buffer and proceed to poll from
-                    // consumer. Else, exit the function
-                    let mut next_message = if let Some(message) = buffer.take() {
-                        Some(message)
-                    } else {
-                        // No currently buffered message, poll from stream
-                        match consumer.poll(Duration::from_millis(0)) {
-                            Some(Ok(msg)) => Some(MessageParts::from(&msg)),
-                            Some(Err(err)) => {
-                                error!("kafka error: {}: {}", name, err);
-                                None
-                            }
-                            _ => None,
+                // Check if there was a message buffered and if we can now process it
+                // If we can now process it, clear the buffer and proceed to poll from
+                // consumer. Else, exit the function
+                let mut next_message = if let Some(message) = buffer.take() {
+                    Some(message)
+                } else {
+                    // No currently buffered message, poll from stream
+                    match consumer.poll(Duration::from_millis(0)) {
+                        Some(Ok(msg)) => Some(MessageParts::from(&msg)),
+                        Some(Err(err)) => {
+                            error!("kafka error: {}: {}", name, err);
+                            None
                         }
-                    };
+                        _ => None,
+                    }
+                };
 
-                    while let Some(message) = next_message {
-                        let partition = message.partition;
-                        let offset = message.offset + 1;
-                        if !partitions.contains(&partition) {
-                            // We have received a message for a partition for which we do not yet
-                            // have any metadata. Buffer the message and wait until we get the
-                            // necessary information
-                            partitions = update_partition_list(
-                                consumer,
-                                &topic,
-                                expected_partition_count,
-                                &mut last_processed_offsets,
-                                &mut next_partition_ts,
-                                last_closed_ts,
-                            );
-                            expected_partition_count = i32::try_from(partitions.len()).unwrap();
+                while let Some(message) = next_message {
+                    let partition = message.partition;
+                    let offset = message.offset + 1;
+                    if !partitions.contains(&partition) {
+                        // We have received a message for a partition for which we do not yet
+                        // have any metadata. Buffer the message and wait until we get the
+                        // necessary information
+                        partitions = update_partition_list(
+                            consumer,
+                            &topic,
+                            expected_partition_count,
+                            &mut last_processed_offsets,
+                            &mut next_partition_ts,
+                            last_closed_ts,
+                        );
+                        expected_partition_count = i32::try_from(partitions.len()).unwrap();
+                        buffer = Some(message);
+                        activator.activate();
+                        return SourceStatus::Alive;
+                    }
+
+                    // Determine what the last processed message for this stream partition
+                    let last_processed_offset =
+                        match last_processed_offsets.get(&PartitionId::Kafka(partition)) {
+                            Some(offset) => *offset,
+                            None => 0,
+                        };
+
+                    if offset <= last_processed_offset {
+                        warn!("duplicate Kakfa message: souce {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
+                        let res = consumer.seek(
+                            &topic,
+                            partition,
+                            Offset(last_processed_offset),
+                            Duration::from_secs(1),
+                        );
+                        match res {
+                            Ok(_) => warn!(
+                                "Fast-forwarding consumer on partition {} to offset {}",
+                                partition, last_processed_offset
+                            ),
+                            Err(e) => error!("Failed to fast-forward consumer: {}", e),
+                        };
+                        activator.activate();
+                        return SourceStatus::Alive;
+                    }
+
+                    // Determine the timestamp to which we need to assign this message
+                    let ts = find_matching_timestamp(&id, partition, offset, &timestamp_histories);
+                    match ts {
+                        None => {
+                            // We have not yet decided on a timestamp for this message,
+                            // we need to buffer the message
                             buffer = Some(message);
                             activator.activate();
                             return SourceStatus::Alive;
                         }
+                        Some(_) => {
+                            let key = message.key.unwrap_or_default();
+                            let out = message.payload.unwrap_or_default();
+                            last_processed_offsets.insert(PartitionId::Kafka(partition), offset);
+                            bytes_read += key.len() as i64;
+                            bytes_read += out.len() as i64;
+                            output
+                                .session(&cap)
+                                .give(((key, out), Some(message.offset)));
 
-                        // Determine what the last processed message for this stream partition
-                        let last_processed_offset =
-                            match last_processed_offsets.get(&PartitionId::Kafka(partition)) {
-                                Some(offset) => *offset,
-                                None => 0,
-                            };
-
-                        if offset <= last_processed_offset {
-                            warn!("duplicate Kakfa message: souce {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
-                            let res = consumer.seek(
+                            downgrade_capability(
+                                &id,
+                                cap,
+                                &mut last_processed_offsets,
+                                &mut next_partition_ts,
+                                &timestamp_histories,
+                                &mut expected_partition_count,
+                                consumer,
                                 &topic,
-                                partition,
-                                Offset(last_processed_offset),
-                                Duration::from_secs(1),
+                                &mut last_closed_ts,
                             );
-                            match res {
-                                Ok(_) => warn!(
-                                    "Fast-forwarding consumer on partition {} to offset {}",
-                                    partition, last_processed_offset
-                                ),
-                                Err(e) => error!("Failed to fast-forward consumer: {}", e),
-                            };
-                            activator.activate();
-                            return SourceStatus::Alive;
-                        }
-
-                        // Determine the timestamp to which we need to assign this message
-                        let ts =
-                            find_matching_timestamp(&id, partition, offset, &timestamp_histories);
-                        match ts {
-                            None => {
-                                // We have not yet decided on a timestamp for this message,
-                                // we need to buffer the message
-                                buffer = Some(message);
-                                activator.activate();
-                                return SourceStatus::Alive;
-                            }
-                            Some(_) => {
-                                let key = message.key.unwrap_or_default();
-                                let out = message.payload.unwrap_or_default();
-                                last_processed_offsets
-                                    .insert(PartitionId::Kafka(partition), offset);
-                                bytes_read += key.len() as i64;
-                                bytes_read += out.len() as i64;
-                                output
-                                    .session(&cap)
-                                    .give(((key, out), Some(message.offset)));
-
-                                downgrade_capability(
-                                    &id,
-                                    cap,
-                                    &mut last_processed_offsets,
-                                    &mut next_partition_ts,
-                                    &timestamp_histories,
-                                    &mut expected_partition_count,
-                                    consumer,
-                                    &topic,
-                                    &mut last_closed_ts,
-                                );
-                            }
-                        }
-
-                        if timer.elapsed().as_millis() > 10 {
-                            // We didn't drain the entire queue, so indicate that we
-                            // should run again. We suppress the activation when the
-                            // queue is drained, as in that case librdkafka is
-                            // configured to unpark our thread when a new message
-                            // arrives.
-                            activator.activate();
-                            return SourceStatus::Alive;
-                        }
-
-                        // Try and poll for next message
-                        next_message = match consumer.poll(Duration::from_millis(0)) {
-                            Some(Ok(msg)) => Some(MessageParts::from(&msg)),
-                            Some(Err(err)) => {
-                                error!("kafka error: {}: {}", name, err);
-                                None
-                            }
-                            _ => None,
-                        };
-                    }
-                }
-                // Ensure that we poll kafka more often than the eviction timeout
-                activator.activate_after(Duration::from_secs(60));
-                if bytes_read > 0 {
-                    BYTES_READ_COUNTER.inc_by(bytes_read);
-                }
-                SourceStatus::Alive
-            } else {
-                if let Some(consumer) = consumer.as_mut() {
-                    // Repeatedly interrogate Kafka for messages. Cease when
-                    // Kafka stops returning new data, or after 10 milliseconds.
-                    let timer = std::time::Instant::now();
-
-                    while let Some(result) = consumer.poll(Duration::from_millis(0)) {
-                        match result {
-                            Ok(message) => {
-                                let key = message.key().map(|k| k.to_vec()).unwrap_or_default();
-
-                                let ms = match message.timestamp() {
-                                    KafkaTimestamp::NotAvailable => {
-                                        // TODO(benesch): do we need to do something
-                                        // else?
-                                        error!("dropped kafka message with no timestamp");
-                                        continue;
-                                    }
-                                    KafkaTimestamp::CreateTime(ms)
-                                    | KafkaTimestamp::LogAppendTime(ms) => ms as u64,
-                                };
-                                let cur = *cap.time();
-                                if ms >= *cap.time() {
-                                    cap.downgrade(&ms)
-                                } else {
-                                    warn!(
-                                        "{}: fast-forwarding out-of-order Kafka timestamp {}ms ({} -> {})",
-                                        name,
-                                        cur - ms,
-                                        ms,
-                                        cur,
-                                    );
-                                };
-
-                                // Null payloads are expected from Debezium and
-                                // Upsert formats.
-                                // See https://github.com/MaterializeInc/materialize/issues/439#issuecomment-534236276
-                                // Upsert treats null payloads as requests to
-                                // delete the record with the corresponding key.
-                                let out = message.payload().map(|p| p.to_vec()).unwrap_or_default();
-                                bytes_read += key.len() as i64;
-                                bytes_read += out.len() as i64;
-                                output
-                                    .session(&cap)
-                                    .give(((key, out), Some(message.offset())));
-                            }
-                            Err(err) => error!("kafka error: {}: {}", name, err),
-                        }
-
-                        if timer.elapsed().as_millis() > 10 {
-                            // We didn't drain the entire queue, so indicate that we
-                            // should run again. We suppress the activation when the
-                            // queue is drained, as in that case librdkafka is
-                            // configured to unpark our thread when a new message
-                            // arrives.
-                            activator.activate();
-                            if bytes_read > 0 {
-                                BYTES_READ_COUNTER.inc_by(bytes_read);
-                            }
-                            return SourceStatus::Alive;
                         }
                     }
+
+                    if timer.elapsed().as_millis() > 10 {
+                        // We didn't drain the entire queue, so indicate that we
+                        // should run again. We suppress the activation when the
+                        // queue is drained, as in that case librdkafka is
+                        // configured to unpark our thread when a new message
+                        // arrives.
+                        activator.activate();
+                        return SourceStatus::Alive;
+                    }
+
+                    // Try and poll for next message
+                    next_message = match consumer.poll(Duration::from_millis(0)) {
+                        Some(Ok(msg)) => Some(MessageParts::from(&msg)),
+                        Some(Err(err)) => {
+                            error!("kafka error: {}: {}", name, err);
+                            None
+                        }
+                        _ => None,
+                    };
                 }
-                // Ensure that we poll kafka more often than the eviction timeout
-                activator.activate_after(Duration::from_secs(60));
-                if bytes_read > 0 {
-                    BYTES_READ_COUNTER.inc_by(bytes_read);
-                }
-                SourceStatus::Alive
             }
+            // Ensure that we poll kafka more often than the eviction timeout
+            activator.activate_after(Duration::from_secs(60));
+            if bytes_read > 0 {
+                BYTES_READ_COUNTER.inc_by(bytes_read);
+            }
+            SourceStatus::Alive
         }
     });
 
