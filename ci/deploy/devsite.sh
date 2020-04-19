@@ -14,8 +14,10 @@
 set -euo pipefail
 
 bin/doc --no-rustup
+bin/pydoc
 rsync misc/www/index.html buildkite@mtrlz.dev:/var/www/html/index.html
-rsync --archive target/doc/ buildkite@mtrlz.dev:/var/www/html/api
+rsync --archive target/doc/ buildkite@mtrlz.dev:/var/www/html/api/rust
+rsync --archive target/pydoc/ buildkite@mtrlz.dev:/var/www/html/api/python
 
 ssh -A buildkite@mtrlz.dev <<'EOF'
 set -euxo pipefail
