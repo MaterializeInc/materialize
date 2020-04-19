@@ -90,7 +90,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
-          config: src/billing-demo/mzcompose.yml
+          config: demo/billing/mzcompose.yml
           run: billing-demo
     if: $CHANGED_RUST
 

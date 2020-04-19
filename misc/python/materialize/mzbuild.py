@@ -58,7 +58,7 @@ def runv(
 def capture(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = ...,
-    universal_newlines: Literal[False] = ...,
+    unicode: Literal[False] = ...,
 ) -> bytes:
     ...
 
@@ -68,17 +68,15 @@ def capture(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = ...,
     *,
-    universal_newlines: Literal[True],
+    unicode: Literal[True],
 ) -> str:
     ...
 
 
 def capture(
-    args: Sequence[Union[Path, str]],
-    cwd: Optional[Path] = None,
-    universal_newlines: bool = False,
+    args: Sequence[Union[Path, str]], cwd: Optional[Path] = None, unicode: bool = False,
 ) -> Union[str, bytes]:
-    if universal_newlines:
+    if unicode:
         return subprocess.check_output(args, cwd=cwd, universal_newlines=True)
     else:
         return subprocess.check_output(args, cwd=cwd, universal_newlines=False)
@@ -112,8 +110,7 @@ xstrip = xbinutil("strip")
 def docker_images() -> Set[str]:
     return set(
         capture(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
-            universal_newlines=True,
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], unicode=True,
         )
         .strip()
         .split("\n")
@@ -186,7 +183,7 @@ class CargoBuild(PreImage):
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().depends(root, path) + git_ls_files(
-            root, "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
         )
 
 
@@ -215,9 +212,7 @@ class CargoTest(PreImage):
         runv(args)
 
         tests = []
-        for line in capture(
-            args + ["--message-format=json"], universal_newlines=True
-        ).split("\n"):
+        for line in capture(args + ["--message-format=json"], unicode=True).split("\n"):
             if line.strip() == "":
                 continue
             message = json.loads(line)
@@ -252,7 +247,7 @@ class CargoTest(PreImage):
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().depends(root, path) + git_ls_files(
-            root, "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
         )
 
 

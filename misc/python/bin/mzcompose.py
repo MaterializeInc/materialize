@@ -11,12 +11,12 @@
 #
 # mzcompose.py — runs Docker Compose with Materialize customizations.
 
+from materialize import mzbuild
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import List, Tuple, Text, Optional, Sequence
 from typing_extensions import NoReturn
 import argparse
-import mzbuild
 import os
 import subprocess
 import sys

@@ -36,7 +36,7 @@ changes_matching() {
 run git fetch origin master
 
 CHANGED_DOC_USER=$(changes_matching "doc/user/*")
-CHANGED_RUST=$(changes_matching "src/*" Cargo.lock)
+CHANGED_RUST=$(changes_matching "demo/billing/*" "src/*" Cargo.lock)
 CHANGED_SLT=$(changes_matching "test/*.slt" "test/**/*.slt")
 CHANGED_TESTDRIVE=$(changes_matching "test/*.td" "test/**/*.td")
 CHANGED_CHBENCH=$(changes_matching "demo/chbench/**/*")
