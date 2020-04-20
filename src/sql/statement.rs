@@ -1245,9 +1245,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
-                        Some(Value::SingleQuotedString(topic)) => {
-                            Consistency::BringYourOwn(topic.into())
-                        }
+                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
                     let connector = ExternalSourceConnector::File(FileSourceConnector {
@@ -1265,9 +1263,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
-                        Some(Value::SingleQuotedString(topic)) => {
-                            Consistency::BringYourOwn(topic.into())
-                        }
+                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
                     let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
