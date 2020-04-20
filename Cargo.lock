@@ -3080,6 +3080,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
+ "bytes",
  "chrono",
  "comm",
  "coord",

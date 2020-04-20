@@ -299,9 +299,11 @@ fn format_row(
             Jsonb::from_datum(datum).to_string()
         } else if let ScalarType::List(_) = col_typ.scalar_type {
             // produce the same output as we would for psql
+            let mut buf = ::bytes::BytesMut::new();
             pgrepr::Value::from_datum(datum, &col_typ)
                 .unwrap()
-                .to_string()
+                .encode_text(&mut buf);
+            str::from_utf8(&buf).unwrap().to_owned()
         } else {
             match (slt_typ, datum) {
                 // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki

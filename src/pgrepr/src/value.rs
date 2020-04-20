@@ -328,11 +328,3 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .map(|(col, typ)| Value::from_datum(col, typ))
         .collect()
 }
-
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut buf = BytesMut::new();
-        self.encode_text(&mut buf);
-        f.write_str(str::from_utf8(&buf).unwrap())
-    }
-}
