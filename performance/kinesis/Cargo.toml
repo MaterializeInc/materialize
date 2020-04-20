@@ -1,0 +1,23 @@
+[package]
+name = "kinesis"
+version = "0.1.0"
+authors = ["Jessica Laughlin <jessica@materialize.io>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+bytes = "0.5.4"
+chrono = "0.4"
+env_logger = "0.7.1"
+futures = "0.3.4"
+futures-channel = "0.3.1"
+log = "0.4.8"
+rand = "0.7.3"
+rusoto_core = "0.43.0-beta.1"
+rusoto_credential = "0.43.0-beta.1"
+rusoto_kinesis = "0.43.0-beta.1"
+structopt = "0.3.11"
+testdrive = { path = "../../src/testdrive" }
+thiserror = "1.0.13"
+tokio = { version = "0.2.13", features = ["full"] }
+tokio-postgres = "0.5.1"

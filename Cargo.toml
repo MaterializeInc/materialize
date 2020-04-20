@@ -2,6 +2,7 @@
 members = [
     "demo/billing",
     "fuzz",
+    "performance/kinesis",
     "src/avro",
     "src/ccsr",
     "src/comm",
