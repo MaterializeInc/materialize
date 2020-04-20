@@ -12,6 +12,7 @@ use std::str;
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use failure::format_err;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
@@ -84,7 +85,6 @@ impl Value {
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
             (Datum::List(list), ScalarType::List(elem_type)) => {
-                //
                 let col_type = ColumnType::new((**elem_type).clone()).nullable(true);
                 Some(Value::List(
                     list.iter()
@@ -176,7 +176,34 @@ impl Value {
                 let mut elems = elems.iter().peekable();
                 while let Some(elem) = elems.next() {
                     match elem {
-                        Some(elem) => elem.encode_text(buf),
+                        Some(elem) => {
+                            let mut tmp = BytesMut::new();
+                            elem.encode_text(&mut tmp);
+                            let tmp = str::from_utf8(&tmp).unwrap();
+                            // https://www.postgresql.org/docs/current/arrays.html#ARRAYS-IO
+                            // > The array output routine will put double quotes around element values if they are empty strings, contain curly braces, delimiter characters, double quotes, backslashes, or white space, or match the word NULL. Double quotes and backslashes embedded in element values will be backslash-escaped.
+                            let mut needs_escaping = tmp.is_empty() || tmp.trim() == "NULL";
+                            for chr in tmp.chars() {
+                                match chr {
+                                    '{' | '}' | ',' | '"' | '\\' | ' ' => needs_escaping = true,
+                                    _ => (),
+                                }
+                            }
+                            if !needs_escaping {
+                                buf.extend(tmp.as_bytes());
+                            } else {
+                                for chr in tmp.chars() {
+                                    match chr {
+                                        '\\' => buf.extend(r#"\\"#.as_bytes()),
+                                        '"' => buf.extend(r#"\""#.as_bytes()),
+                                        _ => {
+                                            let mut chr_buf: [u8; 4] = [0, 0, 0, 0];
+                                            buf.extend(chr.encode_utf8(&mut chr_buf).as_bytes());
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         None => buf.put(&b"NULL"[..]),
                     }
                     if elems.peek().is_some() {
@@ -250,7 +277,116 @@ impl Value {
             Type::Text => Value::Text(raw.to_owned()),
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(strconv::parse_jsonb(raw)?),
-            Type::List(_) => unimplemented!("jamii/list"),
+            Type::List(elem_type) => {
+                let mut elems = vec![];
+                let mut chars = raw.chars().peekable();
+                match chars.next() {
+                    // start of list
+                    Some('{') => (),
+                    Some(other) => {
+                        return Err(format_err!("expected '{{', found {}", other).into());
+                    }
+                    None => return Err(format_err!("unexpected end of input").into()),
+                }
+                loop {
+                    match chars.peek().map(|c| *c) {
+                        // end of list
+                        Some('}') => {
+                            // consume
+                            chars.next();
+                            match chars.next() {
+                                Some(other) => {
+                                    return Err(
+                                        format_err!("unexpected leftover input {}", other).into()
+                                    )
+                                }
+                                None => break,
+                            }
+                        }
+                        // whitespace, ignore
+                        Some(' ') => {
+                            // consume
+                            chars.next();
+                            continue;
+                        }
+                        // escaped value
+                        Some('"') => {
+                            chars.next();
+                            let mut elem_text = String::new();
+                            loop {
+                                match chars.next() {
+                                    // end of escaped value
+                                    Some('"') => break,
+                                    // a backslash-escaped character
+                                    Some('\\') => match chars.next() {
+                                        Some('\\') => elem_text.push('\\'),
+                                        Some('"') => elem_text.push('"'),
+                                        Some(other) => {
+                                            return Err(format_err!("bad escape \\{}", other).into())
+                                        }
+                                        None => {
+                                            return Err(
+                                                format_err!("unexpected end of input").into()
+                                            )
+                                        }
+                                    },
+                                    // a normal character
+                                    Some(other) => elem_text.push(other),
+                                    None => {
+                                        return Err(format_err!("unexpected end of input").into())
+                                    }
+                                }
+                            }
+                            elems.push(Some(Value::decode_text(
+                                (*elem_type).clone(),
+                                elem_text.as_bytes(),
+                            )?));
+                        }
+                        // an unescaped value
+                        Some(_) => {
+                            let mut elem_text = String::new();
+                            loop {
+                                match chars.peek().map(|c| *c) {
+                                    // end of unescaped value
+                                    Some('}') | Some(',') | Some(' ') => break,
+                                    // a normal character
+                                    Some(other) => {
+                                        // consume
+                                        chars.next();
+                                        elem_text.push(other);
+                                    }
+                                    None => {
+                                        return Err(format_err!("unexpected end of input").into())
+                                    }
+                                }
+                            }
+                            elems.push(Some(Value::decode_text(
+                                (*elem_type).clone(),
+                                elem_text.as_bytes(),
+                            )?));
+                        }
+                        None => return Err(format_err!("unexpected end of input").into()),
+                    }
+                    // consume whitespace
+                    while let Some(' ') = chars.peek() {
+                        chars.next();
+                    }
+                    // look for delimiter
+                    match chars.next() {
+                        // another elem
+                        Some(',') => continue,
+                        // end of list
+                        Some('}') => break,
+                        Some(other) => {
+                            return Err(
+                                format_err!("expected ',' or '}}', found '{}'", other).into()
+                            )
+                        }
+                        None => return Err(format_err!("unexpected end of input").into()),
+                    }
+                }
+                Value::List(elems)
+            }
             Type::Unknown => panic!("cannot decode unknown type"),
         })
     }
