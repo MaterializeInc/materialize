@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use rand::distributions::Alphanumeric;
@@ -62,7 +64,7 @@ impl Action for IngestAction {
 
             // The Kinesis stream might not be immediately available,
             // be prepared to back off.
-            retry::retry(|| async {
+            retry::retry_for(Duration::from_secs(8), |_| async {
                 match state.kinesis_client.put_record(put_input.clone()).await {
                     Ok(_output) => Ok(()),
                     Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {

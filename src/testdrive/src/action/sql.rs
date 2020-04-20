@@ -8,15 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::ascii;
-use std::cmp;
-use std::error::Error as _;
+use std::error::Error;
 use std::fmt::Write as _;
 use std::io::{self, Write};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
 use serde_json::Value;
-use tokio::time::{self, Duration};
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{Json, Type};
@@ -28,6 +27,7 @@ use sql_parser::parser::Parser as SqlParser;
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedResult};
+use crate::util::retry;
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -98,37 +98,32 @@ impl Action for SqlAction {
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         let query = &self.cmd.query;
         print_query(&query);
-        let mut total_backoff = Duration::from_millis(0);
-        let mut backoff = cmp::min(Duration::from_millis(100), self.timeout);
-        loop {
-            match self.try_redo(&mut state.pgclient, &query).await {
+
+        let pgclient = &state.pgclient;
+        retry::retry_for(self.timeout, |retry_state| async move {
+            match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
-                    if total_backoff > Duration::from_millis(0) {
+                    if retry_state.i != 0 {
                         println!();
                     }
                     println!("rows match; continuing");
-                    break;
+                    Ok(())
                 }
-                Err(err) => {
-                    if total_backoff == Duration::from_millis(0) {
-                        print!(
-                            "rows didn't match; sleeping to see if dataflow catches up {:?}",
-                            backoff
-                        );
-                        io::stdout().flush().unwrap();
-                    } else if total_backoff < self.timeout {
-                        backoff = cmp::min(backoff * 2, self.timeout - total_backoff);
+                Err(e) => {
+                    if retry_state.i == 0 {
+                        print!("rows didn't match; sleeping to see if dataflow catches up");
+                    }
+                    if let Some(backoff) = retry_state.next_backoff {
                         print!(" {:?}", backoff);
                         io::stdout().flush().unwrap();
                     } else {
                         println!();
-                        return Err(err);
                     }
+                    Err(e)
                 }
             }
-            time::delay_for(backoff).await;
-            total_backoff += backoff;
-        }
+        })
+        .await?;
 
         if let Some(data_dir) = &state.data_dir {
             match self.stmt {
@@ -180,11 +175,7 @@ impl SqlAction {
         }
     }
 
-    async fn try_redo(
-        &self,
-        pgclient: &mut tokio_postgres::Client,
-        query: &str,
-    ) -> Result<(), String> {
+    async fn try_redo(&self, pgclient: &tokio_postgres::Client, query: &str) -> Result<(), String> {
         let mut actual: Vec<_> = pgclient
             .query(query, &[])
             .await

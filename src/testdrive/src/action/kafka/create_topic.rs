@@ -174,7 +174,7 @@ impl Action for CreateTopicAction {
         // get automatically created with multiple partitions. (Since
         // multiple partitions have no ordering guarantees, this violates
         // many assumptions that our tests make.)
-        retry::retry(|| async {
+        retry::retry_for(Duration::from_secs(8), |_| async {
             let metadata = state
                 .kafka_producer
                 .client()
