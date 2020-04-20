@@ -32,7 +32,7 @@ use rusqlite::{params, NO_PARAMS};
 use catalog::sql::SqlVal;
 use dataflow_types::{
     Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
-    KinesisSourceConnector,
+    KinesisSourceConnector, SourceConnector,
 };
 use expr::{PartitionId, SourceInstanceId};
 
@@ -115,7 +115,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, ExternalSourceConnector, Consistency),
+    Add(SourceInstanceId, SourceConnector),
     DropInstance(SourceInstanceId),
     Shutdown,
 }
@@ -505,10 +505,21 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.rx.try_recv() {
             match update {
-                TimestampMessage::Add(id, sc, consistency) => {
+                TimestampMessage::Add(id, sc) => {
+                    let (sc, _enc, _env, cons) = if let SourceConnector::External {
+                        connector,
+                        encoding,
+                        envelope,
+                        consistency,
+                    } = sc
+                    {
+                        (connector, encoding, envelope, consistency)
+                    } else {
+                        panic!("A Local Source should never be timestamped");
+                    };
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
-                        match consistency {
+                        match cons {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency", id);
                                 let last_offset = self.rt_recover_source(id);
