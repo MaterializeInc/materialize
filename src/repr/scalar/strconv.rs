@@ -419,3 +419,141 @@ where
         write!(buf, ".{:0width$}", nanos, width = width);
     }
 }
+
+pub fn parse_list<T>(
+    s: &str,
+    mut make_null: impl FnMut() -> T,
+    mut parse_elem: impl FnMut(&str) -> Result<T, failure::Error>,
+) -> Result<Vec<T>, failure::Error> {
+    let mut elems = vec![];
+    let mut chars = s.chars().peekable();
+    match chars.next() {
+        // start of list
+        Some('{') => (),
+        Some(other) => {
+            bail!("expected '{{', found {}", other);
+        }
+        None => bail!("unexpected end of input"),
+    }
+    loop {
+        match chars.peek().map(|c| *c) {
+            // end of list
+            Some('}') => {
+                // consume
+                chars.next();
+                match chars.next() {
+                    Some(other) => bail!("unexpected leftover input {}", other),
+                    None => break,
+                }
+            }
+            // whitespace, ignore
+            Some(' ') => {
+                // consume
+                chars.next();
+                continue;
+            }
+            // an escaped elem
+            Some('"') => {
+                chars.next();
+                let mut elem_text = String::new();
+                loop {
+                    match chars.next() {
+                        // end of escaped elem
+                        Some('"') => break,
+                        // a backslash-escaped character
+                        Some('\\') => match chars.next() {
+                            Some('\\') => elem_text.push('\\'),
+                            Some('"') => elem_text.push('"'),
+                            Some(other) => bail!("bad escape \\{}", other),
+                            None => bail!("unexpected end of input"),
+                        },
+                        // a normal character
+                        Some(other) => elem_text.push(other),
+                        None => bail!("unexpected end of input"),
+                    }
+                }
+                elems.push(parse_elem(&elem_text)?);
+            }
+            // an unescaped elem
+            Some(_) => {
+                let mut elem_text = String::new();
+                loop {
+                    match chars.peek().map(|c| *c) {
+                        // end of unescaped elem
+                        Some('}') | Some(',') | Some(' ') => break,
+                        // a normal character
+                        Some(other) => {
+                            // consume
+                            chars.next();
+                            elem_text.push(other);
+                        }
+                        None => bail!("unexpected end of input"),
+                    }
+                }
+                elems.push(if elem_text.trim() == "NULL" {
+                    make_null()
+                } else {
+                    parse_elem(&elem_text)?
+                });
+            }
+            None => bail!("unexpected end of input"),
+        }
+        // consume whitespace
+        while let Some(' ') = chars.peek() {
+            chars.next();
+        }
+        // look for delimiter
+        match chars.next() {
+            // another elem
+            Some(',') => continue,
+            // end of list
+            Some('}') => break,
+            Some(other) => bail!("expected ',' or '}}', found '{}'", other),
+            None => bail!("unexpected end of input"),
+        }
+    }
+    Ok(elems)
+}
+
+// can't use a FormatBuffer here because we need to pass a temp buffer to format_elem
+pub fn format_list<T>(
+    buf: &mut String,
+    elems: &[T],
+    mut is_null: impl FnMut(&T) -> bool,
+    mut format_elem: impl FnMut(&mut String, &T),
+) {
+    buf.write_str("{");
+    let mut elems = elems.iter().peekable();
+    while let Some(elem) = elems.next() {
+        if is_null(elem) {
+            buf.write_str("NULL");
+        } else {
+            let mut tmp = String::new();
+            format_elem(&mut tmp, elem);
+            // https://www.postgresql.org/docs/current/arrays.html#ARRAYS-IO
+            // > The array output routine will put double quotes around element values if they are empty strings, contain curly braces, delimiter characters, double quotes, backslashes, or white space, or match the word NULL. Double quotes and backslashes embedded in element values will be backslash-escaped.
+            let mut needs_escaping = tmp.is_empty() || tmp.trim() == "NULL";
+            for chr in tmp.chars() {
+                match chr {
+                    '{' | '}' | ',' | '"' | '\\' | ' ' => needs_escaping = true,
+                    _ => (),
+                }
+            }
+            if !needs_escaping {
+                buf.write_str(&tmp);
+            } else {
+                for chr in tmp.chars() {
+                    match chr {
+                        '\\' => buf.write_str(r#"\\"#),
+                        '"' => buf.write_str(r#"\""#),
+                        _ => write!(buf, "{}", chr),
+                    }
+                }
+            }
+        }
+        if elems.peek().is_some() {
+            buf.write_str(",")
+        }
+    }
+    buf.write_str("}");
+}
