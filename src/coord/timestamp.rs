@@ -166,22 +166,22 @@ struct RtTimestampConsumer {
 
 enum RtTimestampConnector {
     Kafka(RtKafkaConnector),
-    File(RtFileConnector<std::vec::Vec<u8>>),
-    Ocf(RtFileConnector<avro::types::Value>),
+    File(RtFileConnector<Vec<u8>>),
+    Ocf(RtFileConnector<Value>),
     Kinesis(RtKinesisConnector),
 }
 
 enum ByoTimestampConnector {
     Kafka(ByoKafkaConnector),
-    File(ByoFileConnector<std::vec::Vec<u8>>),
-    Ocf(ByoFileConnector<avro::types::Value>),
+    File(ByoFileConnector<Vec<u8>>),
+    Ocf(ByoFileConnector<Value>),
     Kinesis(ByoKinesisConnector),
 }
 
 // List of possible encoding types
 enum ValueEncoding {
-    Bytes(std::vec::Vec<u8>),
-    AvroOcf(avro::types::Value),
+    Bytes(Vec<u8>),
+    Avro(Value),
 }
 
 /// Timestamp consumer: wrapper around source consumers that stores necessary information
@@ -203,9 +203,51 @@ struct ByoTimestampConsumer {
     current_partition_count: i32,
 }
 
+impl ByoTimestampConsumer {
+    fn update_and_send(
+        &mut self,
+        tx: &futures::channel::mpsc::UnboundedSender<coord::Message>,
+        sid: SourceInstanceId,
+        partition_count: i32,
+        partition: PartitionId,
+        timestamp: u64,
+        offset: i64,
+    ) {
+        if self.current_partition_count < partition_count {
+            // A new partition has been added. Partitions always gets added with
+            // newPartitionId = previousLastPartitionId + 1 and start from 0.
+            // So this new partition will have ID "partition_count - 1"
+            // We ensure that the first messages in this partition will always have
+            // timestamps > the last closed timestamp. We need to explicitly close
+            // out all prior timestamps. To achieve this, we send an additional
+            // timestamp message to the coord/worker
+
+            // This can only happen for Kafka sources
+            tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                id: sid,
+                partition_count, // The new partition count
+                pid: PartitionId::Kafka(partition_count - 1), // the ID of the new partition
+                timestamp: self.last_ts,
+                offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
+                           // the empty interval
+            })
+            .expect("Failed to send update to coordinator");
+        }
+        self.current_partition_count = partition_count;
+        self.last_ts = timestamp;
+        self.last_partition_ts.insert(partition.clone(), timestamp);
+        tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
+            id: sid,
+            partition_count,
+            pid: partition,
+            timestamp,
+            offset,
+        })
+        .expect("Failed to send update to coordinator");
+    }
+}
+
 /// Supported format/envelope pairs for consistency topic decoding
-/// TODO(natacha): this should be removed
-/// #[warn(dead_code)]
 enum ConsistencyFormatting {
     // The formatting of this consistency source follows the
     // SourceName,PartitionCount,PartitionId,TS,Offset
@@ -290,7 +332,7 @@ fn byo_query_source(
         }
         ByoTimestampConnector::Ocf(file_consumer) => {
             while let Some(payload) = file_get_next_message(file_consumer) {
-                messages.push(ValueEncoding::AvroOcf(payload));
+                messages.push(ValueEncoding::Avro(payload));
                 msg_count += 1;
                 if msg_count == max_increment_size {
                     // Make sure to bound the number of timestamp updates we have at once,
@@ -728,9 +770,9 @@ impl Timestamper {
                                 };
                                 let last_offset =
                                     std::cmp::max(start_offset, self.rt_recover_source(id));
-                               let consumer = self.create_rt_connector(id, sc,enc, last_offset);
+                               let consumer = self.create_rt_connector(id, sc, last_offset);
                                if let Some(consumer) = consumer {
-                                    self.rt_sources.insert(id, consumer);
+                                   self.rt_sources.insert(id, consumer);
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
@@ -890,7 +932,7 @@ impl Timestamper {
                 }
                 ConsistencyFormatting::DebeziumOcf => {
                     for msg in messages {
-                        let msg = if let ValueEncoding::AvroOcf(value) = msg {
+                        let msg = if let ValueEncoding::Avro(value) = msg {
                             value
                         } else {
                             panic!("Debezium OCF consistency should only encode Value messages");
@@ -958,47 +1000,14 @@ impl Timestamper {
                                 match byo_consumer.connector {
                                     ByoTimestampConnector::Kafka(_)
                                     | ByoTimestampConnector::File(_) => {
-                                        if byo_consumer.current_partition_count < partition_count {
-                                            // A new partition has been added. Partitions always gets added with
-                                            // newPartitionId = previousLastPartitionId + 1 and start from 0.
-                                            // So this new partition will have ID "partition_count - 1"
-                                            // We ensure that the first messages in this partition will always have
-                                            // timestamps > the last closed timestamp. We need to explicitly close
-                                            // out all prior timestamps. To achieve this, we send an additional
-                                            // timestamp message to the coord/worker
-
-                                            // This can only happen for Kafka sources
-                                            self.tx
-                                                .unbounded_send(
-                                                    coord::Message::AdvanceSourceTimestamp {
-                                                        id: *id,
-                                                        partition_count, // The new partition count
-                                                        pid: PartitionId::Kafka(
-                                                            partition_count - 1,
-                                                        ), // the ID of the new partition
-                                                        timestamp: byo_consumer.last_ts,
-                                                        offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
-                                                                   // the empty interval
-                                                    },
-                                                )
-                                                .expect("Failed to send update to coordinator");
-                                        }
-                                        byo_consumer.current_partition_count = partition_count;
-                                        byo_consumer.last_ts = timestamp;
-                                        byo_consumer
-                                            .last_partition_ts
-                                            .insert(partition.clone(), timestamp);
-                                        self.tx
-                                            .unbounded_send(
-                                                coord::Message::AdvanceSourceTimestamp {
-                                                    id: *id,
-                                                    partition_count,
-                                                    pid: partition,
-                                                    timestamp,
-                                                    offset,
-                                                },
-                                            )
-                                            .expect("Failed to send update to coordinator");
+                                        byo_consumer.update_and_send(
+                                            &self.tx,
+                                            *id,
+                                            partition_count,
+                                            partition.clone(),
+                                            timestamp,
+                                            offset,
+                                        );
                                     }
                                     _ => {
                                         error!(
@@ -1012,9 +1021,8 @@ impl Timestamper {
                     }
                 }
                 ConsistencyFormatting::ByoAvroOcf => {
-                    //TODO(natacha): refactor to avoid duplicate code
                     for msg in messages {
-                        let msg = if let ValueEncoding::AvroOcf(value) = msg {
+                        let msg = if let ValueEncoding::Avro(value) = msg {
                             value
                         } else {
                             panic!("Byo Avro consistency should only encode byte messages");
@@ -1031,47 +1039,14 @@ impl Timestamper {
                             if is_ts_valid(byo_consumer, partition_count, &partition, timestamp) {
                                 match byo_consumer.connector {
                                     ByoTimestampConnector::Ocf(_) => {
-                                        if byo_consumer.current_partition_count < partition_count {
-                                            // A new partition has been added. Partitions always gets added with
-                                            // newPartitionId = previousLastPartitionId + 1 and start from 0.
-                                            // So this new partition will have ID "partition_count - 1"
-                                            // We ensure that the first messages in this partition will always have
-                                            // timestamps > the last closed timestamp. We need to explicitly close
-                                            // out all prior timestamps. To achieve this, we send an additional
-                                            // timestamp message to the coord/worker
-
-                                            // This can only happen for Kafka sources
-                                            self.tx
-                                                .unbounded_send(
-                                                    coord::Message::AdvanceSourceTimestamp {
-                                                        id: *id,
-                                                        partition_count, // The new partition count
-                                                        pid: PartitionId::Kafka(
-                                                            partition_count - 1,
-                                                        ), // the ID of the new partition
-                                                        timestamp: byo_consumer.last_ts,
-                                                        offset: 0, // An offset of 0 will "fast-forward" the stream, it denotes
-                                                                   // the empty interval
-                                                    },
-                                                )
-                                                .expect("Failed to send update to coordinator");
-                                        }
-                                        byo_consumer.current_partition_count = partition_count;
-                                        byo_consumer.last_ts = timestamp;
-                                        byo_consumer
-                                            .last_partition_ts
-                                            .insert(partition.clone(), timestamp);
-                                        self.tx
-                                            .unbounded_send(
-                                                coord::Message::AdvanceSourceTimestamp {
-                                                    id: *id,
-                                                    partition_count,
-                                                    pid: partition,
-                                                    timestamp,
-                                                    offset,
-                                                },
-                                            )
-                                            .expect("Failed to send update to coordinator");
+                                        byo_consumer.update_and_send(
+                                            &self.tx,
+                                            *id,
+                                            partition_count,
+                                            partition.clone(),
+                                            timestamp,
+                                            offset,
+                                        );
                                     }
                                     _ => {
                                         error!(
@@ -1093,7 +1068,6 @@ impl Timestamper {
         &self,
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
-        encoding: DataEncoding,
         last_offset: i64,
     ) -> Option<RtTimestampConsumer> {
         match sc {
@@ -1118,22 +1092,7 @@ impl Timestamper {
                 }
             }
             ExternalSourceConnector::AvroOcf(fc) => {
-                let schema = if let DataEncoding::AvroOcf { reader_schema } = encoding {
-                    match Schema::parse_str(&reader_schema) {
-                        Ok(schema) => schema,
-                        Err(e) => {
-                            error!(
-                                "The schema is invalid. Could not register connector. Error: {}",
-                                e
-                            );
-                            return None;
-                        }
-                    }
-                } else {
-                    error!("The only supported encoding for OCF files is Avro OCF. Could not register connector.");
-                    return None;
-                };
-                let connector = self.create_rt_ocf_connector(id, fc, &schema);
+                let connector = self.create_rt_ocf_connector(id, fc);
                 match connector {
                     Some(connector) => Some(RtTimestampConsumer {
                         connector: RtTimestampConnector::Ocf(connector),
@@ -1233,7 +1192,6 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         fc: FileSourceConnector,
-        _reader_schema: &Schema,
     ) -> Option<RtFileConnector<avro::types::Value>> {
         let ctor = move |file| avro::Reader::new(file);
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
