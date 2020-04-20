@@ -691,7 +691,7 @@ where
                     };
                     ts.push((partition_count, timestamp, offset));
                     if last_offset == offset {
-                        // We only activate the Kakfa source if the offset is the same as the last
+                        // We only activate the source if the offset is the same as the last
                         // offset as new data already triggers the Kafka source's activation
                         let source = self
                             .ts_source_mapping
