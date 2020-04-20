@@ -397,6 +397,39 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
     result
 }
 
+/// Determines whether the next proposed timestamp follows the timestamp
+/// assigning rules
+fn is_ts_valid(
+    byo_consumer: &ByoTimestampConsumer,
+    partition_count: i32,
+    partition: &PartitionId,
+    timestamp: u64,
+) -> bool {
+    let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
+        Some(ts) => *ts,
+        None => 0,
+    };
+
+    if timestamp == 0
+        || timestamp == std::u64::MAX
+        || timestamp < byo_consumer.last_ts
+        || timestamp <= last_p_ts
+        || (partition_count > byo_consumer.current_partition_count
+            && timestamp == byo_consumer.last_ts)
+    {
+        error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
+                     1) A timestamp should be greater than 0\n\
+                     2) The timestamp should be strictly smaller than u64::MAX\n\
+                     2) If no new partition is added, a new timestamp should be:\n \
+                        - strictly greater than the last timestamp in this partition\n \
+                        - greater or equal to all the timestamps that have been assigned across all partitions\n \
+                        If a new partition is added, a new timestamp should be:\n  \
+                        - strictly greater than the last timestamp\n");
+        return false;
+    }
+    true
+}
+
 /// Determines what format does a given consistency source abide to
 /// TODO(Natacha): this information should be included as metadata
 /// This function tries to decode to all known formats. If a decoding
@@ -584,26 +617,7 @@ impl Timestamper {
                     for (partition_count, partition, timestamp, offset) in
                         byo_extract_update_from_bytes(byo_consumer, messages)
                     {
-                        let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
-                            Some(ts) => *ts,
-                            None => 0,
-                        };
-                        if timestamp == 0
-                            || timestamp == std::u64::MAX
-                            || timestamp < byo_consumer.last_ts
-                            || timestamp <= last_p_ts
-                            || (partition_count > byo_consumer.current_partition_count
-                                && timestamp == byo_consumer.last_ts)
-                        {
-                            error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
-                     1) A timestamp should be greater than 0\n\
-                     2) The timestamp should be strictly smaller than u64::MAX\n\
-                     2) If no new partition is added, a new timestamp should be:\n \
-                        - strictly greater than the last timestamp in this partition\n \
-                        - greater or equal to all the timestamps that have been assigned across all partitions\n \
-                        If a new partition is added, a new timestamp should be:\n  \
-                        - strictly greater than the last timestamp\n");
-                        } else {
+                        if is_ts_valid(&byo_consumer, partition_count, &partition, timestamp) {
                             match byo_consumer.connector {
                                 ByoTimestampConnector::Kafka(_) => {
                                     if byo_consumer.current_partition_count < partition_count {
