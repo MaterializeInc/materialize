@@ -124,6 +124,7 @@ impl fmt::Display for SourceInstanceId {
 pub enum PartitionId {
     Kafka(i32),
     Kinesis(String),
+    File,
 }
 
 /// Humanizer that provides no additional information.

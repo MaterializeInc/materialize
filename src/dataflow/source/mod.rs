@@ -21,7 +21,7 @@ mod kinesis;
 mod util;
 
 use expr::SourceInstanceId;
-pub use file::{file, FileReadStyle};
+pub use file::{file, read_file_task, FileReadStyle};
 pub use kafka::kafka;
 pub use kinesis::kinesis;
 
