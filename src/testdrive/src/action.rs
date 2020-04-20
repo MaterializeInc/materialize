@@ -293,7 +293,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
                 sql.expected_error = subst(&sql.expected_error)?;
-                Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?)
+                Box::new(sql::build_fail_sql(sql, sql_timeout).map_err(wrap_err)?)
             }
         };
         out.push(PosAction {

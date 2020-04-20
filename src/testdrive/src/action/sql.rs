@@ -253,10 +253,13 @@ impl SqlAction {
     }
 }
 
-pub struct FailSqlAction(FailSqlCommand);
+pub struct FailSqlAction {
+    cmd: FailSqlCommand,
+    timeout: Duration,
+}
 
-pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, String> {
-    Ok(FailSqlAction(cmd))
+pub fn build_fail_sql(cmd: FailSqlCommand, timeout: Duration) -> Result<FailSqlAction, String> {
+    Ok(FailSqlAction { cmd, timeout })
 }
 
 #[async_trait]
@@ -266,23 +269,53 @@ impl Action for FailSqlAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let query = &self.0.query;
+        let query = &self.cmd.query;
         print_query(&query);
-        match state.pgclient.query(query.as_str(), &[]).await {
+
+        let pgclient = &state.pgclient;
+        retry::retry_for(self.timeout, |retry_state| async move {
+            match self.try_redo(pgclient, &query).await {
+                Ok(()) => {
+                    if retry_state.i != 0 {
+                        println!();
+                    }
+                    println!("query error matches; continuing");
+                    Ok(())
+                }
+                Err(e) => {
+                    if retry_state.i == 0 {
+                        print!("query error didn't match; sleeping to see if dataflow produces error shortly");
+                    }
+                    if let Some(backoff) = retry_state.next_backoff {
+                        print!(" {:?}", backoff);
+                        io::stdout().flush().unwrap();
+                    } else {
+                        println!();
+                    }
+                    Err(e)
+                }
+            }
+        }).await
+    }
+}
+
+impl FailSqlAction {
+    async fn try_redo(&self, pgclient: &tokio_postgres::Client, query: &str) -> Result<(), String> {
+        match pgclient.query(query, &[]).await {
             Ok(_) => Err(format!(
                 "query succeeded, but expected error '{}'",
-                self.0.expected_error
+                self.cmd.expected_error
             )),
             Err(err) => {
                 let err_string = err.to_string();
                 match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
                     Some(err) => {
-                        if err.message().contains(&self.0.expected_error) {
+                        if err.message().contains(&self.cmd.expected_error) {
                             Ok(())
                         } else {
                             Err(format!(
                                 "expected error containing '{}', but got '{}'",
-                                self.0.expected_error, err
+                                self.cmd.expected_error, err
                             ))
                         }
                     }
