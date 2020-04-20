@@ -28,7 +28,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
 
-use super::util::source;
+use super::util::{retry_max_backoff, source};
 use super::{SourceStatus, SourceToken};
 use crate::metrics::EVENTS_COUNTER;
 use crate::server::{TimestampChanges, TimestampHistories};
@@ -163,7 +163,7 @@ where
                             //  - InvalidArgument
                             //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
                             //    KMSOptInRequired, KMSThrottling
-                            //  - ResourceNotFound
+                            //  - ResourceNotFound todo: this probably isn't fatal.
                             //
                             // Other fatal Rusoto errors:
                             // - Credentials
@@ -229,7 +229,7 @@ fn reactivate_kinesis_source(
     SourceStatus::Alive
 }
 
-// todo: Better error handling here! Not all errors mean we're done/can't progress.
+// todo: Surface failures from this function to the user, means the source was not created.
 fn create_state(
     c: KinesisSourceConnector,
 ) -> Result<
@@ -241,19 +241,26 @@ fn create_state(
     ),
     failure::Error,
 > {
-    let http_client = HttpClient::new()?;
-    let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
-    let client = KinesisClient::new_with(http_client, provider, c.region);
+    retry_max_backoff(Duration::from_millis(3200), || {
+        let http_client = HttpClient::new()?;
+        let provider = StaticProvider::new(
+            c.access_key.clone(),
+            c.secret_access_key.clone(),
+            c.token.clone(),
+            None,
+        );
+        let client = KinesisClient::new_with(http_client, provider, c.region.clone());
 
-    let shard_set: HashSet<String> = get_shard_ids(&client, &c.stream_name)?;
-    let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
-    for shard_id in &shard_set {
-        shard_queue.push_back((
-            shard_id.clone(),
-            get_shard_iterator(&client, shard_id, &c.stream_name, "TRIM_HORIZON")?,
-        ))
-    }
-    Ok((client, c.stream_name.clone(), shard_set, shard_queue))
+        let shard_set: HashSet<String> = get_shard_ids(&client, &c.stream_name)?;
+        let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
+        for shard_id in &shard_set {
+            shard_queue.push_back((
+                shard_id.clone(),
+                get_shard_iterator(&client, shard_id, &c.stream_name, "TRIM_HORIZON")?,
+            ))
+        }
+        Ok((client, c.stream_name.clone(), shard_set, shard_queue))
+    })
 }
 
 fn downgrade_capability(cap: &mut Capability<u64>, name: &str) {

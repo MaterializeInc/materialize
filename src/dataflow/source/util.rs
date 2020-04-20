@@ -9,6 +9,10 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
+
+use failure;
 
 use expr::SourceInstanceId;
 
@@ -95,4 +99,22 @@ where
     // `timely_source` promises to call the provided closure before returning,
     // so we are guaranteed that `token` is non-None.
     (stream, token.unwrap())
+}
+
+/// Retries a fallible operation `f` with a maximum backoff.
+pub fn retry_max_backoff<F, T>(max_backoff: Duration, mut f: F) -> Result<T, failure::Error>
+where
+    F: FnMut() -> Result<T, failure::Error>,
+{
+    let mut backoff = Duration::from_millis(200);
+    loop {
+        match f() {
+            Ok(t) => return Ok(t),
+            Err(e) if backoff > max_backoff => return Err(e),
+            Err(_) => {
+                thread::sleep(backoff);
+                backoff *= 2;
+            }
+        }
+    }
 }
