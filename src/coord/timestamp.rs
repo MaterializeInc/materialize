@@ -397,6 +397,17 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
     result
 }
 
+/// This function determines the next maximum offset to timestamp.
+/// This offset should be no greater than max_increment_size
+fn determine_next_offset(last_offset: i64, available_offsets: i64, max_increment_size: i64) -> i64 {
+    // Bound the next timestamp to be no more than max_increment_size in the future
+    if (available_offsets - last_offset) > max_increment_size {
+        last_offset + max_increment_size
+    } else {
+        available_offsets
+    }
+}
+
 /// Determines whether the next proposed timestamp follows the timestamp
 /// assigning rules
 fn is_ts_valid(
@@ -985,15 +996,18 @@ impl Timestamper {
                         match watermark {
                             Ok(watermark) => {
                                 let high = watermark.1;
-                                // Bound the next timestamp to be no more than max_increment_size in the future
-                                let next_ts = if (high - cons.last_offset) > self.max_increment_size
-                                {
-                                    cons.last_offset + self.max_increment_size
-                                } else {
-                                    high
-                                };
-                                cons.last_offset = next_ts;
-                                result.push((*id, partition_count, PartitionId::Kafka(p), next_ts))
+                                let next_offset = determine_next_offset(
+                                    cons.last_offset,
+                                    high,
+                                    self.max_increment_size,
+                                );
+                                cons.last_offset = next_offset;
+                                result.push((
+                                    *id,
+                                    partition_count,
+                                    PartitionId::Kafka(p),
+                                    next_offset,
+                                ))
                             }
                             Err(e) => {
                                 error!(
