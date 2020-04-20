@@ -331,6 +331,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         Ok(col)
                                     } else {
                                         Err({
+                                            // TODO(frank): This could be `Datum::Null` if we
+                                            // are certain that no readers will consult it and
+                                            // believe it to be a non-null value. That is the
+                                            // intent, but it is not yet clear that we ensure
+                                            // this.
                                             let typ = &source_type.column_types[col];
                                             if typ.nullable {
                                                 Datum::Null
