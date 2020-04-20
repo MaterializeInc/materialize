@@ -1263,6 +1263,13 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::Boolean(b)) => b,
                         Some(_) => bail!("tail must be a boolean"),
                     };
+                    consistency = match with_options.remove("consistency") {
+                        None => Consistency::RealTime,
+                        Some(Value::SingleQuotedString(topic)) => {
+                            Consistency::BringYourOwn(topic.into())
+                        }
+                        Some(_) => bail!("consistency must be a string"),
+                    };
                     let connector = ExternalSourceConnector::File(FileSourceConnector {
                         path: path.clone().into(),
                         tail,
@@ -1275,6 +1282,13 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         None => false,
                         Some(Value::Boolean(b)) => b,
                         Some(_) => bail!("tail must be a boolean"),
+                    };
+                    consistency = match with_options.remove("consistency") {
+                        None => Consistency::RealTime,
+                        Some(Value::SingleQuotedString(topic)) => {
+                            Consistency::BringYourOwn(topic.into())
+                        }
+                        Some(_) => bail!("consistency must be a string"),
                     };
                     let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                         path: path.clone().into(),
