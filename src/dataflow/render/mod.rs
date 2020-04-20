@@ -126,7 +126,7 @@ use self::context::{ArrangementFlavor, Context};
 use super::sink;
 use super::source;
 use super::source::FileReadStyle;
-use super::source::SourceToken;
+use super::source::{SourceConfig, SourceToken};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_upsert, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -251,6 +251,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         _ => false,
                     };
 
+                    let source_config = SourceConfig::new(
+                        uid,
+                        region,
+                        timestamp_histories.clone(),
+                        timestamp_channel.clone(),
+                        consistency,
+                    );
+
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
                             ExternalSourceConnector::Kafka(c) => {
@@ -259,13 +267,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 let hash = src_id.hashed() as usize;
                                 let read_from_kafka = hash % worker_peers == worker_index;
                                 let (source, capability) = source::kafka(
-                                    region,
+                                    source_config,
                                     format!("kafka-{}-{}", first_export_id, source_number),
                                     c,
-                                    uid,
-                                    timestamp_histories.clone(),
-                                    timestamp_channel.clone(),
-                                    consistency,
                                     read_from_kafka,
                                 );
                                 let arranged = arrange_from_upsert(
@@ -319,15 +323,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             let reader_schema = Schema::parse_str(reader_schema).unwrap();
                             let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
                             let (source, capability) = source::file(
-                                uid,
-                                region,
+                                source_config,
                                 format!("ocf-{}", src_id),
                                 c.path,
                                 read_style,
                                 ctor,
-                                timestamp_histories.clone(),
-                                timestamp_channel.clone(),
-                                consistency,
                             );
                             (decode_avro_values(&source, &envelope), capability)
                         } else {
@@ -339,13 +339,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     let hash = src_id.hashed() as usize;
                                     let read_from_kafka = hash % worker_peers == worker_index;
                                     let (source, capability) = source::kafka(
-                                        region,
+                                        source_config,
                                         format!("kafka-{}-{}", first_export_id, source_number),
                                         c,
-                                        uid,
-                                        timestamp_histories.clone(),
-                                        timestamp_channel.clone(),
-                                        consistency,
                                         read_from_kafka,
                                     );
                                     (
@@ -359,13 +355,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     let hash = src_id.hashed() as usize;
                                     let read_from_kinesis = hash % worker_peers == worker_index;
                                     source::kinesis(
-                                        region,
+                                        source_config,
                                         format!("kinesis-{}-{}", first_export_id, source_number),
                                         c,
-                                        uid,
-                                        timestamp_histories.clone(),
-                                        timestamp_channel.clone(),
-                                        consistency,
                                         read_from_kinesis,
                                     )
                                 }
@@ -387,15 +379,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     let ctor =
                                         |file| Ok(std::io::BufReader::new(file).split(b'\n'));
                                     source::file(
-                                        uid,
-                                        region,
+                                        source_config,
                                         format!("csv-{}", src_id),
                                         c.path,
                                         read_style,
                                         ctor,
-                                        timestamp_histories.clone(),
-                                        timestamp_channel.clone(),
-                                        consistency,
                                     )
                                 }
                                 ExternalSourceConnector::AvroOcf(_) => unreachable!(),

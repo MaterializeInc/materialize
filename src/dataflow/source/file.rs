@@ -16,16 +16,16 @@ use std::time::Duration;
 #[cfg(not(target_os = "macos"))]
 use notify::{RecursiveMode, Watcher};
 
-use dataflow_types::{Consistency, ExternalSourceConnector, FileSourceConnector, Timestamp};
+use dataflow_types::{ExternalSourceConnector, FileSourceConnector, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 use log::error;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use crate::server::{TimestampChanges, TimestampHistories};
+use crate::server::TimestampHistories;
 use crate::source::util::source;
-use crate::source::{SourceStatus, SourceToken};
+use crate::source::{SourceConfig, SourceStatus, SourceToken};
 use std::io::Read;
 use std::sync::mpsc::TryRecvError;
 
@@ -200,7 +200,6 @@ pub fn read_file_task<Ctor, I, Out, Err>(
 /// (even across partitions). This means that once we see a timestamp with ts x, no entry with
 /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
 /// partitions
-#[allow(clippy::too_many_arguments)]
 fn downgrade_capability(
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
@@ -262,17 +261,12 @@ fn find_matching_timestamp(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn file<G, Ctor, I, Out, Err>(
-    id: SourceInstanceId,
-    region: &G,
+    source_config: SourceConfig<G>,
     name: String,
     path: PathBuf,
     read_style: FileReadStyle,
     iter_ctor: Ctor,
-    timestamp_histories: TimestampHistories,
-    timestamp_tx: TimestampChanges,
-    consistency: Consistency,
 ) -> (
     timely::dataflow::Stream<G, (Out, Option<i64>)>,
     Option<SourceToken>,
@@ -286,8 +280,10 @@ where
 {
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_RECORDS_PER_INVOCATION: usize = 1024;
-    let read_file = read_style != FileReadStyle::None;
 
+    let (id, region, timestamp_histories, timestamp_tx, consistency) = source_config.extract();
+
+    let read_file = read_style != FileReadStyle::None;
     let ts = if read_file {
         let prev = timestamp_histories
             .borrow_mut()
