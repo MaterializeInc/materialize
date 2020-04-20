@@ -180,7 +180,7 @@ class CargoBuild(PreImage):
                 ]
             )
 
-    def depends(self, root: Path, path: Path) -> List[bytes]:
+    def inputs(self, root: Path, path: Path) -> List[bytes]:
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().inputs(root, path) + git_ls_files(
@@ -253,7 +253,7 @@ class CargoTest(PreImage):
         )
         shutil.copytree(root / "misc" / "shlib", path / "shlib")
 
-    def depends(self, root: Path, path: Path) -> List[bytes]:
+    def inputs(self, root: Path, path: Path) -> List[bytes]:
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
         return super().inputs(root, path) + git_ls_files(
