@@ -161,7 +161,7 @@ pub enum WorkerFeedback {
     /// The id of a source whose source connector has been dropped
     DroppedSource(SourceInstanceId),
     /// The id of a source whose source connector has been created
-    CreateSource(SourceInstanceId, ExternalSourceConnector, Consistency),
+    CreateSource(SourceInstanceId, ExternalSourceConnector),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -444,11 +444,7 @@ where
                 let connector = self.feedback_tx.as_mut().unwrap();
                 block_on(connector.send(WorkerFeedbackWithMeta {
                     worker_id: self.inner.index(),
-                    message: WorkerFeedback::CreateSource(
-                        *id,
-                        ksc.as_ref().unwrap().0.clone(),
-                        ksc.as_ref().unwrap().1.clone(),
-                    ),
+                    message: WorkerFeedback::CreateSource(*id, ksc.as_ref().unwrap().0.clone()),
                 }))
                 .unwrap();
             }

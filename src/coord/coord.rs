@@ -451,11 +451,19 @@ where
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
-                    message: WorkerFeedback::CreateSource(source_id, sc, consistency),
+                    message: WorkerFeedback::CreateSource(source_id, _sc),
                 }) => {
-                    ts_tx
-                        .send(TimestampMessage::Add(source_id, sc, consistency))
-                        .expect("Failed to send CREATE Instance notice to timestamper");
+                    if let Some(entry) = self.catalog.try_get_by_id(source_id.sid) {
+                        if let CatalogItem::Source(s) = entry.item() {
+                            ts_tx
+                                .send(TimestampMessage::Add(source_id, s.connector.clone()))
+                                .expect("Failed to send CREATE Instance notice to timestamper");
+                        } else {
+                            panic!("A non-source is re-using the same source ID");
+                        }
+                    } else {
+                        // Someone already dropped the source
+                    }
                 }
 
                 Message::AdvanceSourceTimestamp {
