@@ -143,7 +143,7 @@ struct ByoTimestampConsumer {
     // The format of the connector
     envelope: ConsistencyFormatting,
     // The last timestamp assigned per partition
-    last_partition_ts: HashMap<i32, u64>,
+    last_partition_ts: HashMap<PartitionId, u64>,
     // The max assigned timestamp. Should be max(last_partition_ts)
     last_ts: u64,
     // The max offset for which a timestamp has been assigned
@@ -226,12 +226,10 @@ fn byo_query_source(consumer: &mut ByoTimestampConsumer, max_increment_size: i64
     messages
 }
 
-// TODO(Natacha): this function is currently only applicable to Kafka sources
-// Should be made more generic
-fn byo_extract_ts_update(
+fn byo_extract_update_from_bytes(
     consumer: &ByoTimestampConsumer,
     messages: Vec<Vec<u8>>,
-) -> Vec<(i32, i32, u64, i64)> {
+) -> Vec<(i32, PartitionId, u64, i64)> {
     let mut updates = vec![];
     for payload in messages {
         let st = str::from_utf8(&payload);
@@ -251,12 +249,22 @@ fn byo_extract_ts_update(
                         continue;
                     }
                 };
-                let partition = match split[2].parse::<i32>() {
-                    Ok(i) => i,
-                    Err(err) => {
-                        error!("incorrect timestamp format {}", err);
-                        continue;
-                    }
+                let partition = match &consumer.connector {
+                    ByoTimestampConnector::Kinesis(_) => match split[2].parse::<String>() {
+                        Ok(s) => PartitionId::Kinesis(s),
+                        Err(err) => {
+                            error!("incorrect timestamp format {}", err);
+                            continue;
+                        }
+                    },
+                    ByoTimestampConnector::Kafka(_) => match split[2].parse::<i32>() {
+                        Ok(i) => PartitionId::Kafka(i),
+                        Err(err) => {
+                            error!("incorrect timestamp format {}", err);
+                            continue;
+                        }
+                    },
+                    ByoTimestampConnector::File(_) => unimplemented!(),
                 };
                 let ts = match split[3].parse::<u64>() {
                     Ok(i) => i,
@@ -574,7 +582,7 @@ impl Timestamper {
             match byo_consumer.envelope {
                 ConsistencyFormatting::Raw => {
                     for (partition_count, partition, timestamp, offset) in
-                        byo_extract_ts_update(byo_consumer, messages)
+                        byo_extract_update_from_bytes(byo_consumer, messages)
                     {
                         let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
                             Some(ts) => *ts,
@@ -621,12 +629,14 @@ impl Timestamper {
                                     }
                                     byo_consumer.current_partition_count = partition_count;
                                     byo_consumer.last_ts = timestamp;
-                                    byo_consumer.last_partition_ts.insert(partition, timestamp);
+                                    byo_consumer
+                                        .last_partition_ts
+                                        .insert(partition.clone(), timestamp);
                                     self.tx
                                         .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                                             id: *id,
                                             partition_count,
-                                            pid: PartitionId::Kafka(partition),
+                                            pid: partition,
                                             timestamp,
                                             offset,
                                         })
