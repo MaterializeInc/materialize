@@ -32,7 +32,7 @@ use rusqlite::{params, NO_PARAMS};
 use catalog::sql::SqlVal;
 use dataflow_types::{
     Consistency, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
-    KinesisSourceConnector,
+    KinesisSourceConnector, SourceConnector,
 };
 use expr::{PartitionId, SourceInstanceId};
 
@@ -115,7 +115,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, ExternalSourceConnector, Consistency),
+    Add(SourceInstanceId, SourceConnector),
     DropInstance(SourceInstanceId),
     Shutdown,
 }
@@ -143,7 +143,7 @@ struct ByoTimestampConsumer {
     // The format of the connector
     envelope: ConsistencyFormatting,
     // The last timestamp assigned per partition
-    last_partition_ts: HashMap<i32, u64>,
+    last_partition_ts: HashMap<PartitionId, u64>,
     // The max assigned timestamp. Should be max(last_partition_ts)
     last_ts: u64,
     // The max offset for which a timestamp has been assigned
@@ -226,12 +226,10 @@ fn byo_query_source(consumer: &mut ByoTimestampConsumer, max_increment_size: i64
     messages
 }
 
-// TODO(Natacha): this function is currently only applicable to Kafka sources
-// Should be made more generic
-fn byo_extract_ts_update(
+fn byo_extract_update_from_bytes(
     consumer: &ByoTimestampConsumer,
     messages: Vec<Vec<u8>>,
-) -> Vec<(i32, i32, u64, i64)> {
+) -> Vec<(i32, PartitionId, u64, i64)> {
     let mut updates = vec![];
     for payload in messages {
         let st = str::from_utf8(&payload);
@@ -251,12 +249,22 @@ fn byo_extract_ts_update(
                         continue;
                     }
                 };
-                let partition = match split[2].parse::<i32>() {
-                    Ok(i) => i,
-                    Err(err) => {
-                        error!("incorrect timestamp format {}", err);
-                        continue;
-                    }
+                let partition = match &consumer.connector {
+                    ByoTimestampConnector::Kinesis(_) => match split[2].parse::<String>() {
+                        Ok(s) => PartitionId::Kinesis(s),
+                        Err(err) => {
+                            error!("incorrect timestamp format {}", err);
+                            continue;
+                        }
+                    },
+                    ByoTimestampConnector::Kafka(_) => match split[2].parse::<i32>() {
+                        Ok(i) => PartitionId::Kafka(i),
+                        Err(err) => {
+                            error!("incorrect timestamp format {}", err);
+                            continue;
+                        }
+                    },
+                    ByoTimestampConnector::File(_) => unimplemented!(),
                 };
                 let ts = match split[3].parse::<u64>() {
                     Ok(i) => i,
@@ -389,6 +397,50 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
     result
 }
 
+/// This function determines the next maximum offset to timestamp.
+/// This offset should be no greater than max_increment_size
+fn determine_next_offset(last_offset: i64, available_offsets: i64, max_increment_size: i64) -> i64 {
+    // Bound the next timestamp to be no more than max_increment_size in the future
+    if (available_offsets - last_offset) > max_increment_size {
+        last_offset + max_increment_size
+    } else {
+        available_offsets
+    }
+}
+
+/// Determines whether the next proposed timestamp follows the timestamp
+/// assigning rules
+fn is_ts_valid(
+    byo_consumer: &ByoTimestampConsumer,
+    partition_count: i32,
+    partition: &PartitionId,
+    timestamp: u64,
+) -> bool {
+    let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
+        Some(ts) => *ts,
+        None => 0,
+    };
+
+    if timestamp == 0
+        || timestamp == std::u64::MAX
+        || timestamp < byo_consumer.last_ts
+        || timestamp <= last_p_ts
+        || (partition_count > byo_consumer.current_partition_count
+            && timestamp == byo_consumer.last_ts)
+    {
+        error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
+                     1) A timestamp should be greater than 0\n\
+                     2) The timestamp should be strictly smaller than u64::MAX\n\
+                     2) If no new partition is added, a new timestamp should be:\n \
+                        - strictly greater than the last timestamp in this partition\n \
+                        - greater or equal to all the timestamps that have been assigned across all partitions\n \
+                        If a new partition is added, a new timestamp should be:\n  \
+                        - strictly greater than the last timestamp\n");
+        return false;
+    }
+    true
+}
+
 /// Determines what format does a given consistency source abide to
 /// TODO(Natacha): this information should be included as metadata
 /// This function tries to decode to all known formats. If a decoding
@@ -505,10 +557,21 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.rx.try_recv() {
             match update {
-                TimestampMessage::Add(id, sc, consistency) => {
+                TimestampMessage::Add(id, sc) => {
+                    let (sc, _enc, _env, cons) = if let SourceConnector::External {
+                        connector,
+                        encoding,
+                        envelope,
+                        consistency,
+                    } = sc
+                    {
+                        (connector, encoding, envelope, consistency)
+                    } else {
+                        panic!("A Local Source should never be timestamped");
+                    };
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
-                        match consistency {
+                        match cons {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency", id);
                                 let last_offset = self.rt_recover_source(id);
@@ -563,28 +626,9 @@ impl Timestamper {
             match byo_consumer.envelope {
                 ConsistencyFormatting::Raw => {
                     for (partition_count, partition, timestamp, offset) in
-                        byo_extract_ts_update(byo_consumer, messages)
+                        byo_extract_update_from_bytes(byo_consumer, messages)
                     {
-                        let last_p_ts = match byo_consumer.last_partition_ts.get(&partition) {
-                            Some(ts) => *ts,
-                            None => 0,
-                        };
-                        if timestamp == 0
-                            || timestamp == std::u64::MAX
-                            || timestamp < byo_consumer.last_ts
-                            || timestamp <= last_p_ts
-                            || (partition_count > byo_consumer.current_partition_count
-                                && timestamp == byo_consumer.last_ts)
-                        {
-                            error!("The timestamp assignment rules have been violated. The rules are as follows:\n\
-                     1) A timestamp should be greater than 0\n\
-                     2) The timestamp should be strictly smaller than u64::MAX\n\
-                     2) If no new partition is added, a new timestamp should be:\n \
-                        - strictly greater than the last timestamp in this partition\n \
-                        - greater or equal to all the timestamps that have been assigned across all partitions\n \
-                        If a new partition is added, a new timestamp should be:\n  \
-                        - strictly greater than the last timestamp\n");
-                        } else {
+                        if is_ts_valid(&byo_consumer, partition_count, &partition, timestamp) {
                             match byo_consumer.connector {
                                 ByoTimestampConnector::Kafka(_) => {
                                     if byo_consumer.current_partition_count < partition_count {
@@ -610,12 +654,14 @@ impl Timestamper {
                                     }
                                     byo_consumer.current_partition_count = partition_count;
                                     byo_consumer.last_ts = timestamp;
-                                    byo_consumer.last_partition_ts.insert(partition, timestamp);
+                                    byo_consumer
+                                        .last_partition_ts
+                                        .insert(partition.clone(), timestamp);
                                     self.tx
                                         .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                                             id: *id,
                                             partition_count,
-                                            pid: PartitionId::Kafka(partition),
+                                            pid: partition,
                                             timestamp,
                                             offset,
                                         })
@@ -950,15 +996,18 @@ impl Timestamper {
                         match watermark {
                             Ok(watermark) => {
                                 let high = watermark.1;
-                                // Bound the next timestamp to be no more than max_increment_size in the future
-                                let next_ts = if (high - cons.last_offset) > self.max_increment_size
-                                {
-                                    cons.last_offset + self.max_increment_size
-                                } else {
-                                    high
-                                };
-                                cons.last_offset = next_ts;
-                                result.push((*id, partition_count, PartitionId::Kafka(p), next_ts))
+                                let next_offset = determine_next_offset(
+                                    cons.last_offset,
+                                    high,
+                                    self.max_increment_size,
+                                );
+                                cons.last_offset = next_offset;
+                                result.push((
+                                    *id,
+                                    partition_count,
+                                    PartitionId::Kafka(p),
+                                    next_offset,
+                                ))
                             }
                             Err(e) => {
                                 error!(

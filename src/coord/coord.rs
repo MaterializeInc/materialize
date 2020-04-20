@@ -92,7 +92,7 @@ where
     pub logging: Option<&'a LoggingConfig>,
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
-    pub timestamp: Option<TimestampConfig>,
+    pub timestamp: TimestampConfig,
     pub logical_compaction_window: Option<Duration>,
 }
 
@@ -116,7 +116,7 @@ where
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
     active_tails: HashMap<u32, GlobalId>,
-    timestamp_config: Option<TimestampConfig>,
+    timestamp_config: TimestampConfig,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
@@ -284,18 +284,15 @@ where
         });
 
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-        let _timestamper_thread = if let Some(config) = &self.timestamp_config {
-            let mut timestamper = Timestamper::new(
-                config,
-                self.catalog.storage_handle(),
-                internal_cmd_tx.clone(),
-                ts_rx,
-            );
-            let executor = self.executor.clone();
-            Some(thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop())
-        } else {
-            None
-        };
+        let mut timestamper = Timestamper::new(
+            &self.timestamp_config,
+            self.catalog.storage_handle(),
+            internal_cmd_tx.clone(),
+            ts_rx,
+        );
+        let executor = self.executor.clone();
+        let _timestamper_thread =
+            thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -454,11 +451,19 @@ where
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
-                    message: WorkerFeedback::CreateSource(source_id, sc, consistency),
+                    message: WorkerFeedback::CreateSource(source_id, _sc),
                 }) => {
-                    ts_tx
-                        .send(TimestampMessage::Add(source_id, sc, consistency))
-                        .expect("Failed to send CREATE Instance notice to timestamper");
+                    if let Some(entry) = self.catalog.try_get_by_id(source_id.sid) {
+                        if let CatalogItem::Source(s) = entry.item() {
+                            ts_tx
+                                .send(TimestampMessage::Add(source_id, s.connector.clone()))
+                                .expect("Failed to send CREATE Instance notice to timestamper");
+                        } else {
+                            panic!("A non-source is re-using the same source ID");
+                        }
+                    } else {
+                        // Someone already dropped the source
+                    }
                 }
 
                 Message::AdvanceSourceTimestamp {
