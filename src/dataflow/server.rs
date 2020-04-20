@@ -708,8 +708,8 @@ where
                     // );
                     ts.push((partition_count, timestamp, offset));
                     if last_offset == offset {
-                        // We only activate the Kafka source if the offset is the same as the last
-                        // offset as new data already triggers the Kafka source's activation
+                        // We only activate the source if the offset is the same as the last
+                        // offset as new data already triggers the source's activation
                         let source = self
                             .ts_source_mapping
                             .get(&id)
