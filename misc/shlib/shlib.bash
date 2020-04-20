@@ -121,11 +121,12 @@ await_postgres() {
 # the variable MAPFILE is used instead. Other options of `mapfile` are not
 # supported.
 mapfile_shim() {
-    local -n var=${1:-MAPFILE}
-    var=()
+    local val
+    val=()
     while IFS= read -r line; do
-        var+=("$line")
+        val+=("$line")
     done
+    declare -ag "${1:-MAPFILE}=($(printf "%q " "${val[@]}"))"
 }
 
 ########################################
