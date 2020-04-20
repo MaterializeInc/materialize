@@ -7,45 +7,48 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::future::Future;
 
 use tokio::time::{self, Duration};
 
-/// Retries a fallible operation `f` with suitable defaults for a network
-/// service.
-pub async fn retry<F, U, T>(mut f: F) -> Result<T, String>
-where
-    F: FnMut() -> U,
-    U: Future<Output = Result<T, String>>,
-{
-    let mut i = 0;
-    let mut backoff = Duration::from_millis(200);
-    loop {
-        match f().await {
-            Ok(t) => return Ok(t),
-            Err(e) if i > 5 => return Err(e),
-            Err(_) => i += 1,
-        }
-        time::delay_for(backoff).await;
-        backoff *= 2;
-    }
+const ZERO_DURATION: Duration = Duration::from_secs(0);
+
+#[derive(Clone)]
+pub struct RetryState {
+    pub i: usize,
+    pub next_backoff: Option<Duration>,
 }
 
-/// Retries a fallible operation `f` with a maximum backoff.
-pub async fn retry_max_backoff<F, U, T>(max_backoff: Duration, mut f: F) -> Result<T, String>
+/// Retries a fallible operation `f` with exponential backoff.
+///
+/// If the operation is still failing after a cumulative delay of `max_sleep`,
+/// its last error is returned.
+pub async fn retry_for<F, U, T>(max_sleep: Duration, mut f: F) -> Result<T, String>
 where
-    F: FnMut() -> U,
+    F: FnMut(RetryState) -> U,
     U: Future<Output = Result<T, String>>,
 {
-    let mut backoff = Duration::from_millis(200);
+    let mut state = RetryState {
+        i: 0,
+        next_backoff: Some(Duration::from_millis(125)),
+    };
+    let mut total_backoff = ZERO_DURATION;
     loop {
-        match f().await {
+        match f(state.clone()).await {
             Ok(t) => return Ok(t),
-            Err(e) if backoff > max_backoff => return Err(e),
-            Err(_) => {
-                time::delay_for(backoff).await;
-                backoff *= 2;
-            }
+            Err(e) => match state.next_backoff {
+                None => return Err(e),
+                Some(backoff) => {
+                    total_backoff += backoff;
+                    time::delay_for(backoff).await;
+                    state.i += 1;
+                    state.next_backoff = match cmp::min(backoff * 2, max_sleep - total_backoff) {
+                        ZERO_DURATION => None,
+                        b => Some(b),
+                    }
+                }
+            },
         }
     }
 }
