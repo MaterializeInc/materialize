@@ -419,7 +419,15 @@ class Image:
         for rel_path in paths:
             abs_path = self.root / rel_path.decode()
             file_hash = hashlib.sha1()
-            file_mode = stat.S_IMODE(os.lstat(abs_path).st_mode)
+            raw_file_mode = os.lstat(abs_path).st_mode
+            # Compute a simplified file mode using the same rules as Git.
+            # https://github.com/git/git/blob/3bab5d562/Documentation/git-fast-import.txt#L610-L616
+            if stat.S_ISLNK(raw_file_mode):
+                file_mode = 0o120000
+            elif raw_file_mode & stat.S_IXUSR:
+                file_mode = 0o100755
+            else:
+                file_mode = 0o100644
             with open(abs_path, "rb") as f:
                 file_hash.update(f.read())
             fingerprint.update(file_mode.to_bytes(2, byteorder="big"))
