@@ -20,8 +20,9 @@ use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::Message;
 use rdkafka::Offset::Offset;
-use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
+use rdkafka::{ClientConfig, ClientContext, Statistics};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
@@ -157,6 +158,7 @@ where
         move |cap, output| {
             // Accumulate updates to BYTES_READ_COUNTER;
             let mut bytes_read = 0;
+
             if let Some(consumer) = consumer.as_mut() {
                 // Repeatedly interrogate Kafka for messages. Cease when
                 // Kafka stops returning new data, or after 10 milliseconds.
