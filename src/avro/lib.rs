@@ -287,8 +287,6 @@
 //! We can just read directly instances of `Value` out of the `Reader` iterator:
 //!
 //! ```
-//! use futures::stream::StreamExt;
-//!
 //! # use avro::Schema;
 //! # use avro::types::Record;
 //! # use avro::Writer;
