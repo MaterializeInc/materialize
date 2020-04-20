@@ -392,7 +392,7 @@ pub fn decode_values<G>(
     encoding: DataEncoding,
     name: &str,
     envelope: &Envelope,
-    // Information about option transformations that can be eagerly done.
+    // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,

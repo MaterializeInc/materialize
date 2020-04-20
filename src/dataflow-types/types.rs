@@ -86,7 +86,11 @@ pub struct DataflowDesc {
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
     pub objects_to_build: Vec<BuildDesc>,
+    /// Indexes to be made available to be shared with other dataflows
+    /// (id of new index, description of index, relationtype of base source/view)
     pub index_exports: Vec<(GlobalId, IndexDesc, RelationType)>,
+    /// sinks to be created
+    /// (id of new sink, description of sink)
     pub sink_exports: Vec<(GlobalId, SinkDesc)>,
     /// Maps views to views + indexes needed to generate that view
     pub dependent_objects: HashMap<GlobalId, Vec<GlobalId>>,
@@ -552,6 +556,11 @@ pub struct IndexDesc {
 /// streams of rows. Any row that does not satisfy all predicates may
 /// be discarded, and any column not listed in the projection may be
 /// replaced by a default value.
+///
+/// The intended order of operations is that the predicates are first
+/// applied, and columns not in projection can then be overwritten with
+/// default values. This allows the projection to avoid capturing columns
+/// used by the predicates but not otherwise required.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct LinearOperator {
     /// Rows that do not pass all predicates may be discarded.
