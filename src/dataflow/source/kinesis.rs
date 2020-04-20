@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use failure::{bail, ResultExt};
 use futures::executor::block_on;
@@ -50,6 +50,13 @@ lazy_static! {
     .unwrap();
 }
 
+/// To read all data from a Kinesis stream, we need to continually update
+/// our knowledge of the stream's shards by calling the ListShards API.
+///
+/// We will call ListShards at most this often to stay under the API rate limit
+/// (100x/sec per stream) and to improve source performance overall.
+const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
+
 #[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
     scope: &G,
@@ -85,6 +92,7 @@ where
     };
 
     let mut state = create_state(connector);
+    let mut last_checked_shards = std::time::Instant::now();
 
     let (stream, capability) = source(id, ts, scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
@@ -97,13 +105,18 @@ where
                     return SourceStatus::Done;
                 }
             };
-            if let Err(e) = update_shard_information(&client, &stream_name, shard_set, shard_queue)
-            {
-                error!("{}", e);
-                return SourceStatus::Done;
-            }
-            let timer = std::time::Instant::now();
 
+            if last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
+                if let Err(e) =
+                    update_shard_information(&client, &stream_name, shard_set, shard_queue)
+                {
+                    error!("{}", e);
+                    return SourceStatus::Done;
+                }
+                last_checked_shards = std::time::Instant::now();
+            }
+
+            let timer = std::time::Instant::now();
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             while let Some((shard_id, mut shard_iterator)) = shard_queue.pop_front() {
                 // While the next_shard_iterator is Some(iterator), the shard is open
