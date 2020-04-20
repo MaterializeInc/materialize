@@ -257,9 +257,7 @@ where
                             last_processed_offsets.insert(PartitionId::Kafka(partition), offset);
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
-                            output
-                                .session(&cap)
-                                .give(((key, out), Some(message.offset)));
+                            output.session(&cap).give(((key, out), Some(offset - 1)));
 
                             downgrade_capability(
                                 &id,
@@ -420,7 +418,7 @@ fn downgrade_capability(
         None => {}
         Some(entries) => {
             for (pid, entries) in entries {
-                // Obtain the last offset processed (or -1 if no messages have yet been processed)
+                // Obtain the last offset processed (or 0 if no messages have yet been processed)
                 let last_offset = match last_processed_offset.get(pid) {
                     Some(offs) => *offs,
                     None => 0,

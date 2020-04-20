@@ -687,7 +687,7 @@ where
                     let last_offset = if let Some(offs) = ts.last() {
                         offs.2
                     } else {
-                        -1
+                        0
                     };
                     ts.push((partition_count, timestamp, offset));
                     if last_offset == offset {
