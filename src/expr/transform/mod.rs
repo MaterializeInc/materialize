@@ -28,6 +28,7 @@ pub mod inline_let;
 pub mod join_elision;
 pub mod join_implementation;
 // pub mod join_order;
+pub mod map_lifting;
 pub mod nonnull_requirements;
 pub mod nonnullable;
 pub mod predicate_pushdown;
@@ -180,10 +181,11 @@ impl Default for Optimizer {
                     Box::new(crate::transform::update_let::UpdateLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                     Box::new(crate::transform::projection_lifting::ProjectionLifting),
+                    Box::new(crate::transform::map_lifting::LiteralLifting),
                     Box::new(crate::transform::filter_lets::FilterLets),
                     Box::new(crate::transform::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::transform::column_knowledge::ColumnKnowledge),
-                    Box::new(crate::transform::constant_join::InsertConstantJoin),
+                    // Box::new(crate::transform::constant_join::InsertConstantJoin),
                     Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::transform::redundant_join::RedundantJoin),
                     Box::new(crate::transform::topk_elision::TopKElision),
