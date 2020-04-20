@@ -10,7 +10,6 @@ path = "lib.rs"
 
 [dependencies]
 bytes = "0.5"
-failure = "0.1.7"
 fallible-iterator = "0.2.0"
 futures = "0.3"
 lazy_static = "1.4.0"
