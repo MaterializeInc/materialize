@@ -37,6 +37,7 @@ impl MzClient {
         Ok(MzClient(client))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn query_materialize_for_kinesis_records(
         &self,
         aws_region: &str,
@@ -47,6 +48,7 @@ impl MzClient {
         endpoint: &str,
         num_records: i64,
     ) -> Result<(), String> {
+        let timer = std::time::Instant::now();
         let source_name = String::from("foo");
         let view_name = format!("{}_view", source_name);
         self.create_kinesis_source(
@@ -68,9 +70,15 @@ impl MzClient {
         self.query_view(&view_name, num_records)
             .await
             .map_err(|e| format!("querying view: {}", e))?;
+        println!(
+            "Read all {} records in Materialize from Kinesis source in {} milliseconds",
+            num_records,
+            timer.elapsed().as_millis()
+        );
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_kinesis_source(
         &self,
         source_name: &str,
@@ -96,7 +104,6 @@ impl MzClient {
             secret_access_key = secret_access_key,
             endpoint = endpoint
         );
-        //        log::debug!("creating source=> {}", query);
         println!("creating source=> {}", query);
 
         self.0

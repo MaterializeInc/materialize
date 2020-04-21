@@ -13,6 +13,7 @@ use std::thread;
 use std::time::Duration;
 
 use bytes::Bytes;
+use chrono::Utc;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rusoto_core::{Region, RusotoError};
@@ -48,59 +49,27 @@ impl KinesisInfo {
     }
 }
 
-pub fn create_fake_client(_aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
-    let dummy_aws_account: &str = "000000000000";
-    let dummy_aws_access_key: &str = "dummy-access-key";
-    let dummy_aws_secret_access_key: &str = "dummy-secret-access-key";
-
-    let aws_credentials = AwsCredentials::new(
-        dummy_aws_access_key,
-        dummy_aws_secret_access_key,
-        Some(String::new()),
-        None,
-    );
+pub async fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
+    let (aws_account, aws_credentials) =
+        util::aws::account_details(Duration::from_secs(5))
+            .await
+            .map_err(|e| format!("error getting AWS account details: {}", e))?;
     let provider = rusoto_credential::StaticProvider::new(
-        dummy_aws_access_key.to_owned(),
-        dummy_aws_secret_access_key.to_owned(),
-        Some(String::new()),
-        None,
+        aws_credentials.aws_access_key_id().to_owned(),
+        aws_credentials.aws_secret_access_key().to_owned(),
+        aws_credentials.token().clone(),
+        aws_credentials
+            .expires_at()
+            .map(|expires_at| (expires_at - Utc::now()).num_seconds()),
     );
     let dispatcher = rusoto_core::HttpClient::new().unwrap();
 
-    let region = Region::Custom {
-        name: "localstack".into(),
-        endpoint: "http://localhost:4568".into(),
-    };
+    let region: Region = aws_region.parse().unwrap();
     Ok((
-        KinesisClient::new_with(dispatcher, provider.clone(), region.clone()),
-        KinesisInfo::new_with(
-            region.clone(),
-            dummy_aws_account.to_owned(),
-            aws_credentials,
-        ),
+        KinesisClient::new_with(dispatcher, provider, region.clone()),
+        KinesisInfo::new_with(region, aws_account, aws_credentials),
     ))
 }
-
-//pub fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
-//    let (aws_account, aws_credentials) =
-//        block_on(util::aws::account_details(Duration::from_secs(5)))
-//            .map_err(|e| format!("error getting AWS account details: {}", e))?;
-//    let provider = rusoto_credential::StaticProvider::new(
-//        aws_credentials.aws_access_key_id().to_owned(),
-//        aws_credentials.aws_secret_access_key().to_owned(),
-//        aws_credentials.token().clone(),
-//        aws_credentials
-//            .expires_at()
-//            .map(|expires_at| (expires_at - Utc::now()).num_seconds()),
-//    );
-//    let dispatcher = rusoto_core::HttpClient::new().unwrap();
-//
-//    let region: Region = aws_region.clone().parse().unwrap();
-//    Ok((
-//        KinesisClient::new_with(dispatcher, provider.clone(), region.clone()),
-//        KinesisInfo::new_with(region.clone(), aws_account, aws_credentials),
-//    ))
-//}
 
 pub async fn create_stream(
     kinesis_client: &KinesisClient,
@@ -125,7 +94,7 @@ pub async fn create_stream(
             })
             .await
             .map_err(|e| format!("describing stream: {}", e))?;
-        if description.stream_description.stream_status == ACTIVE.to_owned() {
+        if description.stream_description.stream_status == ACTIVE {
             Ok(())
         } else {
             Err(format!(
@@ -163,77 +132,79 @@ pub async fn list_shards(
     }
 }
 
-// todo: make the records more realistic json blobs
-pub async fn generate_kinesis_records(
+pub async fn generate_and_put_records(
     kinesis_client: &KinesisClient,
     stream_name: &str,
-    num_records: i64,
-) -> Result<Vec<PutRecordsRequestEntry>, String> {
-    let timer = std::time::Instant::now();
-    let shards = list_shards(kinesis_client, stream_name).await?;
-    // For each string, round robin puts across all of the shards.
-    let mut shards_queue: VecDeque<Shard> = shards.iter().cloned().collect();
-    let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
-    for _i in 0..num_records {
-        let shard = shards_queue.pop_front().unwrap();
-        records.push(PutRecordsRequestEntry {
-            data: Bytes::from(
-                rand::thread_rng()
-                    .sample_iter(&Alphanumeric)
-                    .take(30)
-                    .collect::<String>(),
-            ),
-            explicit_hash_key: Some(shard.hash_key_range.starting_hash_key.clone()), // explicitly push to the current shard
-            partition_key: DUMMY_PARTITION_KEY.to_owned(), // will be overridden by "explicit_hash_key"
-        });
-        shards_queue.push_back(shard);
-    }
-    // todo: print size?
-    println!(
-        "Generated {} records in {} milliseconds.",
-        num_records,
-        timer.elapsed().as_millis()
-    );
-    Ok(records)
-}
-
-// todo: push json records
-pub async fn put_records(
-    kinesis_client: &KinesisClient,
-    stream_name: &str,
-    records: Vec<PutRecordsRequestEntry>,
+    record_count: i64,
+    records_per_second: i64,
 ) -> Result<(), String> {
     let timer = std::time::Instant::now();
-    let mut min = 0;
-    let mut max = 500;
-    let total_records = records.len();
-    while max <= total_records {
-        match kinesis_client
-            .put_records(PutRecordsInput {
-                records: (&records[min..cmp::min(max, total_records)]).to_vec(),
-                stream_name: stream_name.to_owned(),
-            })
-            .await
-        {
-            Ok(_output) => {
-                min = max;
-                max += 500;
+    let shards = list_shards(&kinesis_client, &stream_name).await?;
+    // For each string, round robin puts across all of the shards.
+    let mut shards_queue: VecDeque<Shard> = shards.iter().cloned().collect();
+
+    let mut put_record_count = 0;
+    while put_record_count < record_count {
+        // Generate records.
+        let put_timer = std::time::Instant::now();
+        let shard = shards_queue.pop_front().unwrap();
+        let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
+        for _i in 0..records_per_second {
+            //// todo: make the records more realistic json blobs
+            records.push(PutRecordsRequestEntry {
+                data: Bytes::from(
+                    rand::thread_rng()
+                        .sample_iter(&Alphanumeric)
+                        .take(30)
+                        .collect::<String>(),
+                ),
+                explicit_hash_key: Some(shard.hash_key_range.starting_hash_key.clone()), // explicitly push to the current shard
+                partition_key: DUMMY_PARTITION_KEY.to_owned(), // will be overridden by "explicit_hash_key"
+            });
+        }
+
+        // Put records.
+        let mut min = 0;
+        let mut max = 500;
+        let mut second_put_record_count = 0;
+        while second_put_record_count < records_per_second {
+            match kinesis_client
+                .put_records(PutRecordsInput {
+                    records: records[min..cmp::min(records.len(), max)].to_vec(),
+                    stream_name: stream_name.to_owned(),
+                })
+                .await
+            {
+                Ok(output) => {
+                    // todo: do something with failed counts?
+                    let put_records = output.records.len();
+                    min += put_records;
+                    max += put_records;
+                    second_put_record_count += output.records.len() as i64;
+                }
+                Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
+                | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {
+                    println!("hit error, trying again in one second: {}", e);
+                    thread::sleep(Duration::from_secs(1));
+                }
+                Err(e) => {
+                    println!("{}", e);
+                    return Err(String::from("failed putting records!"));
+                }
             }
-            Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
-            | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {
-                println!("hit error, trying again in one second: {}", e);
-                thread::sleep(Duration::from_secs(1));
-            }
-            Err(e) => {
-                println!("{}", e);
-                return Err(String::from("failed putting records!"));
-            }
+        }
+        put_record_count += second_put_record_count;
+        shards_queue.push_back(shard);
+        let elapsed = put_timer.elapsed().as_millis();
+        if elapsed < 1000 {
+            thread::sleep(Duration::from_millis((1000 - elapsed) as u64));
+        } else {
+            println!("running behind by {} milliseconds", elapsed);
         }
     }
     println!(
-        "Pushed {} records to {} in {} milliseconds",
-        total_records,
-        stream_name,
+        "Generated and put {} records in {} milliseconds.",
+        put_record_count,
         timer.elapsed().as_millis()
     );
     Ok(())
@@ -252,6 +223,6 @@ pub async fn delete_stream(
         })
         .await
         .map_err(|e| format!("deleting Kinesis stream: {}", e))?;
-    println!("Deleted stale Kinesis stream: {}", &stream_name);
+    println!("Deleted Kinesis stream: {}", &stream_name);
     Ok(())
 }
