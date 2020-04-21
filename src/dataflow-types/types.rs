@@ -469,6 +469,8 @@ pub struct KafkaSourceConnector {
     // Represents options specified by user when creating the source, e.g.
     // security settings.
     pub config_options: Vec<(String, String)>,
+    // btv - document this
+    pub start_offset: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

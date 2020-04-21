@@ -241,6 +241,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     // can produce errors.
                     let err_collection = Collection::empty(region);
 
+                    let fast_forwarded = match connector {
+                        ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                            start_offset,
+                            ..
+                        }) => start_offset > 0,
+                        _ => false,
+                    };
+
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
                             ExternalSourceConnector::Kafka(c) => {
@@ -382,8 +390,13 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream =
-                                decode_values(&source, encoding, &dataflow.debug_name, &envelope);
+                            let stream = decode_values(
+                                &source,
+                                encoding,
+                                &dataflow.debug_name,
+                                &envelope,
+                                fast_forwarded,
+                            );
 
                             (stream, capability)
                         };

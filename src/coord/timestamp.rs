@@ -177,6 +177,7 @@ enum ByoTimestampConnector {
 struct RtKafkaConnector {
     consumer: BaseConsumer,
     topic: String,
+    //start_offset: u64,
 }
 
 /// Data consumer for Kafka source with BYO consistency
@@ -403,8 +404,10 @@ fn determine_next_offset(last_offset: i64, available_offsets: i64, max_increment
     // Bound the next timestamp to be no more than max_increment_size in the future
     if (available_offsets - last_offset) > max_increment_size {
         last_offset + max_increment_size
-    } else {
+    } else if available_offsets >= last_offset {
         available_offsets
+    } else {
+        last_offset
     }
 }
 
@@ -574,7 +577,15 @@ impl Timestamper {
                         match cons {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency", id);
-                                let last_offset = self.rt_recover_source(id);
+                                let start_offset = match sc {
+                                    ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                                        start_offset,
+                                        ..
+                                    }) => start_offset,
+                                    _ => 0,
+                                };
+                                let last_offset =
+                                    std::cmp::max(start_offset, self.rt_recover_source(id));
                                 let consumer = self.create_rt_connector(id, sc, last_offset);
                                 self.rt_sources.insert(id, consumer);
                             }
@@ -781,6 +792,7 @@ impl Timestamper {
         RtKafkaConnector {
             consumer: k_consumer,
             topic: kc.topic,
+            //    start_offset: kc.start_offset,
         }
     }
 

@@ -20,7 +20,7 @@ use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_counter, IntCounter};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::Offset::Offset;
+use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
@@ -80,6 +80,7 @@ where
         url,
         topic,
         config_options,
+        start_offset,
     } = connector.clone();
 
     let ts = if read_kafka {
@@ -149,6 +150,7 @@ where
                 &mut last_processed_offsets,
                 &mut next_partition_ts,
                 last_closed_ts,
+                start_offset,
             );
             expected_partition_count = i32::try_from(partitions.len()).unwrap();
         }
@@ -174,6 +176,7 @@ where
                     consumer,
                     &topic,
                     &mut last_closed_ts,
+                    start_offset,
                 );
 
                 // Check if there was a message buffered and if we can now process it
@@ -195,6 +198,9 @@ where
 
                 while let Some(message) = next_message {
                     let partition = message.partition;
+                    if message.offset < start_offset {
+                        error!("Offset {} in {} is before start offset {}! We should have seeked past this!", message.offset, topic, start_offset);
+                    }
                     let offset = message.offset + 1;
                     if !partitions.contains(&partition) {
                         // We have received a message for a partition for which we do not yet
@@ -207,6 +213,7 @@ where
                             &mut last_processed_offsets,
                             &mut next_partition_ts,
                             last_closed_ts,
+                            start_offset,
                         );
                         expected_partition_count = i32::try_from(partitions.len()).unwrap();
                         buffer = Some(message);
@@ -218,7 +225,7 @@ where
                     let last_processed_offset =
                         match last_processed_offsets.get(&PartitionId::Kafka(partition)) {
                             Some(offset) => *offset,
-                            None => 0,
+                            None => start_offset,
                         };
 
                     if offset <= last_processed_offset {
@@ -226,7 +233,7 @@ where
                         let res = consumer.seek(
                             &topic,
                             partition,
-                            Offset(last_processed_offset),
+                            Offset::Offset(last_processed_offset),
                             Duration::from_secs(1),
                         );
                         match res {
@@ -268,6 +275,7 @@ where
                                 consumer,
                                 &topic,
                                 &mut last_closed_ts,
+                                start_offset,
                             );
                         }
                     }
@@ -344,10 +352,11 @@ fn update_partition_list(
     last_processed_offsets: &mut HashMap<PartitionId, i64>,
     next_partition_ts: &mut HashMap<PartitionId, u64>,
     closed_ts: u64,
+    start_offset: i64,
 ) -> HashSet<i32> {
     let mut partitions = HashSet::new();
     assert!(expected_partition_count > 0);
-    // TODO[reliability] (brennan) - we will hang the Timely worker here re-pinging Kafka in a loop every 1s
+    //TODO[reliability] (brennan) - we will hang the Timely worker here re-pinging Kafka in a loop every 1s
     // if it is not able to respond to the request within the timeout for whatever reason.
     while i32::try_from(partitions.len()).unwrap() < expected_partition_count {
         let result = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
@@ -370,9 +379,23 @@ fn update_partition_list(
         if next_partition_ts.get(&partition_id).is_none() {
             next_partition_ts.insert(partition_id.clone(), closed_ts);
         }
-        // The last processed offset is always 0
         if last_processed_offsets.get(&partition_id).is_none() {
-            last_processed_offsets.insert(partition_id.clone(), 0);
+            last_processed_offsets.insert(partition_id.clone(), start_offset);
+            if start_offset > 0 {
+                //TODO (brennan) - As in the metadata request above, this can hang the worker.
+                // When we rework this code to fail more gracefully, do both at the same time.
+                while let Err(e) = consumer.seek(
+                    topic,
+                    *p,
+                    Offset::Offset(start_offset),
+                    Duration::from_secs(1),
+                ) {
+                    error!(
+                        "Failed to seek to offset {} in topic {} for partition {}. Error: {:?}",
+                        start_offset, topic, *p, e
+                    );
+                }
+            }
         }
     }
     partitions
@@ -403,6 +426,7 @@ fn downgrade_capability(
     consumer: &BaseConsumer<GlueConsumerContext>,
     topic: &str,
     last_closed_ts: &mut u64,
+    start_offset: i64,
 ) {
     let mut changed = false;
 
@@ -434,6 +458,7 @@ fn downgrade_capability(
                             last_processed_offset,
                             next_partition_ts,
                             *last_closed_ts,
+                            start_offset,
                         );
                         *current_partition_count = i32::try_from(partitions.len()).unwrap();
                     }

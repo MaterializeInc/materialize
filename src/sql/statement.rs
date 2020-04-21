@@ -1164,10 +1164,21 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     config_options.push(("client.id".to_string(), kafka_client_id));
 
+                    let start_offset_err = "start_offset must be a nonnegative integer";
+                    let start_offset = match with_options.remove("start_offset") {
+                        None => 0,
+                        Some(Value::Number(n)) => match n.parse::<i64>() {
+                            Ok(n) if n >= 0 => n,
+                            _ => bail!(start_offset_err),
+                        },
+                        Some(_) => bail!(start_offset_err),
+                    };
+
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
                         topic: topic.clone(),
                         config_options,
+                        start_offset,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)
