@@ -217,7 +217,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 unreachable!()
             };
             // Load declared sources into the rendering context.
-            for (source_number, (src_id, src)) in
+            for (source_number, (src_id, mut src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
             {
                 if let SourceConnector::External {
@@ -239,7 +239,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     // error stream. Likely we will want to plumb this
                     // collection into the source connector so that sources
                     // can produce errors.
-                    let err_collection = Collection::empty(region);
+                    let mut err_collection = Collection::empty(region);
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
@@ -382,13 +382,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream =
-                                decode_values(&source, encoding, &dataflow.debug_name, &envelope);
+                            let stream = decode_values(
+                                &source,
+                                encoding,
+                                &dataflow.debug_name,
+                                &envelope,
+                                &mut src.operators,
+                            );
 
                             (stream, capability)
                         };
 
-                        let collection = match envelope {
+                        let mut collection = match envelope {
                             Envelope::None => stream.as_collection(),
                             Envelope::Debezium => {
                                 // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
@@ -400,6 +405,66 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             }
                             Envelope::Upsert(_) => unreachable!(),
                         };
+
+                        // Implement source filtering and projection.
+                        // At the moment this is strictly optional, but we perform it anyhow
+                        // to demonstrate the intended use.
+                        if let Some(operators) = src.operators.clone() {
+                            // Determine replacement values for unused columns.
+                            let source_type = src.desc.typ();
+                            let position_or = (0..source_type.arity())
+                                .map(|col| {
+                                    if operators.projection.contains(&col) {
+                                        Ok(col)
+                                    } else {
+                                        Err({
+                                            // TODO(frank): This could be `Datum::Null` if we
+                                            // are certain that no readers will consult it and
+                                            // believe it to be a non-null value. That is the
+                                            // intent, but it is not yet clear that we ensure
+                                            // this.
+                                            let typ = &source_type.column_types[col];
+                                            if typ.nullable {
+                                                Datum::Null
+                                            } else {
+                                                typ.scalar_type.dummy_datum()
+                                            }
+                                        })
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            // Evaluate the predicate on each record, noting potential errors that might result.
+                            let (collection2, errors) =
+                                collection.flat_map_fallible(move |input_row| {
+                                    let temp_storage = RowArena::new();
+                                    let datums = input_row.unpack();
+                                    let pred_eval = operators
+                                        .predicates
+                                        .iter()
+                                        .map(|predicate| predicate.eval(&datums, &temp_storage))
+                                        .find(|result| result != &Ok(Datum::True));
+                                    match pred_eval {
+                                        None => {
+                                            Some(Ok(Row::pack(position_or.iter().map(|pos_or| {
+                                                match pos_or {
+                                                    Result::Ok(index) => datums[*index],
+                                                    Result::Err(datum) => *datum,
+                                                }
+                                            }))))
+                                        }
+                                        Some(Ok(Datum::False)) => None,
+                                        Some(Ok(Datum::Null)) => None,
+                                        Some(Ok(x)) => {
+                                            panic!("Predicate evaluated to invalid value: {:?}", x)
+                                        }
+                                        Some(Err(x)) => Some(Err(x)),
+                                    }
+                                });
+
+                            collection = collection2;
+                            err_collection = err_collection.concat(&errors);
+                        }
 
                         // Introduce the stream by name, as an unarranged collection.
                         context.collections.insert(

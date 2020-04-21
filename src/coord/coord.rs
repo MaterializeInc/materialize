@@ -1607,6 +1607,7 @@ where
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
         // TODO: should we still support creating multiple dataflows with a single command,
         // Or should it all be compacted into a single DataflowDesc with multiple exports?
+        dataflow.optimize();
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -1686,6 +1687,7 @@ where
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
+        dataflow.optimize();
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
