@@ -298,7 +298,10 @@ fn handle_panic(panic_info: &PanicInfo) {
         r#"materialized encountered an internal error and crashed.
 
 We rely on bug reports to diagnose and fix these errors. Please
-copy and paste the following details and mail them to bugs@materialize.io.
+copy and paste the following details and file a report at:
+
+    https://materialize.io/s/bug
+
 To protect your privacy, we do not collect crash reports automatically.
 
  thread: {}
