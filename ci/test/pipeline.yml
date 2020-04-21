@@ -12,7 +12,7 @@ dag: true
 steps:
   - id: build
     label: ":docker: build"
-    command: ci/test/build.sh
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
     if: $CHANGED_RUST || $CHANGED_CHBENCH || $CHANGED_SLT || $CHANGED_TESTDRIVE
     timeout_in_minutes: 30
     agents:
