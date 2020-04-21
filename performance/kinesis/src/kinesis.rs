@@ -84,7 +84,6 @@ pub async fn create_stream(
         .await
         .map_err(|e| format!("creating stream: {}", e))?;
 
-    // todo: fix import
     util::retry::retry(|| async {
         let description = kinesis_client
             .describe_stream(DescribeStreamInput {
@@ -110,7 +109,6 @@ pub async fn create_stream(
     Ok(())
 }
 
-// todo: fix unwrap.
 pub async fn list_shards(
     kinesis_client: &KinesisClient,
     stream_name: &str,
@@ -150,7 +148,7 @@ pub async fn generate_and_put_records(
         let shard = shards_queue.pop_front().unwrap();
         let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
         for _i in 0..records_per_second {
-            //// todo: make the records more realistic json blobs
+            // todo: make the records more realistic json blobs
             records.push(PutRecordsRequestEntry {
                 data: Bytes::from(
                     rand::thread_rng()
@@ -176,7 +174,7 @@ pub async fn generate_and_put_records(
                 .await
             {
                 Ok(output) => {
-                    // todo: do something with failed counts?
+                    // todo: do something with failed counts
                     let put_records = output.records.len();
                     min += put_records;
                     max += put_records;
@@ -184,8 +182,7 @@ pub async fn generate_and_put_records(
                 }
                 Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
                 | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {
-                    println!("hit error, trying again in one second: {}", e);
-                    thread::sleep(Duration::from_secs(1));
+                    println!("hit non-fatal error, continuing: {}", e);
                 }
                 Err(e) => {
                     println!("{}", e);
@@ -199,7 +196,10 @@ pub async fn generate_and_put_records(
         if elapsed < 1000 {
             thread::sleep(Duration::from_millis((1000 - elapsed) as u64));
         } else {
-            println!("running behind by {} milliseconds", elapsed);
+            println!(
+                "expected to put records in 1000 milliseconds, took {}",
+                elapsed
+            );
         }
     }
     println!(

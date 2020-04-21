@@ -65,7 +65,7 @@ async fn run() -> Result<(), String> {
                 &stream_name_clone,
                 kinesis_info.aws_credentials.aws_access_key_id(),
                 kinesis_info.aws_credentials.aws_secret_access_key(),
-                "http://localhost:4568",
+                kinesis_info.aws_credentials.token(),
                 record_count,
             )
             .await
@@ -100,14 +100,14 @@ pub struct Args {
     pub shard_count: i64,
 
     /// The total number of records to create
-    #[structopt(long, default_value = "100000000")]
+    #[structopt(long, default_value = "1000000")]
     pub record_count: i64,
 
     /// The number of records to put to the Kinesis stream per second
     #[structopt(long, default_value = "2000")]
     pub records_per_second: i64,
 
-    // todo: use to add a count query.
+    // todo: use to rate limit querying.
     /// The number of times to query Materialize per second
     #[structopt(long, default_value = "1")]
     pub queries_per_second: i64,

@@ -45,7 +45,7 @@ impl MzClient {
         stream_name: &str,
         access_key: &str,
         secret_access_key: &str,
-        endpoint: &str,
+        token: &Option<String>,
         num_records: i64,
     ) -> Result<(), String> {
         let timer = std::time::Instant::now();
@@ -58,7 +58,7 @@ impl MzClient {
             stream_name,
             access_key,
             secret_access_key,
-            endpoint,
+            token,
         )
         .await
         .map_err(|e| format!("creating kinesis source: {}", e))?;
@@ -87,14 +87,14 @@ impl MzClient {
         stream_name: &str,
         access_key: &str,
         secret_access_key: &str,
-        endpoint: &str,
+        token: &Option<String>,
     ) -> Result<(), String> {
         let query = format!(
             "CREATE SOURCE {source_name}
                  FROM KINESIS ARN 'arn:aws:kinesis:{aws_region}:{aws_account}:stream/{stream_name}'
                  WITH (access_key = '{access_key}',
                        secret_access_key = '{secret_access_key}',
-                       endpoint = '{endpoint}')
+                       token = '{token}')
                  FORMAT BYTES;",
             source_name = source_name,
             aws_region = aws_region,
@@ -102,7 +102,7 @@ impl MzClient {
             stream_name = stream_name,
             access_key = access_key,
             secret_access_key = secret_access_key,
-            endpoint = endpoint
+            token = token.as_ref().unwrap_or(&String::new())
         );
         println!("creating source=> {}", query);
 
