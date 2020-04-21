@@ -243,6 +243,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     // can produce errors.
                     let mut err_collection = Collection::empty(region);
 
+                    let fast_forwarded = match connector {
+                        ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                            start_offset,
+                            ..
+                        }) => start_offset > 0,
+                        _ => false,
+                    };
+
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
                             ExternalSourceConnector::Kafka(c) => {
@@ -394,6 +402,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 &dataflow.debug_name,
                                 &envelope,
                                 &mut src.operators,
+                                fast_forwarded,
                             );
 
                             (stream, capability)

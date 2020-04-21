@@ -416,6 +416,7 @@ pub struct Decoder {
     writer_schemas: Option<SchemaCache>,
     fast_row_schema: Option<Schema>,
     envelope: EnvelopeType,
+    fast_forwarded: bool,
 }
 
 impl fmt::Debug for Decoder {
@@ -446,6 +447,7 @@ impl Decoder {
         reader_schema: &str,
         schema_registry_url: Option<url::Url>,
         envelope: EnvelopeType,
+        fast_forwarded: bool,
     ) -> Decoder {
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
@@ -476,6 +478,7 @@ impl Decoder {
             writer_schemas,
             fast_row_schema,
             envelope,
+            fast_forwarded,
         }
     }
 
@@ -541,6 +544,9 @@ impl Decoder {
                 after: row,
             }
         };
+        if result.before.is_some() && self.fast_forwarded {
+            panic!("If a source contains updates or deletes, it may not be started from a positive offset! Got diff pair: {:#?}", result)
+        }
         Ok(result)
     }
 }

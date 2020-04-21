@@ -27,9 +27,10 @@ impl AvroDecoderState {
         reader_schema: &str,
         schema_registry_url: Option<url::Url>,
         envelope: EnvelopeType,
+        fast_forwarded: bool,
     ) -> Self {
         AvroDecoderState {
-            decoder: Decoder::new(reader_schema, schema_registry_url, envelope),
+            decoder: Decoder::new(reader_schema, schema_registry_url, envelope, fast_forwarded),
             events_success: 0,
             events_error: 0,
         }

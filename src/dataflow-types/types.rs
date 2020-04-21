@@ -479,6 +479,9 @@ pub struct KafkaSourceConnector {
     // Represents options specified by user when creating the source, e.g.
     // security settings.
     pub config_options: Vec<(String, String)>,
+    // FIXME (brennan) - in the very near future, this should be made into a hashmap of partition |-> offset.
+    // #2736
+    pub start_offset: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
