@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License

@@ -134,9 +134,12 @@ RUN mkdir rust \
 # Step 2d. Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
-COPY requirements.txt requirements-dev.txt /workdir/
+COPY requirements.txt requirements-dev.txt requirements-ci.txt /workdir/
 
-RUN pip3 install -r /workdir/requirements.txt -r /workdir/requirements-dev.txt \
+RUN pip3 install \
+    -r /workdir/requirements.txt \
+    -r /workdir/requirements-dev.txt \
+    -r /workdir/requirements-ci.txt \
     && rm /workdir/requirements*.txt
 
 # Step 2e. Hardcode some known SSH hosts, or else SSH will ask whether the host
@@ -163,5 +166,11 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 
 ENV MZ_DEV_CI_BUILDER=1
 
-# Step 2h. Make the image as small as possible.
+# Step 2h. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
+# unnecessary when we upgrade to Python 3.7+.
+# See: https://www.python.org/dev/peps/pep-0538/
+
+ENV LC_CTYPE=C.UTF-8
+
+# Step 2i. Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
