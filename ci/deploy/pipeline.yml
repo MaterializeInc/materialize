@@ -21,7 +21,7 @@ steps:
     concurrency: 1
     concurrency_group: deploy/linux
 
-  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.macos
+  - command: bin/pyactivate -m ci.deploy.macos
     agents:
       queue: mac
     timeout_in_minutes: 30
