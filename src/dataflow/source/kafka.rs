@@ -29,7 +29,6 @@ use timely::scheduling::activate::SyncActivator;
 use super::util::source;
 use super::{SourceStatus, SourceToken};
 use expr::{PartitionId, SourceInstanceId};
-use itertools::Itertools;
 use rdkafka::message::BorrowedMessage;
 
 lazy_static! {
@@ -223,7 +222,7 @@ where
                         };
 
                     if offset <= last_processed_offset {
-                        warn!("duplicate Kakfa message: souce {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
+                        warn!("duplicate Kafka message: source {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
                         let res = consumer.seek(
                             &topic,
                             partition,
@@ -312,7 +311,7 @@ where
 
 /// For a given offset, returns an option type returning the matching timestamp or None
 /// if no timestamp can be assigned. The timestamp history contains a sequence of
-/// (timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
+/// (partition_count, timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
 /// for which offset>=x.
 fn find_matching_timestamp(
     id: &SourceInstanceId,
@@ -347,14 +346,14 @@ fn update_partition_list(
     closed_ts: u64,
 ) -> HashSet<i32> {
     let mut partitions = HashSet::new();
-
+    assert!(expected_partition_count > 0);
+    // TODO[reliability] (brennan) - we will hang the Timely worker here re-pinging Kafka in a loop every 1s
+    // if it is not able to respond to the request within the timeout for whatever reason.
     while i32::try_from(partitions.len()).unwrap() < expected_partition_count {
         let result = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
         partitions = match &result {
             Ok(meta) => match meta.topics().iter().find(|t| t.name() == topic) {
-                Some(topic) => {
-                    HashSet::from_iter(topic.partitions().iter().map(|x| x.id()).collect_vec())
-                }
+                Some(topic) => HashSet::from_iter(topic.partitions().iter().map(|x| x.id())),
                 None => HashSet::new(),
             },
             Err(e) => {
@@ -379,7 +378,7 @@ fn update_partition_list(
     partitions
 }
 
-/// Timestamp history map is of format [pid1: (ts1, offset1), (ts2, offset2), pid2: (ts1, offset)...].
+/// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
 /// For a given partition pid, messages in interval [0,offset1] get assigned ts1, all messages in interval [offset1+1,offset2]
 /// get assigned ts2, etc.
 /// When receive message with offset1, it is safe to downgrade the capability to the next
@@ -406,12 +405,11 @@ fn downgrade_capability(
     last_closed_ts: &mut u64,
 ) {
     let mut changed = false;
-    let mut min = std::u64::MAX;
 
     // Determine which timestamps have been closed. A timestamp is closed once we have processed
     // all messages that we are going to process for this timestamp across all partitions
     // In practice, the following happens:
-    // Per partition, we iterate over the datastructure to remove (ts,offset) mappings for which
+    // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
     // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
     // in next_partition_ts
     match timestamp_histories.borrow_mut().get_mut(id) {
@@ -456,11 +454,10 @@ fn downgrade_capability(
     }
     //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
     //  timestamp across partitions. This value is stored in next_partition_ts
-    for next_ts in next_partition_ts.values() {
-        if *next_ts < min {
-            min = *next_ts
-        }
-    }
+    let min = *next_partition_ts
+        .values()
+        .min()
+        .expect("There should never be 0 expected partitions!");
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
     if changed && min > 0 {
         cap.downgrade(&(&min + 1));

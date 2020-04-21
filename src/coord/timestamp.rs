@@ -994,8 +994,7 @@ impl Timestamper {
                             kc.consumer
                                 .fetch_watermarks(&kc.topic, p, Duration::from_secs(1));
                         match watermark {
-                            Ok(watermark) => {
-                                let high = watermark.1;
+                            Ok((_low, high)) => {
                                 let next_offset = determine_next_offset(
                                     cons.last_offset,
                                     high,
@@ -1079,9 +1078,12 @@ impl Timestamper {
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
-    /// This may require multiple calls to the underlying now() system method, which is not443Gk
+    /// This may require multiple calls to the underlying now() system method, which is not
     /// guaranteed to increase monotonically
     fn rt_generate_next_timestamp(&mut self) {
+        // TODO[reliability] (brennan) - If someone does something silly like sets their
+        // system clock backward by an hour while mz is running,
+        // we will hang here for an hour.
         let mut new_ts = 0;
         while new_ts <= self.current_timestamp {
             let start = SystemTime::now();
