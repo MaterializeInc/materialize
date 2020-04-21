@@ -9,7 +9,7 @@
 
 from materialize import bintray
 from materialize import cargo
-from materialize import cargo
+from materialize import ci_util
 from materialize import deb
 from materialize import git
 from materialize import mzbuild
@@ -40,23 +40,9 @@ def main() -> None:
         tag_docker(repo, f'unstable-{git.rev_parse("HEAD")}')
 
     print("--- Uploading binary tarball")
-    # Extract the binary from the Docker image to avoid an expensive rebuild.
-    materialized = Path("materialized")
-    with open(materialized, "wb") as f:
-        spawn.runv(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--entrypoint",
-                "cat",
-                repo.images["materialized"].spec(),
-                "/usr/local/bin/materialized",
-            ],
-            stdout=f,
-        )
-    mzbuild.chmod_x(materialized)
-    deploy_util.deploy_tarball("x86_64-unknown-linux-gnu", materialized)
+    mz_path = Path("materialized")
+    ci_util.acquire_materialized(repo, mz_path)
+    deploy_util.deploy_tarball("x86_64-unknown-linux-gnu", mz_path)
 
 
 def publish_deb(package: str, version: str) -> None:

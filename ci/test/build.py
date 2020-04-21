@@ -11,6 +11,7 @@
 
 from materialize import bintray
 from materialize import cargo
+from materialize import ci_util
 from materialize import deb
 from materialize import git
 from materialize import mzbuild
@@ -55,26 +56,10 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
 
     # Extract the materialized binary from the Docker image. This avoids
     # an expensive rebuild if we're using a cached image.
-    mz_image = repo.images["materialized"]
-    repo.resolve_dependencies([mz_image]).acquire()
-    materialized = Path(repo.root) / "target" / "release" / "materialized"
-    with open(materialized, "wb") as f:
-        spawn.runv(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--entrypoint",
-                "cat",
-                mz_image.spec(),
-                "/usr/local/bin/materialized",
-            ],
-            stdout=f,
-        )
-    mzbuild.chmod_x(materialized)
+    ci_util.acquire_materialized(repo, Path("target") / "release" / "materialized")
 
     # Build the Debian package.
-    deb_path = repo.root / "target/debian/materialized.deb"
+    deb_path = repo.root / "target" / "debian" / "materialized.deb"
     spawn.runv(
         [
             "cargo",
