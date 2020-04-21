@@ -16,19 +16,12 @@ steps:
     concurrency: 1
     concurrency_group: deploy/devsite
 
-  # TODO(benesch): the next two scripts should be unified, and run in
-  # ci-builder.
-  - command: ci/deploy/docker.sh
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.linux
     timeout_in_minutes: 10
     concurrency: 1
-    concurrency_group: deploy/docker
-  - command: ci/deploy/deb.sh
-    branches: master
-    timeout_in_minutes: 10
-    concurrency: 1
-    concurrency_group: deploy/deb
+    concurrency_group: deploy/linux
 
-  - command: ci/deploy/macos.sh
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.macos
     agents:
       queue: mac
     timeout_in_minutes: 30
