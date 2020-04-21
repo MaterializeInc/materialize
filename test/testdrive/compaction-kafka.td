@@ -138,7 +138,7 @@ mammalmore:herd
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
       WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT
+  FORMAT TEXT ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE textbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -150,7 +150,7 @@ mammalmore:herd
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
       WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT BYTES ENVELOPE UPSERT FORMAT BYTES
+  FORMAT BYTES ENVELOPE UPSERT
 
 $ kafka-ingest format=bytes topic=data-consistency
 testdrive-textbytes-${testdrive.seed},1,0,1,1
@@ -234,7 +234,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-realtimeavroavro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE UPSERT
+  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > select * from realtimeavroavro
 key        f1             f2
@@ -242,7 +242,9 @@ key        f1             f2
 lightning  sheep          54
 water      crocodile      7
 
+# ensure that having deletion on a key that never existed does not break anything
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+{"key": "spirit"} null
 {"key": "air"} {"f1": "pigeon", "f2": 10}
 {"key": "air"} {"f1": "owl", "f2": 15}
 {"key": "earth"} {"f1": "rhinoceros", "f2": 211}
