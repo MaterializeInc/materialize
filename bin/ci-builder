@@ -83,15 +83,19 @@ case "$cmd" in
         )
         if [[ "$(uname -s)" = Linux ]]; then
             args+=(
-                --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
                 --volume "/var/run/docker.sock:/var/run/docker.sock"
                 --volume "$HOME/.cargo:/cargo"
                 --volume "$HOME/.docker/config.json:/docker/config.json"
-                --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
                 --env "CARGO_HOME=/cargo"
                 --env "DOCKER_CONFIG=/docker"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
             )
+            if [[ "${SSH_AUTH_SOCK:-}" ]]; then
+                args+=(
+                    --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
+                    --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
+                )
+            fi
         else
             args+=(--user "$(id -u):1001")
         fi
