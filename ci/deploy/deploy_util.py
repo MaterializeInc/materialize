@@ -46,6 +46,7 @@ def set_latest_redirect(platform: str, version: str) -> None:
                 "s3",
                 "cp",
                 "--acl=public-read",
+                "--cache-control=no-cache",
                 f"--website-redirect={target}",
                 empty.name,
                 s3_url,
