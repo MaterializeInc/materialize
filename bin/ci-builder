@@ -77,11 +77,14 @@ case "$cmd" in
             --rm --interactive --tty
             --volume "$(pwd):$(pwd)"
             --workdir "$(pwd)"
-            --env CI
+            --env AWS_ACCESS_KEY_ID
+            --env AWS_SECRET_ACCESS_KEY
+            --env BINTRAY_API_KEY
             --env BUILDKITE
             --env BUILDKITE_BRANCH
             --env BUILDKITE_BUILD_NUMBER
             --env BUILDKITE_TAG
+            --env CI
         )
         if [[ "$(uname -s)" = Linux ]]; then
             args+=(
