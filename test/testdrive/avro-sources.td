@@ -64,6 +64,17 @@ a  b  json
 2  3  "{\"hello\":\"world\"}"
 -1  7 "[1.0,2.0,3.0]"
 
+> CREATE MATERIALIZED SOURCE fast_forwarded
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (start_offset=2)
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM fast_forwarded
+a  b  json
+----------
+-1  7 "[1.0,2.0,3.0]"
+
 # Create a source using a file schema. This should fail if the named schema file
 # does not exist.
 
