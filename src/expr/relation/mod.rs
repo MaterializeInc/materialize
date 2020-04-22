@@ -138,7 +138,7 @@ pub enum RelationExpr {
     ///
     /// The runtime memory footprint of this operator is at most proportional to the
     /// number of distinct records in the input and output. The actual requirements
-    /// are reduced to the number of distinct inputs to each aggregate, summed across
+    /// can be less: the number of distinct inputs to each aggregate, summed across
     /// each aggregate, plus the output size. For more details consult the code that
     /// builds the associated dataflow.
     Reduce {
