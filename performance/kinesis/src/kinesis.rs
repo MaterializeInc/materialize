@@ -84,7 +84,7 @@ pub async fn create_stream(
         .await
         .map_err(|e| format!("creating stream: {}", e))?;
 
-    util::retry::retry(|| async {
+    util::retry::retry_for(Duration::from_secs(1), |_| async {
         let description = kinesis_client
             .describe_stream(DescribeStreamInput {
                 exclusive_start_shard_id: None,
