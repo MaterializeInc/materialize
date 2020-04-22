@@ -86,21 +86,13 @@ class RepositoryDetails:
         self.root = root
         self.cargo_workspace = cargo.Workspace(root)
 
+    def xcargo(self) -> str:
+        """Determine the path to a Cargo executable that targets linux/amd64."""
+        return str(self.root / "bin" / "xcompile")
 
-def xcargo(rd: RepositoryDetails) -> str:
-    """Determine the path to a `cargo` executable that targets linux/amd64."""
-    if sys.platform == "linux":
-        return "cargo"
-    else:
-        return str(rd.root / "bin" / "xcompile")
-
-
-def xcargo_target_dir(rd: RepositoryDetails) -> Path:
-    """Determine the path to the target directory for Cargo. """
-    if sys.platform == "linux":
-        return rd.root / "target"
-    else:
-        return rd.root / "target" / "x86_64-unknown-linux-gnu"
+    def xcargo_target_dir(self) -> Path:
+        """Determine the path to the target directory for Cargo."""
+        return self.root / "target" / "x86_64-unknown-linux-gnu"
 
 
 def xbinutil(tool: str) -> str:
@@ -192,9 +184,10 @@ class CargoBuild(CargoPreImage):
     def run(self) -> None:
         super().run()
         spawn.runv(
-            [xcargo(self.rd), "build", "--release", "--bin", self.bin], cwd=self.rd.root
+            [self.rd.xcargo(), "build", "--release", "--bin", self.bin],
+            cwd=self.rd.root,
         )
-        shutil.copy(xcargo_target_dir(self.rd) / "release" / self.bin, self.path)
+        shutil.copy(self.rd.xcargo_target_dir() / "release" / self.bin, self.path)
         if self.strip:
             # NOTE(benesch): the debug information is large enough that it slows
             # down CI, since we're packaging these binaries up into Docker
@@ -254,7 +247,7 @@ class CargoTest(CargoPreImage):
         # error messages would also be sent to the output file in JSON, and the
         # user would only see a vague "could not compile <package>" error.
         args = [
-            xcargo(self.rd),
+            self.rd.xcargo(),
             "test",
             "--locked",
             "--no-run",
@@ -291,7 +284,7 @@ class CargoTest(CargoPreImage):
                 manifest.write(f"{slug} {crate_path}\n")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")
         shutil.copy(
-            xcargo_target_dir(self.rd) / "debug" / "examples" / "pingpong",
+            self.rd.xcargo_target_dir() / "debug" / "examples" / "pingpong",
             self.path / "tests" / "examples",
         )
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
