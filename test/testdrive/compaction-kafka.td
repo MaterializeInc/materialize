@@ -222,6 +222,7 @@ mammalmore    moose 5
 $ kafka-create-topic topic=realtimeavroavro
 
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+{"key": "fire"} {"f1": "dog", "f2": 42}
 {"key": "lightning"} {"f1": "sheep", "f2": 53}
 {"key": "water"} {"f1":"plesiosaur", "f2": 224}
 {"key": "earth"} {"f1": "turtle", "f2": 34}
@@ -237,6 +238,21 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
   ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > select * from realtimeavroavro
+key        f1             f2
+----------------------------
+fire       dog            42
+lightning  sheep          54
+water      crocodile      7
+
+# Ensure that Upsert sources work with `start_offset`
+> CREATE MATERIALIZED SOURCE realtimeavroavro_ff
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-realtimeavroavro-${testdrive.seed}'
+  WITH (start_offset=1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> SELECT * FROM realtimeavroavro_ff
 key        f1             f2
 ----------------------------
 lightning  sheep          54
@@ -256,6 +272,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 > select * from realtimeavroavro
 key        f1             f2
 ------------------------------
+fire       dog            42
 air        chicken        47
 lightning  dog            243
 earth      rhinoceros     211

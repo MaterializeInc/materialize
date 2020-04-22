@@ -263,6 +263,7 @@ where
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::Upsert,
+                false,
             ),
             &op_name,
         ),
@@ -275,6 +276,7 @@ where
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::Upsert,
+                false,
             ),
             &op_name,
         ),
@@ -284,11 +286,13 @@ where
                 &key_enc.value_schema,
                 key_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::None,
+                false,
             ),
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::Upsert,
+                false,
             ),
             &op_name,
         ),
@@ -379,6 +383,7 @@ pub fn decode_values<G>(
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
+    fast_forwarded: bool,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -398,6 +403,7 @@ where
                 &enc.value_schema,
                 enc.schema_registry_url,
                 envelope.get_avro_envelope_type(),
+                fast_forwarded,
             ),
             &op_name,
         ),
