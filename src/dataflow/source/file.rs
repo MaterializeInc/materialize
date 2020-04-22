@@ -281,7 +281,7 @@ where
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_RECORDS_PER_INVOCATION: usize = 1024;
 
-    let (id, region, timestamp_histories, timestamp_tx, consistency) = source_config.extract();
+    let (id, region, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
 
     let read_file = read_style != FileReadStyle::None;
     let ts = if read_file {
@@ -291,8 +291,6 @@ where
         assert!(prev.is_none());
         timestamp_tx.as_ref().borrow_mut().push((
             id,
-            // TODO(natacha) use catalog information instead of
-            // FileSourceConnector information
             Some((
                 ExternalSourceConnector::File(FileSourceConnector {
                     path: path.clone(),
@@ -306,7 +304,7 @@ where
         None
     };
 
-    // Buffer place older for buffering messages for which we did not have a timestamp
+    // Buffer placeholder for buffering messages for which we did not have a timestamp
     let mut buffer: Option<Out> = None;
     // Index of the last offset that we have already processed (and assigned a timestamp to)
     let mut last_processed_offset: i64 = 0;
@@ -341,24 +339,23 @@ where
                     &timestamp_histories,
                 );
 
-                // Check if there was a message buffered and if we can now process it
-                // If we can now process it, clear the buffer and proceed to poll from
-                // consumer. Else, exit the function
-                buffer = if let Some(message) = buffer.take() {
-                    Some(message)
-                } else {
+                // Check if there was a message buffered. If yes, use this message. Else,
+                // attempt to process the next message
+                if buffer.is_none() {
                     match rx.try_recv() {
                         Ok(record) => {
                             records_read += 1;
                             current_msg_offset += 1;
-                            Some(record)
+                            buffer = Some(record);
                         }
-                        Err(TryRecvError::Empty) => None,
+                        Err(TryRecvError::Empty) => {
+                            buffer = None;
+                        }
                         Err(TryRecvError::Disconnected) => {
                             return SourceStatus::Done;
                         }
                     }
-                };
+                }
 
                 while let Some(message) = buffer.take() {
                     let ts = find_matching_timestamp(&id, current_msg_offset, &timestamp_histories);

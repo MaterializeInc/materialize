@@ -66,7 +66,7 @@ impl<'a, G> SourceConfig<'a, G> {
         }
     }
 
-    pub fn extract(
+    pub fn into_parts(
         self,
     ) -> (
         SourceInstanceId,

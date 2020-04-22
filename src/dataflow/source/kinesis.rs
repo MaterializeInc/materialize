@@ -64,7 +64,7 @@ pub fn kinesis<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.extract();
+    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
 
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.

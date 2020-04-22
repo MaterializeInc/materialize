@@ -71,7 +71,7 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.extract();
+    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
 
     let KafkaSourceConnector {
         url,

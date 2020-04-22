@@ -770,9 +770,9 @@ impl Timestamper {
                                 };
                                 let last_offset =
                                     std::cmp::max(start_offset, self.rt_recover_source(id));
-                               let consumer = self.create_rt_connector(id, sc, last_offset);
-                               if let Some(consumer) = consumer {
-                                   self.rt_sources.insert(id, consumer);
+                                let consumer = self.create_rt_connector(id, sc, last_offset);
+                                if let Some(consumer) = consumer {
+                                    self.rt_sources.insert(id, consumer);
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
@@ -1072,45 +1072,32 @@ impl Timestamper {
     ) -> Option<RtTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
-                let connector = self.create_rt_kafka_connector(id, kc);
-                match connector {
-                    Some(connector) => Some(RtTimestampConsumer {
+                self.create_rt_kafka_connector(id, kc)
+                    .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
                         last_offset,
-                    }),
-                    None => None,
-                }
+                    })
             }
             ExternalSourceConnector::File(fc) => {
-                let connector = self.create_rt_file_connector(id, fc);
-                match connector {
-                    Some(connector) => Some(RtTimestampConsumer {
+                self.create_rt_file_connector(id, fc)
+                    .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::File(connector),
                         last_offset,
-                    }),
-                    None => None,
-                }
+                    })
             }
             ExternalSourceConnector::AvroOcf(fc) => {
-                let connector = self.create_rt_ocf_connector(id, fc);
-                match connector {
-                    Some(connector) => Some(RtTimestampConsumer {
+                self.create_rt_ocf_connector(id, fc)
+                    .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Ocf(connector),
                         last_offset,
-                    }),
-                    None => None,
-                }
+                    })
             }
-            ExternalSourceConnector::Kinesis(kinc) => {
-                let connector = self.create_rt_kinesis_connector(id, kinc);
-                match connector {
-                    Some(connector) => Some(RtTimestampConsumer {
-                        connector: RtTimestampConnector::Kinesis(connector),
-                        last_offset,
-                    }),
-                    None => None,
-                }
-            }
+            ExternalSourceConnector::Kinesis(kinc) => self
+                .create_rt_kinesis_connector(id, kinc)
+                .map(|connector| RtTimestampConsumer {
+                    connector: RtTimestampConnector::Kinesis(connector),
+                    last_offset,
+                }),
         }
     }
 
@@ -1121,6 +1108,7 @@ impl Timestamper {
         timestamp_topic: String,
     ) -> Option<ByoFileConnector<std::vec::Vec<u8>>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
+
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
@@ -1187,7 +1175,6 @@ impl Timestamper {
         }
     }
 
-    #[allow(clippy::redundant_clone)]
     fn create_rt_ocf_connector(
         &self,
         _id: SourceInstanceId,
@@ -1200,15 +1187,13 @@ impl Timestamper {
         } else {
             FileReadStyle::ReadOnce
         };
-        let path = fc.path.clone();
         std::thread::spawn(move || {
-            read_file_task(path, tx, None, tail, ctor);
+            read_file_task(fc.path, tx, None, tail, ctor);
         });
 
         Some(RtFileConnector { stream: rx })
     }
 
-    #[allow(clippy::redundant_clone)]
     fn create_rt_file_connector(
         &self,
         _id: SourceInstanceId,
@@ -1221,9 +1206,8 @@ impl Timestamper {
         } else {
             FileReadStyle::ReadOnce
         };
-        let path = fc.path.clone();
         std::thread::spawn(move || {
-            read_file_task(path, tx, None, tail, ctor);
+            read_file_task(fc.path, tx, None, tail, ctor);
         });
 
         Some(RtFileConnector { stream: rx })
