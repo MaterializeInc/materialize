@@ -10,6 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 interchange = { path = "../interchange" }
+ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 expr = { path = "../expr" }
 failure = "0.1"

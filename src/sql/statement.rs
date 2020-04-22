@@ -11,7 +11,7 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -909,6 +909,7 @@ async fn purify_format(
     format: &mut Option<Format>,
     connector: &mut Connector,
     col_names: &mut Vec<Ident>,
+    specified_options: &HashMap<String, String>,
 ) -> Result<(), failure::Error> {
     match format {
         Some(Format::Avro(schema)) => match schema {
@@ -920,11 +921,15 @@ async fn purify_format(
                 };
                 if seed.is_none() {
                     let url = url.parse()?;
+
+                    let ccsr_config =
+                        kafka_util::generate_ccsr_client_config(url, &specified_options)?;
+
                     let Schema {
                         key_schema,
                         value_schema,
                         ..
-                    } = get_remote_avro_schema(url, topic.clone()).await?;
+                    } = get_remote_avro_schema(ccsr_config, topic.clone()).await?;
                     *seed = Some(CsrSeed {
                         key_schema,
                         value_schema,
@@ -986,6 +991,7 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
     } = &mut stmt
     {
         let with_options_map = normalize::with_options(with_options);
+        let mut specified_options = HashMap::new();
 
         match connector {
             Connector::Kafka { broker, .. } => {
@@ -994,8 +1000,8 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                 }
 
                 // Verify that the provided security options are valid and then test them.
-                let specified_options =
-                    kafka_util::extract_security_options(&mut with_options_map.clone())?;
+                specified_options =
+                    kafka_util::extract_security_config(&mut with_options_map.clone())?;
                 kafka_util::test_config(&specified_options)?;
             }
             Connector::AvroOcf { path, .. } => {
@@ -1013,9 +1019,9 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             _ => (),
         }
 
-        purify_format(format, connector, col_names).await?;
+        purify_format(format, connector, col_names, &specified_options).await?;
         if let sql_parser::ast::Envelope::Upsert(format) = envelope {
-            purify_format(format, connector, col_names).await?;
+            purify_format(format, connector, col_names, &specified_options).await?;
         }
     }
     Ok(stmt)
@@ -1044,25 +1050,31 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         let Schema {
                             key_schema,
                             value_schema,
-                            schema_registry_url,
+                            schema_registry_config,
                         } = match schema {
                             // TODO(jldlaughlin): we need a way to pass in primary key information
                             // when building a source from a string or file.
                             AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Schema {
                                 key_schema: None,
                                 value_schema: schema.clone(),
-                                schema_registry_url: None,
+                                schema_registry_config: None,
                             },
                             AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
                                 unreachable!("File schema should already have been inlined")
                             }
-                            AvroSchema::CsrUrl { url: csr_url, seed } => {
-                                let csr_url: Url = csr_url.parse()?;
+                            AvroSchema::CsrUrl { url, seed } => {
+                                let url: Url = url.parse()?;
+                                let mut with_options_map = normalize::with_options(with_options);
+                                let config =
+                                    kafka_util::extract_security_config(&mut with_options_map)?;
+                                let ccsr_config =
+                                    kafka_util::generate_ccsr_client_config(url, &config)?;
+
                                 if let Some(seed) = seed {
                                     Schema {
                                         key_schema: seed.key_schema.clone(),
                                         value_schema: seed.value_schema.clone(),
-                                        schema_registry_url: Some(csr_url),
+                                        schema_registry_config: Some(ccsr_config),
                                     }
                                 } else {
                                     unreachable!(
@@ -1075,7 +1087,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         DataEncoding::Avro(AvroEncoding {
                             key_schema,
                             value_schema,
-                            schema_registry_url,
+                            schema_registry_config,
                         })
                     }
                     Format::Protobuf {
@@ -1132,7 +1144,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
                     let mut config_options =
-                        kafka_util::extract_security_options(&mut with_options)?;
+                        kafka_util::extract_security_config(&mut with_options)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
@@ -1152,17 +1164,17 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         },
                         Some(_) => bail!(verbose_stats_err),
                     };
-                    config_options.push((
+                    config_options.insert(
                         "statistics.interval.ms".to_string(),
                         verbose_stats_ms.to_string(),
-                    ));
+                    );
 
                     let kafka_client_id = match with_options.remove("kafka_client_id") {
                         None => "materialized".to_string(),
                         Some(Value::SingleQuotedString(s)) => s,
                         Some(_) => bail!("kafka_client_id must be a string"),
                     };
-                    config_options.push(("client.id".to_string(), kafka_client_id));
+                    config_options.insert("client.id".to_string(), kafka_client_id);
 
                     // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
                     // until we have had time to think about what the right UX/design is on a non-urgent timeline!
@@ -1669,11 +1681,14 @@ fn handle_query(
 struct Schema {
     key_schema: Option<String>,
     value_schema: String,
-    schema_registry_url: Option<Url>,
+    schema_registry_config: Option<ccsr::ClientConfig>,
 }
 
-async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failure::Error> {
-    let ccsr_client = ccsr::AsyncClient::new(url.clone());
+async fn get_remote_avro_schema(
+    schema_registry_config: ccsr::ClientConfig,
+    topic: String,
+) -> Result<Schema, failure::Error> {
+    let ccsr_client = ccsr::AsyncClient::new(&schema_registry_config);
 
     let value_schema_name = format!("{}-value", topic);
     let value_schema = ccsr_client
@@ -1690,7 +1705,7 @@ async fn get_remote_avro_schema(url: Url, topic: String) -> Result<Schema, failu
     Ok(Schema {
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
-        schema_registry_url: Some(url),
+        schema_registry_config: Some(schema_registry_config),
     })
 }
 
