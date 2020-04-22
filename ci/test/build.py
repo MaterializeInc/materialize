@@ -56,10 +56,12 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
 
     # Extract the materialized binary from the Docker image. This avoids
     # an expensive rebuild if we're using a cached image.
-    ci_util.acquire_materialized(repo, Path("target") / "release" / "materialized")
+    ci_util.acquire_materialized(
+        repo, repo.rd.xcargo_target_dir() / "release" / "materialized"
+    )
 
     # Build the Debian package.
-    deb_path = repo.root / "target" / "debian" / "materialized.deb"
+    deb_path = repo.rd.xcargo_target_dir() / "debian" / "materialized.deb"
     spawn.runv(
         [
             "cargo",

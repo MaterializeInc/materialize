@@ -21,8 +21,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 main() {
     case "${1-}" in
         "") do_cargo build ;;
-        build) shift && do_cargo build "$@" ;;
-        test) shift && do_cargo test "$@" ;;
+        build|deb|test) do_cargo "$@" ;;
         bootstrap) bootstrap ;;
         clean) clean ;;
         *) usage ;;
@@ -38,37 +37,53 @@ the cross-compiled binaries into Docker images."
 }
 
 do_cargo() {
-    if [[ ! -d "$root/target/sysroot" ]]; then
-        die "xcompile: fatal: run \`bin/xcompile bootstrap\` first"
+    command=()
+    uname=$(uname)
+
+    if [[ "$uname" = Darwin ]]; then
+        # On macOS, require the installation of a custom cross-compiler, since
+        # Docker for Mac is unusably slow.
+
+        if [[ ! -d "$root/target/sysroot" ]]; then
+            die "xcompile: fatal: run \`bin/xcompile bootstrap\` first"
+        fi
+
+        sysroot=$root/target/sysroot/x86_64-unknown-linux-gnu
+
+        export AR=x86_64-unknown-linux-gnu-ar
+        export LD=x86_64-unknown-linux-gnu-ld
+        export RANLIB=x86_64-unknown-linux-gnu-ranlib
+        export CPP=x86_64-unknown-linux-gnu-cpp
+        export CC=x86_64-unknown-linux-gnu-cc
+        export CXX=x86_64-unknown-linux-gnu-c++
+        export CFLAGS="-I$sysroot/usr/include/x86_64-linux-gnu -isystem$sysroot/usr/include"
+        export CMAKE_SYSTEM_NAME=Linux
+        export CXXFLAGS=$CFLAGS
+        export LDFLAGS="-L$sysroot/usr/lib/x86_64-linux-gnu -L$sysroot/lib/x86_64-linux-gnu"
+        export TARGET_CC=$CC
+        export TARGET_CXX=$CXX
+        export TARGET_CFLAGS=$CFLAGS
+        export TARGET_CXXFLAGS=$CXXFLAGS
+        export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$CC
+    elif [[ ! "${MZ_DEV_CI_BUILDER:-}" ]]; then
+        # Otherwise, build inside the CI builder image, unless we're already
+        # inside of it.
+        command+=("$root"/bin/ci-builder run stable)
     fi
 
     subcommand="$1"
     shift
-
-    sysroot=$root/target/sysroot/x86_64-unknown-linux-gnu
-
-    export AR=x86_64-unknown-linux-gnu-ar
-    export LD=x86_64-unknown-linux-gnu-ld
-    export RANLIB=x86_64-unknown-linux-gnu-ranlib
-    export CPP=x86_64-unknown-linux-gnu-cpp
-    export CC=x86_64-unknown-linux-gnu-cc
-    export CXX=x86_64-unknown-linux-gnu-c++
-    export CFLAGS="-I$sysroot/usr/include/x86_64-linux-gnu -isystem$sysroot/usr/include"
-    export CMAKE_SYSTEM_NAME=Linux
-    export CXXFLAGS=$CFLAGS
-    export LDFLAGS="-L$sysroot/usr/lib/x86_64-linux-gnu -L$sysroot/lib/x86_64-linux-gnu"
-    export TARGET_CC=$CC
-    export TARGET_CXX=$CXX
-    export TARGET_CFLAGS=$CFLAGS
-    export TARGET_CXXFLAGS=$CXXFLAGS
-    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$CC
-
-    cargo "$subcommand" --target=x86_64-unknown-linux-gnu "$@"
+    command+=(cargo "$subcommand" "--target=x86_64-unknown-linux-gnu" "$@")
+    "${command[@]}"
 }
 
 pkg_url=http://archive.ubuntu.com/ubuntu/ubuntu
 
 bootstrap() {
+    if [[ "$(uname)" = Linux ]]; then
+        exit 0
+    fi
+
     clean
 
     run brew install SergioBenitez/osxct/x86_64-unknown-linux-gnu
