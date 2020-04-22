@@ -127,6 +127,15 @@ pub enum PartitionId {
     File,
 }
 
+impl PartitionId {
+    pub fn kafka_id(&self) -> Option<i32> {
+        match self {
+            PartitionId::Kafka(id) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
 /// Humanizer that provides no additional information.
 #[derive(Debug)]
 pub struct DummyHumanizer;
