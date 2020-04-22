@@ -429,10 +429,11 @@ fn downgrade_capability(
                 };
                 // Check whether timestamps can be closed on this partition
                 while let Some((partition_count, ts, offset)) = entries.first() {
+                    assert!(*offset >= start_offset, "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.", offset, start_offset);
                     if partition_count > current_partition_count {
                         // A new partition has been added, we need to update the appropriate
                         // entries before we continue. This will also update the last_processed_offset
-                        // and next_partition_ts datastructures
+                        // and next_partition_ts data structures
                         let partitions = update_partition_list(
                             consumer,
                             topic,
