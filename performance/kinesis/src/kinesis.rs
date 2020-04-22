@@ -137,61 +137,29 @@ pub async fn generate_and_put_records(
     records_per_second: i64,
 ) -> Result<(), String> {
     let timer = std::time::Instant::now();
-    let shards = list_shards(&kinesis_client, &stream_name).await?;
     // For each string, round robin puts across all of the shards.
-    let mut shards_queue: VecDeque<Shard> = shards.iter().cloned().collect();
+    let mut shard_starting_hash_keys: VecDeque<String> = list_shards(&kinesis_client, &stream_name)
+        .await?
+        .iter()
+        .map(|shard| shard.hash_key_range.starting_hash_key.clone())
+        .collect();
 
     let mut put_record_count = 0;
     while put_record_count < record_count {
-        // Generate records.
+        // Use a basic timer to put records_per_second records/second to Kinesis.
         let put_timer = std::time::Instant::now();
-        let shard = shards_queue.pop_front().unwrap();
-        let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
-        for _i in 0..records_per_second {
-            // todo: make the records more realistic json blobs
-            records.push(PutRecordsRequestEntry {
-                data: Bytes::from(
-                    rand::thread_rng()
-                        .sample_iter(&Alphanumeric)
-                        .take(30)
-                        .collect::<String>(),
-                ),
-                explicit_hash_key: Some(shard.hash_key_range.starting_hash_key.clone()), // explicitly push to the current shard
-                partition_key: DUMMY_PARTITION_KEY.to_owned(), // will be overridden by "explicit_hash_key"
-            });
-        }
 
-        // Put records.
-        let mut min = 0;
-        let mut max = 500;
-        let mut second_put_record_count = 0;
-        while second_put_record_count < records_per_second {
-            match kinesis_client
-                .put_records(PutRecordsInput {
-                    records: records[min..cmp::min(records.len(), max)].to_vec(),
-                    stream_name: stream_name.to_owned(),
-                })
-                .await
-            {
-                Ok(output) => {
-                    // todo: do something with failed counts
-                    let put_records = output.records.len();
-                    min += put_records;
-                    max += put_records;
-                    second_put_record_count += output.records.len() as i64;
-                }
-                Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
-                | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {
-                    println!("hit non-fatal error, continuing: {}", e);
-                }
-                Err(e) => {
-                    println!("{}", e);
-                    return Err(String::from("failed putting records!"));
-                }
-            }
-        }
-        put_record_count += second_put_record_count;
-        shards_queue.push_back(shard);
+        let target_shard = shard_starting_hash_keys.pop_front().unwrap();
+        put_record_count += put_records_one_second(
+            kinesis_client,
+            stream_name,
+            &target_shard,
+            records_per_second,
+        )
+        .await
+        .map_err(|e| format!("error putting records to Kinesis: {}", e))?;
+        shard_starting_hash_keys.push_back(target_shard);
+
         let elapsed = put_timer.elapsed().as_millis();
         if elapsed < 1000 {
             thread::sleep(Duration::from_millis((1000 - elapsed) as u64));
@@ -208,6 +176,59 @@ pub async fn generate_and_put_records(
         timer.elapsed().as_millis()
     );
     Ok(())
+}
+
+pub async fn put_records_one_second(
+    kinesis_client: &KinesisClient,
+    stream_name: &str,
+    shard_starting_hash_key: &str,
+    records_per_second: i64,
+) -> Result<i64, String> {
+    // Generate records.
+    let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
+    for _i in 0..records_per_second {
+        // todo: make the records more realistic json blobs
+        records.push(PutRecordsRequestEntry {
+            data: Bytes::from(
+                rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(30)
+                    .collect::<String>(),
+            ),
+            explicit_hash_key: Some(shard_starting_hash_key.to_owned()), // explicitly push to the current shard
+            partition_key: DUMMY_PARTITION_KEY.to_owned(), // will be overridden by "explicit_hash_key"
+        });
+    }
+
+    // Put records.
+    let mut index = 0;
+    let mut put_record_count = 0;
+    while put_record_count < records_per_second {
+        match kinesis_client
+            .put_records(PutRecordsInput {
+                records: records[index..cmp::min(index + 500, records.len())].to_vec(), // Can put 500 records at a time.
+                stream_name: stream_name.to_owned(),
+            })
+            .await
+        {
+            Ok(output) => {
+                // todo: do something with failed counts
+                let put_records = output.records.len();
+                index += put_records;
+                put_record_count += output.records.len() as i64;
+            }
+            Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
+            | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {
+                // todo: do something here to avoid looping forever
+                println!("hit non-fatal error, continuing: {}", e);
+            }
+            Err(e) => {
+                println!("{}", e);
+                return Err(String::from("failed putting records!"));
+            }
+        }
+    }
+    Ok(put_record_count)
 }
 
 /// There could be more than one test running at once,

@@ -66,7 +66,6 @@ impl MzClient {
         self.create_materialized_view(&source_name, &view_name)
             .await
             .map_err(|e| format!("creating materialized view: {}", e))?;
-        // run query loop until you've read all records? or timeout?
         self.query_view(&view_name, num_records)
             .await
             .map_err(|e| format!("querying view: {}", e))?;

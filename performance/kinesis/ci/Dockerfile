@@ -16,5 +16,4 @@ RUN apt-get update && apt-get -qy install \
 
 COPY kinesis /usr/local/bin
 
-
 ENTRYPOINT ["kinesis"]

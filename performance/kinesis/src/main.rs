@@ -30,7 +30,7 @@ async fn run() -> Result<(), String> {
 
     let materialize_client =
         mz_client::MzClient::new(&args.materialized_host, args.materialized_port).await?;
-    let (kinesis_client, kinesis_info) = block_on(kinesis::create_client("us-east-2"))?;
+    let (kinesis_client, kinesis_info) = block_on(kinesis::create_client(&args.aws_region))?;
 
     let seed: u32 = rand::thread_rng().gen();
     let stream_name: String = format!("kinesis-load-test-{}", seed);
@@ -94,6 +94,10 @@ pub struct Args {
     /// The materialized port
     #[structopt(long, default_value = "6875")]
     pub materialized_port: u16,
+
+    /// The AWS region of the stream
+    #[structopt(long, default_value = "us-east-2")]
+    pub aws_region: String,
 
     /// The number of shards in the Kinesis stream
     #[structopt(long, default_value = "50")]
