@@ -168,7 +168,7 @@ columns come before the message payload columns.
 
 As the format of the message key may be different from the format of the message
 payload, when specifying the upsert envelope, you can add an optional format
-specification for the message key. 
+specification for the message key.
 
 If you do not include the format specification, Materialize will treat the
 message key as having the same format as the message payload. The exception if
@@ -176,7 +176,7 @@ you are using the Confluent Schema Registry to receive your schemas. Materialize
 will look for the key and payload schemas based on TopicNameStrategy.
 
 If the format of the key is either plain text or raw bytes, the key is treated
-as single column. The default key column name is `key0`. 
+as single column. The default key column name is `key0`.
 
 ## Examples
 
