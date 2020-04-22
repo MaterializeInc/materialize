@@ -30,21 +30,27 @@ pub mod func;
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum RelationExpr {
-    /// Always return the same value
+    /// A constant relation containing specified rows.
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Constant {
         /// Rows of the constant collection and their multiplicities.
         rows: Vec<(Row, isize)>,
         /// Schema of the collection.
         typ: RelationType,
     },
-    /// Get an existing dataflow
+    /// Get an existing dataflow.
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Get {
         /// The identifier for the collection to load.
         id: Id,
         /// Schema of the collection.
         typ: RelationType,
     },
-    /// Introduce a temporary dataflow
+    /// Introduce a temporary dataflow.
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Let {
         /// The identifier to be used in `Get` variants to retrieve `value`.
         id: LocalId,
@@ -54,6 +60,8 @@ pub enum RelationExpr {
         body: Box<RelationExpr>,
     },
     /// Project out some columns from a dataflow
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Project {
         /// The source collection.
         input: Box<RelationExpr>,
@@ -61,6 +69,8 @@ pub enum RelationExpr {
         outputs: Vec<usize>,
     },
     /// Append new columns to a dataflow
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Map {
         /// The source collection.
         input: Box<RelationExpr>,
@@ -70,6 +80,8 @@ pub enum RelationExpr {
         scalars: Vec<ScalarExpr>,
     },
     /// Like Map, but yields zero-or-more output rows per input row
+    ///
+    /// The runtime memory footprint of this operator is zero.
     FlatMapUnary {
         /// The source collection
         input: Box<RelationExpr>,
@@ -85,6 +97,8 @@ pub enum RelationExpr {
         demand: Option<Vec<usize>>,
     },
     /// Keep rows from a dataflow where all the predicates are true
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Filter {
         /// The source collection.
         input: Box<RelationExpr>,
@@ -94,6 +108,10 @@ pub enum RelationExpr {
     /// Join several collections, where some columns must be equal.
     ///
     /// For further details consult the documentation for [`RelationExpr::join`].
+    ///
+    /// The runtime memory footprint of this operator can be proportional to
+    /// the sizes of all inputs. This may be reduced due to arrangements available
+    /// at rendering time.
     Join {
         /// A sequence of input relations.
         inputs: Vec<RelationExpr>,
@@ -117,6 +135,12 @@ pub enum RelationExpr {
         implementation: JoinImplementation,
     },
     /// Group a dataflow by some columns and aggregate over each group
+    ///
+    /// The runtime memory footprint of this operator is at most proportional to the
+    /// number of distinct records in the input and output. The actual requirements
+    /// are reduced to the number of distinct inputs to each aggregate, summed across
+    /// each aggregate, plus the output size. For more details consult the code that
+    /// builds the associated dataflow.
     Reduce {
         /// The source collection.
         input: Box<RelationExpr>,
@@ -126,6 +150,8 @@ pub enum RelationExpr {
         aggregates: Vec<AggregateExpr>,
     },
     /// Groups and orders within each group, limiting output.
+    ///
+    /// The runtime memory footprint of this operator is proportional to its input and output.
     TopK {
         /// The source collection.
         input: Box<RelationExpr>,
@@ -139,16 +165,22 @@ pub enum RelationExpr {
         offset: usize,
     },
     /// Return a dataflow where the row counts are negated
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Negate {
         /// The source collection.
         input: Box<RelationExpr>,
     },
     /// Keep rows from a dataflow where the row counts are positive
+    ///
+    /// The runtime memory footprint of this operator is proportional to its input and output.
     Threshold {
         /// The source collection.
         input: Box<RelationExpr>,
     },
     /// Adds the frequencies of elements in both sets.
+    ///
+    /// The runtime memory footprint of this operator is zero.
     Union {
         /// A source collection.
         left: Box<RelationExpr>,
@@ -157,6 +189,8 @@ pub enum RelationExpr {
     },
     /// Technically a no-op. Used to render an index. Will be used to optimize queries
     /// on finer grain
+    ///
+    /// The runtime memory footprint of this operator is proportional to its input.
     ArrangeBy {
         /// The source collection
         input: Box<RelationExpr>,
