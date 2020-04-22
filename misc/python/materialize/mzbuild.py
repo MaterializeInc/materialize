@@ -151,23 +151,23 @@ class PreImage:
         """Perform the action."""
         spawn.runv(["git", "clean", "-ffdX", self.path])
 
-    def inputs(self) -> Set[bytes]:
-        """Return the paths which are considered inputs to the action."""
+    def inputs(self) -> Set[str]:
+        """Return the globs which are considered inputs to the action."""
 
 
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
-    def inputs(self) -> Set[bytes]:
+    def inputs(self) -> Set[str]:
         return {
-            b"ci/builder/stable.stamp",
-            b"ci/builder/nightly.stamp",
-            b"Cargo.toml",
+            "ci/builder/stable.stamp",
+            "ci/builder/nightly.stamp",
+            "Cargo.toml",
             # TODO(benesch): we could in theory fingerprint only the subset of
             # Cargo.lock that applies to the crates at hand, but that is a
             # *lot* of work.
-            b"Cargo.lock",
-            b".cargo/config",
+            "Cargo.lock",
+            ".cargo/config",
         }
 
 
@@ -214,11 +214,11 @@ class CargoBuild(CargoPreImage):
                 ]
             )
 
-    def inputs(self) -> Set[bytes]:
+    def inputs(self) -> Set[str]:
         crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
         deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
-        return super().inputs() | git_ls_files(
-            self.rd.root, *(dep.path for dep in deps),
+        return super().inputs() | set(
+            str(dep.path.relative_to(self.rd.root)) for dep in deps
         )
 
 
@@ -289,10 +289,9 @@ class CargoTest(CargoPreImage):
         )
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
-    def inputs(self) -> Set[bytes]:
-        return super().inputs() | git_ls_files(
-            self.rd.root,
-            *(crate.path for crate in self.rd.cargo_workspace.crates.values()),
+    def inputs(self) -> Set[str]:
+        return super().inputs() | set(
+            str(crate.path) for crate in self.rd.cargo_workspace.crates.values()
         )
 
 
@@ -468,19 +467,19 @@ class ResolvedImage:
                 out |= dep.list_dependencies(transitive)
         return out
 
-    def inputs(self, transitive: bool = False) -> Set[bytes]:
-        """List the files tracked as inputs to the image.
+    def inputs(self, transitive: bool = False) -> Set[str]:
+        """List the globs tracked as inputs to the image.
 
-        These files are used to compute the fingerprint for the image.
-        See `ResolvedImage.fingerprint` for details.
+        Files matching these globs are used to compute the fingerprint for the
+        image. See `ResolvedImage.fingerprint` for details.
 
         Returns:
-            inputs: A list of input paths, relative to the root of the
+            inputs: A list of input globs, relative to the root of the
                 repository.
         """
-        paths = git_ls_files(self.image.rd.root, self.image.path)
+        paths = {str(self.image.path.relative_to(self.image.rd.root))}
         if self.image.pre_image is not None:
-            paths.update(self.image.pre_image.inputs())
+            paths |= self.image.pre_image.inputs()
         if transitive:
             for dep in self.dependencies.values():
                 paths |= dep.inputs(transitive)
@@ -499,7 +498,7 @@ class ResolvedImage:
         inputs via `PreImage.inputs`.
         """
         self_hash = hashlib.sha1()
-        for rel_path in sorted(self.inputs()):
+        for rel_path in sorted(set(git_ls_files(self.image.rd.root, *self.inputs()))):
             abs_path = self.image.rd.root / rel_path.decode()
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode

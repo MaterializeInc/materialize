@@ -72,6 +72,11 @@ def main() -> int:
         action="store_true",
         help="compute transitive inputs and dependencies",
     )
+    describe_parser.add_argument(
+        "--resolve-inputs",
+        action="store_true",
+        help="resolve input patterns (by running `git ls-files`)",
+    )
 
     args = parser.parse_args()
 
@@ -102,13 +107,22 @@ def main() -> int:
         elif args.command == "fingerprint":
             print(rimage.fingerprint())
         elif args.command == "describe":
+            inputs = sorted(rimage.inputs(args.transitive))
+            dependencies = sorted(rimage.list_dependencies(args.transitive))
+
             print(f"Image: {rimage.name}")
             print(f"Fingerprint: {rimage.fingerprint()}")
-            print("Inputs:")
-            for inp in sorted(rimage.inputs(args.transitive)):
-                print(f"    {inp.decode()}")
+
+            print("Input patterns:")
+            for inp in inputs:
+                print(f"    {inp}")
+
+            if args.resolve_inputs:
+                print("Resolved inputs:")
+                for path in sorted(mzbuild.git_ls_files(root, *inputs)):
+                    print(f"    {path.decode()}")
+
             print("Dependencies:")
-            dependencies = sorted(rimage.list_dependencies(args.transitive))
             for d in dependencies:
                 print(f"    {d}")
             if not dependencies:
