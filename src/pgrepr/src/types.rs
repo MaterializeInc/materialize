@@ -48,7 +48,7 @@ pub enum Type {
 }
 
 lazy_static! {
-    static ref LIST: postgres_types::Type = postgres_types::Type::new(
+    pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
         "LIST".to_owned(),
         // OID chosen at random
         72_794_149,

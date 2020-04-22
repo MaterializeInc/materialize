@@ -170,21 +170,7 @@ impl Value {
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Text(s) => buf.put(s.as_bytes()),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
-            Value::List(elems) => {
-                // we eat a lot of copies here and in format_list because it's hard to be generic over both BytesMut here and String in func
-                let mut tmp = String::new();
-                strconv::format_list(
-                    &mut tmp,
-                    &elems,
-                    |elem| elem.is_none(),
-                    |buf, elem| {
-                        let mut tmp = BytesMut::new();
-                        elem.as_ref().unwrap().encode_text(&mut tmp);
-                        buf.push_str(str::from_utf8(&tmp).unwrap());
-                    },
-                );
-                buf.extend_from_slice(tmp.as_bytes());
-            }
+            Value::List(elems) => encode_list(buf, elems),
         }
     }
 
@@ -250,14 +236,7 @@ impl Value {
             Type::Text => Value::Text(raw.to_owned()),
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(strconv::parse_jsonb(raw)?),
-            Type::List(elem_type) => Value::List(strconv::parse_list(
-                raw,
-                || None,
-                |elem_text| match Value::decode_text((*elem_type).clone(), elem_text.as_bytes()) {
-                    Ok(elem) => Ok(Some(elem)),
-                    Err(err) => Err(failure::format_err!("{}", err)),
-                },
-            )?),
+            Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
             Type::Unknown => panic!("cannot decode unknown type"),
         })
     }
@@ -327,4 +306,31 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .zip(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, typ))
         .collect()
+}
+
+pub fn encode_list(buf: &mut BytesMut, elems: &[Option<Value>]) {
+    // we eat a lot of copies in encode_list and in strconv::format_list because it's hard to be generic over both BytesMut here and String in func
+    let mut tmp = String::new();
+    strconv::format_list(
+        &mut tmp,
+        elems,
+        |elem| elem.is_none(),
+        |buf, elem| {
+            let mut tmp = BytesMut::new();
+            elem.as_ref().unwrap().encode_text(&mut tmp);
+            buf.push_str(str::from_utf8(&tmp).unwrap());
+        },
+    );
+    buf.extend_from_slice(tmp.as_bytes());
+}
+
+pub fn decode_list(elem_type: &Type, raw: &str) -> Result<Vec<Option<Value>>, failure::Error> {
+    strconv::parse_list(
+        raw,
+        || None,
+        |elem_text| match Value::decode_text((*elem_type).clone(), elem_text.as_bytes()) {
+            Ok(elem) => Ok(Some(elem)),
+            Err(err) => Err(failure::format_err!("{}", err)),
+        },
+    )
 }
