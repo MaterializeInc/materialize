@@ -81,7 +81,7 @@ impl Action for AddPartitionsAction {
             return Err(e.to_string());
         }
 
-        retry::retry(|| async {
+        retry::retry_for(Duration::from_secs(8), |_| async {
             let metadata = state
                 .kafka_producer
                 .client()

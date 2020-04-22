@@ -1164,10 +1164,30 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     config_options.push(("client.id".to_string(), kafka_client_id));
 
+                    // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
+                    // until we have had time to think about what the right UX/design is on a non-urgent timeline!
+                    // In particular, we almost certainly want the offsets to be specified per-partition.
+                    // The other major caveat is that by using this feature, you are opting in to
+                    // not using updates or deletes in CDC sources, and accepting panics if that constraint is violated.
+                    let start_offset_err = "start_offset must be a nonnegative integer";
+                    let start_offset = match with_options.remove("start_offset") {
+                        None => 0,
+                        Some(Value::Number(n)) => match n.parse::<i64>() {
+                            Ok(n) if n >= 0 => n,
+                            _ => bail!(start_offset_err),
+                        },
+                        Some(_) => bail!(start_offset_err),
+                    };
+
+                    if start_offset != 0 && consistency != Consistency::RealTime {
+                        bail!("`start_offset` is not yet implemented for BYO consistency sources.")
+                    }
+
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
                         topic: topic.clone(),
                         config_options,
+                        start_offset,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)
@@ -1321,16 +1341,12 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             };
 
             if let dataflow_types::Envelope::Upsert(_) = envelope {
-                if let Consistency::BringYourOwn(_) = consistency {
-                    match &mut encoding {
-                        DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
-                            *key_schema = None;
-                        }
-                        DataEncoding::Bytes | DataEncoding::Text => {}
-                        _ => bail!("Upsert envelope is not yet supported for this format."),
+                match &mut encoding {
+                    DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
+                        *key_schema = None;
                     }
-                } else {
-                    bail!("Upsert envelope is only supported for BYO consistency.")
+                    DataEncoding::Bytes | DataEncoding::Text => {}
+                    _ => bail!("Upsert envelope is not yet supported for this format."),
                 }
             }
 

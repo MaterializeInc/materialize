@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# TODO: uncomment tests when timestamping problem is fixed.
-# TODO: add tests where the updated value is less than old value
-
 $ set keyschema={
     "type": "record",
     "name": "Key",
@@ -89,14 +86,17 @@ mammalmore: {"f1":"moose", "f2": 2}
 > CREATE MATERIALIZED SOURCE bytesavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
     WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE UPSERT FORMAT BYTES
+
+$ file-append path=data-schema.json
+\${schema}
 
 > CREATE MATERIALIZED SOURCE textavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textavro-${testdrive.seed}'
     WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
   ENVELOPE UPSERT FORMAT TEXT
 
 > select * from bytesavro
@@ -138,7 +138,7 @@ mammalmore:herd
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
       WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT
+  FORMAT TEXT ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE textbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -150,7 +150,7 @@ mammalmore:herd
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
       WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT BYTES ENVELOPE UPSERT FORMAT BYTES
+  FORMAT BYTES ENVELOPE UPSERT
 
 $ kafka-ingest format=bytes topic=data-consistency
 testdrive-textbytes-${testdrive.seed},1,0,1,1
@@ -218,3 +218,61 @@ key           data  mz_offset
 -----------------------------
 birdmore      geese 4
 mammalmore    moose 5
+
+$ kafka-create-topic topic=realtimeavroavro
+
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+{"key": "fire"} {"f1": "dog", "f2": 42}
+{"key": "lightning"} {"f1": "sheep", "f2": 53}
+{"key": "water"} {"f1":"plesiosaur", "f2": 224}
+{"key": "earth"} {"f1": "turtle", "f2": 34}
+{"key": "lightning"} {"f1": "sheep", "f2": 54}
+{"key": "earth"} {"f1": "snake", "f2": 68}
+{"key": "water"} {"f1": "crocodile", "f2": 7}
+{"key": "earth"} null
+
+> CREATE MATERIALIZED SOURCE realtimeavroavro
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-realtimeavroavro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> select * from realtimeavroavro
+key        f1             f2
+----------------------------
+fire       dog            42
+lightning  sheep          54
+water      crocodile      7
+
+# Ensure that Upsert sources work with `start_offset`
+> CREATE MATERIALIZED SOURCE realtimeavroavro_ff
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-realtimeavroavro-${testdrive.seed}'
+  WITH (start_offset=1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+> SELECT * FROM realtimeavroavro_ff
+key        f1             f2
+----------------------------
+lightning  sheep          54
+water      crocodile      7
+
+# ensure that having deletion on a key that never existed does not break anything
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+{"key": "spirit"} null
+{"key": "air"} {"f1": "pigeon", "f2": 10}
+{"key": "air"} {"f1": "owl", "f2": 15}
+{"key": "earth"} {"f1": "rhinoceros", "f2": 211}
+{"key": "air"} {"f1": "chicken", "f2": 47}
+{"key": "lightning"} null
+{"key": "lightning"} {"f1":"dog", "f2": 243}
+{"key": "water"} null
+
+> select * from realtimeavroavro
+key        f1             f2
+------------------------------
+fire       dog            42
+air        chicken        47
+lightning  dog            243
+earth      rhinoceros     211

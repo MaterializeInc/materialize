@@ -44,7 +44,7 @@ impl Action for VerifyAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let topic: String = retry::retry(|| async {
+        let topic: String = retry::retry_for(Duration::from_secs(8), |_| async {
             let row = state
                 .pgclient
                 .query_one(

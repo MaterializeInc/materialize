@@ -21,7 +21,7 @@ pub async fn wait_for_stream_shards(
     stream_name: String,
     target_shard_count: i64,
 ) -> Result<(), String> {
-    retry::retry_max_backoff(Duration::from_secs(30), || async {
+    retry::retry_for(Duration::from_secs(60), |_| async {
         let description = kinesis_client
             .describe_stream(DescribeStreamInput {
                 exclusive_start_shard_id: None,

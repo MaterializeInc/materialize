@@ -17,6 +17,7 @@ documentation][user-docs].
 
 from collections import OrderedDict
 from functools import lru_cache
+from materialize import cargo
 from materialize import spawn
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -49,6 +50,18 @@ import sys
 import yaml
 
 
+class Fingerprint(bytes):
+    """A SHA-1 hash of the inputs to an `Image`.
+
+    The string representation uses base32 encoding to distinguish mzbuild
+    fingerprints from Git's hex encoded SHA-1 hashes while still being
+    URL safe.
+    """
+
+    def __str__(self) -> str:
+        return base64.b32encode(self).decode()
+
+
 class AcquiredFrom(enum.Enum):
     """Where an `Image` was acquired from."""
 
@@ -59,20 +72,27 @@ class AcquiredFrom(enum.Enum):
     """The image was built from source locally."""
 
 
-def xcargo(root: Path) -> str:
-    """Determine the path to a `cargo` executable that targets linux/amd64."""
-    if sys.platform == "linux":
-        return "cargo"
-    else:
-        return str(root / "bin" / "xcompile")
+class RepositoryDetails:
+    """Immutable details about a `Repository`.
 
+    Used internally by mzbuild.
 
-def xcargo_target_dir(root: Path) -> Path:
-    """Determine the path to the target directory for Cargo. """
-    if sys.platform == "linux":
-        return root / "target"
-    else:
-        return root / "target" / "x86_64-unknown-linux-gnu"
+    Attributes:
+        root: The path to the root of the repository.
+        cargo_workspace: The `cargo.Workspace` associated with the repository.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.cargo_workspace = cargo.Workspace(root)
+
+    def xcargo(self) -> str:
+        """Determine the path to a Cargo executable that targets linux/amd64."""
+        return str(self.root / "bin" / "xcompile")
+
+    def xcargo_target_dir(self) -> Path:
+        """Determine the path to the target directory for Cargo."""
+        return self.root / "target" / "x86_64-unknown-linux-gnu"
 
 
 def xbinutil(tool: str) -> str:
@@ -116,50 +136,64 @@ def chmod_x(path: Path) -> None:
 
 
 class PreImage:
-    """An action to run before building a Docker image."""
+    """An action to run before building a Docker image.
 
-    def run(self, root: Path, path: Path) -> None:
-        """Perform the action.
+    Args:
+        rd: The `RepositoryDetails` for the repository.
+        path: The path to the `Image` associated with this action.
+    """
 
-        Args:
-            root: The path to the root of the `Repository` associated with this
-                action.
-            path: The path to the `Image` associated with this action.
-        """
-        spawn.runv(["git", "clean", "-ffdX", path])
+    def __init__(self, rd: RepositoryDetails, path: Path):
+        self.rd = rd
+        self.path = path
 
-    def inputs(self, root: Path, path: Path) -> List[bytes]:
-        """Return the paths which are considered inputs to the action.
+    def run(self) -> None:
+        """Perform the action."""
+        spawn.runv(["git", "clean", "-ffdX", self.path])
 
-        Args:
-            root: The path to the root of the `Repository` associated with this
-                action.
-            path: The path to the `Image` associated with this action.
-        """
-        # HACK(benesch): all Rust code implicitly depends on the ci-builder
-        # version. Can we express this with less hardcoding?
-        return [b"ci/builder/stable.stamp", b"ci/builder/nightly.stamp"]
+    def inputs(self) -> List[bytes]:
+        """Return the paths which are considered inputs to the action."""
 
 
-class CargoBuild(PreImage):
+class CargoPreImage(PreImage):
+    """A `PreImage` action that uses Cargo."""
+
+    def inputs(self) -> List[bytes]:
+        return [
+            b"ci/builder/stable.stamp",
+            b"ci/builder/nightly.stamp",
+            b"Cargo.toml",
+            # TODO(benesch): we could in theory fingerprint only the subset of
+            # Cargo.lock that applies to the crates at hand, but that is a
+            # *lot* of work.
+            b"Cargo.lock",
+            b".cargo/config",
+        ]
+
+
+class CargoBuild(CargoPreImage):
     """A pre-image action that builds a single binary with Cargo."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+        super().__init__(rd, path)
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
-    def run(self, root: Path, path: Path) -> None:
-        super().run(root, path)
-        spawn.runv([xcargo(root), "build", "--release", "--bin", self.bin], cwd=root)
-        shutil.copy(xcargo_target_dir(root) / "release" / self.bin, path)
+    def run(self) -> None:
+        super().run()
+        spawn.runv(
+            [self.rd.xcargo(), "build", "--release", "--bin", self.bin],
+            cwd=self.rd.root,
+        )
+        shutil.copy(self.rd.xcargo_target_dir() / "release" / self.bin, self.path)
         if self.strip:
             # NOTE(benesch): the debug information is large enough that it slows
             # down CI, since we're packaging these binaries up into Docker
             # images and shipping them around. A bit unfortunate, since it'd be
             # nice to have useful backtraces if the binary crashes.
-            spawn.runv([xstrip, path / self.bin])
+            spawn.runv([xstrip, self.path / self.bin])
         else:
             # Even if we've been asked not to strip the binary, remove the
             # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
@@ -176,20 +210,20 @@ class CargoBuild(PreImage):
                     ".debug_pubnames",
                     "-R",
                     ".debug_pubtypes",
-                    path / self.bin,
+                    self.path / self.bin,
                 ]
             )
 
-    def inputs(self, root: Path, path: Path) -> List[bytes]:
-        # TODO(benesch): this should be much smarter about computing the Rust
-        # files that actually contribute to this binary target.
-        return super().inputs(root, path) + git_ls_files(
-            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+    def inputs(self) -> List[bytes]:
+        crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
+        deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
+        return super().inputs() + git_ls_files(
+            self.rd.root, *(dep.path for dep in deps),
         )
 
 
 # TODO(benesch): make this less hardcoded and custom.
-class CargoTest(PreImage):
+class CargoTest(CargoPreImage):
     """A pre-image action that builds all test binaries in the Cargo workspace.
 
     .. todo:: This action does not generalize well.
@@ -198,12 +232,12 @@ class CargoTest(PreImage):
         instead be captured by configuration in `mzbuild.yml`.
     """
 
-    def __init__(self, config: Dict[str, Any]):
-        pass
+    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+        super().__init__(rd, path)
 
-    def run(self, root: Path, path: Path) -> None:
-        super().run(root, path)
-        CargoBuild({"bin": "testdrive"}).run(root, path)
+    def run(self) -> None:
+        super().run()
+        CargoBuild(self.rd, self.path, {"bin": "testdrive"}).run()
 
         # NOTE(benesch): The two invocations of `cargo test --no-run` here
         # deserve some explanation. The first invocation prints error messages
@@ -213,7 +247,7 @@ class CargoTest(PreImage):
         # error messages would also be sent to the output file in JSON, and the
         # user would only see a vague "could not compile <package>" error.
         args = [
-            xcargo(root),
+            self.rd.xcargo(),
             "test",
             "--locked",
             "--no-run",
@@ -237,32 +271,35 @@ class CargoTest(PreImage):
                 )
                 if not crate_path_match:
                     raise ValueError(f'invalid package_id: {message["package_id"]}')
-                crate_path = Path(crate_path_match.group(1)).relative_to(root.resolve())
+                crate_path = Path(crate_path_match.group(1)).relative_to(
+                    self.rd.root.resolve()
+                )
                 tests.append((message["executable"], slug, crate_path))
 
-        os.makedirs(path / "tests" / "examples")
-        with open(path / "tests" / "manifest", "w") as manifest:
+        os.makedirs(self.path / "tests" / "examples")
+        with open(self.path / "tests" / "manifest", "w") as manifest:
             for (executable, slug, crate_path) in tests:
-                shutil.copy(executable, path / "tests" / slug)
-                spawn.runv([xstrip, path / "tests" / slug])
+                shutil.copy(executable, self.path / "tests" / slug)
+                spawn.runv([xstrip, self.path / "tests" / slug])
                 manifest.write(f"{slug} {crate_path}\n")
-        shutil.move(str(path / "testdrive"), path / "tests")
+        shutil.move(str(self.path / "testdrive"), self.path / "tests")
         shutil.copy(
-            xcargo_target_dir(root) / "debug" / "examples" / "pingpong",
-            path / "tests" / "examples",
+            self.rd.xcargo_target_dir() / "debug" / "examples" / "pingpong",
+            self.path / "tests" / "examples",
         )
-        shutil.copytree(root / "misc" / "shlib", path / "shlib")
+        shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
-    def inputs(self, root: Path, path: Path) -> List[bytes]:
+    def inputs(self) -> List[bytes]:
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
-        return super().inputs(root, path) + git_ls_files(
-            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+        return super().inputs() + git_ls_files(
+            self.rd.root,
+            *(crate.path for crate in self.rd.cargo_workspace.crates.values()),
         )
 
 
 class Image:
-    """An Docker image whose build and dependencies are managed by mzbuild.
+    """A Docker image whose build and dependencies are managed by mzbuild.
 
     An image corresponds to a directory in a repository that contains a
     `mzbuild.yml` file. This directory is called an "mzbuild context."
@@ -279,21 +316,21 @@ class Image:
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
 
-    def __init__(self, root: Path, path: Path):
-        self.root = root
+    def __init__(self, rd: RepositoryDetails, path: Path):
+        self.rd = rd
         self.path = path
         self.pre_image: Optional[PreImage] = None
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
-            self.publish = data.pop("publish", True)
+            self.publish: bool = data.pop("publish", True)
             pre_image = data.pop("pre-image", None)
             if pre_image is not None:
                 typ = pre_image.pop("type", None)
                 if typ == "cargo-build":
-                    self.pre_image = CargoBuild(pre_image)
+                    self.pre_image = CargoBuild(self.rd, self.path, pre_image)
                 elif typ == "cargo-test":
-                    self.pre_image = CargoTest(pre_image)
+                    self.pre_image = CargoTest(self.rd, self.path, pre_image)
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
@@ -311,27 +348,6 @@ class Image:
                 if match:
                     self.depends_on.append(match.group(1).decode())
 
-    def write_dockerfile(self, dep_specs: Dict[str, str]) -> IO[bytes]:
-        """Render the Dockerfile without mzbuild directives.
-
-        The arguments are the same as for `Image.acquire`.
-
-        Returns:
-            file: A handle to a temporary file containing the adjusted
-                Dockerfile."""
-        with open(self.path / "Dockerfile", "rb") as f:
-            lines = f.readlines()
-        f = TemporaryFile()
-        for line in lines:
-            match = self._DOCKERFILE_MZFROM_RE.match(line)
-            if match:
-                image = match.group(1).decode()
-                spec = dep_specs[image]
-                line = self._DOCKERFILE_MZFROM_RE.sub(b"FROM %b" % spec.encode(), line)
-            f.write(line)
-        f.seek(0)
-        return f
-
     def env_var_name(self) -> str:
         """Return the image name formatted for use in an environment variable.
 
@@ -343,51 +359,98 @@ class Image:
         """Return the name of the image on Docker Hub at the given tag."""
         return f"materialize/{self.name}:{tag}"
 
+
+class ResolvedImage:
+    """An `Image` whose dependencies have been resolved.
+
+    Attributes:
+        image: The underlying `Image`.
+        dependencies: A mapping from dependency name to `ResolvedImage` for
+            each of the images that `image` depends upon.
+        """
+
+    def __init__(self, image: Image, dependencies: Iterable["ResolvedImage"]):
+        self.image = image
+        self.dependencies = {}
+        for d in dependencies:
+            self.dependencies[d.name] = d
+
+    @property
+    def name(self) -> str:
+        """The name of the underlying image."""
+        return self.image.name
+
+    @property
+    def publish(self) -> bool:
+        """Whether the underlying image should be pushed to Docker Hub."""
+        return self.image.publish
+
     def spec(self) -> str:
         """Return the "spec" for the image.
 
         A spec is the unique identifier for the image given its current
         fingerprint. It is a valid Docker Hub name.
         """
-        return self.docker_name(f"mzbuild-{self.fingerprint()}")
+        return self.image.docker_name(f"mzbuild-{self.fingerprint()}")
 
-    def build(self, dep_specs: Dict[str, str]) -> None:
-        """Build the image from source.
+    def write_dockerfile(self) -> IO[bytes]:
+        """Render the Dockerfile without mzbuild directives.
 
-        The arguments are the same as for `Image.acquire`.
-        """
-        if self.pre_image is not None:
-            self.pre_image.run(self.root, self.path)
-        f = self.write_dockerfile(dep_specs)
+        Returns:
+            file: A handle to a temporary file containing the adjusted
+                Dockerfile."""
+        with open(self.image.path / "Dockerfile", "rb") as f:
+            lines = f.readlines()
+        f = TemporaryFile()
+        for line in lines:
+            match = Image._DOCKERFILE_MZFROM_RE.match(line)
+            if match:
+                image = match.group(1).decode()
+                spec = self.dependencies[image].spec()
+                line = Image._DOCKERFILE_MZFROM_RE.sub(b"FROM %b" % spec.encode(), line)
+            f.write(line)
+        f.seek(0)
+        return f
+
+    def build(self) -> None:
+        """Build the image from source."""
+        if self.image.pre_image is not None:
+            self.image.pre_image.run()
+        f = self.write_dockerfile()
         spawn.runv(
-            ["docker", "build", "--pull", "-f", "-", "-t", self.spec(), self.path],
+            [
+                "docker",
+                "build",
+                "--pull",
+                "-f",
+                "-",
+                "-t",
+                self.spec(),
+                self.image.path,
+            ],
             stdin=f,
         )
 
-    def acquire(self, dep_specs: Dict[str, str]) -> AcquiredFrom:
+    def acquire(self) -> AcquiredFrom:
         """Download or build the image.
-
-        Args:
-            dep_specs: A mapping from spec to fingerprint for all images upon
-                which this image depends.
 
         Returns:
             acquired_from: How the image was acquired.
         """
-        if self.publish:
+        if self.image.publish:
             try:
                 spawn.runv(["docker", "pull", self.spec()])
                 return AcquiredFrom.REGISTRY
             except subprocess.CalledProcessError:
                 pass
-        self.build(dep_specs)
+        self.build()
         return AcquiredFrom.LOCAL_BUILD
 
     def push(self) -> None:
         """Push the image to Docker Hub.
 
         The image is pushed under the Docker identifier returned by
-        `Image.spec`.
+        `ResolvedImage.spec`.
         """
         spawn.runv(["docker", "push", self.spec()])
 
@@ -399,34 +462,61 @@ class Image:
         """
         spawn.runv(["docker", "run", "-it", "--rm", "--init", self.spec(), *args])
 
-    @lru_cache(maxsize=None)
-    def fingerprint(self) -> str:
-        """Fingerprints the inputs to the image.
+    def inputs(self) -> List[bytes]:
+        """List the files tracked as inputs to the image.
 
-        Returns a base32-encoded SHA-1 hash of all of the files present in the
-        image. Changing the contents of any of the files or adding or removing
-        files to the image will change the fingerprint.
+        These files are used to compute the fingerprint for the image.
+        See `ResolvedImage.fingerprint` for details.
+
+        Returns:
+            inputs: A list of input paths, relative to the root of the
+                repository.
+        """
+        paths = set(git_ls_files(self.image.rd.root, self.image.path))
+        if self.image.pre_image is not None:
+            paths.update(self.image.pre_image.inputs())
+        return sorted(paths)
+
+    @lru_cache(maxsize=None)
+    def fingerprint(self) -> Fingerprint:
+        """Fingerprint the inputs to the image.
+
+        Compute the fingerprint of the image. Changing the contents of any of
+        the files or adding or removing files to the image will change the
+        fingerprint, as will modifying the inputs to any of its dependencies.
 
         The image considers all non-gitignored files in its mzbuild context to
         be inputs. If it has a pre-image action, that action may add additional
         inputs via `PreImage.inputs`.
         """
-        paths = git_ls_files(self.root, self.path)
-        if self.pre_image is not None:
-            paths += self.pre_image.inputs(self.root, self.path)
-        paths.sort()
-        fingerprint = hashlib.sha1()
-        for rel_path in paths:
-            abs_path = self.root / rel_path.decode()
+        self_hash = hashlib.sha1()
+        for rel_path in self.inputs():
+            abs_path = self.image.rd.root / rel_path.decode()
             file_hash = hashlib.sha1()
-            file_mode = stat.S_IMODE(os.lstat(abs_path).st_mode)
+            raw_file_mode = os.lstat(abs_path).st_mode
+            # Compute a simplified file mode using the same rules as Git.
+            # https://github.com/git/git/blob/3bab5d562/Documentation/git-fast-import.txt#L610-L616
+            if stat.S_ISLNK(raw_file_mode):
+                file_mode = 0o120000
+            elif raw_file_mode & stat.S_IXUSR:
+                file_mode = 0o100755
+            else:
+                file_mode = 0o100644
             with open(abs_path, "rb") as f:
                 file_hash.update(f.read())
-            fingerprint.update(file_mode.to_bytes(2, byteorder="big"))
-            fingerprint.update(rel_path)
-            fingerprint.update(file_hash.digest())
-            fingerprint.update(b"\0")
-        return base64.b32encode(fingerprint.digest()).decode()
+            self_hash.update(file_mode.to_bytes(2, byteorder="big"))
+            self_hash.update(rel_path)
+            self_hash.update(file_hash.digest())
+            self_hash.update(b"\0")
+
+        full_hash = hashlib.sha1()
+        full_hash.update(self_hash.digest())
+        for dep in sorted(self.dependencies.values(), key=lambda d: d.name):
+            full_hash.update(dep.name.encode())
+            full_hash.update(dep.fingerprint())
+            full_hash.update(b"\0")
+
+        return Fingerprint(full_hash.digest())
 
 
 class DependencySet:
@@ -444,7 +534,11 @@ class DependencySet:
     """
 
     def __init__(self, dependencies: Iterable[Image]):
-        self.dependencies = list(dependencies)
+        self.dependencies: OrderedDict[str, ResolvedImage] = OrderedDict()
+        for d in dependencies:
+            self.dependencies[d.name] = ResolvedImage(
+                d, (self.dependencies[d0] for d0 in d.depends_on)
+            )
 
     def acquire(self, force_build: bool = False, push: bool = False) -> None:
         """Download or build all of the images in the dependency set.
@@ -461,21 +555,20 @@ class DependencySet:
         specs = {d.name: d.spec() for d in self}
         for d in self:
             spec = d.spec()
-            dep_specs = {d: specs[d] for d in d.depends_on}
             if spec not in known_images:
                 if force_build:
                     print(f"==> Force-building {spec}")
-                    d.build(dep_specs)
+                    d.build()
                 else:
                     print(f"==> Acquiring {spec}")
-                    acquired_from = d.acquire(dep_specs)
+                    acquired_from = d.acquire()
                     if push and d.publish and acquired_from == AcquiredFrom.LOCAL_BUILD:
                         d.push()
 
-    def __iter__(self) -> Iterator[Image]:
-        return iter(self.dependencies)
+    def __iter__(self) -> Iterator[ResolvedImage]:
+        return iter(self.dependencies.values())
 
-    def __getitem__(self, key: int) -> Image:
+    def __getitem__(self, key: str) -> ResolvedImage:
         return self.dependencies[key]
 
 
@@ -497,7 +590,7 @@ class Repository:
     """
 
     def __init__(self, root: Path):
-        self.root = root
+        self.rd = RepositoryDetails(root)
         self.images: Dict[str, Image] = {}
         self.compose_dirs = set()
         for (path, dirs, files) in os.walk(self.root, topdown=True):
@@ -505,7 +598,7 @@ class Repository:
             # things snappy. Not required for correctness.
             dirs[:] = set(dirs) - {".git", "target", "mzdata", "node_modules"}
             if "mzbuild.yml" in files:
-                image = Image(self.root, Path(path))
+                image = Image(self.rd, Path(path))
                 if not image.name:
                     raise ValueError(f"config at {path} missing name")
                 if image.name in self.images:
@@ -521,6 +614,11 @@ class Repository:
                     raise ValueError(
                         f"image {image.name} depends on non-existent image {d}"
                     )
+
+    @property
+    def root(self) -> Path:
+        """The path to the root directory for the repository."""
+        return self.rd.root
 
     def resolve_dependencies(self, targets: Iterable[Image]) -> DependencySet:
         """Compute the dependency set necessary to build target images.

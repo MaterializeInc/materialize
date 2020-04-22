@@ -7,7 +7,6 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.28"
 bytes = "0.5.4"
 chrono = "0.4.11"
 csv = "1.1.3"
@@ -27,7 +26,6 @@ structopt = "0.3.13"
 thiserror = "1.0.15"
 tokio = { version = "0.2.18", features = ["full"] }
 tokio-postgres = "0.5.2"
-url = "2.1.1"
 uuid = { version = "0.8", features = ["v4"] }
 
 [build-dependencies]

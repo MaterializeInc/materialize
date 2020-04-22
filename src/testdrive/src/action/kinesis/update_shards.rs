@@ -57,7 +57,7 @@ impl Action for UpdateShardCountAction {
             .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
 
         // Verify the current shard count.
-        retry::retry_max_backoff(Duration::from_secs(30), || async {
+        retry::retry_for(Duration::from_secs(60), |_| async {
             // Wait for shards to stop updating.
             let description = state
                 .kinesis_client

@@ -53,7 +53,7 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
-    cp misc/python/requirements{,-dev}.txt ci/builder
+    cp misc/python/requirements{,-dev,-ci}.txt ci/builder
     docker build --pull \
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
@@ -77,21 +77,30 @@ case "$cmd" in
             --rm --interactive --tty
             --volume "$(pwd):$(pwd)"
             --workdir "$(pwd)"
-            --env CI
+            --env AWS_ACCESS_KEY_ID
+            --env AWS_SECRET_ACCESS_KEY
+            --env BINTRAY_API_KEY
             --env BUILDKITE
+            --env BUILDKITE_BRANCH
             --env BUILDKITE_BUILD_NUMBER
+            --env BUILDKITE_TAG
+            --env CI
         )
         if [[ "$(uname -s)" = Linux ]]; then
             args+=(
-                --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
                 --volume "/var/run/docker.sock:/var/run/docker.sock"
                 --volume "$HOME/.cargo:/cargo"
                 --volume "$HOME/.docker/config.json:/docker/config.json"
-                --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
                 --env "CARGO_HOME=/cargo"
                 --env "DOCKER_CONFIG=/docker"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
             )
+            if [[ "${SSH_AUTH_SOCK:-}" ]]; then
+                args+=(
+                    --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
+                    --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
+                )
+            fi
         else
             args+=(--user "$(id -u):1001")
         fi

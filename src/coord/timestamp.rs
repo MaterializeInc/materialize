@@ -177,6 +177,7 @@ enum ByoTimestampConnector {
 struct RtKafkaConnector {
     consumer: BaseConsumer,
     topic: String,
+    //start_offset: u64,
 }
 
 /// Data consumer for Kafka source with BYO consistency
@@ -574,7 +575,15 @@ impl Timestamper {
                         match cons {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency", id);
-                                let last_offset = self.rt_recover_source(id);
+                                let start_offset = match sc {
+                                    ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                                        start_offset,
+                                        ..
+                                    }) => start_offset,
+                                    _ => 0,
+                                };
+                                let last_offset =
+                                    std::cmp::max(start_offset, self.rt_recover_source(id));
                                 let consumer = self.create_rt_connector(id, sc, last_offset);
                                 self.rt_sources.insert(id, consumer);
                             }
@@ -994,8 +1003,7 @@ impl Timestamper {
                             kc.consumer
                                 .fetch_watermarks(&kc.topic, p, Duration::from_secs(1));
                         match watermark {
-                            Ok(watermark) => {
-                                let high = watermark.1;
+                            Ok((_low, high)) => {
                                 let next_offset = determine_next_offset(
                                     cons.last_offset,
                                     high,
@@ -1079,9 +1087,12 @@ impl Timestamper {
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
-    /// This may require multiple calls to the underlying now() system method, which is not443Gk
+    /// This may require multiple calls to the underlying now() system method, which is not
     /// guaranteed to increase monotonically
     fn rt_generate_next_timestamp(&mut self) {
+        // TODO[reliability] (brennan) - If someone does something silly like sets their
+        // system clock backward by an hour while mz is running,
+        // we will hang here for an hour.
         let mut new_ts = 0;
         while new_ts <= self.current_timestamp {
             let start = SystemTime::now();

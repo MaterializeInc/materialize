@@ -20,6 +20,7 @@ pub struct AvroDecoderState {
     decoder: Decoder,
     events_success: i64,
     events_error: i64,
+    reject_non_inserts: bool,
 }
 
 impl AvroDecoderState {
@@ -27,11 +28,13 @@ impl AvroDecoderState {
         reader_schema: &str,
         schema_registry_url: Option<url::Url>,
         envelope: EnvelopeType,
+        reject_non_inserts: bool,
     ) -> Self {
         AvroDecoderState {
             decoder: Decoder::new(reader_schema, schema_registry_url, envelope),
             events_success: 0,
             events_error: 0,
+            reject_non_inserts,
         }
     }
 }
@@ -94,13 +97,16 @@ impl DecoderState for AvroDecoderState {
         match self.decoder.decode(bytes) {
             Ok(diff_pair) => {
                 self.events_success += 1;
-                if let Some(before) = diff_pair.before {
+                if diff_pair.before.is_some() {
+                    if self.reject_non_inserts {
+                        panic!("Updates and deletes are not allowed for this source! This probably means it was started with `start_offset`. Got diff pair: {:#?}", diff_pair)
+                    }
                     // Note - this is indeed supposed to be an insert,
                     // not a retraction! `before` already contains a `-1` value as the last
                     // element of the data, which will cause it to turn into a retraction
                     // in a future call to `explode`
                     // (currently in dataflow/render/mod.rs:299)
-                    session.give((before, time, 1));
+                    session.give((diff_pair.before.unwrap(), time, 1));
                 }
                 if let Some(after) = diff_pair.after {
                     session.give((after, time, 1));

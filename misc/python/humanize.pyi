@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize import mzbuild
-from pathlib import Path
-import os
-
-
-def main() -> None:
-    repo = mzbuild.Repository(Path("."))
-    deps = repo.resolve_dependencies(image for image in repo if image.publish)
-    deps.acquire(push=True)
-
-
-if __name__ == "__main__":
-    main()
+def naturalsize(size: int) -> str: ...

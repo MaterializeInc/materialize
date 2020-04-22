@@ -111,8 +111,10 @@ use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
+use timely::dataflow::operators::aggregation::Aggregate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
+use timely::dataflow::Stream;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::Timestamp;
@@ -126,7 +128,7 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::SourceToken;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::decode::{decode_avro_values, decode_key_values, decode_values};
+use crate::decode::{decode_avro_values, decode_upsert, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::CollectionExt;
 use crate::server::LocalInput;
@@ -217,7 +219,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 unreachable!()
             };
             // Load declared sources into the rendering context.
-            for (source_number, (src_id, src)) in
+            for (source_number, (src_id, mut src)) in
                 dataflow.source_imports.clone().into_iter().enumerate()
             {
                 if let SourceConnector::External {
@@ -239,7 +241,15 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     // error stream. Likely we will want to plumb this
                     // collection into the source connector so that sources
                     // can produce errors.
-                    let err_collection = Collection::empty(region);
+                    let mut err_collection = Collection::empty(region);
+
+                    let fast_forwarded = match connector {
+                        ExternalSourceConnector::Kafka(KafkaSourceConnector {
+                            start_offset,
+                            ..
+                        }) => start_offset > 0,
+                        _ => false,
+                    };
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
@@ -259,7 +269,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     read_from_kafka,
                                 );
                                 let arranged = arrange_from_upsert(
-                                    &decode_key_values(&source, encoding, key_encoding),
+                                    &decode_upsert(
+                                        &prepare_upsert_by_max_offset(&source),
+                                        encoding,
+                                        key_encoding,
+                                    ),
                                     &format!("UpsertArrange: {}", src_id.to_string()),
                                 );
                                 let keys = src.desc.typ().keys[0]
@@ -332,7 +346,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         read_from_kafka,
                                     );
                                     (
-                                        source.map(|((_key, payload), aux_num)| (payload, aux_num)),
+                                        source.map(|(_key, (payload, aux_num))| (payload, aux_num)),
                                         capability,
                                     )
                                 }
@@ -382,13 +396,19 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream =
-                                decode_values(&source, encoding, &dataflow.debug_name, &envelope);
+                            let stream = decode_values(
+                                &source,
+                                encoding,
+                                &dataflow.debug_name,
+                                &envelope,
+                                &mut src.operators,
+                                fast_forwarded,
+                            );
 
                             (stream, capability)
                         };
 
-                        let collection = match envelope {
+                        let mut collection = match envelope {
                             Envelope::None => stream.as_collection(),
                             Envelope::Debezium => {
                                 // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
@@ -400,6 +420,66 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             }
                             Envelope::Upsert(_) => unreachable!(),
                         };
+
+                        // Implement source filtering and projection.
+                        // At the moment this is strictly optional, but we perform it anyhow
+                        // to demonstrate the intended use.
+                        if let Some(operators) = src.operators.clone() {
+                            // Determine replacement values for unused columns.
+                            let source_type = src.desc.typ();
+                            let position_or = (0..source_type.arity())
+                                .map(|col| {
+                                    if operators.projection.contains(&col) {
+                                        Ok(col)
+                                    } else {
+                                        Err({
+                                            // TODO(frank): This could be `Datum::Null` if we
+                                            // are certain that no readers will consult it and
+                                            // believe it to be a non-null value. That is the
+                                            // intent, but it is not yet clear that we ensure
+                                            // this.
+                                            let typ = &source_type.column_types[col];
+                                            if typ.nullable {
+                                                Datum::Null
+                                            } else {
+                                                typ.scalar_type.dummy_datum()
+                                            }
+                                        })
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            // Evaluate the predicate on each record, noting potential errors that might result.
+                            let (collection2, errors) =
+                                collection.flat_map_fallible(move |input_row| {
+                                    let temp_storage = RowArena::new();
+                                    let datums = input_row.unpack();
+                                    let pred_eval = operators
+                                        .predicates
+                                        .iter()
+                                        .map(|predicate| predicate.eval(&datums, &temp_storage))
+                                        .find(|result| result != &Ok(Datum::True));
+                                    match pred_eval {
+                                        None => {
+                                            Some(Ok(Row::pack(position_or.iter().map(|pos_or| {
+                                                match pos_or {
+                                                    Result::Ok(index) => datums[*index],
+                                                    Result::Err(datum) => *datum,
+                                                }
+                                            }))))
+                                        }
+                                        Some(Ok(Datum::False)) => None,
+                                        Some(Ok(Datum::Null)) => None,
+                                        Some(Ok(x)) => {
+                                            panic!("Predicate evaluated to invalid value: {:?}", x)
+                                        }
+                                        Some(Err(x)) => Some(Err(x)),
+                                    }
+                                });
+
+                            collection = collection2;
+                            err_collection = err_collection.concat(&errors);
+                        }
 
                         // Introduce the stream by name, as an unarranged collection.
                         context.collections.insert(
@@ -585,6 +665,42 @@ pub(crate) fn build_dataflow<A: Allocate>(
             }
         });
     })
+}
+
+/// `arrange_from_upsert` may not behave as intended if multiple rows
+/// with the same key and timestamp are sent because it cannot determine
+/// which row was the last update. Resolve this confusion for
+/// `arrange_from_upsert` by deleting all rows except the one with the
+/// highest offset if multiple rows with the same key will have the
+/// same timestamp.
+fn prepare_upsert_by_max_offset<G>(
+    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
+) -> Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    use differential_dataflow::hashable::Hashable;
+    // This approach works as long as there is a 1:1 correspondence between
+    // Timely capabilities and Differential timestamps.
+    // Change the code if the assumption no longer holds.
+    stream.aggregate::<_, (Vec<u8>, Option<i64>), _, _, _>(
+        |_key, val, agg| {
+            // All offsets are assumed to be Some(...).
+            // Offsets are always Some(...) for Kafka and file sources.
+            // Kinesis offsets are already None.
+            if let Some(new_offset) = val.1 {
+                if let Some(offset) = agg.1 {
+                    if offset < new_offset {
+                        *agg = val;
+                    }
+                } else {
+                    *agg = val;
+                }
+            }
+        },
+        |key, agg| (key, agg),
+        |key| key.hashed(),
+    )
 }
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>

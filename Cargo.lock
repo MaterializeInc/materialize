@@ -42,12 +42,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9a60d744a80c30fcb657dfe2c1b22bcb3e814c1a1e3674f32bf5820b570fbff"
-
-[[package]]
 name = "arbitrary"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,7 +115,6 @@ dependencies = [
  "crc",
  "digest",
  "failure",
- "futures",
  "itertools 0.9.0",
  "lazy_static",
  "libflate",
@@ -132,7 +125,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "snap",
- "tokio",
 ]
 
 [[package]]
@@ -183,7 +175,6 @@ checksum = "7d5ca2cd0adc3f48f9e9ea5a6bbdf9ccc0bfade884847e484d452414c7ccffb3"
 name = "billing-demo"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bytes",
  "chrono",
  "csv",
@@ -204,7 +195,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
- "url",
  "uuid",
 ]
 
@@ -324,7 +314,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sql-parser",
 ]
 
 [[package]]
@@ -933,7 +922,6 @@ dependencies = [
  "serde",
  "serde_json",
  "unicase",
- "uuid",
 ]
 
 [[package]]
@@ -978,9 +966,9 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "filetime"
-version = "0.2.8"
+version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ff6d4dab0aa0c8e6346d46052e93b13a16cf847b54ed357087c35011048cc7d"
+checksum = "f59efc38004c988e4201d11d263b8171f49a2e7ec0bdbb71773433f271504a5e"
 dependencies = [
  "cfg-if",
  "libc",
@@ -2005,7 +1993,6 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "crossbeam-utils",
- "failure",
  "fallible-iterator",
  "futures",
  "lazy_static",
@@ -2100,7 +2087,6 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "expr",
  "failure",
  "postgres-types",
  "repr",

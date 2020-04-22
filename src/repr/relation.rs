@@ -108,6 +108,11 @@ impl RelationType {
         }
         self
     }
+
+    /// The number of columns in the relation type.
+    pub fn arity(&self) -> usize {
+        self.column_types.len()
+    }
 }
 
 /// The name of a column in a [`RelationDesc`].

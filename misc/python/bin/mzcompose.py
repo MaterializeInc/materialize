@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -55,7 +53,6 @@ def main(argv: List[str]) -> int:
         for config in compose["services"].values():
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
-                del config["mzbuild"]
 
                 if image_name not in repo.images:
                     print(
@@ -73,8 +70,8 @@ def main(argv: List[str]) -> int:
                         f"mzcompose: warning: overriding {image_name} image to tag {override_tag}",
                         file=sys.stderr,
                     )
+                    del config["mzbuild"]
                 else:
-                    config["image"] = image.spec()
                     images.append(image)
 
             if "propagate-uid-gid" in config:
@@ -84,6 +81,11 @@ def main(argv: List[str]) -> int:
     deps = repo.resolve_dependencies(images)
     for d in deps:
         say(d.spec())
+
+    for config in compose["services"].values():
+        if "mzbuild" in config:
+            config["image"] = deps[config["mzbuild"]].spec()
+            del config["mzbuild"]
 
     # Check if the command is going to create or start containers, and if so
     # build the dependencies. This can be slow, so we don't want to do it if we
