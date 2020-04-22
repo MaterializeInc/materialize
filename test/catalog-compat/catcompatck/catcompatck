@@ -53,7 +53,7 @@ say "launching materialized-golden"
 launch_materialized golden
 
 say "building golden catalog"
-testdrive --kafka-addr kafka:9092 <<'EOF'
+testdrive --kafka-url plaintext://kafka:9092 <<'EOF'
 $ set schema={
     "type": "record",
     "name": "envelope",
