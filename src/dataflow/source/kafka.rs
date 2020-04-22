@@ -18,7 +18,7 @@ use crate::server::TimestampHistories;
 use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
 use log::{error, info, warn};
-use prometheus::{register_int_counter, IntCounter};
+use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
@@ -35,6 +35,12 @@ lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
         "mz_kafka_bytes_read_total",
         "Count of kafka bytes we have read from the wire"
+    )
+    .unwrap();
+    static ref KAFKA_PARTITION_OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_ingested",
+        "The most recent kafka offset that we have ingested into a dataflow",
+        &["topic", "source_id", "partition_id"]
     )
     .unwrap();
 }
@@ -223,7 +229,12 @@ where
                         };
 
                     if offset <= last_processed_offset {
-                        warn!("Kafka message before expected offset: source {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
+                        warn!(
+                            "Kafka message before expected offset: \
+                             source {} (reading topic {}, partition {}) \
+                             received offset {} max processed offset {}",
+                            name, topic, partition, offset, last_processed_offset
+                        );
                         let res = consumer.seek(
                             &topic,
                             partition,
@@ -444,6 +455,13 @@ fn downgrade_capability(
                     next_partition_ts.insert(pid.clone(), *ts);
                     entries.remove(0);
                     changed = true;
+                    KAFKA_PARTITION_OFFSET_INGESTED
+                        .with_label_values(&[
+                            &topic,
+                            &id.to_string(),
+                            &pid.kafka_id().unwrap().to_string(),
+                        ])
+                        .set(last_offset);
                 } else {
                     // Offset isn't at a timestamp boundary, we take no action
                     break;

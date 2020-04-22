@@ -21,7 +21,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use avro::schema::Schema;
 use avro::types::Value;
 use lazy_static::lazy_static;
-use log::{error, info};
+use log::{error, info, warn};
+use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
@@ -43,6 +44,9 @@ use crate::coord;
 
 use futures::executor::block_on;
 use itertools::Itertools;
+
+/// Number of seconds that must elapse before we update watermarks again
+const WATERMARK_UPDATE_INTERVAL: u64 = 1;
 
 lazy_static! {
 
@@ -143,6 +147,14 @@ lazy_static! {
         )
         .unwrap()
     };
+
+    /// The high watermark for a partition, the maximum offset that we could hope to ingest
+    static ref KAFKA_PARTITION_OFFSET_MAX: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_max",
+        "The high watermark for a partition, the maximum offset that we could hope to ingest",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
 }
 
 pub struct TimestampConfig {
@@ -191,8 +203,9 @@ struct ByoTimestampConsumer {
     connector: ByoTimestampConnector,
     /// The name of the source with which this connector is associated
     ///
-    /// For kafka this is the topic.
-    /// other sources don't work with BYO consistency yet.
+    /// * For kafka this is the topic
+    /// * For kinesis this is the stream name
+    /// * For file types this is the file name
     source_name: String,
     /// The SourceId that this consumer is associated with
     source_id: SourceInstanceId,
@@ -278,9 +291,46 @@ struct RtKafkaConnector {
     //start_offset: u64,
 }
 
+use std::time::Instant;
+
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
     consumer: BaseConsumer,
+    /// Used to track if we should update watermark metrics
+    last_watermark_update: Instant,
+}
+
+impl ByoKafkaConnector {
+    fn new(consumer: BaseConsumer) -> ByoKafkaConnector {
+        ByoKafkaConnector {
+            consumer,
+            last_watermark_update: Instant::now(),
+        }
+    }
+
+    /// Update watermark metadata if appropriate
+    ///
+    /// "Appropriate" meants that it has been more than [`WATERMARK_UPDATE_INTERVAL`]
+    /// since the last update.
+    fn update_watermark_metrics(&mut self, topic: &str, source_id: &SourceInstanceId) {
+        if self.last_watermark_update.elapsed().as_secs() >= WATERMARK_UPDATE_INTERVAL {
+            for p in get_kafka_partitions(&self.consumer, topic) {
+                match self
+                    .consumer
+                    .fetch_watermarks(&topic, p, Duration::from_secs(1))
+                {
+                    Ok((_low, high)) => KAFKA_PARTITION_OFFSET_MAX
+                        .with_label_values(&[&source_id.to_string(), &topic, &p.to_string()])
+                        .set(high),
+                    Err(e) => warn!(
+                        "error loading watermarks topic={} partition={} error={}",
+                        topic, p, e
+                    ),
+                }
+            }
+            self.last_watermark_update = Instant::now();
+        }
+    }
 }
 
 /// Data consumer for Kinesis source with RT consistency
@@ -310,8 +360,10 @@ fn byo_query_source(
     let mut messages = vec![];
     let mut msg_count = 0;
     match &mut consumer.connector {
-        ByoTimestampConnector::Kafka(kafka_consumer) => {
-            while let Some(payload) = kafka_get_next_message(&mut kafka_consumer.consumer) {
+        ByoTimestampConnector::Kafka(kafka_connector) => {
+            let topic = &consumer.source_name;
+            kafka_connector.update_watermark_metrics(topic, &consumer.source_id);
+            while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer) {
                 messages.push(ValueEncoding::Bytes(payload));
                 msg_count += 1;
                 if msg_count == max_increment_size {
@@ -748,6 +800,8 @@ impl Timestamper {
         // First check if there are some new source that we should
         // start checking
         while let Ok(update) = self.rx.try_recv() {
+            // TODO: Add metric creation in here so we don't create label strings every
+            // time we update
             match update {
                 TimestampMessage::Add(id, sc) => {
                     let (sc, enc, env, cons) = if let SourceConnector::External {
@@ -1253,6 +1307,7 @@ impl Timestamper {
                 match self.create_byo_kafka_connector(id, &kc, timestamp_topic) {
                     Some(connector) => Some(ByoTimestampConsumer {
                         source_name: topic,
+                        source_id: id,
                         connector: ByoTimestampConnector::Kafka(connector),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1267,6 +1322,7 @@ impl Timestamper {
                 match self.create_byo_file_connector(id, &fc, timestamp_topic) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
+                        source_id: id,
                         connector: ByoTimestampConnector::File(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1281,6 +1337,7 @@ impl Timestamper {
                 match self.create_byo_ocf_connector(id, &fc, timestamp_topic) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
+                        source_id: id,
                         connector: ByoTimestampConnector::Ocf(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1295,6 +1352,7 @@ impl Timestamper {
                 match self.create_byo_kinesis_connector(id, &kinc, timestamp_topic) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: kinc.stream_name,
+                        source_id: id,
                         connector: ByoTimestampConnector::Kinesis(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1343,7 +1401,7 @@ impl Timestamper {
 
         match config.create() {
             Ok(consumer) => {
-                let consumer = ByoKafkaConnector { consumer };
+                let consumer = ByoKafkaConnector::new(consumer);
                 consumer.consumer.subscribe(&[&timestamp_topic]).unwrap();
 
                 let partitions = get_kafka_partitions(&consumer.consumer, &timestamp_topic);
@@ -1438,7 +1496,14 @@ impl Timestamper {
                                     partition_count,
                                     PartitionId::Kafka(p),
                                     next_offset,
-                                ))
+                                ));
+                                KAFKA_PARTITION_OFFSET_MAX
+                                    .with_label_values(&[
+                                        &kc.topic,
+                                        &id.to_string(),
+                                        &p.to_string(),
+                                    ])
+                                    .set(high);
                             }
                             Err(e) => {
                                 error!(
