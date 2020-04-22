@@ -1179,6 +1179,10 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(_) => bail!(start_offset_err),
                     };
 
+                    if start_offset != 0 && consistency != Consistency::RealTime {
+                        bail!("`start_offset` is not yet implemented for BYO consistency sources.")
+                    }
+
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
                         topic: topic.clone(),
