@@ -49,7 +49,9 @@ impl ProjectionExtraction {
                 scalars.retain(|scalar| {
                     if let ScalarExpr::Column(col) = scalar {
                         dropped += 1;
-                        outputs.push(*col);
+                        // We may need to chase down a few levels of indirection;
+                        // find the original input column in `outputs[*col]`.
+                        outputs.push(outputs[*col]);
                         false // don't retain
                     } else {
                         outputs.push(outputs.len() - dropped);
