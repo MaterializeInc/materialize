@@ -50,6 +50,8 @@ def main(argv: List[str]) -> int:
     images = []
     with open(config_file) as f:
         compose = yaml.safe_load(f)
+        # strip mzconduct top-level key, if it exists
+        compose.pop("mzconduct", None)
         for config in compose["services"].values():
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
