@@ -49,6 +49,18 @@ import sys
 import yaml
 
 
+class Fingerprint(bytes):
+    """A SHA-1 hash of the inputs to an `Image`.
+
+    The string representation uses base32 encoding to distinguish mzbuild
+    fingerprints from Git's hex encoded SHA-1 hashes while still being
+    URL safe.
+    """
+
+    def __str__(self) -> str:
+        return base64.b32encode(self).decode()
+
+
 class AcquiredFrom(enum.Enum):
     """Where an `Image` was acquired from."""
 
@@ -426,12 +438,12 @@ class ResolvedImage:
         spawn.runv(["docker", "run", "-it", "--rm", "--init", self.spec(), *args])
 
     @lru_cache(maxsize=None)
-    def fingerprint(self) -> str:
-        """Fingerprints the inputs to the image.
+    def fingerprint(self) -> Fingerprint:
+        """Fingerprint the inputs to the image.
 
-        Returns a base32-encoded SHA-1 hash of all of the files present in the
-        image. Changing the contents of any of the files or adding or removing
-        files to the image will change the fingerprint.
+        Compute the fingerprint of the image. Changing the contents of any of
+        the files or adding or removing files to the image will change the
+        fingerprint, as will modifying the inputs to any of its dependencies.
 
         The image considers all non-gitignored files in its mzbuild context to
         be inputs. If it has a pre-image action, that action may add additional
@@ -441,7 +453,7 @@ class ResolvedImage:
         if self.image.pre_image is not None:
             paths += self.image.pre_image.inputs(self.image.root, self.image.path)
         paths.sort()
-        fingerprint = hashlib.sha1()
+        self_hash = hashlib.sha1()
         for rel_path in paths:
             abs_path = self.image.root / rel_path.decode()
             file_hash = hashlib.sha1()
@@ -456,11 +468,19 @@ class ResolvedImage:
                 file_mode = 0o100644
             with open(abs_path, "rb") as f:
                 file_hash.update(f.read())
-            fingerprint.update(file_mode.to_bytes(2, byteorder="big"))
-            fingerprint.update(rel_path)
-            fingerprint.update(file_hash.digest())
-            fingerprint.update(b"\0")
-        return base64.b32encode(fingerprint.digest()).decode()
+            self_hash.update(file_mode.to_bytes(2, byteorder="big"))
+            self_hash.update(rel_path)
+            self_hash.update(file_hash.digest())
+            self_hash.update(b"\0")
+
+        full_hash = hashlib.sha1()
+        full_hash.update(self_hash.digest())
+        for dep in sorted(self.dependencies.values(), key=lambda d: d.name):
+            full_hash.update(dep.name.encode())
+            full_hash.update(dep.fingerprint())
+            full_hash.update(b"\0")
+
+        return Fingerprint(full_hash.digest())
 
 
 class DependencySet:
