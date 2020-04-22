@@ -62,10 +62,15 @@ def main() -> int:
         help="fingerprint an image",
     )
 
-    add_image_subcommand(
+    describe_parser = add_image_subcommand(
         "describe",
         description="Print information about an image.",
         help="show image details",
+    )
+    describe_parser.add_argument(
+        "--transitive",
+        action="store_true",
+        help="compute transitive inputs and dependencies",
     )
 
     args = parser.parse_args()
@@ -100,12 +105,13 @@ def main() -> int:
             print(f"Image: {rimage.name}")
             print(f"Fingerprint: {rimage.fingerprint()}")
             print("Inputs:")
-            for inp in rimage.inputs():
+            for inp in sorted(rimage.inputs(args.transitive)):
                 print(f"    {inp.decode()}")
             print("Dependencies:")
-            for d in rimage.dependencies:
+            dependencies = sorted(rimage.list_dependencies(args.transitive))
+            for d in dependencies:
                 print(f"    {d}")
-            if not rimage.dependencies:
+            if not dependencies:
                 print("    (none)")
         else:
             raise RuntimeError("unreachable")
