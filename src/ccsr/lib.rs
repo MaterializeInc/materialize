@@ -17,7 +17,7 @@ use std::fmt;
 use futures::executor::block_on;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// A synchronous API client for a Confluent-compatible schema registry.
@@ -33,15 +33,137 @@ pub struct AsyncClient {
     url: Url,
 }
 
-impl AsyncClient {
-    /// Creates a new API client that will send requests to the schema registry
-    /// at the provided URL.
-    pub fn new(url: Url) -> Self {
-        let inner = reqwest::Client::builder()
+// Encodes the type of certificate file, as well as the certificate's bytes. In
+// the case of der certificates, it also stores the password.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum CertDetails {
+    PEM(Vec<u8>),
+    DER(Vec<u8>, String),
+}
+
+/// Provides a serde wrapper around
+/// [`reqwest::Identity`](https://docs.rs/reqwest/latest/reqwest/struct.Identity.html).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Identity {
+    cert: CertDetails,
+}
+
+impl Identity {
+    /// Wraps
+    /// [`reqwest::Identity::from_pem`](https://docs.rs/reqwest/latest/reqwest/struct.Identity.html#method.from_pem).
+    pub fn from_pem(pem: &[u8]) -> Result<Self, reqwest::Error> {
+        let _ = reqwest::Identity::from_pem(&pem)?;
+        Ok(Identity {
+            cert: CertDetails::PEM(pem.into()),
+        })
+    }
+
+    /// Wraps
+    /// [`reqwest::Identity::from_pem`](https://docs.rs/reqwest/latest/reqwest/struct.Identity.html#method.from_pkcs12_der).
+    pub fn from_pkcs12_der(der: &[u8], password: &str) -> Result<Self, reqwest::Error> {
+        let _ = reqwest::Identity::from_pkcs12_der(&der, password)?;
+        Ok(Identity {
+            cert: CertDetails::DER(der.into(), password.to_string()),
+        })
+    }
+}
+
+impl Into<reqwest::Identity> for Identity {
+    fn into(self) -> reqwest::Identity {
+        match self.cert {
+            CertDetails::PEM(pem) => {
+                reqwest::Identity::from_pem(&pem).expect("known to be a valid identity")
+            }
+            CertDetails::DER(der, pass) => reqwest::Identity::from_pkcs12_der(&der, &pass)
+                .expect("known to be a valid identity"),
+        }
+    }
+}
+
+/// Provides a serde wrapper around
+/// [`reqwest::Certificate`](https://docs.rs/reqwest/latest/reqwest/struct.Certificate.html).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Certificate {
+    der: Vec<u8>,
+}
+impl Certificate {
+    pub fn from_pem(pem: &[u8]) -> native_tls::Result<Certificate> {
+        Ok(Certificate {
+            der: native_tls::Certificate::from_pem(pem)?.to_der()?,
+        })
+    }
+    pub fn from_der(der: &[u8]) -> native_tls::Result<Certificate> {
+        let _ = native_tls::Certificate::from_der(der)?;
+        Ok(Certificate { der: der.into() })
+    }
+}
+impl Into<reqwest::Certificate> for Certificate {
+    fn into(self) -> reqwest::Certificate {
+        reqwest::Certificate::from_der(&self.der).expect("known to be a valid cert")
+    }
+}
+
+/// Represents the Confluent Schema Registry you want to connect to, including
+/// potential TLS configuration.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ClientConfig {
+    pub url: Url,
+    pub root_certs: Vec<Certificate>,
+    pub identity: Option<Identity>,
+}
+
+impl ClientConfig {
+    pub fn new(url: Url) -> ClientConfig {
+        ClientConfig {
+            url,
+            root_certs: Vec::new(),
+            identity: None,
+        }
+    }
+    pub fn add_root_certificate(mut self, cert: Certificate) -> ClientConfig {
+        self.root_certs.push(cert);
+        self
+    }
+    pub fn identity(mut self, identity: Identity) -> ClientConfig {
+        self.identity = Some(identity);
+        self
+    }
+    pub fn build(&self) -> AsyncClient {
+        let mut builder = reqwest::Client::builder();
+
+        for root_cert in &self.root_certs {
+            builder = builder.add_root_certificate(root_cert.clone().into());
+        }
+
+        if let Some(ident) = &self.identity {
+            match ident.cert {
+                CertDetails::PEM(_) => {
+                    builder = builder.use_rustls_tls();
+                }
+                CertDetails::DER(_, _) => {
+                    builder = builder.use_native_tls();
+                }
+            }
+            builder = builder.identity(ident.clone().into());
+        }
+
+        let inner = builder
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
-        Self { inner, url }
+
+        AsyncClient {
+            inner,
+            url: self.url.clone(),
+        }
+    }
+}
+
+impl AsyncClient {
+    /// Creates a new API client that will send requests to the CSR at `config.url`.
+    pub fn new(config: &ClientConfig) -> Self {
+        config.build()
     }
 
     /// Gets the schema with the associated ID.
@@ -102,10 +224,10 @@ impl AsyncClient {
 }
 
 impl Client {
-    /// Creates a new API client that will send requests to the schema registry
-    /// at the provided URL.
-    pub fn new(url: Url) -> Client {
-        let inner = AsyncClient::new(url);
+    /// Creates a new API client that will send requests to the supplied
+    /// `ccsr::ClientConfig`.
+    pub fn new(config: &ClientConfig) -> Client {
+        let inner = AsyncClient::new(config);
         Client { inner }
     }
 
