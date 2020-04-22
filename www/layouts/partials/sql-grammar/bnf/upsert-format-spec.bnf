@@ -1,0 +1,2 @@
+format_spec ::= ('BYTES' | 'TEXT' | ('AVRO' 'USING' ('CONFLUENT SCHEMA REGISTRY' url |
+    'SCHEMA' ('FILE' schema_file_path | inline_schema))))

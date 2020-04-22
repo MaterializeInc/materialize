@@ -20,7 +20,7 @@ Materialize can connect to many different external sources of data, each with
 their own requirements. For details about creating sources, view the
 documentation for the type of data you are trying to load into Materialize:
 
-- [Avro over Kafka](./avro-source)
+- [Avro, raw bytes, or raw text over Kafka](./avro-source)
 - [Protobuf over Kafka](./protobuf-source)
 - [JSON over Kinesis](./kinesis-source)
 - [Local CSV files](./csv-source)
