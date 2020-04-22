@@ -2,3 +2,7 @@ pyyaml==5.3.1
 semver==2.9.1
 toml==0.10.0
 typing-extensions==3.7.4.2
+click==7.1.1
+dataclasses-json==0.4.2
+psycopg2-binary==2.8.5
+PyMySQL==0.9.3
