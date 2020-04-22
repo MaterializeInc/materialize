@@ -14,8 +14,8 @@ use std::iter::FromIterator;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::server::{TimestampChanges, TimestampHistories};
-use dataflow_types::{Consistency, ExternalSourceConnector, KafkaSourceConnector, Timestamp};
+use crate::server::TimestampHistories;
+use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_counter, IntCounter};
@@ -27,7 +27,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
-use super::{SourceStatus, SourceToken};
+use super::{SourceConfig, SourceStatus, SourceToken};
 use expr::{PartitionId, SourceInstanceId};
 use rdkafka::message::BorrowedMessage;
 
@@ -59,15 +59,10 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn kafka<G>(
-    scope: &G,
+    source_config: SourceConfig<G>,
     name: String,
     connector: KafkaSourceConnector,
-    id: SourceInstanceId,
-    timestamp_histories: TimestampHistories,
-    timestamp_tx: TimestampChanges,
-    consistency: Consistency,
     read_kafka: bool,
 ) -> (
     Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
@@ -76,6 +71,8 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
+
     let KafkaSourceConnector {
         url,
         topic,
