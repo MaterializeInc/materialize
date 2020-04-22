@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
 $ set keyschema={
     "type": "record",
     "name": "Key",
@@ -112,7 +113,7 @@ mammalmore: {"f1":"moose", "f2": 2}
 > CREATE MATERIALIZED SOURCE bytesavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
     WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
+  FORMAT AVRO USING SCHEMA  '${schema}'
   ENVELOPE UPSERT FORMAT BYTES
 
 $ file-append path=data-schema.json
@@ -164,8 +165,8 @@ mammalmore:herd
 > CREATE MATERIALIZED SOURCE texttext
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
-      WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
-  FORMAT TEXT ENVELOPE UPSERT
+    WITH (consistency = 'testdrive-data-consistency2-${testdrive.seed}')
+    FORMAT TEXT ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE textbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -176,7 +177,7 @@ mammalmore:herd
 > CREATE MATERIALIZED SOURCE bytesbytes
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-textbytes-${testdrive.seed}'
-  WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
+      WITH (consistency = 'testdrive-data-consistency2-${testdrive.seed}')
   FORMAT BYTES ENVELOPE UPSERT
 
 $ kafka-ingest format=bytes topic=data-consistency2
@@ -184,6 +185,9 @@ testdrive-textbytes-${testdrive.seed},1,0,1,1
 testdrive-textbytes-${testdrive.seed},1,0,3,3
 testdrive-textbytes-${testdrive.seed},1,0,6,4
 testdrive-textbytes-${testdrive.seed},1,0,10,5
+testdrive-texttext-${testdrive.seed},1,0,1,1
+testdrive-texttext-${testdrive.seed},1,0,2,2
+testdrive-texttext-${testdrive.seed},1,0,3,3
 
 > select * from texttext
 key           data  mz_offset

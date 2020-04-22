@@ -371,7 +371,7 @@ fn byo_extract_update_from_bytes(
                 // Extract timestamp from payload
                 let split: Vec<&str> = timestamp.split(',').collect();
                 if split.len() != 5 {
-                    error!("incorrect payload format. Expected: SourceName,PartitionCount,PartitionId,TS,Offset");
+                    error!("incorrect payload format. Expected: SourceName,PartitionCount,PartitionId,TS,Offset. Got: {}", timestamp);
                     continue;
                 }
                 let topic_name = String::from(split[0]);
