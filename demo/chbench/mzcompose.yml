@@ -192,3 +192,98 @@ services:
 volumes:
   chbench-gen:
   grafana:
+
+mzconduct:
+  name: chbench
+  workflows:
+    ci:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+          run
+          --dsn=mysql --gen-dir=/var/lib/mysql-files
+          --analytic-threads=0
+          --transactional-threads=1
+          --run-seconds=432000
+          -l /dev/stdout
+          --config-file-path=/etc/chbenchmark/mz-default.cfg
+          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+      - step: ensure-stays-up
+        container: chbench
+        seconds: 60
+      - step: run
+        service: peeker
+        command: --only-initialize --queries q01
+      - step: wait-for-mz
+        query: 'select count(*) from q01'
+        timeout_secs: 20
+        expected: any  # TODO: do we want this to be [15], it seems like it usually is
+        print_result: true
+      - step: down
+        destroy_volumes: true
+
+    demo-load:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data
+      - step: workflow
+        workflow: clean-chbench-init
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+          run
+          --dsn=mysql --gen-dir=/var/lib/mysql-files
+          --peek-conns=0
+          --analytic-threads=0
+          --transactional-threads=1
+          --run-seconds=864000
+          --min-delay=0.0
+          --max-delay=0.0
+          -l /dev/stdout
+          --config-file-path=/etc/chbenchmark/mz-default.cfg
+          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+      - step: start-services
+        services: [dashboard]
+      - step: run
+        service: peeker
+        command: >-
+          --only-initialize
+          -c /etc/peeker/materialized-sources.toml
+          -q loadtest
+
+    # Helper workflows
+
+    bring-up-source-data:
+      steps:
+      - step: start-services
+        services: [materialized, mysql]
+      - step: wait-for-mz
+      - step: wait-for-mysql
+        user: root
+        password: debezium
+        timeout_secs: 30
+      - step: start-services
+        services: [connector]
+      - step: wait-for-tcp
+        host: connect
+        port: 8083
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+
+    clean-chbench-init:
+      steps:
+      - step: drop-kafka-topics
+        kafka-container: chbench_kafka_1
+        topic_pattern: mysql.tpcch.*
+      - step: run
+        service: chbench
+        command: >-
+          gen
+          --warehouses=1
+          --config-file-path=/etc/chbenchmark/mz-default.cfg

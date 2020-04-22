@@ -1,3 +1,6 @@
+PyMySQL==0.9.3
+click==7.1.1
+psycopg2-binary==2.8.5
 pyyaml==5.3.1
 semver==2.9.1
 toml==0.10.0
