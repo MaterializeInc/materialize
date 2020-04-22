@@ -56,7 +56,7 @@ def tag_docker(repo: mzbuild.Repository, tag: str) -> None:
     deps.acquire()
     for dep in deps:
         if dep.publish:
-            name = dep.docker_name(tag)
+            name = dep.image.docker_name(tag)
             spawn.runv(["docker", "tag", dep.spec(), name])
             spawn.runv(["docker", "push", name])
 

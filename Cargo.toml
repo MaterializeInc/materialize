@@ -3,8 +3,10 @@ members = [
     "demo/billing",
     "fuzz",
     "src/avro",
+    "src/catalog",
     "src/ccsr",
     "src/comm",
+    "src/coord",
     "src/dataflow-bin",
     "src/dataflow-types",
     "src/dataflow",
@@ -18,6 +20,7 @@ members = [
     "src/repr",
     "src/sql",
     "src/sqllogictest",
+    "src/sql-parser",
     "src/symbiosis",
     "src/testdrive",
 ]
