@@ -35,6 +35,36 @@ async fn run() -> Result<(), Error> {
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
     opts.optopt(
         "",
+        "security_protocol",
+        "use the supplied security protocol (currenly only supported for SSL with Kafka)",
+        "SSL?",
+    );
+    opts.optopt(
+        "",
+        "ssl_key_location",
+        "location of the SSL client key",
+        "PATH",
+    );
+    opts.optopt(
+        "",
+        "ssl_certificate_location",
+        "location of the SSL client certificate",
+        "PATH",
+    );
+    opts.optopt(
+        "",
+        "ssl_ca_location",
+        "location of the SSL certificate authority certificate",
+        "PATH",
+    );
+    opts.optopt(
+        "",
+        "ssl_key_password",
+        "password for provided SSL key",
+        "custom",
+    );
+    opts.optopt(
+        "",
         "aws-region",
         "a named AWS region to target for AWS API requests",
         "custom",
@@ -110,6 +140,20 @@ async fn run() -> Result<(), Error> {
 
     if let Some(path) = opts.opt_str("validate-catalog") {
         config.materialized_catalog_path = Some(path.into());
+    }
+
+    let security_options = vec![
+        "security_protocol",
+        "ssl_ca_location",
+        "ssl_certificate_location",
+        "ssl_key_location",
+        "ssl_key_password",
+    ];
+
+    for key in security_options {
+        if let Some(value) = opts.opt_str(key) {
+            config.options.insert(key.replace("_", "."), value);
+        }
     }
 
     if opts.free.is_empty() {

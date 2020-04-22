@@ -19,3 +19,4 @@ __pycache__
 .mypy_cache
 venv
 node_modules
+test/cert-gen-kafka/secrets

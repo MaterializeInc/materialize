@@ -59,6 +59,16 @@ steps:
           run: testdrive
     if: $CHANGED_RUST || $CHANGED_TESTDRIVE
 
+  - id: testdrive
+    label: ":racing_car: testdrive"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/testdrive/mzcompose.ssl.yml
+          run: testdrive
+    if: $CHANGED_RUST || $CHANGED_TESTDRIVE
+
   - id: testdrive-purgatory
     label: ":racing_car: testdrive purgatory"
     depends_on: build
@@ -133,7 +143,16 @@ steps:
 
   - id: deploy
     label: ":rocket: Deploy"
-    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, metabase-demo, short-sqllogictest]
+    depends_on:
+      [
+        lint-fast,
+        lint-slow,
+        cargo-test,
+        testdrive,
+        streaming-demo,
+        metabase-demo,
+        short-sqllogictest,
+      ]
     trigger: deploy
     async: true
     branches: "master v*.*"

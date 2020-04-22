@@ -46,12 +46,12 @@ const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 pub struct Config {
     pub kafka_addr: String,
     pub schema_registry_url: Url,
-    pub security_options: HashMap<String, String>,
     pub aws_region: rusoto_core::Region,
     pub aws_account: String,
     pub aws_credentials: AwsCredentials,
     pub materialized_pgconfig: tokio_postgres::Config,
     pub materialized_catalog_path: Option<PathBuf>,
+    pub options: HashMap<String, String>,
 }
 
 impl Default for Config {
@@ -62,7 +62,6 @@ impl Default for Config {
         Config {
             kafka_addr: "localhost:9092".into(),
             schema_registry_url: "http://localhost:8081".parse().unwrap(),
-            security_options: HashMap::new(),
             aws_region: rusoto_core::Region::default(),
             aws_account: DUMMY_AWS_ACCOUNT.into(),
             aws_credentials: AwsCredentials::new(
@@ -75,6 +74,7 @@ impl Default for Config {
                 tokio_postgres::Config::new().host("localhost").port(6875),
             ),
             materialized_catalog_path: None,
+            options: HashMap::new(),
         }
     }
 }
@@ -403,7 +403,7 @@ pub async fn create_state(
     let schema_registry_url = config.schema_registry_url.to_owned();
     let ccsr_client = ccsr::AsyncClient::new(&SchemaRegistry {
         url: config.schema_registry_url.clone(),
-        config: HashMap::new(),
+        config: config.options.clone(),
     });
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
@@ -414,7 +414,7 @@ pub async fn create_state(
 
         let mut kafka_config = ClientConfig::new();
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
-        for (k, v) in &config.security_options {
+        for (k, v) in &config.options {
             kafka_config.set(k, v);
         }
 
