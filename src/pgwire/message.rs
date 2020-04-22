@@ -378,3 +378,4 @@ pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
         })
         .collect()
 }
+
