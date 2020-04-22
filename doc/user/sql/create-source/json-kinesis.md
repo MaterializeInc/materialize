@@ -6,6 +6,7 @@ menu:
     parent: 'create-source'
 aliases:
     - /docs/sql/create-source/kinesis
+    - /docs/sql/create-source/kinesis-source
 ---
 
 `CREATE SOURCE` connects Materialize to some data source, and lets you interact
