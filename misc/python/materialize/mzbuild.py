@@ -437,6 +437,21 @@ class ResolvedImage:
         """
         spawn.runv(["docker", "run", "-it", "--rm", "--init", self.spec(), *args])
 
+    def inputs(self) -> List[bytes]:
+        """List the files tracked as inputs to the image.
+
+        These files are used to compute the fingerprint for the image.
+        See `ResolvedImage.fingerprint` for details.
+
+        Returns:
+            inputs: A list of input paths, relative to the root of the
+                repository.
+        """
+        paths = set(git_ls_files(self.image.root, self.image.path))
+        if self.image.pre_image is not None:
+            paths.update(self.image.pre_image.inputs(self.image.root, self.image.path))
+        return sorted(paths)
+
     @lru_cache(maxsize=None)
     def fingerprint(self) -> Fingerprint:
         """Fingerprint the inputs to the image.
@@ -449,12 +464,8 @@ class ResolvedImage:
         be inputs. If it has a pre-image action, that action may add additional
         inputs via `PreImage.inputs`.
         """
-        paths = git_ls_files(self.image.root, self.image.path)
-        if self.image.pre_image is not None:
-            paths += self.image.pre_image.inputs(self.image.root, self.image.path)
-        paths.sort()
         self_hash = hashlib.sha1()
-        for rel_path in paths:
+        for rel_path in self.inputs():
             abs_path = self.image.root / rel_path.decode()
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
