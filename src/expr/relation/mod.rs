@@ -110,8 +110,8 @@ pub enum RelationExpr {
     /// For further details consult the documentation for [`RelationExpr::join`].
     ///
     /// The runtime memory footprint of this operator can be proportional to
-    /// the sizes of all inputs. This may be reduced due to arrangements available
-    /// at rendering time.
+    /// the sizes of all inputs and the size of all joins of prefixes.
+    /// This may be reduced due to arrangements available at rendering time.
     Join {
         /// A sequence of input relations.
         inputs: Vec<RelationExpr>,
