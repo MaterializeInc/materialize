@@ -1,0 +1,112 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Portions of this file is derived from
+# https://github.com/Pierrotws/kafka-ssl-compose/blob/master/docker-compose.yml
+
+version: "3.7"
+services:
+  test-certs:
+    mzbuild: test-certs
+    volumes:
+      - secrets:/secrets
+  testdrive:
+    mzbuild: testdrive
+    hostname: producer
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        wait-for-it --timeout=30 broker:9092 &&
+        wait-for-it --timeout=30 schema-registry:8081 &&
+        wait-for-it --timeout=30 materialized:6875 &&
+        testdrive
+        --kafka-url=SSL://broker:9092
+        --schema-registry-url=https://schema-registry:8081
+        --materialized-url=postgres://ignored@materialized:6875
+        --validate-catalog=/share/mzdata
+        --cert=/share/secrets/producer.p12
+        --cert-password=mzmzmz
+        --root-cert=/share/secrets/ca.crt
+        $$*
+      - bash
+    command: test/testdrive/avro-registry-ssl.td
+    user: root
+    environment:
+      - TMPDIR=/share/tmp
+    volumes:
+      - ../../:/workdir
+      - mzdata:/share/mzdata
+      - tmp:/share/tmp
+      - secrets:/share/secrets
+    propagate-uid-gid: true
+    init: true
+    depends_on: [kafka, zookeeper, schema-registry, materialized]
+  materialized:
+    mzbuild: materialized
+    command: --logging-granularity=10ms --data-directory=/share/mzdata -w1
+    volumes:
+      - mzdata:/share/mzdata
+      - tmp:/share/tmp
+      - secrets:/share/secrets
+  zookeeper:
+    image: zookeeper:3.4.13
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_SERVER_ID: 1
+      ZOOKEEPER_CLIENT_PORT: 2181
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: broker
+    hostname: broker
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_HOST_NAME: broker
+      KAFKA_ADVERTISED_LISTENERS: SSL://broker:9092
+      KAFKA_SSL_KEYSTORE_FILENAME: broker.keystore.jks
+      KAFKA_SSL_KEYSTORE_CREDENTIALS: cert_creds
+      KAFKA_SSL_KEY_CREDENTIALS: cert_creds
+      KAFKA_SSL_TRUSTSTORE_FILENAME: broker.truststore.jks
+      KAFKA_SSL_TRUSTSTORE_CREDENTIALS: cert_creds
+      KAFKA_SSL_CLIENT_AUTH: "required"
+      KAFKA_SECURITY_PROTOCOL: SSL
+      KAFKA_SECURITY_INTER_BROKER_PROTOCOL: SSL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    volumes:
+      - secrets:/etc/kafka/secrets
+    depends_on: [zookeeper]
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.2.1
+    hostname: schema-registry
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: "https://0.0.0.0:8081"
+      SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL: zookeeper:2181
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "SSL://broker:9092"
+      SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL: SSL
+      SCHEMA_REGISTRY_KAFKASTORE_SSL_KEYSTORE_LOCATION: /etc/schema-registry/secrets/schema-registry.keystore.jks
+      SCHEMA_REGISTRY_SSL_KEYSTORE_LOCATION: /etc/schema-registry/secrets/schema-registry.keystore.jks
+      SCHEMA_REGISTRY_KAFKASTORE_SSL_KEYSTORE_PASSWORD: mzmzmz
+      SCHEMA_REGISTRY_SSL_KEYSTORE_PASSWORD: mzmzmz
+      SCHEMA_REGISTRY_KAFKASTORE_SSL_KEY_PASSWORD: mzmzmz
+      SCHEMA_REGISTRY_SSL_KEY_PASSWORD: mzmzmz
+      SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_LOCATION: /etc/schema-registry/secrets/schema-registry.truststore.jks
+      SCHEMA_REGISTRY_SSL_TRUSTSTORE_LOCATION: /etc/schema-registry/secrets/schema-registry.truststore.jks
+      SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_PASSWORD: mzmzmz
+      SCHEMA_REGISTRY_SSL_TRUSTSTORE_PASSWORD: mzmzmz
+      SCHEMA_REGISTRY_SCHEMA_REGISTRY_INTER_INSTANCE_PROTOCOL: https
+      SCHEMA_REGISTRY_SSL_CLIENT_AUTH: "true"
+    volumes:
+      - secrets:/etc/schema-registry/secrets
+    depends_on: [kafka, zookeeper]
+volumes:
+  mzdata:
+  tmp:
+  secrets:
