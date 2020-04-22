@@ -790,7 +790,6 @@ impl Timestamper {
         RtKafkaConnector {
             consumer: k_consumer,
             topic: kc.topic,
-            //    start_offset: kc.start_offset,
         }
     }
 
