@@ -1,5 +1,12 @@
 # Release checklist
 
+- [ ] Create a new github issue that you copy this checklist into, named `Release:
+  vX.Y.Z`. (Copy this checklist [from raw markdown][release-checklist-raw], and create [a
+  new issue][new-issue].)
+
+[release-checklist-raw]: https://raw.githubusercontent.com/MaterializeInc/materialize/master/doc/developer/release-checklist.md
+[new-issue]: https://github.com/MaterializeInc/materialize/issues/new/
+
 ## Release candidate
 
 A release candidate is the Materialize codebase at a given commit, tested for
@@ -18,7 +25,10 @@ production readiness.
   v0.2.3 would be called v0.2.3-rc1.
 
 - [ ] Update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-      and [`LICENSE`](/LICENSE) and commit that change.
+  and [`LICENSE`](/LICENSE) and commit that change.
+
+  <details><summary>Example Diff</summary>
+  <p>
 
   ```diff
   diff --git a/src/materialized/Cargo.toml b/src/materialized/Cargo.toml
@@ -57,7 +67,8 @@ production readiness.
 
    Change License:            Apache License, Version 2.0
   ```
-
+  </p>
+  </details>
 
 - [ ] Create the release tag on the current commit.
 
@@ -68,6 +79,8 @@ production readiness.
   ```
 
 ### Test the release candidate
+
+All of these can be run in parallel.
 
 - [ ] Run the chbench load test on the release candidate tag.
 
@@ -115,7 +128,7 @@ production readiness.
 - [ ] Check out the final RC tag.
 
 - [ ] Update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-      and commit that change.
+  and commit that change.
 
 - [ ] Create the release tag on that commit.
 
@@ -128,7 +141,7 @@ production readiness.
 - [ ] Create Homebrew bottle and update Homebrew tap.
 
   Follow the instructions in [MaterializeInc/homebrew-materialize's
-  CONTRIBUTING.md](homebrew-guide).
+  CONTRIBUTING.md][homebrew-guide].
 
 - [ ] Create Debian package.
 
@@ -150,12 +163,19 @@ production readiness.
   description from an earlier release ([v0.1.2., for example][v0.1.2]) and
   updating the links appropriately.
 
-- [ ] On **master**, update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-  to `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on
-  master to `v0.1.3-dev`.
+- [ ] On **master**, update the various files that must be up to date:
 
-   Also update the [`LICENSE`](/LICENSE) file with the changes from the
-   release branch, so that it reflects the latest release of Materialize.
+  - [ ] version field in
+    [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) to `vNEXT-dev`.
+    For example, if releasing v0.1.2, bump the version on master to `v0.1.3-dev`.
+
+  - [ ] Update the [`LICENSE`](/LICENSE) file with the changes from the
+    release branch, so that it reflects the latest release of Materialize.
+
+  - [ ] Ensure that the [Release Notes](../../doc/user/release-notes.md) are up to date,
+    including the current version.
+
+  - [ ] Ensure that [Versions](../../doc/user/versions.md) is up to date.
 
 [homebrew-guide]: https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md
 [new-github-release]: https://github.com/MaterializeInc/materialize/releases/new
