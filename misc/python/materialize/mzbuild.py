@@ -17,6 +17,7 @@ documentation][user-docs].
 
 from collections import OrderedDict
 from functools import lru_cache
+from materialize import cargo
 from materialize import spawn
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -71,20 +72,35 @@ class AcquiredFrom(enum.Enum):
     """The image was built from source locally."""
 
 
-def xcargo(root: Path) -> str:
+class RepositoryDetails:
+    """Immutable details about a `Repository`.
+
+    Used internally by mzbuild.
+
+    Attributes:
+        root: The path to the root of the repository.
+        cargo_workspace: The `cargo.Workspace` associated with the repository.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.cargo_workspace = cargo.Workspace(root)
+
+
+def xcargo(rd: RepositoryDetails) -> str:
     """Determine the path to a `cargo` executable that targets linux/amd64."""
     if sys.platform == "linux":
         return "cargo"
     else:
-        return str(root / "bin" / "xcompile")
+        return str(rd.root / "bin" / "xcompile")
 
 
-def xcargo_target_dir(root: Path) -> Path:
+def xcargo_target_dir(rd: RepositoryDetails) -> Path:
     """Determine the path to the target directory for Cargo. """
     if sys.platform == "linux":
-        return root / "target"
+        return rd.root / "target"
     else:
-        return root / "target" / "x86_64-unknown-linux-gnu"
+        return rd.root / "target" / "x86_64-unknown-linux-gnu"
 
 
 def xbinutil(tool: str) -> str:
@@ -128,50 +144,63 @@ def chmod_x(path: Path) -> None:
 
 
 class PreImage:
-    """An action to run before building a Docker image."""
+    """An action to run before building a Docker image.
 
-    def run(self, root: Path, path: Path) -> None:
-        """Perform the action.
+    Args:
+        rd: The `RepositoryDetails` for the repository.
+        path: The path to the `Image` associated with this action.
+    """
 
-        Args:
-            root: The path to the root of the `Repository` associated with this
-                action.
-            path: The path to the `Image` associated with this action.
-        """
-        spawn.runv(["git", "clean", "-ffdX", path])
+    def __init__(self, rd: RepositoryDetails, path: Path):
+        self.rd = rd
+        self.path = path
 
-    def inputs(self, root: Path, path: Path) -> List[bytes]:
-        """Return the paths which are considered inputs to the action.
+    def run(self) -> None:
+        """Perform the action."""
+        spawn.runv(["git", "clean", "-ffdX", self.path])
 
-        Args:
-            root: The path to the root of the `Repository` associated with this
-                action.
-            path: The path to the `Image` associated with this action.
-        """
-        # HACK(benesch): all Rust code implicitly depends on the ci-builder
-        # version. Can we express this with less hardcoding?
-        return [b"ci/builder/stable.stamp", b"ci/builder/nightly.stamp"]
+    def inputs(self) -> List[bytes]:
+        """Return the paths which are considered inputs to the action."""
 
 
-class CargoBuild(PreImage):
+class CargoPreImage(PreImage):
+    """A `PreImage` action that uses Cargo."""
+
+    def inputs(self) -> List[bytes]:
+        return [
+            b"ci/builder/stable.stamp",
+            b"ci/builder/nightly.stamp",
+            b"Cargo.toml",
+            # TODO(benesch): we could in theory fingerprint only the subset of
+            # Cargo.lock that applies to the crates at hand, but that is a
+            # *lot* of work.
+            b"Cargo.lock",
+            b".cargo/config",
+        ]
+
+
+class CargoBuild(CargoPreImage):
     """A pre-image action that builds a single binary with Cargo."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+        super().__init__(rd, path)
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
-    def run(self, root: Path, path: Path) -> None:
-        super().run(root, path)
-        spawn.runv([xcargo(root), "build", "--release", "--bin", self.bin], cwd=root)
-        shutil.copy(xcargo_target_dir(root) / "release" / self.bin, path)
+    def run(self) -> None:
+        super().run()
+        spawn.runv(
+            [xcargo(self.rd), "build", "--release", "--bin", self.bin], cwd=self.rd.root
+        )
+        shutil.copy(xcargo_target_dir(self.rd) / "release" / self.bin, self.path)
         if self.strip:
             # NOTE(benesch): the debug information is large enough that it slows
             # down CI, since we're packaging these binaries up into Docker
             # images and shipping them around. A bit unfortunate, since it'd be
             # nice to have useful backtraces if the binary crashes.
-            spawn.runv([xstrip, path / self.bin])
+            spawn.runv([xstrip, self.path / self.bin])
         else:
             # Even if we've been asked not to strip the binary, remove the
             # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
@@ -188,20 +217,20 @@ class CargoBuild(PreImage):
                     ".debug_pubnames",
                     "-R",
                     ".debug_pubtypes",
-                    path / self.bin,
+                    self.path / self.bin,
                 ]
             )
 
-    def inputs(self, root: Path, path: Path) -> List[bytes]:
-        # TODO(benesch): this should be much smarter about computing the Rust
-        # files that actually contribute to this binary target.
-        return super().inputs(root, path) + git_ls_files(
-            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+    def inputs(self) -> List[bytes]:
+        crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
+        deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
+        return super().inputs() + git_ls_files(
+            self.rd.root, *(dep.path for dep in deps),
         )
 
 
 # TODO(benesch): make this less hardcoded and custom.
-class CargoTest(PreImage):
+class CargoTest(CargoPreImage):
     """A pre-image action that builds all test binaries in the Cargo workspace.
 
     .. todo:: This action does not generalize well.
@@ -210,12 +239,12 @@ class CargoTest(PreImage):
         instead be captured by configuration in `mzbuild.yml`.
     """
 
-    def __init__(self, config: Dict[str, Any]):
-        pass
+    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+        super().__init__(rd, path)
 
-    def run(self, root: Path, path: Path) -> None:
-        super().run(root, path)
-        CargoBuild({"bin": "testdrive"}).run(root, path)
+    def run(self) -> None:
+        super().run()
+        CargoBuild(self.rd, self.path, {"bin": "testdrive"}).run()
 
         # NOTE(benesch): The two invocations of `cargo test --no-run` here
         # deserve some explanation. The first invocation prints error messages
@@ -225,7 +254,7 @@ class CargoTest(PreImage):
         # error messages would also be sent to the output file in JSON, and the
         # user would only see a vague "could not compile <package>" error.
         args = [
-            xcargo(root),
+            xcargo(self.rd),
             "test",
             "--locked",
             "--no-run",
@@ -249,27 +278,30 @@ class CargoTest(PreImage):
                 )
                 if not crate_path_match:
                     raise ValueError(f'invalid package_id: {message["package_id"]}')
-                crate_path = Path(crate_path_match.group(1)).relative_to(root.resolve())
+                crate_path = Path(crate_path_match.group(1)).relative_to(
+                    self.rd.root.resolve()
+                )
                 tests.append((message["executable"], slug, crate_path))
 
-        os.makedirs(path / "tests" / "examples")
-        with open(path / "tests" / "manifest", "w") as manifest:
+        os.makedirs(self.path / "tests" / "examples")
+        with open(self.path / "tests" / "manifest", "w") as manifest:
             for (executable, slug, crate_path) in tests:
-                shutil.copy(executable, path / "tests" / slug)
-                spawn.runv([xstrip, path / "tests" / slug])
+                shutil.copy(executable, self.path / "tests" / slug)
+                spawn.runv([xstrip, self.path / "tests" / slug])
                 manifest.write(f"{slug} {crate_path}\n")
-        shutil.move(str(path / "testdrive"), path / "tests")
+        shutil.move(str(self.path / "testdrive"), self.path / "tests")
         shutil.copy(
-            xcargo_target_dir(root) / "debug" / "examples" / "pingpong",
-            path / "tests" / "examples",
+            xcargo_target_dir(self.rd) / "debug" / "examples" / "pingpong",
+            self.path / "tests" / "examples",
         )
-        shutil.copytree(root / "misc" / "shlib", path / "shlib")
+        shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
-    def inputs(self, root: Path, path: Path) -> List[bytes]:
+    def inputs(self) -> List[bytes]:
         # TODO(benesch): this should be much smarter about computing the Rust
         # files that actually contribute to this binary target.
-        return super().inputs(root, path) + git_ls_files(
-            root, "demo/billing/**", "src/**", "Cargo.toml", "Cargo.lock", ".cargo"
+        return super().inputs() + git_ls_files(
+            self.rd.root,
+            *(crate.path for crate in self.rd.cargo_workspace.crates.values()),
         )
 
 
@@ -291,8 +323,8 @@ class Image:
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
 
-    def __init__(self, root: Path, path: Path):
-        self.root = root
+    def __init__(self, rd: RepositoryDetails, path: Path):
+        self.rd = rd
         self.path = path
         self.pre_image: Optional[PreImage] = None
         with open(self.path / "mzbuild.yml") as f:
@@ -303,9 +335,9 @@ class Image:
             if pre_image is not None:
                 typ = pre_image.pop("type", None)
                 if typ == "cargo-build":
-                    self.pre_image = CargoBuild(pre_image)
+                    self.pre_image = CargoBuild(self.rd, self.path, pre_image)
                 elif typ == "cargo-test":
-                    self.pre_image = CargoTest(pre_image)
+                    self.pre_image = CargoTest(self.rd, self.path, pre_image)
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
@@ -390,7 +422,7 @@ class ResolvedImage:
     def build(self) -> None:
         """Build the image from source."""
         if self.image.pre_image is not None:
-            self.image.pre_image.run(self.image.root, self.image.path)
+            self.image.pre_image.run()
         f = self.write_dockerfile()
         spawn.runv(
             [
@@ -447,9 +479,9 @@ class ResolvedImage:
             inputs: A list of input paths, relative to the root of the
                 repository.
         """
-        paths = set(git_ls_files(self.image.root, self.image.path))
+        paths = set(git_ls_files(self.image.rd.root, self.image.path))
         if self.image.pre_image is not None:
-            paths.update(self.image.pre_image.inputs(self.image.root, self.image.path))
+            paths.update(self.image.pre_image.inputs())
         return sorted(paths)
 
     @lru_cache(maxsize=None)
@@ -466,7 +498,7 @@ class ResolvedImage:
         """
         self_hash = hashlib.sha1()
         for rel_path in self.inputs():
-            abs_path = self.image.root / rel_path.decode()
+            abs_path = self.image.rd.root / rel_path.decode()
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
             # Compute a simplified file mode using the same rules as Git.
@@ -565,7 +597,7 @@ class Repository:
     """
 
     def __init__(self, root: Path):
-        self.root = root
+        self.rd = RepositoryDetails(root)
         self.images: Dict[str, Image] = {}
         self.compose_dirs = set()
         for (path, dirs, files) in os.walk(self.root, topdown=True):
@@ -573,7 +605,7 @@ class Repository:
             # things snappy. Not required for correctness.
             dirs[:] = set(dirs) - {".git", "target", "mzdata", "node_modules"}
             if "mzbuild.yml" in files:
-                image = Image(self.root, Path(path))
+                image = Image(self.rd, Path(path))
                 if not image.name:
                     raise ValueError(f"config at {path} missing name")
                 if image.name in self.images:
@@ -589,6 +621,11 @@ class Repository:
                     raise ValueError(
                         f"image {image.name} depends on non-existent image {d}"
                     )
+
+    @property
+    def root(self) -> Path:
+        """The path to the root directory for the repository."""
+        return self.rd.root
 
     def resolve_dependencies(self, targets: Iterable[Image]) -> DependencySet:
         """Compute the dependency set necessary to build target images.

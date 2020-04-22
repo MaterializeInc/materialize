@@ -56,7 +56,7 @@ def main(args: List[str]) -> int:
             print("Dependencies:")
             for d in rimage.dependencies:
                 print(f"    {d}")
-            else:
+            if not rimage.dependencies:
                 print("    (none)")
     else:
         print(f"fatal: unknown command: {command}", file=sys.stderr)
