@@ -139,7 +139,9 @@ impl MzClient {
         );
         println!("querying view=> {}", query);
 
+        // 1QPS until caught up.
         loop {
+            let timer = std::time::Instant::now();
             match self.0.query(&*query, &[]).await {
                 Ok(rows) => {
                     assert!(rows.len() == 1);
@@ -161,12 +163,14 @@ impl MzClient {
                         .contains("At least one input has no complete timestamps yet.")
                     {
                         log::debug!("Hit error querying, will try again... {}", e.to_string());
-                        thread::sleep(Duration::from_secs(1));
                     } else {
                         return Err(format!("hit error trying to query view: {}", e.to_string()));
                     }
                 }
             }
+            thread::sleep(Duration::from_millis(
+                1000 - timer.elapsed().as_millis() as u64,
+            ));
         }
         Ok(())
     }

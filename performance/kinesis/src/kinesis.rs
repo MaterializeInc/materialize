@@ -161,6 +161,10 @@ pub async fn generate_and_put_records(
         shard_starting_hash_keys.push_back(target_shard);
 
         let elapsed = put_timer.elapsed().as_millis();
+        println!(
+            "put {} records in {} milliseconds",
+            records_per_second, elapsed
+        );
         if elapsed < 1000 {
             thread::sleep(Duration::from_millis((1000 - elapsed) as u64));
         } else {
