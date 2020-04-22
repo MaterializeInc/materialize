@@ -176,3 +176,4 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
 fn any_matches(haystack: &[String], needle: &str) -> bool {
     haystack.iter().any(|s| s.contains(needle))
 }
+
