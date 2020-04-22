@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
-use std::iter::FromIterator;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -18,7 +17,7 @@ use crate::server::{TimestampChanges, TimestampHistories};
 use dataflow_types::{Consistency, ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
 use log::{error, info, warn};
-use prometheus::{register_int_counter, IntCounter};
+use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::Offset::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
@@ -29,13 +28,18 @@ use timely::scheduling::activate::SyncActivator;
 use super::util::source;
 use super::{SourceStatus, SourceToken};
 use expr::{PartitionId, SourceInstanceId};
-use itertools::Itertools;
 use rdkafka::message::BorrowedMessage;
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
         "mz_kafka_bytes_read_total",
         "Count of kafka bytes we have read from the wire"
+    )
+    .unwrap();
+    static ref CURRENT_KAFKA_PROCESSED_OFFSET: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_processed_offset",
+        "Count of kafka bytes we have read from the wire",
+        &["topic", "source_id", "partition_id"]
     )
     .unwrap();
 }
@@ -223,7 +227,12 @@ where
                         };
 
                     if offset <= last_processed_offset {
-                        warn!("duplicate Kakfa message: souce {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
+                        warn!(
+                            "duplicate Kakfa message: source {} \
+                               (reading topic {}, partition {}) \
+                               received offset {} max processed offset {}",
+                            name, topic, partition, offset, last_processed_offset
+                        );
                         let res = consumer.seek(
                             &topic,
                             partition,
@@ -351,12 +360,21 @@ fn update_partition_list(
     while i32::try_from(partitions.len()).unwrap() < expected_partition_count {
         let result = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
         partitions = match &result {
-            Ok(meta) => match meta.topics().iter().find(|t| t.name() == topic) {
-                Some(topic) => {
-                    HashSet::from_iter(topic.partitions().iter().map(|x| x.id()).collect_vec())
-                }
-                None => HashSet::new(),
-            },
+            Ok(meta) => meta
+                .topics()
+                .iter()
+                .find(|t| t.name() == topic)
+                .map(|topic| {
+                    let partitions = topic.partitions();
+                    let mut partition_ids = HashSet::with_capacity(partitions.len());
+                    for partition in partitions {
+                        partition_ids.insert(partition.id());
+                    }
+
+                    partition_ids
+                    //HashSet::from_iter(.iter().map(|x| x.id()).collect_vec())
+                })
+                .unwrap_or_else(HashSet::new),
             Err(e) => {
                 error!("Failed to obtain partition information: {} {}", topic, e);
                 HashSet::new()
@@ -441,6 +459,13 @@ fn downgrade_capability(
                     next_partition_ts.insert(pid.clone(), *ts);
                     entries.remove(0);
                     changed = true;
+                    CURRENT_KAFKA_PROCESSED_OFFSET
+                        .with_label_values(&[
+                            &topic,
+                            &id.to_string(),
+                            &pid.kafka_id().unwrap().to_string(),
+                        ])
+                        .set(last_offset);
                 } else {
                     // Offset isn't at a timestamp boundary, we take no action
                     break;

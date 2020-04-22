@@ -20,7 +20,8 @@ use avro::types::Value;
 use avro::Reader;
 
 use lazy_static::lazy_static;
-use log::{error, info};
+use log::{error, info, warn};
+use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
@@ -106,6 +107,12 @@ lazy_static! {
         )
         .unwrap()
     };
+    static ref CURRENT_KAFKA_PARTITION_OFFSET: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_max",
+        "Count of kafka bytes we have read from the wire",
+        &["source_id", "topic", "partition_id"]
+    )
+    .unwrap();
 }
 
 pub struct TimestampConfig {
@@ -211,6 +218,23 @@ fn byo_query_source(consumer: &mut ByoTimestampConsumer, max_increment_size: i64
     let mut msg_count = 0;
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_consumer) => {
+            let kconsumer = &kafka_consumer.consumer;
+            let topic = &consumer.source_name;
+            for p in get_kafka_partitions(kconsumer, &topic) {
+                match kconsumer.fetch_watermarks(&topic, p, Duration::from_secs(1)) {
+                    Ok((_low, high)) => CURRENT_KAFKA_PARTITION_OFFSET
+                        .with_label_values(&[
+                            &consumer.source_id.to_string(),
+                            &topic,
+                            &p.to_string(),
+                        ])
+                        .set(high),
+                    Err(e) => warn!(
+                        "error loading watermarks topic={} partition={} error={}",
+                        topic, p, e
+                    ),
+                }
+            }
             while let Some(payload) = kafka_get_next_message(&mut kafka_consumer.consumer) {
                 messages.push(payload);
                 msg_count += 1;
@@ -561,6 +585,8 @@ impl Timestamper {
         // First check if there are some new source that we should
         // start checking
         while let Ok(update) = self.rx.try_recv() {
+            // TODO: Add metric creation in here so we don't create label strings every
+            // time we update
             match update {
                 TimestampMessage::Add(id, sc) => {
                     let (sc, _enc, _env, cons) = if let SourceConnector::External {
@@ -584,7 +610,11 @@ impl Timestamper {
                                 self.rt_sources.insert(id, consumer);
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}", id, consistency_topic);
+                                info!(
+                                    "Timestamping Source {} with BYO Consistency. \
+                                     Consistency Source: {}",
+                                    id, consistency_topic
+                                );
                                 let consumer = self.create_byo_connector(id, sc, consistency_topic);
                                 self.byo_sources.insert(id, consumer);
                             }
@@ -828,6 +858,7 @@ impl Timestamper {
         match sc {
             ExternalSourceConnector::Kafka(kc) => ByoTimestampConsumer {
                 source_name: kc.topic.clone(),
+                source_id: id,
                 connector: ByoTimestampConnector::Kafka(self.create_byo_kafka_connector(
                     id,
                     kc,
@@ -843,6 +874,7 @@ impl Timestamper {
                 error!("File sources are unsupported for timestamping");
                 ByoTimestampConsumer {
                     source_name: String::from(""),
+                    source_id: id,
                     connector: ByoTimestampConnector::File(self.create_byo_file_connector(
                         id,
                         fc,
@@ -859,6 +891,7 @@ impl Timestamper {
                 error!("Kinesis sources are unsupported for timestamping");
                 ByoTimestampConsumer {
                     source_name: String::from(""),
+                    source_id: id,
                     connector: ByoTimestampConnector::Kinesis(self.create_byo_kinesis_connector(
                         id,
                         kinc,
@@ -1012,7 +1045,14 @@ impl Timestamper {
                                     partition_count,
                                     PartitionId::Kafka(p),
                                     next_offset,
-                                ))
+                                ));
+                                CURRENT_KAFKA_PARTITION_OFFSET
+                                    .with_label_values(&[
+                                        &id.to_string(),
+                                        &kc.topic,
+                                        &p.to_string(),
+                                    ])
+                                    .set(high);
                             }
                             Err(e) => {
                                 error!(
