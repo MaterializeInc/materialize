@@ -11,7 +11,7 @@
 #
 # pyactivate — runs a script in the Materialize Python virtualenv.
 
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 import logging
 import os
@@ -42,16 +42,20 @@ def main(args: List[str]) -> int:
     logger.debug("root_dir={} py_dir={}".format(root_dir, py_dir))
 
     dev = False
+    ci = False
     if len(args) > 0 and args[0] == "--dev":
         del args[0]
         dev = True
+    if "CI" in os.environ and os.environ["CI"]:
+        dev = True
+        ci = True
 
     # If we're not in the CI builder container, activate a virtualenv with the
     # necessary dependencies.
     if os.environ.get("MZ_DEV_CI_BUILDER", False):
         python = "python3"
     else:
-        python = str(activate_venv(py_dir, dev))
+        python = str(activate_venv(py_dir, dev, ci))
     logger.debug("python={}".format(python))
 
     # Reinvoke with the interpreter from the virtualenv.
@@ -60,7 +64,7 @@ def main(args: List[str]) -> int:
     os.execvp(python, [python, *args])
 
 
-def activate_venv(py_dir: Path, dev: bool = False) -> Path:
+def activate_venv(py_dir: Path, dev: bool = False, ci: bool = False) -> Path:
     """Bootstrap and activate a virtualenv at py_dir/venv"""
     venv_dir = py_dir / "venv"
     stamp_path = venv_dir / "dep_stamp"
@@ -92,15 +96,17 @@ def activate_venv(py_dir: Path, dev: bool = False) -> Path:
 
     acquire_deps(venv_dir)
     if dev:
-        acquire_deps(venv_dir, dev=True)
+        acquire_deps(venv_dir, "dev")
+    if ci:
+        acquire_deps(venv_dir, "ci")
 
     return python
 
 
-def acquire_deps(venv_dir: Path, dev: bool = False) -> None:
+def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
     """Install normal/development dependencencies into the virtualenv"""
 
-    stamp_path = venv_dir / ("dev_dep_stamp" if dev else "dep_stamp")
+    stamp_path = venv_dir / (f"{variant}_dep_stamp" if variant else "dep_stamp")
 
     # Check when dependencies were last installed.
     try:
@@ -111,7 +117,7 @@ def acquire_deps(venv_dir: Path, dev: bool = False) -> None:
 
     # Check when the requirements file was last modified.
     requirements_path = venv_dir.parent / (
-        "requirements-dev.txt" if dev else "requirements.txt"
+        f"requirements-{variant}.txt" if variant else "requirements.txt"
     )
     requirements_mtime = os.path.getmtime(requirements_path)
     logger.debug(
@@ -122,7 +128,7 @@ def acquire_deps(venv_dir: Path, dev: bool = False) -> None:
 
     # Update dependencies, if necessary.
     if stamp_mtime <= requirements_mtime:
-        print("==> Updating {}dependencies with pip".format("dev " if dev else ""))
+        print("==> Updating {}dependencies with pip".format(variant + " " if variant else ""))
         subprocess.check_call(
             [venv_dir / "bin" / "pip", "install", "-r", requirements_path]
         )
