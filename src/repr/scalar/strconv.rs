@@ -542,6 +542,7 @@ pub fn format_list<T>(
             if !needs_escaping {
                 buf.write_str(&tmp);
             } else {
+                buf.write_str(r#"""#);
                 for chr in tmp.chars() {
                     match chr {
                         '\\' => buf.write_str(r#"\\"#),
@@ -549,6 +550,7 @@ pub fn format_list<T>(
                         _ => write!(buf, "{}", chr),
                     }
                 }
+                buf.write_str(r#"""#);
             }
         }
         if elems.peek().is_some() {
