@@ -262,7 +262,7 @@ class CargoTest(PreImage):
 
 
 class Image:
-    """An Docker image whose build and dependencies are managed by mzbuild.
+    """A Docker image whose build and dependencies are managed by mzbuild.
 
     An image corresponds to a directory in a repository that contains a
     `mzbuild.yml` file. This directory is called an "mzbuild context."
@@ -286,7 +286,7 @@ class Image:
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
-            self.publish = data.pop("publish", True)
+            self.publish: bool = data.pop("publish", True)
             pre_image = data.pop("pre-image", None)
             if pre_image is not None:
                 typ = pre_image.pop("type", None)
@@ -311,27 +311,6 @@ class Image:
                 if match:
                     self.depends_on.append(match.group(1).decode())
 
-    def write_dockerfile(self, dep_specs: Dict[str, str]) -> IO[bytes]:
-        """Render the Dockerfile without mzbuild directives.
-
-        The arguments are the same as for `Image.acquire`.
-
-        Returns:
-            file: A handle to a temporary file containing the adjusted
-                Dockerfile."""
-        with open(self.path / "Dockerfile", "rb") as f:
-            lines = f.readlines()
-        f = TemporaryFile()
-        for line in lines:
-            match = self._DOCKERFILE_MZFROM_RE.match(line)
-            if match:
-                image = match.group(1).decode()
-                spec = dep_specs[image]
-                line = self._DOCKERFILE_MZFROM_RE.sub(b"FROM %b" % spec.encode(), line)
-            f.write(line)
-        f.seek(0)
-        return f
-
     def env_var_name(self) -> str:
         """Return the image name formatted for use in an environment variable.
 
@@ -343,51 +322,98 @@ class Image:
         """Return the name of the image on Docker Hub at the given tag."""
         return f"materialize/{self.name}:{tag}"
 
+
+class ResolvedImage:
+    """An `Image` whose dependencies have been resolved.
+
+    Attributes:
+        image: The underlying `Image`.
+        dependencies: A mapping from dependency name to `ResolvedImage` for
+            each of the images that `image` depends upon.
+        """
+
+    def __init__(self, image: Image, dependencies: Iterable["ResolvedImage"]):
+        self.image = image
+        self.dependencies = {}
+        for d in dependencies:
+            self.dependencies[d.name] = d
+
+    @property
+    def name(self) -> str:
+        """The name of the underlying image."""
+        return self.image.name
+
+    @property
+    def publish(self) -> bool:
+        """Whether the underlying image should be pushed to Docker Hub."""
+        return self.image.publish
+
     def spec(self) -> str:
         """Return the "spec" for the image.
 
         A spec is the unique identifier for the image given its current
         fingerprint. It is a valid Docker Hub name.
         """
-        return self.docker_name(f"mzbuild-{self.fingerprint()}")
+        return self.image.docker_name(f"mzbuild-{self.fingerprint()}")
 
-    def build(self, dep_specs: Dict[str, str]) -> None:
-        """Build the image from source.
+    def write_dockerfile(self) -> IO[bytes]:
+        """Render the Dockerfile without mzbuild directives.
 
-        The arguments are the same as for `Image.acquire`.
-        """
-        if self.pre_image is not None:
-            self.pre_image.run(self.root, self.path)
-        f = self.write_dockerfile(dep_specs)
+        Returns:
+            file: A handle to a temporary file containing the adjusted
+                Dockerfile."""
+        with open(self.image.path / "Dockerfile", "rb") as f:
+            lines = f.readlines()
+        f = TemporaryFile()
+        for line in lines:
+            match = Image._DOCKERFILE_MZFROM_RE.match(line)
+            if match:
+                image = match.group(1).decode()
+                spec = self.dependencies[image].spec()
+                line = Image._DOCKERFILE_MZFROM_RE.sub(b"FROM %b" % spec.encode(), line)
+            f.write(line)
+        f.seek(0)
+        return f
+
+    def build(self) -> None:
+        """Build the image from source."""
+        if self.image.pre_image is not None:
+            self.image.pre_image.run(self.image.root, self.image.path)
+        f = self.write_dockerfile()
         spawn.runv(
-            ["docker", "build", "--pull", "-f", "-", "-t", self.spec(), self.path],
+            [
+                "docker",
+                "build",
+                "--pull",
+                "-f",
+                "-",
+                "-t",
+                self.spec(),
+                self.image.path,
+            ],
             stdin=f,
         )
 
-    def acquire(self, dep_specs: Dict[str, str]) -> AcquiredFrom:
+    def acquire(self) -> AcquiredFrom:
         """Download or build the image.
-
-        Args:
-            dep_specs: A mapping from spec to fingerprint for all images upon
-                which this image depends.
 
         Returns:
             acquired_from: How the image was acquired.
         """
-        if self.publish:
+        if self.image.publish:
             try:
                 spawn.runv(["docker", "pull", self.spec()])
                 return AcquiredFrom.REGISTRY
             except subprocess.CalledProcessError:
                 pass
-        self.build(dep_specs)
+        self.build()
         return AcquiredFrom.LOCAL_BUILD
 
     def push(self) -> None:
         """Push the image to Docker Hub.
 
         The image is pushed under the Docker identifier returned by
-        `Image.spec`.
+        `ResolvedImage.spec`.
         """
         spawn.runv(["docker", "push", self.spec()])
 
@@ -411,13 +437,13 @@ class Image:
         be inputs. If it has a pre-image action, that action may add additional
         inputs via `PreImage.inputs`.
         """
-        paths = git_ls_files(self.root, self.path)
-        if self.pre_image is not None:
-            paths += self.pre_image.inputs(self.root, self.path)
+        paths = git_ls_files(self.image.root, self.image.path)
+        if self.image.pre_image is not None:
+            paths += self.image.pre_image.inputs(self.image.root, self.image.path)
         paths.sort()
         fingerprint = hashlib.sha1()
         for rel_path in paths:
-            abs_path = self.root / rel_path.decode()
+            abs_path = self.image.root / rel_path.decode()
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
             # Compute a simplified file mode using the same rules as Git.
@@ -452,7 +478,11 @@ class DependencySet:
     """
 
     def __init__(self, dependencies: Iterable[Image]):
-        self.dependencies = list(dependencies)
+        self.dependencies: OrderedDict[str, ResolvedImage] = OrderedDict()
+        for d in dependencies:
+            self.dependencies[d.name] = ResolvedImage(
+                d, (self.dependencies[d0] for d0 in d.depends_on)
+            )
 
     def acquire(self, force_build: bool = False, push: bool = False) -> None:
         """Download or build all of the images in the dependency set.
@@ -469,21 +499,20 @@ class DependencySet:
         specs = {d.name: d.spec() for d in self}
         for d in self:
             spec = d.spec()
-            dep_specs = {d: specs[d] for d in d.depends_on}
             if spec not in known_images:
                 if force_build:
                     print(f"==> Force-building {spec}")
-                    d.build(dep_specs)
+                    d.build()
                 else:
                     print(f"==> Acquiring {spec}")
-                    acquired_from = d.acquire(dep_specs)
+                    acquired_from = d.acquire()
                     if push and d.publish and acquired_from == AcquiredFrom.LOCAL_BUILD:
                         d.push()
 
-    def __iter__(self) -> Iterator[Image]:
-        return iter(self.dependencies)
+    def __iter__(self) -> Iterator[ResolvedImage]:
+        return iter(self.dependencies.values())
 
-    def __getitem__(self, key: int) -> Image:
+    def __getitem__(self, key: str) -> ResolvedImage:
         return self.dependencies[key]
 
 

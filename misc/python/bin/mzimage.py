@@ -36,17 +36,16 @@ def main(args: List[str]) -> int:
         if image_name not in repo.images:
             print(f"fatal: unknown image: {image_name}", file=sys.stderr)
             return 1
-        image = repo.images[image_name]
-        deps = repo.resolve_dependencies([image])
+        deps = repo.resolve_dependencies([repo.images[image_name]])
         if command == "build":
             deps.acquire(force_build=True)
         elif command == "run":
             deps.acquire()
-            image.run(args)
+            deps[image_name].run(args)
         elif command == "acquire":
             deps.acquire()
         elif command == "fingerprint":
-            print(deps[-1].fingerprint())
+            print(deps[image_name].fingerprint())
     else:
         print(f"fatal: unknown command: {command}", file=sys.stderr)
         return 1
