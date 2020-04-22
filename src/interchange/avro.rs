@@ -13,12 +13,12 @@ use std::fmt;
 use std::iter;
 
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
+use ccsr::SchemaRegistry;
 use chrono::Timelike;
 use failure::bail;
 use itertools::Itertools;
 use serde_json::json;
 use sha2::Sha256;
-use url::Url;
 
 use avro::schema::{
     resolve_schemas, Schema, SchemaFingerprint, SchemaNode, SchemaNodeOrNamed, SchemaPiece,
@@ -444,14 +444,14 @@ impl Decoder {
     /// that they are encoded with a different schema; as long as those.
     pub fn new(
         reader_schema: &str,
-        schema_registry_url: Option<url::Url>,
+        schema_registry: Option<SchemaRegistry>,
         envelope: EnvelopeType,
     ) -> Decoder {
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
         let reader_schema = parse_schema(reader_schema).unwrap();
-        let writer_schemas = schema_registry_url
-            .map(|url| SchemaCache::new(url, reader_schema.fingerprint::<Sha256>()));
+        let writer_schemas =
+            schema_registry.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
 
         let fast_row_schema = match reader_schema.top_node().inner {
             // If the first two fields in the record are `before` and `after`,
@@ -772,10 +772,10 @@ struct SchemaCache {
 }
 
 impl SchemaCache {
-    fn new(schema_registry_url: Url, reader_fingerprint: SchemaFingerprint) -> SchemaCache {
+    fn new(schema_registry: SchemaRegistry, reader_fingerprint: SchemaFingerprint) -> SchemaCache {
         SchemaCache {
             cache: HashMap::new(),
-            ccsr_client: ccsr::Client::new(schema_registry_url),
+            ccsr_client: ccsr::Client::new(&schema_registry),
             reader_fingerprint,
         }
     }

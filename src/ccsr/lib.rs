@@ -11,14 +11,67 @@
 
 //! Confluent-compatible schema registry API client.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::fs::File;
+use std::io::Read;
 
+use failure::bail;
 use futures::executor::block_on;
-use reqwest::Url;
+use reqwest::{Certificate, Identity, Url};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+// Represents the Confluent Schema Registry you want to connect to, including
+// any configuration provided for the Kafka cluster, such as TLS options.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SchemaRegistry {
+    pub url: Url,
+    pub config: HashMap<String, String>,
+}
+
+impl SchemaRegistry {
+    // Returns the values from the SchemaRegistry necessary to create a
+    // `reqwest::Client`.
+    pub fn extract_client_params(
+        &self,
+    ) -> Result<(Url, Option<Certificate>, Option<Identity>), failure::Error> {
+        let ca = match self.config.get("ssl.ca.location") {
+            Some(v) => {
+                if !std::path::Path::new(&v).exists() {
+                    bail!("invalid ssl.ca.location");
+                }
+                let mut ca_buf = Vec::new();
+                File::open(v)?.read_to_end(&mut ca_buf)?;
+                Some(Certificate::from_pem(&ca_buf)?)
+            }
+            None => None,
+        };
+        let key = self.config.get("ssl.key.location");
+        let cert = self.config.get("ssl.certificate.location");
+        let ident = match (key, cert) {
+            (Some(key), Some(cert)) => {
+                // `reqwest` expects identity `pem` files to contain one key and
+                // at least one certificate. Because `librdkafka` expects these
+                // as two separate arguments, we simply concatenate them for
+                // `reqwest`'s sake.
+                let mut ident_buf = Vec::new();
+                File::open(key)?.read_to_end(&mut ident_buf)?;
+                File::open(cert)?.read_to_end(&mut ident_buf)?;
+                Some(Identity::from_pem(&ident_buf)?)
+            }
+            (None, None) => None,
+            (_, _) => bail!(
+                "Reading from SSL-auth Confluent Schema Registry requires both ssl.key.location \
+                and ssl.certificate.location"
+            ),
+        };
+        Ok((self.url.clone(), ca, ident))
+    }
+}
 
 /// A synchronous API client for a Confluent-compatible schema registry.
 #[derive(Debug)]
@@ -34,13 +87,26 @@ pub struct AsyncClient {
 }
 
 impl AsyncClient {
-    /// Creates a new API client that will send requests to the schema registry
-    /// at the provided URL.
-    pub fn new(url: Url) -> Self {
-        let inner = reqwest::Client::builder()
+    /// Creates a new API client that will send requests to the supplied `SchemaRegistry`.
+    pub fn new(sr: &SchemaRegistry) -> Self {
+        let mut builder = reqwest::Client::builder();
+        builder = builder.use_rustls_tls();
+
+        // Errors from `sr.extract_client_params()` are expected to have been
+        // caught by `sql::statement::purify_format`, so we can unwrap here.
+        let (url, ca, ident) = sr.extract_client_params().unwrap();
+        if let Some(ca) = ca {
+            builder = builder.add_root_certificate(ca);
+        }
+        if let Some(ident) = ident {
+            builder = builder.identity(ident);
+        }
+
+        let inner = builder
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
+
         Self { inner, url }
     }
 
@@ -102,10 +168,10 @@ impl AsyncClient {
 }
 
 impl Client {
-    /// Creates a new API client that will send requests to the schema registry
-    /// at the provided URL.
-    pub fn new(url: Url) -> Client {
-        let inner = AsyncClient::new(url);
+    /// Creates a new API client that will send requests to the supplied
+    /// `SchemaRegistry`.
+    pub fn new(sr: &SchemaRegistry) -> Client {
+        let inner = AsyncClient::new(sr);
         Client { inner }
     }
 

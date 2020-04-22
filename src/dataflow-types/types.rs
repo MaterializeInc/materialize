@@ -15,6 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use ccsr::SchemaRegistry;
 use failure::ResultExt;
 use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
@@ -372,7 +373,7 @@ impl DataEncoding {
 pub struct AvroEncoding {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub schema_registry_url: Option<Url>,
+    pub schema_registry: Option<SchemaRegistry>,
 }
 
 /// Encoding in CSV format, with `n_cols` columns per row, with an optional header.
@@ -478,7 +479,7 @@ pub struct KafkaSourceConnector {
     pub topic: String,
     // Represents options specified by user when creating the source, e.g.
     // security settings.
-    pub config_options: Vec<(String, String)>,
+    pub config_options: HashMap<String, String>,
     // FIXME (brennan) - in the very near future, this should be made into a hashmap of partition |-> offset.
     // #2736
     pub start_offset: i64,

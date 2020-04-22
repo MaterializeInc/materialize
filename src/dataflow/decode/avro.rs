@@ -10,6 +10,7 @@
 use log::error;
 
 use super::{DecoderState, PushSession};
+use ccsr::SchemaRegistry;
 use dataflow_types::{Diff, Timestamp};
 use interchange::avro::{Decoder, EnvelopeType};
 use repr::Row;
@@ -26,12 +27,12 @@ pub struct AvroDecoderState {
 impl AvroDecoderState {
     pub fn new(
         reader_schema: &str,
-        schema_registry_url: Option<url::Url>,
+        schema_registry: Option<SchemaRegistry>,
         envelope: EnvelopeType,
         reject_non_inserts: bool,
     ) -> Self {
         AvroDecoderState {
-            decoder: Decoder::new(reader_schema, schema_registry_url, envelope),
+            decoder: Decoder::new(reader_schema, schema_registry, envelope),
             events_success: 0,
             events_error: 0,
             reject_non_inserts,

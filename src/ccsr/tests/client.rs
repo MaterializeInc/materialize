@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::env;
 
 use hyper::server::conn::AddrIncoming;
@@ -17,7 +18,7 @@ use hyper::{Body, Response};
 use lazy_static::lazy_static;
 use tokio::runtime::Runtime;
 
-use ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError};
+use ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaRegistry};
 
 lazy_static! {
     pub static ref SCHEMA_REGISTRY_URL: reqwest::Url = match env::var("SCHEMA_REGISTRY_URL") {
@@ -29,7 +30,10 @@ lazy_static! {
 #[test]
 fn test_client() -> Result<(), failure::Error> {
     tokio::runtime::Runtime::new().unwrap().enter(|| {
-        let client = Client::new(SCHEMA_REGISTRY_URL.clone());
+        let client = Client::new(&SchemaRegistry {
+            url: SCHEMA_REGISTRY_URL.clone(),
+            config: HashMap::new(),
+        });
 
         let existing_subjects = client.list_subjects()?;
         for s in existing_subjects {
@@ -103,7 +107,10 @@ fn test_client() -> Result<(), failure::Error> {
 #[test]
 fn test_client_errors() -> Result<(), failure::Error> {
     tokio::runtime::Runtime::new().unwrap().enter(|| {
-        let client = Client::new(SCHEMA_REGISTRY_URL.clone());
+        let client = Client::new(&SchemaRegistry {
+            url: SCHEMA_REGISTRY_URL.clone(),
+            config: HashMap::new(),
+        });
 
         // Get-by-id-specific errors.
         match client.get_schema_by_id(i32::max_value()) {
@@ -249,7 +256,10 @@ fn start_server(runtime: &Runtime, status_code: StatusCode, body: &'static str) 
     });
 
     let url: reqwest::Url = format!("http://{}", addr).parse().unwrap();
-    Client::new(url)
+    Client::new(&SchemaRegistry {
+        url,
+        config: HashMap::new(),
+    })
 }
 
 fn assert_raw_schemas_eq(schema1: &str, schema2: &str) {

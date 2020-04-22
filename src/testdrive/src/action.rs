@@ -26,6 +26,7 @@ use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::KinesisClient;
 use url::Url;
 
+use ccsr::SchemaRegistry;
 use repr::strconv;
 
 use crate::error::{Error, InputError, ResultExt};
@@ -45,6 +46,7 @@ const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 pub struct Config {
     pub kafka_addr: String,
     pub schema_registry_url: Url,
+    pub security_options: HashMap<String, String>,
     pub aws_region: rusoto_core::Region,
     pub aws_account: String,
     pub aws_credentials: AwsCredentials,
@@ -60,6 +62,7 @@ impl Default for Config {
         Config {
             kafka_addr: "localhost:9092".into(),
             schema_registry_url: "http://localhost:8081".parse().unwrap(),
+            security_options: HashMap::new(),
             aws_region: rusoto_core::Region::default(),
             aws_account: DUMMY_AWS_ACCOUNT.into(),
             aws_credentials: AwsCredentials::new(
@@ -398,7 +401,10 @@ pub async fn create_state(
     };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
-    let ccsr_client = ccsr::AsyncClient::new(config.schema_registry_url.clone());
+    let ccsr_client = ccsr::AsyncClient::new(&SchemaRegistry {
+        url: config.schema_registry_url.clone(),
+        config: HashMap::new(),
+    });
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
@@ -408,6 +414,9 @@ pub async fn create_state(
 
         let mut kafka_config = ClientConfig::new();
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
+        for (k, v) in &config.security_options {
+            kafka_config.set(k, v);
+        }
 
         let admin: AdminClient<DefaultClientContext> =
             kafka_config.create().map_err(|e| Error::General {

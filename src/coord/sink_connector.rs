@@ -14,6 +14,7 @@ use failure::{bail, format_err, ResultExt};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::config::ClientConfig;
 
+use ccsr::SchemaRegistry;
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
     KafkaSinkConnectorBuilder, SinkConnector, SinkConnectorBuilder,
@@ -64,10 +65,14 @@ async fn build_kafka(
     //
     // TODO(benesch): do we need to delete the Kafka topic if publishing the
     // schema fails?
-    let schema_id = ccsr::AsyncClient::new(builder.schema_registry_url)
-        .publish_schema(&format!("{}-value", topic), &builder.value_schema)
-        .await
-        .with_context(|e| format!("unable to publish schema to registry in kafka sink: {}", e))?;
+    // TODO(sploiselle): support SSL auth'ed sinks
+    let schema_id = ccsr::AsyncClient::new(&SchemaRegistry {
+        url: builder.schema_registry_url,
+        config: std::collections::HashMap::new(),
+    })
+    .publish_schema(&format!("{}-value", topic), &builder.value_schema)
+    .await
+    .with_context(|e| format!("unable to publish schema to registry in kafka sink: {}", e))?;
 
     Ok(SinkConnector::Kafka(KafkaSinkConnector {
         schema_id,
