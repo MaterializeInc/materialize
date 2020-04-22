@@ -1,2 +1,18 @@
+# Force HTTP to HTTPS.
 http://materialize.io/* https://materialize.io/:splat 301!
+
+# Evergreen, readable shortlinks.
+#
+# The materialize.io/s/ namespace is reserved for shortlinks. The idea is that
+# even if we change hosting providers, or switch platforms for the marketing
+# website, the /s path can always be easily reserved for shortlinks.
+#
+# This is not a general-purpose URL shortener. Only evergreen content should be
+# added here, and only when the layer of indirection is necessary. For example,
+# the "bug" shortlink allows us to embed a bug reporting URL in the
+# materialized binary that can be updated if we ever switch away from GitHub
+# or change how we want bugs to be filed.
+/s/bug https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=bug.md
+
+# Forward all paths unknown to Netlify to the marketing site.
 /* https://materializeinc.wpengine.com/:splat 200
