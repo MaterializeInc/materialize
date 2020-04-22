@@ -1027,24 +1027,34 @@ impl RelationExpr {
         keys_and_values: RelationExpr,
         default: Vec<(Datum, ColumnType)>,
     ) -> RelationExpr {
-        let keys = self;
-        assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
-        keys_and_values
-            .let_in(id_gen, |_id_gen, get_keys_and_values| {
-                Ok(get_keys_and_values
-                    .distinct_by((0..keys.arity()).collect())
-                    .negate()
-                    .union(keys)
-                    // This join is logically equivalent to
-                    // `.map(<default_expr>)`, but using a join allows for
-                    // potential predicate pushdown and elision in the
-                    // optimizer.
-                    .product(RelationExpr::constant(
-                        vec![default.iter().map(|(datum, _)| *datum).collect()],
-                        RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
-                    )))
-            })
-            .unwrap()
+        assert_eq!(keys_and_values.arity() - self.arity(), default.len());
+        self.let_in(id_gen, |_id_gen, get_keys| {
+            Ok(RelationExpr::join(
+                vec![
+                    // all the missing keys (with count 1)
+                    keys_and_values
+                        .distinct_by((0..get_keys.arity()).collect())
+                        .negate()
+                        .union(get_keys.clone().distinct()),
+                    // join with keys to get the correct counts
+                    get_keys.clone(),
+                ],
+                (0..get_keys.arity())
+                    .map(|i| vec![(0, i), (1, i)])
+                    .collect(),
+            )
+            // get rid of the extra copies of columns from keys
+            .project((0..get_keys.arity()).collect())
+            // This join is logically equivalent to
+            // `.map(<default_expr>)`, but using a join allows for
+            // potential predicate pushdown and elision in the
+            // optimizer.
+            .product(RelationExpr::constant(
+                vec![default.iter().map(|(datum, _)| *datum).collect()],
+                RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
+            )))
+        })
+        .unwrap()
     }
 
     /// Return:
