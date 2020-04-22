@@ -129,10 +129,13 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None) -> None:
 
     # Update dependencies, if necessary.
     if stamp_mtime <= requirements_mtime:
-        print("==> Updating {}dependencies with pip".format(variant + " " if variant else ""))
-        subprocess.check_call(
-            [venv_dir / "bin" / "pip", "install", "-r", requirements_path]
-        )
+        var = variant + " " if variant else ""
+        print(f"==> Updating {var}dependencies with pip")
+        pip = venv_dir / "bin" / "pip"
+        # ensure that wheel is installed to reduce the build pipeline required on
+        # deployment targets
+        subprocess.check_call([pip, "install", "wheel"])
+        subprocess.check_call([pip, "install", "-r", requirements_path])
         stamp_path.touch()
 
 
