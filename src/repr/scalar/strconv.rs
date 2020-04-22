@@ -436,7 +436,7 @@ pub fn parse_list<T>(
         None => bail!("unexpected end of input"),
     }
     loop {
-        match chars.peek().map(|c| *c) {
+        match chars.peek().copied() {
             // end of list
             Some('}') => {
                 // consume
@@ -478,7 +478,7 @@ pub fn parse_list<T>(
             Some(_) => {
                 let mut elem_text = String::new();
                 loop {
-                    match chars.peek().map(|c| *c) {
+                    match chars.peek().copied() {
                         // end of unescaped elem
                         Some('}') | Some(',') | Some(' ') => break,
                         // a normal character
