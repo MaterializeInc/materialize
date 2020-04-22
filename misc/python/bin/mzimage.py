@@ -58,6 +58,9 @@ def main(args: List[str]) -> int:
                 print(f"    {d}")
             if not rimage.dependencies:
                 print("    (none)")
+    elif command in ["-h", "--help"]:
+        print_usage()
+        return 0
     else:
         print(f"fatal: unknown command: {command}", file=sys.stderr)
         return 1
