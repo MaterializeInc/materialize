@@ -415,44 +415,38 @@ fn downgrade_capability(
     // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
     // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
     // in next_partition_ts
-    match timestamp_histories.borrow_mut().get_mut(id) {
-        None => {}
-        Some(entries) => {
-            for (pid, entries) in entries {
-                // Obtain the last offset processed (or 0 if no messages have yet been processed)
-                let last_offset = match last_processed_offset.get(pid) {
-                    Some(offs) => *offs,
-                    None => 0,
-                };
-                // Check whether timestamps can be closed on this partition
-                while let Some((partition_count, ts, offset)) = entries.first() {
-                    assert!(*offset >= start_offset, "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.", offset, start_offset);
-                    if partition_count > current_partition_count {
-                        // A new partition has been added, we need to update the appropriate
-                        // entries before we continue. This will also update the last_processed_offset
-                        // and next_partition_ts data structures
-                        let partitions = update_partition_list(
-                            consumer,
-                            topic,
-                            *partition_count,
-                            last_processed_offset,
-                            next_partition_ts,
-                            *last_closed_ts,
-                            start_offset,
-                        );
-                        *current_partition_count = i32::try_from(partitions.len()).unwrap();
-                    }
-                    if last_offset == *offset {
-                        // We have now seen all messages corresponding to this timestamp for this
-                        // partition. We
-                        // can close the timestamp (on this partition) and remove the associated metadata
-                        next_partition_ts.insert(pid.clone(), *ts);
-                        entries.remove(0);
-                        changed = true;
-                    } else {
-                        // Offset isn't at a timestamp boundary, we take no action
-                        break;
-                    }
+    if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+        for (pid, entries) in entries {
+            // Obtain the last offset processed (or 0 if no messages have yet been processed)
+            let last_offset = *last_processed_offset.get(pid).unwrap_or(&0);
+            // Check whether timestamps can be closed on this partition
+            while let Some((partition_count, ts, offset)) = entries.first() {
+                assert!(*offset >= start_offset, "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.", offset, start_offset);
+                if partition_count > current_partition_count {
+                    // A new partition has been added, we need to update the appropriate
+                    // entries before we continue. This will also update the last_processed_offset
+                    // and next_partition_ts data structures
+                    let partitions = update_partition_list(
+                        consumer,
+                        topic,
+                        *partition_count,
+                        last_processed_offset,
+                        next_partition_ts,
+                        *last_closed_ts,
+                        start_offset,
+                    );
+                    *current_partition_count = i32::try_from(partitions.len()).unwrap();
+                }
+                if last_offset == *offset {
+                    // We have now seen all messages corresponding to this timestamp for this
+                    // partition. We
+                    // can close the timestamp (on this partition) and remove the associated metadata
+                    next_partition_ts.insert(pid.clone(), *ts);
+                    entries.remove(0);
+                    changed = true;
+                } else {
+                    // Offset isn't at a timestamp boundary, we take no action
+                    break;
                 }
             }
         }

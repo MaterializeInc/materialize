@@ -187,19 +187,24 @@ enum ValueEncoding {
 /// Timestamp consumer: wrapper around source consumers that stores necessary information
 /// about topics and offset for byo consistency
 struct ByoTimestampConsumer {
-    // Source Connector
+    /// Source Connector
     connector: ByoTimestampConnector,
-    // The name of the source with which this connector is associated
+    /// The name of the source with which this connector is associated
+    ///
+    /// For kafka this is the topic.
+    /// other sources don't work with BYO consistency yet.
     source_name: String,
-    // The format of the connector
+    /// The SourceId that this consumer is associated with
+    source_id: SourceInstanceId,
+    /// The format of the connector
     envelope: ConsistencyFormatting,
-    // The last timestamp assigned per partition
+    /// The last timestamp assigned per partition
     last_partition_ts: HashMap<PartitionId, u64>,
-    // The max assigned timestamp. Should be max(last_partition_ts)
+    /// The max assigned timestamp. Should be max(last_partition_ts)
     last_ts: u64,
-    // The max offset for which a timestamp has been assigned
+    /// The max offset for which a timestamp has been assigned
     last_offset: i64,
-    // The total number of partitions for the data topic
+    /// The total number of partitions for the data topic
     current_partition_count: i32,
 }
 
@@ -249,20 +254,20 @@ impl ByoTimestampConsumer {
 
 /// Supported format/envelope pairs for consistency topic decoding
 enum ConsistencyFormatting {
-    // The formatting of this consistency source follows the
-    // SourceName,PartitionCount,PartitionId,TS,Offset
+    /// The formatting of this consistency source follows the
+    /// SourceName,PartitionCount,PartitionId,TS,Offset
     ByoBytes,
-    // The formatting of this consistency source follows
-    // the Avro BYO consistency format
+    /// The formatting of this consistency source follows
+    /// the Avro BYO consistency format
     ByoAvro,
-    // The formatting of this consistency source follows the
-    // the AvroOCF BYO consistency format
+    /// The formatting of this consistency source follows the
+    /// the AvroOCF BYO consistency format
     ByoAvroOcf,
-    // The formatting of this consistency source follows the
-    // Debezium Avro format
+    /// The formatting of this consistency source follows the
+    /// Debezium Avro format
     DebeziumAvro,
-    // The formatting of this consistency source follows the
-    // Debezium AvroOCF format
+    /// The formatting of this consistency source follows the
+    /// Debezium AvroOCF format
     DebeziumOcf,
 }
 
@@ -1405,6 +1410,7 @@ impl Timestamper {
     }
 
     /// Query real-time sources for the current max offset that has been generated for that source
+    ///
     /// Set the new timestamped offset to min(max_offset, last_offset + increment_size): this ensures
     /// that we never create an overly large batch of messages for the same timestamp (which would
     /// prevent views from becoming visible in a timely fashion)
