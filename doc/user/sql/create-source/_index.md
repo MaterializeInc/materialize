@@ -21,7 +21,7 @@ their own requirements. For details about creating sources, view the
 documentation for the type of data you are trying to load into Materialize:
 
 - [Avro over Kafka](./avro-kafka)
-- [Raw bytes/text over Kafka](./text-kafka)
+- [Text or bytes over Kafka](./text-kafka)
 - [Avro from local file](./avro-file)
 - [Protobuf over Kafka](./protobuf-kafka)
 - [JSON over Kinesis](./json-kinesis)
