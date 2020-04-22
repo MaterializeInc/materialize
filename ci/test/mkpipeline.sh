@@ -11,39 +11,9 @@
 #
 # mkpipeline.sh — dynamically renders a pipeline.yml for Buildkite.
 
+# This wrapper script exists for compatibility with past revisions, where this
+# script was written in Bash. Its path is hardcoded into the Buildkite UI.
+
 set -euo pipefail
 
-cd "$(dirname "$0")/../.."
-
-. misc/shlib/shlib.bash
-
-# changes_matching GLOB
-#
-# Reports whether there were any changes on this branch in a file whose name
-# matches GLOB. Note that this function always returns true if there were any
-# changes to the build configuration itself, or if building on a release
-# branch or tag.
-changes_matching() {
-    if [[ "${BUILDKITE_BRANCH:-}" = master ]] || [[ "${BUILDKITE_TAG:-}" ]] ||
-        ! git diff --no-patch --quiet origin/master... -- "bin/*" "ci/*" "$@"
-    then
-        echo true
-    else
-        echo false
-    fi
-}
-
-run git fetch origin master
-
-CHANGED_DOC_USER=$(changes_matching "doc/user/*")
-CHANGED_RUST=$(changes_matching "demo/billing/*" "src/*" Cargo.lock)
-CHANGED_SLT=$(changes_matching "test/*.slt" "test/**/*.slt")
-CHANGED_TESTDRIVE=$(changes_matching "test/*.td" "test/**/*.td")
-CHANGED_CHBENCH=$(changes_matching "demo/chbench/**/*")
-CHANGED_JS=$(changes_matching "test/lang/**/*.js")
-export CHANGED_DOC_USER CHANGED_RUST CHANGED_SLT CHANGED_TESTDRIVE CHANGED_CHBENCH CHANGED_JS
-
-GIT_PAGER="" run git diff --stat origin/master...
-env | grep CHANGED
-
-buildkite-agent pipeline upload ci/test/pipeline.yml
+exec bin/ci-builder run stable bin/pyactivate -m ci.test.mkpipeline "$@"

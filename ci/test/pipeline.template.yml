@@ -7,13 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# This file is processed by mkpipeline.py to trim unnecessary steps in PR
+# builds. The inputs for steps using the `mzcompose` plugin are computed
+# automatically. Inputs for other steps need to be manually listed in the
+# `inputs` key.
+
 dag: true
 
 steps:
   - id: build
     label: ":docker: build"
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
-    if: $CHANGED_RUST || $CHANGED_CHBENCH || $CHANGED_SLT || $CHANGED_TESTDRIVE
     timeout_in_minutes: 30
     agents:
       queue: builder
@@ -21,12 +25,17 @@ steps:
   - id: lint-fast
     label: ":bath: lint and rustfmt"
     command: bin/ci-builder run stable ci/test/lint-fast.sh
+    inputs:
+      - "*"
     timeout_in_minutes: 10
 
   - id: lint-slow
     label: ":paperclip: clippy and doctests"
     command: bin/ci-builder run stable ci/test/lint-slow.sh
-    if: $CHANGED_RUST
+    inputs:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/*.rs"
     timeout_in_minutes: 30
     agents:
       queue: builder
@@ -39,13 +48,11 @@ steps:
       - ./ci/plugins/mzcompose:
           config: ci/test/cargo-test.mzcompose.yml
           run: app
-    if: $CHANGED_RUST
 
   - id: miri-test
     label: ":face_with_monocle: miri test"
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
     timeout_in_minutes: 30
-    if: $CHANGED_RUST
     agents:
       queue: builder
 
@@ -53,36 +60,34 @@ steps:
     label: ":racing_car: testdrive"
     depends_on: build
     timeout_in_minutes: 30
+    inputs: [test/testdrive]
     plugins:
       - ./ci/plugins/mzcompose:
           config: test/testdrive/mzcompose.yml
           run: testdrive
-    if: $CHANGED_RUST || $CHANGED_TESTDRIVE
 
   - id: testdrive-purgatory
     label: ":racing_car: testdrive purgatory"
     depends_on: build
     command: test/testdrive/ci-only/*.td
     timeout_in_minutes: 30
+    inputs: [test/testdrive/ci-only]
     soft_fail: true
     plugins:
       - ./ci/plugins/mzcompose:
           config: test/testdrive/mzcompose.yml
           run: testdrive
-    if: $CHANGED_RUST || $CHANGED_TESTDRIVE
 
   - id: short-sqllogictest
     label: ":bulb: Short SQL logic tests"
     depends_on: build
     command: ci/test/slt-fast.sh
     timeout_in_minutes: 10
-    env:
-      SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
+    inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
           config: test/sqllogictest/mzcompose.yml
           run: sqllogictest
-    if: $CHANGED_RUST || $CHANGED_SLT
 
   - id: streaming-demo
     label: ":shower: streaming-demo"
@@ -92,14 +97,15 @@ steps:
       - ./ci/plugins/mzcompose:
           config: demo/billing/mzcompose.yml
           run: billing-demo
-    if: $CHANGED_RUST
 
   - id: chbench-demo
     label: "chbench sanity check"
     depends_on: build
     command: bin/ci-builder run stable demo/chbench/dc.sh ci
+    # TODO(benesch): integrate dc.sh into mzcompose, so we don't need to
+    # manually track image inputs here.
+    inputs: ["#materialized", "#chbenchmark", "#peeker", "#cli"]
     timeout_in_minutes: 30
-    if: $CHANGED_RUST || $CHANGED_CHBENCH
 
   - id: catalog-compat
     label: ":book: catalog compatibility check"
@@ -109,7 +115,6 @@ steps:
       - ./ci/plugins/mzcompose:
           config: test/catalog-compat/mzcompose.yml
           run: catalog-compat
-    if: $CHANGED_RUST
 
   - id: metabase-demo
     label: "metabase-demo"
@@ -119,17 +124,16 @@ steps:
       - ./ci/plugins/mzcompose:
           config: test/metabase/mzcompose.yml
           run: healthcheck
-    if: $CHANGED_RUST
 
   - id: lang-js
     label: ":javascript: tests"
     depends_on: build
     timeout_in_minutes: 10
+    inputs: [test/lang/js]
     plugins:
       - ./ci/plugins/mzcompose:
           config: test/lang/js/mzcompose.yml
           run: js
-    if: $CHANGED_RUST || $CHANGED_JS
 
   - id: deploy
     label: ":rocket: Deploy"

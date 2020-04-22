@@ -81,25 +81,46 @@ case "$cmd" in
             --env AWS_SECRET_ACCESS_KEY
             --env BINTRAY_API_KEY
             --env BUILDKITE
+            --env BUILDKITE_AGENT_ACCESS_TOKEN
             --env BUILDKITE_BRANCH
             --env BUILDKITE_BUILD_NUMBER
+            --env BUILDKITE_JOB_ID
             --env BUILDKITE_TAG
             --env CI
         )
         if [[ "$(uname -s)" = Linux ]]; then
+            # Allow Docker-in-Docker by mounting the Docker socket in the
+            # container.
             args+=(
                 --volume "/var/run/docker.sock:/var/run/docker.sock"
-                --volume "$HOME/.cargo:/cargo"
-                --volume "$HOME/.docker/config.json:/docker/config.json"
-                --env "CARGO_HOME=/cargo"
-                --env "DOCKER_CONFIG=/docker"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
             )
+
+            # Forward Docker configuration too, if available.
+            if [[ -d ~/.docker ]]; then
+                args+=(
+                    --volume "$HOME/.docker:/docker"
+                    --env "DOCKER_CONFIG=/docker"
+                )
+            fi
+
+            # Forward the host's SSH agent, if available.
             if [[ "${SSH_AUTH_SOCK:-}" ]]; then
                 args+=(
                     --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock"
                     --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock"
                 )
+            fi
+
+            # Forward the host's Cargo cache.
+            args+=(
+                --volume "$HOME/.cargo:/cargo"
+                --env "CARGO_HOME=/cargo"
+            )
+
+            # Forward the host's buildkite-agent binary, if available.
+            if command -v buildkite-agent > /dev/null 2>&1; then
+                args+=(--volume "$(command -v buildkite-agent)":/usr/local/bin/buildkite-agent)
             fi
         else
             args+=(--user "$(id -u):1001")
