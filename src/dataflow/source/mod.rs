@@ -7,11 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::{Consistency, Timestamp};
 use std::cell::RefCell;
 use std::rc::Rc;
+
 use timely::dataflow::operators::Capability;
 use timely::scheduling::Activator;
+
+use dataflow_types::{Consistency, Timestamp};
+use expr::SourceInstanceId;
 
 use crate::server::{TimestampChanges, TimestampHistories};
 
@@ -20,10 +23,29 @@ mod kafka;
 mod kinesis;
 mod util;
 
-use expr::SourceInstanceId;
 pub use file::{file, read_file_task, FileReadStyle};
 pub use kafka::kafka;
 pub use kinesis::kinesis;
+
+// Shared configuration information for all source types.
+pub struct SourceConfig<'a, G> {
+    /// The name to attach to the underlying timely operator.
+    pub name: String,
+    /// The ID of this instantiation of this source.
+    pub id: SourceInstanceId,
+    /// The timely scope in which to build the source.
+    pub scope: &'a G,
+    /// Whether this worker has been chosen to actually receive data. All
+    /// workers must build the same dataflow operators to keep timely channel
+    /// IDs in sync, but only one worker will receive the data, to avoid
+    /// duplicates.
+    pub active: bool,
+    // Timestamping fields.
+    // TODO: document these.
+    pub timestamp_histories: TimestampHistories,
+    pub timestamp_tx: TimestampChanges,
+    pub consistency: Consistency,
+}
 
 // A `SourceToken` indicates interest in a source. When the `SourceToken` is
 // dropped, its associated source will be stopped.
@@ -37,51 +59,6 @@ pub struct SourceToken {
 impl SourceToken {
     pub fn activate(&self) {
         self.activator.activate();
-    }
-}
-
-// Shared configuration information for all source types
-pub struct SourceConfig<'a, G> {
-    id: SourceInstanceId,
-    region: &'a G,
-    timestamp_histories: TimestampHistories,
-    timestamp_tx: TimestampChanges,
-    consistency: Consistency,
-}
-
-impl<'a, G> SourceConfig<'a, G> {
-    pub fn new(
-        id: SourceInstanceId,
-        region: &'a G,
-        timestamp_histories: TimestampHistories,
-        timestamp_tx: TimestampChanges,
-        consistency: Consistency,
-    ) -> Self {
-        SourceConfig {
-            id,
-            region,
-            timestamp_histories,
-            timestamp_tx,
-            consistency,
-        }
-    }
-
-    pub fn into_parts(
-        self,
-    ) -> (
-        SourceInstanceId,
-        &'a G,
-        TimestampHistories,
-        TimestampChanges,
-        Consistency,
-    ) {
-        (
-            self.id,
-            self.region,
-            self.timestamp_histories,
-            self.timestamp_tx,
-            self.consistency,
-        )
     }
 }
 

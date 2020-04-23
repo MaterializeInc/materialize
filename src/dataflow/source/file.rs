@@ -9,29 +9,29 @@
 
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::io::Read;
 use std::path::PathBuf;
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
+use log::error;
 #[cfg(not(target_os = "macos"))]
 use notify::{RecursiveMode, Watcher};
-
-use dataflow_types::{ExternalSourceConnector, FileSourceConnector, Timestamp};
-use expr::{PartitionId, SourceInstanceId};
-use log::error;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
+use dataflow_types::{ExternalSourceConnector, FileSourceConnector, Timestamp};
+use expr::{PartitionId, SourceInstanceId};
+
 use crate::server::TimestampHistories;
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
-use std::io::Read;
-use std::sync::mpsc::TryRecvError;
 
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
-    None,
     ReadOnce,
     TailFollowFd,
     // TODO: TailFollowName,
@@ -126,7 +126,6 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     };
 
     let iter = match read_style {
-        FileReadStyle::None => unreachable!(),
         FileReadStyle::ReadOnce => iter_ctor(Box::new(file)),
         FileReadStyle::TailFollowFd => {
             // FSEvents doesn't raise events until you close the file, making it
@@ -145,9 +144,9 @@ pub fn read_file_task<Ctor, I, Out, Err>(
             #[cfg(target_os = "macos")]
             let (file_events_stream, handle) = {
                 let (timer_tx, timer_rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
+                thread::spawn(move || {
                     while let Ok(()) = timer_tx.send(()) {
-                        std::thread::sleep(Duration::from_millis(100));
+                        thread::sleep(Duration::from_millis(100));
                     }
                 });
                 (timer_rx, ())
@@ -262,8 +261,7 @@ fn find_matching_timestamp(
 }
 
 pub fn file<G, Ctor, I, Out, Err>(
-    source_config: SourceConfig<G>,
-    name: String,
+    config: SourceConfig<G>,
     path: PathBuf,
     read_style: FileReadStyle,
     iter_ctor: Ctor,
@@ -281,25 +279,23 @@ where
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_RECORDS_PER_INVOCATION: usize = 1024;
 
-    let (id, region, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
-
-    let read_file = read_style != FileReadStyle::None;
-    let ts = if read_file {
-        let prev = timestamp_histories
+    let ts = if config.active {
+        let prev = config
+            .timestamp_histories
             .borrow_mut()
-            .insert(id.clone(), HashMap::new());
+            .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        timestamp_tx.as_ref().borrow_mut().push((
-            id,
+        config.timestamp_tx.as_ref().borrow_mut().push((
+            config.id,
             Some((
                 ExternalSourceConnector::File(FileSourceConnector {
                     path: path.clone(),
                     tail: read_style == FileReadStyle::TailFollowFd,
                 }),
-                consistency,
+                config.consistency,
             )),
         ));
-        Some(timestamp_tx)
+        Some(config.timestamp_tx)
     } else {
         None
     };
@@ -314,12 +310,20 @@ where
     // open
     let mut last_closed_ts: u64 = 0;
 
-    let (stream, capability) = source(id, ts, region, &name, move |info| {
-        let activator = region.activator_for(&info.address[..]);
+    let SourceConfig {
+        id,
+        active,
+        scope,
+        timestamp_histories,
+        ..
+    } = config;
+
+    let (stream, capability) = source(id, ts, scope, &config.name.clone(), move |info| {
+        let activator = scope.activator_for(&info.address[..]);
         let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);
-        if read_file {
-            let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
-            std::thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
+        if active {
+            let activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
+            thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
         }
         move |cap, output| {
             // If nothing else causes us to wake up, do so after a specified amount of time.
@@ -327,7 +331,7 @@ where
             // Number of records read for this particular activation
             let mut records_read = 0;
 
-            if read_file {
+            if active {
                 // Check if the capability can be downgraded (this is independent of whether
                 // there are new messages that can be processed) as timestamps can become
                 // closed in the absence of messages
@@ -404,7 +408,7 @@ where
         }
     });
 
-    if read_file {
+    if config.active {
         (stream, Some(capability))
     } else {
         (stream, None)
