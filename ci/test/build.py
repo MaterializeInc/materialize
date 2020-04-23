@@ -64,7 +64,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     deb_path = repo.rd.xcargo_target_dir() / "debian" / "materialized.deb"
     spawn.runv(
         [
-            "cargo",
+            repo.rd.xcargo(),
             "deb",
             "--no-build",
             "--no-strip",
