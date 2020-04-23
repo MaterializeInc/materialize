@@ -110,16 +110,13 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
-use timely::dataflow::operators::generic::{operator, Operator};
+use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
-use timely::dataflow::Stream;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
-
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
 
 use avro::Schema;
 use dataflow_types::Timestamp;
@@ -135,13 +132,12 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::{SourceConfig, SourceToken};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::decode::{decode_avro_values, decode_upsert, decode_values};
+use crate::decode::{decode_avro_values, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
 use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
 use crate::source::KafkaSourceInfo;
-use source::SourceOutput;
 
 mod arrange_by;
 mod context;
@@ -150,6 +146,7 @@ mod join;
 mod reduce;
 mod threshold;
 mod top_k;
+mod upsert;
 
 pub(crate) fn build_local_input<A: Allocate>(
     manager: &mut TraceManager,
@@ -315,38 +312,27 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         connector,
                                     );
 
-                                // This operator changes the timestamp from capability to message payload,
-                                // and applies `as_of` frontier compaction. The compaction is important as
-                                // downstream upsert preparation can compact away updates for the same keys
-                                // at the same times, and by advancing times we make more of them the same.
-                                let as_of_frontier = as_of_frontier.clone();
-                                let source =
-                                    source.unary(Pipeline, "AppendTimestamp", move |_, _| {
-                                        let mut vector = Vec::new();
-                                        move |input, output| {
-                                            input.for_each(|cap, data| {
-                                                data.swap(&mut vector);
-                                                let mut time = cap.time().clone();
-                                                time.advance_by(as_of_frontier.borrow());
-                                                output.session(&cap).give_iterator(
-                                                    vector.drain(..).map(|x| (x, time.clone())),
-                                                );
-                                            });
-                                        }
-                                    });
+                                let (transformed, new_err_collection) =
+                                    upsert::pre_arrange_from_upsert_transforms(
+                                        &source,
+                                        encoding,
+                                        key_encoding,
+                                        &dataflow.debug_name,
+                                        worker_index,
+                                        as_of_frontier.clone(),
+                                        &mut src.operators,
+                                        src.desc.typ(),
+                                    );
 
-                                // Deduplicate records by key, decode, and then upsert arrange them.
-                                let deduplicated = prepare_upsert_by_max_offset(&source);
-                                let decoded = decode_upsert(
-                                    &deduplicated,
-                                    encoding,
-                                    key_encoding,
-                                    &dataflow.debug_name,
-                                    worker_index,
-                                );
                                 let arranged = arrange_from_upsert(
-                                    &decoded,
+                                    &transformed,
                                     &format!("UpsertArrange: {}", src_id.to_string()),
+                                );
+
+                                err_collection.concat(
+                                    &new_err_collection
+                                        .pass_through("upsert-linear-errors")
+                                        .as_collection(),
                                 );
 
                                 let keys = src.desc.typ().keys[0]
@@ -741,73 +727,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
             }
         });
     })
-}
-
-/// Produces at most one entry for each `(key, time)` pair.
-///
-/// The incoming stream of `(key, (val, off), time)` records may have many
-/// entries with the same `key` and `time`. We are able to reduce this to
-/// at most one record for each pair, by retaining only the record with the
-/// greatest offset: its action summarizes the sequence of many actions that
-/// occur at the same moment and so are not distinguishable.
-fn prepare_upsert_by_max_offset<G>(
-    stream: &Stream<G, (SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)>,
-) -> Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    stream.unary_frontier(
-        Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
-        "UpsertCompaction",
-        |_cap, _info| {
-            let mut values = HashMap::<_, HashMap<_, (Vec<u8>, Option<i64>)>>::new();
-            let mut vector = Vec::new();
-
-            move |input, output| {
-                // Digest each input, reduce by presented timestamp.
-                input.for_each(|cap, data| {
-                    data.swap(&mut vector);
-                    for (
-                        SourceOutput {
-                            key,
-                            value: val,
-                            position,
-                        },
-                        time,
-                    ) in vector.drain(..)
-                    {
-                        let value = values
-                            .entry(cap.delayed(&time))
-                            .or_insert_with(HashMap::new)
-                            .entry(key)
-                            .or_insert_with(Default::default);
-
-                        if let Some(new_offset) = position {
-                            if let Some(offset) = value.1 {
-                                if offset < new_offset {
-                                    *value = (val, position);
-                                }
-                            } else {
-                                *value = (val, position);
-                            }
-                        }
-                    }
-                });
-
-                // Produce (key, val) pairs at any complete times.
-                for (cap, map) in values.iter_mut() {
-                    if !input.frontier.less_equal(cap.time()) {
-                        let mut session = output.session(cap);
-                        for (key, val) in map.drain() {
-                            session.give(((key, val), cap.time().clone()))
-                        }
-                    }
-                }
-                // Discard entries, capabilities for complete times.
-                values.retain(|_cap, map| !map.is_empty());
-            }
-        },
-    )
 }
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>

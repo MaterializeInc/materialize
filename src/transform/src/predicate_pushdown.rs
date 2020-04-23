@@ -77,8 +77,20 @@ impl crate::Transform for PredicatePushdown {
 }
 
 impl PredicatePushdown {
-    /// Pushes predicates down through other operators.
-    pub fn action(
+    /// Pushes predicates down through the operator tree and extracts
+    /// The ones that should be pushed down to the next dataflow object
+    pub fn dataflow_transform(
+        &self,
+        relation: &mut RelationExpr,
+        get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
+    ) {
+        relation.visit_mut_pre(&mut |e| {
+            self.action(e, get_predicates);
+        });
+    }
+
+    /// Single node predicate pushdown
+    fn action(
         &self,
         relation: &mut RelationExpr,
         get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
@@ -111,7 +123,7 @@ impl PredicatePushdown {
                         **value = value.take_dangerous().filter(list);
                     }
                     // The pre-order optimization will process `value` and
-                    // then (unneccesarily, I think) reconsider `body`.
+                    // then (unnecessarily, I think) reconsider `body`.
                 }
                 RelationExpr::Get { id, .. } => {
                     // We can report the predicates upward in `get_predicates`,
