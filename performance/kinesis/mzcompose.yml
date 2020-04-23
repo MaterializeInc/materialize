@@ -29,7 +29,7 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w ${MZ_THREADS:-1}
+    command: -w 4
     environment:
       # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
       - MZ_LOG=pgwire=debug,info

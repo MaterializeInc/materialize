@@ -51,6 +51,7 @@ impl MzClient {
         let timer = std::time::Instant::now();
         let source_name = String::from("foo");
         let view_name = format!("{}_view", source_name);
+        let count_view_name = format!("count_{}", view_name);
         self.create_kinesis_source(
             &source_name,
             aws_region,
@@ -61,15 +62,15 @@ impl MzClient {
             token,
         )
         .await
-        .map_err(|e| format!("creating kinesis source: {}", e))?;
+        .map_err(|e| format!("Error creating kinesis source: {}", e))?;
 
-        self.create_materialized_view(&source_name, &view_name)
+        self.create_materialized_view(&source_name, &view_name, &count_view_name)
             .await
-            .map_err(|e| format!("creating materialized view: {}", e))?;
-        self.query_view(&view_name, num_records)
+            .map_err(|e| format!("Error creating materialized view: {}", e))?;
+        self.query_view(&count_view_name, num_records)
             .await
             .map_err(|e| format!("querying view: {}", e))?;
-        println!(
+        log::info!(
             "Read all {} records in Materialize from Kinesis source in {} milliseconds",
             num_records,
             timer.elapsed().as_millis()
@@ -103,12 +104,12 @@ impl MzClient {
             secret_access_key = secret_access_key,
             token = token.as_ref().unwrap_or(&String::new())
         );
-        println!("creating source=> {}", query);
+        log::info!("creating source=> {}", query);
 
         self.0
             .execute(&*query, &[])
             .await
-            .map_err(|e| format!("creating Kinesis source: {}", e))?;
+            .map_err(|e| format!("Error creating Kinesis source: {}", e))?;
         Ok(())
     }
 
@@ -116,28 +117,42 @@ impl MzClient {
         &self,
         source_name: &str,
         view_name: &str,
+        count_view_name: &str,
     ) -> Result<(), String> {
         let query = format!(
-            "CREATE MATERIALIZED VIEW {view_name}
+            "CREATE VIEW {view_name}
              AS SELECT CONVERT_FROM(data, 'utf8') AS DATA FROM {source_name}",
             view_name = view_name,
             source_name = source_name,
         );
-        println!("creating materialized view=> {}", query);
+        log::info!("creating view=> {}", query);
 
         self.0
             .execute(&*query, &[])
             .await
-            .map_err(|e| format!("creating materialized view: {}", e))?;
+            .map_err(|e| format!("Creating view: {}", e))?;
+
+        let query = format!(
+            "CREATE MATERIALIZED VIEW {count_view_name}
+             AS SELECT COUNT(*) AS COUNT FROM {view_name}",
+            count_view_name = count_view_name,
+            view_name = view_name,
+        );
+        log::info!("creating materialized view=> {}", query);
+
+        self.0
+            .execute(&*query, &[])
+            .await
+            .map_err(|e| format!("Error creating materialized view: {}", e))?;
         Ok(())
     }
 
-    pub async fn query_view(&self, view_name: &str, num_records: i64) -> Result<(), String> {
+    pub async fn query_view(&self, count_view_name: &str, num_records: i64) -> Result<(), String> {
         let query = format!(
-            "SELECT COUNT(data) as count FROM {view_name};",
-            view_name = view_name
+            "SELECT COUNT(count) as count FROM {count_view_name};",
+            count_view_name = count_view_name
         );
-        println!("querying view=> {}", query);
+        log::info!("querying view=> {}", query);
 
         // 1QPS until caught up.
         loop {
@@ -149,6 +164,7 @@ impl MzClient {
                         Some(row) => {
                             let count: i64 = row.get("count");
                             if count == num_records {
+                                log::info!("Found all {} records, done querying.", num_records);
                                 break;
                             }
                         }
@@ -162,15 +178,16 @@ impl MzClient {
                     if e.to_string()
                         .contains("At least one input has no complete timestamps yet.")
                     {
-                        log::debug!("Hit error querying, will try again... {}", e.to_string());
+                        log::debug!("Error querying, will try again... {}", e.to_string());
                     } else {
-                        return Err(format!("hit error trying to query view: {}", e.to_string()));
+                        return Err(format!("Error trying to query view: {}", e.to_string()));
                     }
                 }
             }
-            thread::sleep(Duration::from_millis(
-                1000 - timer.elapsed().as_millis() as u64,
-            ));
+            let elapsed = timer.elapsed();
+            if elapsed < Duration::from_secs(1) {
+                thread::sleep(Duration::from_millis(1000 - elapsed.as_millis() as u64));
+            }
         }
         Ok(())
     }

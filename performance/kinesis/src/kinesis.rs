@@ -50,10 +50,9 @@ impl KinesisInfo {
 }
 
 pub async fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
-    let (aws_account, aws_credentials) =
-        util::aws::account_details(Duration::from_secs(5))
-            .await
-            .map_err(|e| format!("error getting AWS account details: {}", e))?;
+    let (aws_account, aws_credentials) = util::aws::account_details(Duration::from_secs(15))
+        .await
+        .map_err(|e| format!("error getting AWS account details: {}", e))?;
     let provider = rusoto_credential::StaticProvider::new(
         aws_credentials.aws_access_key_id().to_owned(),
         aws_credentials.aws_secret_access_key().to_owned(),
@@ -97,7 +96,7 @@ pub async fn create_stream(
             Ok(())
         } else {
             Err(format!(
-                "Stream {} is not yet active, is {}",
+                "Stream {} is not yet ACTIVE, is {}",
                 stream_name.to_string(),
                 description.stream_description.stream_status
             ))
@@ -161,20 +160,17 @@ pub async fn generate_and_put_records(
         shard_starting_hash_keys.push_back(target_shard);
 
         let elapsed = put_timer.elapsed().as_millis();
-        println!(
-            "put {} records in {} milliseconds",
-            records_per_second, elapsed
-        );
         if elapsed < 1000 {
             thread::sleep(Duration::from_millis((1000 - elapsed) as u64));
         } else {
-            println!(
-                "expected to put records in 1000 milliseconds, took {}",
+            log::info!(
+                "Expected to put {} records in 1000 milliseconds, took {}",
+                records_per_second,
                 elapsed
             );
         }
     }
-    println!(
+    log::info!(
         "Generated and put {} records in {} milliseconds.",
         put_record_count,
         timer.elapsed().as_millis()
@@ -224,11 +220,17 @@ pub async fn put_records_one_second(
             Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
             | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {
                 // todo: do something here to avoid looping forever
-                println!("hit non-fatal error, continuing: {}", e);
+                log::info!("Hit non-fatal error, continuing: {}", e);
+            }
+            Err(RusotoError::Credentials(e)) => {
+                if e.message
+                    .contains("The security token included in the request is expired")
+                {
+                    log::info!("{}. Getting a new KinesisClient.", e.message);
+                }
             }
             Err(e) => {
-                println!("{}", e);
-                return Err(String::from("failed putting records!"));
+                return Err(format!("Failed putting records: {}", e));
             }
         }
     }
@@ -247,7 +249,7 @@ pub async fn delete_stream(
             stream_name: stream_name.to_owned(),
         })
         .await
-        .map_err(|e| format!("deleting Kinesis stream: {}", e))?;
-    println!("Deleted Kinesis stream: {}", &stream_name);
+        .map_err(|e| format!("Error deleting Kinesis stream: {}", e))?;
+    log::info!("Deleted Kinesis stream: {}", &stream_name);
     Ok(())
 }
