@@ -70,10 +70,10 @@ impl MzClient {
             let name: String = row.get(0);
 
             // TODO cleaner way to map our types to types Smith understands
-            let data_type_raw: String = row.get(2);
-            let data_type = data_type_raw.trim_end_matches(char::is_numeric).to_string();
-
-            res.push(Column { data_type, name });
+            res.push(Column {
+                data_type: "int".to_string(),
+                name,
+            });
         }
 
         Ok(res)
