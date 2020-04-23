@@ -740,7 +740,7 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         let source_id = self.catalog.allocate_id()?;
         let source = catalog::Source {
-            create_sql: "TODO".to_string(),
+            create_sql: "TODO (see #2755)".to_string(),
             plan_cx: pcx,
             connector: dataflow_types::SourceConnector::Local,
             desc,
