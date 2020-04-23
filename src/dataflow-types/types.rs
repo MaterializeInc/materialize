@@ -15,6 +15,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use timely::progress::frontier::Antichain;
+
 use failure::ResultExt;
 use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
@@ -34,7 +36,7 @@ pub type Diff = isize;
 pub type Timestamp = u64;
 
 /// Specifies when a `Peek` should occur.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PeekWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
@@ -199,8 +201,8 @@ impl DataflowDesc {
         ));
     }
 
-    pub fn as_of(&mut self, as_of: Option<Vec<Timestamp>>) {
-        self.as_of = as_of;
+    pub fn as_of(&mut self, as_of: Antichain<Timestamp>) {
+        self.as_of = Some(as_of.elements().into());
     }
 
     /// Gets index ids of all indexes require to construct a particular view
@@ -531,7 +533,8 @@ pub struct AvroOcfSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
-    pub since: Timestamp,
+    pub frontier: Antichain<Timestamp>,
+    pub strict: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

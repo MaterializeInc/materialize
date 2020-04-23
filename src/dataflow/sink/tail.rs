@@ -10,7 +10,6 @@
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
-use timely::order::PartialOrder;
 
 use futures::executor::block_on;
 use futures::sink::SinkExt;
@@ -31,7 +30,12 @@ pub fn tail<G>(
         input.for_each(|_, rows| {
             let mut results: Vec<Update> = Vec::new();
             for (row, time, diff) in rows.iter() {
-                if connector.since.less_equal(time) {
+                let should_emit = if connector.strict {
+                    connector.frontier.less_than(time)
+                } else {
+                    connector.frontier.less_equal(time)
+                };
+                if should_emit {
                     results.push(Update {
                         row: row.clone(),
                         timestamp: *time,

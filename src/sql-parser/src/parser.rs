@@ -176,9 +176,7 @@ impl Parser {
                     "BEGIN" => Ok(self.parse_begin()?),
                     "COMMIT" => Ok(self.parse_commit()?),
                     "ROLLBACK" => Ok(self.parse_rollback()?),
-                    "TAIL" => Ok(Statement::Tail {
-                        name: self.parse_object_name()?,
-                    }),
+                    "TAIL" => Ok(self.parse_tail()?),
                     "EXPLAIN" => Ok(self.parse_explain()?),
                     _ => parser_err!(
                         self,
@@ -2779,6 +2777,27 @@ impl Parser {
         } else {
             Ok(false)
         }
+    }
+
+    pub fn parse_tail(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_object_name()?;
+        let with_snapshot = if self.parse_keyword("WITH") {
+            self.expect_keyword("SNAPSHOT")?;
+            true
+        } else {
+            false
+        };
+        let as_of = if self.parse_keyword("AS") {
+            self.expect_keyword("OF")?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(Statement::Tail {
+            name,
+            with_snapshot,
+            as_of,
+        })
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token

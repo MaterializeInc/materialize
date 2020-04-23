@@ -409,6 +409,7 @@ define_keywords!(
     SINK,
     SINKS,
     SMALLINT,
+    SNAPSHOT,
     SOME,
     SOURCE,
     SOURCES,

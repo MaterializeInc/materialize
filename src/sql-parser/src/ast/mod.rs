@@ -1050,6 +1050,8 @@ pub enum Statement {
     /// `TAIL`
     Tail {
         name: ObjectName,
+        with_snapshot: bool,
+        as_of: Option<Expr>,
     },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
     Explain {
@@ -1473,9 +1475,20 @@ impl AstDisplay for Statement {
                     f.write_str(" AND CHAIN");
                 }
             }
-            Statement::Tail { name } => {
+            Statement::Tail {
+                name,
+                with_snapshot,
+                as_of,
+            } => {
                 f.write_str("TAIL ");
                 f.write_node(&name);
+                if *with_snapshot {
+                    f.write_str(" WITH SNAPSHOT");
+                }
+                if let Some(as_of) = as_of {
+                    f.write_str(" AS OF ");
+                    f.write_node(as_of);
+                }
             }
             Statement::Explain {
                 stage,
