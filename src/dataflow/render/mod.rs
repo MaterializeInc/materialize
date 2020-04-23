@@ -100,9 +100,11 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::rc::Rc;
 use std::rc::Weak;
 
+use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
@@ -112,14 +114,18 @@ use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpin
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::aggregation::Aggregate;
+use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
+use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
 use timely::dataflow::Stream;
 use timely::worker::Worker as TimelyWorker;
 
+use avro::Schema;
 use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{EvalError, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
+use ore::cast::CastFrom;
 use repr::{Datum, RelationType, Row, RowArena};
 
 use self::context::{ArrangementFlavor, Context};
@@ -133,8 +139,6 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::CollectionExt;
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
-use avro::Schema;
-use std::io::BufRead;
 
 mod context;
 mod delta_join;
@@ -219,9 +223,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 unreachable!()
             };
             // Load declared sources into the rendering context.
-            for (source_number, (src_id, mut src)) in
-                dataflow.source_imports.clone().into_iter().enumerate()
-            {
+            for (src_id, mut src) in dataflow.source_imports.clone() {
                 if let SourceConnector::External {
                     connector,
                     encoding,
@@ -251,27 +253,21 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         _ => false,
                     };
 
-                    let source_config = SourceConfig::new(
-                        uid,
-                        region,
-                        timestamp_histories.clone(),
-                        timestamp_channel.clone(),
+                    let source_config = SourceConfig {
+                        name: format!("{}-{}", connector.name(), uid),
+                        id: uid,
+                        scope: region,
+                        // Distribute read responsibility among workers.
+                        active: (usize::cast_from(uid.hashed()) % worker_peers) == worker_index,
+                        timestamp_histories: timestamp_histories.clone(),
+                        timestamp_tx: timestamp_channel.clone(),
                         consistency,
-                    );
+                    };
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
-                            ExternalSourceConnector::Kafka(c) => {
-                                // Distribute read responsibility among workers.
-                                use differential_dataflow::hashable::Hashable;
-                                let hash = src_id.hashed() as usize;
-                                let read_from_kafka = hash % worker_peers == worker_index;
-                                let (source, capability) = source::kafka(
-                                    source_config,
-                                    format!("kafka-{}-{}", first_export_id, source_number),
-                                    c,
-                                    read_from_kafka,
-                                );
+                            ExternalSourceConnector::Kafka(kc) => {
+                                let (source, capability) = source::kafka(source_config, kc);
                                 let arranged = arrange_from_upsert(
                                     &decode_upsert(
                                         &prepare_upsert_by_max_offset(&source),
@@ -298,17 +294,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             connector
                         {
                             // Distribute read responsibility among workers.
-                            use differential_dataflow::hashable::Hashable;
-                            let hash = src_id.hashed() as usize;
-                            let should_read = hash % worker_peers == worker_index;
-                            let read_style = if should_read {
-                                if c.tail {
-                                    FileReadStyle::TailFollowFd
-                                } else {
-                                    FileReadStyle::ReadOnce
-                                }
+                            let read_style = if c.tail {
+                                FileReadStyle::TailFollowFd
                             } else {
-                                FileReadStyle::None
+                                FileReadStyle::ReadOnce
                             };
 
                             let reader_schema = match &encoding {
@@ -322,69 +311,30 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             let reader_schema = Schema::parse_str(reader_schema).unwrap();
                             let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
-                            let (source, capability) = source::file(
-                                source_config,
-                                format!("ocf-{}", src_id),
-                                c.path,
-                                read_style,
-                                ctor,
-                            );
+                            let (source, capability) =
+                                source::file(source_config, c.path, read_style, ctor);
                             (decode_avro_values(&source, &envelope), capability)
                         } else {
                             let (source, capability) = match connector {
-                                ExternalSourceConnector::Kafka(c) => {
-                                    // Distribute read responsibility among workers.
-                                    use differential_dataflow::hashable::Hashable;
-                                    use timely::dataflow::operators::Map;
-                                    let hash = src_id.hashed() as usize;
-                                    let read_from_kafka = hash % worker_peers == worker_index;
-                                    let (source, capability) = source::kafka(
-                                        source_config,
-                                        format!("kafka-{}-{}", first_export_id, source_number),
-                                        c,
-                                        read_from_kafka,
-                                    );
+                                ExternalSourceConnector::Kafka(kc) => {
+                                    let (source, capability) = source::kafka(source_config, kc);
                                     (
                                         source.map(|(_key, (payload, aux_num))| (payload, aux_num)),
                                         capability,
                                     )
                                 }
-                                ExternalSourceConnector::Kinesis(c) => {
-                                    // Distribute read responsibility among workers.
-                                    use differential_dataflow::hashable::Hashable;
-                                    let hash = src_id.hashed() as usize;
-                                    let read_from_kinesis = hash % worker_peers == worker_index;
-                                    source::kinesis(
-                                        source_config,
-                                        format!("kinesis-{}-{}", first_export_id, source_number),
-                                        c,
-                                        read_from_kinesis,
-                                    )
+                                ExternalSourceConnector::Kinesis(kc) => {
+                                    source::kinesis(source_config, kc)
                                 }
                                 ExternalSourceConnector::File(c) => {
-                                    // Distribute read responsibility among workers.
-                                    use differential_dataflow::hashable::Hashable;
-                                    let hash = src_id.hashed() as usize;
-                                    let should_read = hash % worker_peers == worker_index;
-                                    let read_style = if should_read {
-                                        if c.tail {
-                                            FileReadStyle::TailFollowFd
-                                        } else {
-                                            FileReadStyle::ReadOnce
-                                        }
+                                    let read_style = if c.tail {
+                                        FileReadStyle::TailFollowFd
                                     } else {
-                                        FileReadStyle::None
+                                        FileReadStyle::ReadOnce
                                     };
-
                                     let ctor =
                                         |file| Ok(std::io::BufReader::new(file).split(b'\n'));
-                                    source::file(
-                                        source_config,
-                                        format!("csv-{}", src_id),
-                                        c.path,
-                                        read_style,
-                                        ctor,
-                                    )
+                                    source::file(source_config, c.path, read_style, ctor)
                                 }
                                 ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                             };
@@ -673,7 +623,6 @@ fn prepare_upsert_by_max_offset<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    use differential_dataflow::hashable::Hashable;
     // This approach works as long as there is a 1:1 correspondence between
     // Timely capabilities and Differential timestamps.
     // Change the code if the assumption no longer holds.
@@ -723,7 +672,6 @@ where
             match relation_expr {
                 // The constant collection is instantiated only on worker zero.
                 RelationExpr::Constant { rows, .. } => {
-                    use timely::dataflow::operators::{Map, ToStream};
                     let rows = if worker_index == 0 {
                         rows.clone()
                     } else {
@@ -1380,7 +1328,6 @@ where
 
             let group_clone = group_key.to_vec();
             let mut collection = ok_input.map(move |row| {
-                use differential_dataflow::hashable::Hashable;
                 let row_hash = row.hashed();
                 let datums = row.unpack();
                 let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));

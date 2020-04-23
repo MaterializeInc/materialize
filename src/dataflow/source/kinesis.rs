@@ -56,31 +56,28 @@ lazy_static! {
 const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
 pub fn kinesis<G>(
-    source_config: SourceConfig<G>,
-    name: String,
+    config: SourceConfig<G>,
     connector: KinesisSourceConnector,
-    read_kinesis: bool,
 ) -> (Stream<G, (Vec<u8>, Option<i64>)>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
-
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.
-    let ts = if read_kinesis {
-        let prev = timestamp_histories
+    let ts = if config.active {
+        let prev = config
+            .timestamp_histories
             .borrow_mut()
-            .insert(id.clone(), HashMap::new());
+            .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        timestamp_tx.as_ref().borrow_mut().push((
-            id,
+        config.timestamp_tx.as_ref().borrow_mut().push((
+            config.id,
             Some((
                 ExternalSourceConnector::Kinesis(connector.clone()),
-                consistency,
+                config.consistency,
             )),
         ));
-        Some(timestamp_tx)
+        Some(config.timestamp_tx)
     } else {
         None
     };
@@ -88,7 +85,9 @@ where
     let mut state = create_state(connector);
     let mut last_checked_shards = std::time::Instant::now();
 
-    let (stream, capability) = source(id, ts, scope, &name.clone(), move |info| {
+    let SourceConfig { name, scope, .. } = config;
+
+    let (stream, capability) = source(config.id, ts, scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
 
         move |cap, output| {
@@ -206,7 +205,7 @@ where
         }
     });
 
-    if read_kinesis {
+    if config.active {
         (stream, Some(capability))
     } else {
         (stream, None)

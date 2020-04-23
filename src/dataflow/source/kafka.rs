@@ -14,22 +14,23 @@ use std::iter::FromIterator;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::server::TimestampHistories;
-use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::SyncActivator;
 
+use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
+use expr::{PartitionId, SourceInstanceId};
+
 use super::util::source;
 use super::{SourceConfig, SourceStatus, SourceToken};
-use expr::{PartitionId, SourceInstanceId};
-use rdkafka::message::BorrowedMessage;
+use crate::server::TimestampHistories;
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -66,10 +67,8 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
 }
 
 pub fn kafka<G>(
-    source_config: SourceConfig<G>,
-    name: String,
+    config: SourceConfig<G>,
     connector: KafkaSourceConnector,
-    read_kafka: bool,
 ) -> (
     Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     Option<SourceToken>,
@@ -77,8 +76,6 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
-
     let KafkaSourceConnector {
         url,
         topic,
@@ -86,25 +83,38 @@ where
         start_offset,
     } = connector.clone();
 
-    let ts = if read_kafka {
-        let prev = timestamp_histories
+    let ts = if config.active {
+        let prev = config
+            .timestamp_histories
             .borrow_mut()
-            .insert(id.clone(), HashMap::new());
+            .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        timestamp_tx.as_ref().borrow_mut().push((
-            id,
-            Some((ExternalSourceConnector::Kafka(connector), consistency)),
+        config.timestamp_tx.as_ref().borrow_mut().push((
+            config.id,
+            Some((
+                ExternalSourceConnector::Kafka(connector),
+                config.consistency,
+            )),
         ));
-        Some(timestamp_tx)
+        Some(config.timestamp_tx)
     } else {
         None
     };
 
-    let (stream, capability) = source(id, ts, scope, &name.clone(), move |info| {
+    let SourceConfig {
+        name,
+        id,
+        scope,
+        active,
+        timestamp_histories,
+        ..
+    } = config;
+
+    let (stream, capability) = source(config.id, ts, scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
 
-        let mut config = ClientConfig::new();
-        config
+        let mut kafka_config = ClientConfig::new();
+        kafka_config
             .set("group.id", &format!("materialize-{}", name))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
@@ -115,13 +125,13 @@ where
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &url.to_string());
         for (k, v) in &config_options {
-            config.set(k, v);
+            kafka_config.set(k, v);
         }
 
-        let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if read_kafka {
+        let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if active {
             let cx = GlueConsumerContext(Mutex::new(scope.sync_activator_for(&info.address[..])));
             Some(
-                config
+                kafka_config
                     .create_with_context(cx)
                     .expect("Failed to create Kafka Consumer"),
             )
@@ -270,9 +280,12 @@ where
                             bytes_read += out.len() as i64;
                             output.session(&cap).give((key, (out, Some(offset - 1))));
 
-                            let id_str = id.to_string();
                             KAFKA_PARTITION_OFFSET_INGESTED
-                                .with_label_values(&[&topic, &id_str, &partition.to_string()])
+                                .with_label_values(&[
+                                    &topic,
+                                    &id.to_string(),
+                                    &partition.to_string(),
+                                ])
                                 .set(offset);
 
                             downgrade_capability(
@@ -320,7 +333,7 @@ where
         }
     });
 
-    if read_kafka {
+    if config.active {
         (stream, Some(capability))
     } else {
         (stream, None)

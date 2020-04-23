@@ -464,6 +464,16 @@ impl ExternalSourceConnector {
             }
         }
     }
+
+    /// Returns the name of the external source connector.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ExternalSourceConnector::Kafka(_) => "kafka",
+            ExternalSourceConnector::Kinesis(_) => "kinesis",
+            ExternalSourceConnector::File(_) => "file",
+            ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
