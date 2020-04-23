@@ -1473,6 +1473,46 @@ fn plan_expr_returning_name<'a>(
                 (expr.call_unary(func), None)
             }
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
+            Expr::List(exprs) => {
+                let elem_type_hint = if let Some(ScalarType::List(elem_type_hint)) = type_hint {
+                    Some(*elem_type_hint)
+                } else {
+                    None
+                };
+                let exprs = exprs
+                    .iter()
+                    .map(|expr| plan_expr(ecx, expr, elem_type_hint.clone()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let elem_types = exprs
+                    .iter()
+                    .map(|expr| ecx.scalar_type(expr))
+                    .collect::<Vec<_>>();
+                let elem_type = if let Some(elem_type) = elem_types.iter().next() {
+                    &elem_type
+                } else if let Some(elem_type_hint) = &elem_type_hint {
+                    elem_type_hint
+                } else {
+                    bail!("Cannot assign type to this empty list")
+                };
+                if let Some(pos) = elem_types
+                    .iter()
+                    .position(|est| (est != elem_type) && (*est != ScalarType::Unknown))
+                {
+                    bail!("Cannot create list with mixed types. Element 1 has type {} but element {} has type {}", elem_type, pos+1, &elem_types[pos])
+                }
+                (
+                    ScalarExpr::CallVariadic {
+                        func: VariadicFunc::ListCreate {
+                            elem_type: elem_type.clone(),
+                        },
+                        exprs,
+                    },
+                    Some(ScopeItemName {
+                        table_name: None,
+                        column_name: Some(ColumnName::from("list")),
+                    }),
+                )
+            }
         })
     }
 }
@@ -3123,7 +3163,6 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Unknown),
-        Value::Array(_) => bail!("ARRAY literals are not supported: {}", l),
     })
 }
 
@@ -3538,8 +3577,8 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
         DataType::Jsonb => ScalarType::Jsonb,
-        other @ DataType::Array(_)
-        | other @ DataType::Binary(..)
+        DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
+        other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
         | other @ DataType::Clob(_)
         | other @ DataType::Regclass

@@ -16,7 +16,7 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
-use repr::{strconv, ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
+use repr::{strconv, ColumnType, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 use crate::{Format, Interval, Numeric, Type};
 
@@ -54,6 +54,8 @@ pub enum Value {
     Numeric(Numeric),
     /// A binary JSON blob.
     Jsonb(Jsonb),
+    /// An 1d array of values (distinct from postgres Nd arrays)
+    List(Vec<Option<Value>>),
 }
 
 impl Value {
@@ -81,6 +83,14 @@ impl Value {
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
+            (Datum::List(list), ScalarType::List(elem_type)) => {
+                let col_type = ColumnType::new((**elem_type).clone()).nullable(true);
+                Some(Value::List(
+                    list.iter()
+                        .map(|elem| Value::from_datum(elem, &col_type))
+                        .collect(),
+                ))
+            }
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -92,7 +102,7 @@ impl Value {
     /// not the datum.
     ///
     /// To construct a null datum, see the [`null_datum`] function.
-    pub fn into_datum<'a>(self, buf: &'a RowArena) -> (Datum<'a>, ScalarType) {
+    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: Type) -> (Datum<'a>, ScalarType) {
         match self {
             Value::Bool(true) => (Datum::True, ScalarType::Bool),
             Value::Bool(false) => (Datum::False, ScalarType::Bool),
@@ -115,6 +125,22 @@ impl Value {
                 buf.push_row(jsonb.into_row()).unpack_first(),
                 ScalarType::Jsonb,
             ),
+            Value::List(elems) => {
+                let elem_pg_type = match typ {
+                    Type::List(t) => *t,
+                    _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
+                };
+                let (_, elem_type) = null_datum(elem_pg_type.clone());
+                let mut packer = RowPacker::new();
+                packer.push_list(elems.into_iter().map(|elem| match elem {
+                    Some(elem) => elem.into_datum(buf, elem_pg_type.clone()).0,
+                    None => Datum::Null,
+                }));
+                (
+                    buf.push_row(packer.finish()).unpack_first(),
+                    ScalarType::List(Box::new(elem_type)),
+                )
+            }
         }
     }
 
@@ -144,6 +170,7 @@ impl Value {
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Text(s) => buf.put(s.as_bytes()),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
+            Value::List(elems) => encode_list(buf, elems),
         }
     }
 
@@ -165,11 +192,15 @@ impl Value {
             Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
             Value::Jsonb(jsonb) => jsonb.as_serde_json().to_sql(&PgType::JSONB, buf),
+            Value::List(_) => {
+                // for now just use text encoding
+                self.encode_text(buf);
+                Ok(postgres_types::IsNull::No)
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
-        match is_null {
-            IsNull::Yes => panic!("encode_binary impossibly called on a null value"),
-            IsNull::No => (),
+        if let IsNull::Yes = is_null {
+            panic!("encode_binary impossibly called on a null value")
         }
     }
 
@@ -205,6 +236,7 @@ impl Value {
             Type::Text => Value::Text(raw.to_owned()),
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(strconv::parse_jsonb(raw)?),
+            Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
             Type::Unknown => panic!("cannot decode unknown type"),
         })
     }
@@ -230,6 +262,10 @@ impl Value {
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
+            Type::List(_) => {
+                // just using the text encoding for now
+                Value::decode_text(ty, raw)
+            }
             Type::Unknown => panic!("cannot decode unknown type"),
         }
     }
@@ -252,6 +288,10 @@ pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
         Type::Time => ScalarType::Time,
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
+        Type::List(t) => {
+            let (_, elem_type) = null_datum(*t);
+            ScalarType::List(Box::new(elem_type))
+        }
         Type::Unknown => ScalarType::Unknown,
     };
     (Datum::Null, ty)
@@ -266,4 +306,31 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .zip(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, typ))
         .collect()
+}
+
+pub fn encode_list(buf: &mut BytesMut, elems: &[Option<Value>]) {
+    // we eat a lot of copies in encode_list and in strconv::format_list because it's hard to be generic over both BytesMut here and String in func
+    let mut tmp = String::new();
+    strconv::format_list(
+        &mut tmp,
+        elems,
+        |elem| elem.is_none(),
+        |buf, elem| {
+            let mut tmp = BytesMut::new();
+            elem.as_ref().unwrap().encode_text(&mut tmp);
+            buf.push_str(str::from_utf8(&tmp).unwrap());
+        },
+    );
+    buf.extend_from_slice(tmp.as_bytes());
+}
+
+pub fn decode_list(elem_type: &Type, raw: &str) -> Result<Vec<Option<Value>>, failure::Error> {
+    strconv::parse_list(
+        raw,
+        || None,
+        |elem_text| match Value::decode_text((*elem_type).clone(), elem_text.as_bytes()) {
+            Ok(elem) => Ok(Some(elem)),
+            Err(err) => Err(failure::format_err!("{}", err)),
+        },
+    )
 }

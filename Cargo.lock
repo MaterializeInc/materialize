@@ -2068,6 +2068,7 @@ dependencies = [
  "bytes",
  "chrono",
  "failure",
+ "lazy_static",
  "postgres-types",
  "repr",
  "serde_json",
@@ -3081,6 +3082,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
+ "bytes",
  "chrono",
  "comm",
  "coord",

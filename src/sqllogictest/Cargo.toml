@@ -6,6 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+bytes = "0.5"
 chrono = "0.4"
 comm = { path = "../comm" }
 coord = { path = "../coord" }

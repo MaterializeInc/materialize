@@ -1030,15 +1030,15 @@ fn parse_cast() {
 }
 
 #[test]
-fn parse_array_datatype() {
-    let sql = "SELECT CAST('{{1,2},{3,4}}' AS int ARRAY)";
+fn parse_list_datatype() {
+    let sql = "SELECT CAST('{{1,2},{3,4}}' AS int LIST)";
     let select = unverified_only_select(sql);
     assert_eq!(
         &Expr::Cast {
             expr: Box::new(Expr::Value(Value::SingleQuotedString(
                 "{{1,2},{3,4}}".to_owned()
             ))),
-            data_type: DataType::Array(Box::new(DataType::Int)),
+            data_type: DataType::List(Box::new(DataType::Int)),
         },
         expr_from_projection(only(&select.projection))
     );
@@ -4522,7 +4522,7 @@ fn parse_create_table_from_pg_dump() {
             store_id smallint NOT NULL,
             first_name character varying(45) NOT NULL,
             last_name character varying(45) NOT NULL,
-            info text[],
+            info text,
             address_id smallint NOT NULL,
             activebool boolean DEFAULT true NOT NULL,
             create_date date DEFAULT now()::date NOT NULL,
@@ -4535,7 +4535,7 @@ fn parse_create_table_from_pg_dump() {
             store_id smallint NOT NULL, \
             first_name character varying(45) NOT NULL, \
             last_name character varying(45) NOT NULL, \
-            info text[], \
+            info text, \
             address_id smallint NOT NULL, \
             activebool boolean DEFAULT true NOT NULL, \
             create_date date DEFAULT CAST(now() AS date) NOT NULL, \
@@ -4551,7 +4551,7 @@ fn parse_create_table_with_inherit() {
                CREATE TABLE bazaar.settings (\
                settings_id uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL, \
                user_id uuid UNIQUE, \
-               value text[], \
+               value text, \
                use_metric boolean DEFAULT true\
                )";
     verified_stmt(sql);
@@ -4721,51 +4721,57 @@ fn parse_show() {
 }
 
 #[test]
-fn parse_array() {
-    let expr = verified_expr("ARRAY[]");
+fn parse_list() {
+    let expr = verified_expr("LIST[]");
 
-    assert_eq!(expr, Expr::Value(Value::Array(vec![])));
+    assert_eq!(expr, Expr::List(vec![]));
 
-    let expr = verified_expr("ARRAY[1, 'foo']");
+    let expr = verified_expr("LIST[1, 'foo']");
 
     assert_eq!(
         expr,
-        Expr::Value(Value::Array(vec![
-            Value::Number("1".into()),
-            Value::SingleQuotedString("foo".to_owned())
-        ]))
+        Expr::List(vec![
+            Expr::Value(Value::Number("1".into())),
+            Expr::Value(Value::SingleQuotedString("foo".to_owned())),
+        ])
     );
 
-    let select = verified_only_select("SELECT ARRAY[]");
+    let select = verified_only_select("SELECT LIST[]");
 
     assert_eq!(
         expr_from_projection(only(&select.projection)),
-        &Expr::Value(Value::Array(vec![]))
+        &Expr::List(vec![])
     );
 
-    let select = verified_only_select("SELECT ARRAY[1, 'foo']");
+    let select = verified_only_select("SELECT LIST[1, 'foo']");
 
     assert_eq!(
         expr_from_projection(only(&select.projection)),
-        &Expr::Value(Value::Array(vec![
-            Value::Number("1".into()),
-            Value::SingleQuotedString("foo".to_owned())
-        ]))
+        &Expr::List(vec![
+            Expr::Value(Value::Number("1".into())),
+            Expr::Value(Value::SingleQuotedString("foo".to_owned())),
+        ])
     );
-}
 
-#[test]
-fn parse_pg_array_datatype() {
-    let sql = "SELECT '{{1,2},{3,4}}'::int[][]";
-    let select = unverified_only_select(sql);
+    let expr = verified_expr("LIST[LIST[1 + 1, 2], a || b]");
+
     assert_eq!(
-        &Expr::Cast {
-            expr: Box::new(Expr::Value(Value::SingleQuotedString(
-                "{{1,2},{3,4}}".to_owned()
-            ))),
-            data_type: DataType::Array(Box::new(DataType::Array(Box::new(DataType::Int)))),
-        },
-        expr_from_projection(only(&select.projection))
+        expr,
+        Expr::List(vec![
+            Expr::List(vec![
+                Expr::BinaryOp {
+                    left: Box::new(Expr::Value(Value::Number("1".to_string()))),
+                    op: BinaryOperator::Plus,
+                    right: Box::new(Expr::Value(Value::Number("1".to_string()))),
+                },
+                Expr::Value(Value::Number("2".to_string())),
+            ]),
+            Expr::BinaryOp {
+                left: Box::new(Expr::Identifier(Ident::new("a"))),
+                op: BinaryOperator::JsonConcat,
+                right: Box::new(Expr::Identifier(Ident::new("b")))
+            }
+        ])
     );
 }
 

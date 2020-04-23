@@ -66,8 +66,6 @@ pub enum Value {
     Interval(IntervalValue),
     /// `NULL` value
     Null,
-    /// An array of values
-    Array(Vec<Value>),
 }
 
 impl AstDisplay for Value {
@@ -155,17 +153,6 @@ impl AstDisplay for Value {
                 }
             }
             Value::Null => f.write_str("NULL"),
-            Value::Array(array) => {
-                let mut values = array.iter().peekable();
-                f.write_str("ARRAY[");
-                while let Some(value) = values.next() {
-                    f.write_node(value);
-                    if values.peek().is_some() {
-                        f.write_str(", ");
-                    }
-                }
-                f.write_str("]");
-            }
         }
     }
 }
