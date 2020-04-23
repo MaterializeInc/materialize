@@ -27,6 +27,7 @@
 /// we get more experience running this test).
 ///
 /// TODOs:
+///     - Parameterize queries_per_second.
 ///     - Get this test to run nightly.
 ///     - Handle this token error: {"__type":"ExpiredTokenException","message":"The security token included in the request is expired"}
 ///       This can occur from the producer side (the kinesis thread).
@@ -60,9 +61,11 @@ async fn run() -> Result<(), String> {
 
     let seed: u32 = rand::thread_rng().gen();
     let stream_name: String = format!("kinesis-load-test-{}", seed);
+    // todo: make configurable. (requires mz_client changes)
+    let queries_per_second = 1;
 
     log::info!("Starting kinesis load test with mzd={}:{} stream={} shard_count={} total_records={} records_per_second={} queries_per_second={}",
-    args.materialized_host, args.materialized_port, &stream_name, args.shard_count, args.total_records, args.records_per_second, args.queries_per_second);
+    args.materialized_host, args.materialized_port, &stream_name, args.shard_count, args.total_records, args.records_per_second, queries_per_second);
 
     kinesis::create_stream(&kinesis_client, &stream_name, args.shard_count).await?;
     log::info!("Created Kinesis stream {}", stream_name);
@@ -140,9 +143,7 @@ pub struct Args {
     /// The number of records to put to the Kinesis stream per second
     #[structopt(long, default_value = "2000")]
     pub records_per_second: i64,
-
-    // todo: use to rate limit querying.
-    /// The number of times to query Materialize per second
-    #[structopt(long, default_value = "1")]
-    pub queries_per_second: i64,
+    //    /// The number of times to query Materialize per second
+    //    #[structopt(long, default_value = "1")]
+    //    pub queries_per_second: i64,
 }

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio_postgres::{Client, NoTls};
 
-/// A Materialized client with custom methods to create, query, and drop
+/// A Materialized client with custom methods to create and query
 /// sources and views based on Kinesis Data Streams.
 pub struct MzClient(Client);
 
@@ -37,6 +37,13 @@ impl MzClient {
         Ok(MzClient(client))
     }
 
+    /// Run all of the necessary steps to:
+    ///     - Create a Kinesis source in Materialize
+    ///     - Create a view that transforms Kinesis record bytes to a utf-8 string
+    ///     - Create a materialized view that counts the number of strings from Kinesis
+    ///
+    /// This function will log how long it took to read total_records records
+    /// in materialized.
     #[allow(clippy::too_many_arguments)]
     pub async fn query_materialize_for_kinesis_records(
         &self,
@@ -46,7 +53,7 @@ impl MzClient {
         access_key: &str,
         secret_access_key: &str,
         token: &Option<String>,
-        num_records: i64,
+        total_records: i64,
     ) -> Result<(), String> {
         let timer = std::time::Instant::now();
         let source_name = String::from("foo");
@@ -67,12 +74,12 @@ impl MzClient {
         self.create_materialized_view(&source_name, &view_name, &count_view_name)
             .await
             .map_err(|e| format!("Error creating materialized view: {}", e))?;
-        self.query_view(&count_view_name, num_records)
+        self.query_view(&count_view_name, total_records)
             .await
             .map_err(|e| format!("querying view: {}", e))?;
         log::info!(
             "Read all {} records in Materialize from Kinesis source in {} milliseconds",
-            num_records,
+            total_records,
             timer.elapsed().as_millis()
         );
         Ok(())
@@ -132,6 +139,7 @@ impl MzClient {
             .await
             .map_err(|e| format!("Creating view: {}", e))?;
 
+        // Only materialize the count.
         let query = format!(
             "CREATE MATERIALIZED VIEW {count_view_name}
              AS SELECT COUNT(*) AS COUNT FROM {view_name}",
@@ -147,9 +155,14 @@ impl MzClient {
         Ok(())
     }
 
-    pub async fn query_view(&self, count_view_name: &str, num_records: i64) -> Result<(), String> {
+    /// Query the materialize view once per second until you see total_records records.
+    pub async fn query_view(
+        &self,
+        count_view_name: &str,
+        total_records: i64,
+    ) -> Result<(), String> {
         let query = format!(
-            "SELECT COUNT(count) as count FROM {count_view_name};",
+            "SELECT * FROM {count_view_name};",
             count_view_name = count_view_name
         );
         log::info!("querying view=> {}", query);
@@ -163,8 +176,8 @@ impl MzClient {
                     match rows.get(0) {
                         Some(row) => {
                             let count: i64 = row.get("count");
-                            if count == num_records {
-                                log::info!("Found all {} records, done querying.", num_records);
+                            if count == total_records {
+                                log::info!("Found all {} records, done querying.", total_records);
                                 break;
                             }
                         }

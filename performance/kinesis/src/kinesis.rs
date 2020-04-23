@@ -49,6 +49,8 @@ impl KinesisInfo {
     }
 }
 
+/// Creates a KinesisClient to put records to the target Kinesis stream.
+/// Creates KinesisInfo to use for creating our source and views.
 pub async fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
     let (aws_account, aws_credentials) = util::aws::account_details(Duration::from_secs(15))
         .await
@@ -70,6 +72,9 @@ pub async fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisIn
     ))
 }
 
+/// Creates a Kinesis stream with the given name and shard count.
+/// Will fail if the stream is not created and in ACTIVE mode after
+/// some amount of retrying.
 pub async fn create_stream(
     kinesis_client: &KinesisClient,
     stream_name: &str,
@@ -81,7 +86,7 @@ pub async fn create_stream(
             stream_name: stream_name.to_string(),
         })
         .await
-        .map_err(|e| format!("creating stream: {}", e))?;
+        .map_err(|e| format!("Error creating stream: {}", e))?;
 
     util::retry::retry_for(Duration::from_secs(120), |_| async {
         let description = kinesis_client
@@ -91,7 +96,7 @@ pub async fn create_stream(
                 stream_name: stream_name.to_string(),
             })
             .await
-            .map_err(|e| format!("describing stream: {}", e))?;
+            .map_err(|e| format!("Error describing stream: {}", e))?;
         if description.stream_description.stream_status == ACTIVE {
             Ok(())
         } else {
@@ -103,11 +108,12 @@ pub async fn create_stream(
         }
     })
     .await
-    .map_err(|e| format!("describing stream: {}", e))?;
+    .map_err(|e| format!("Error describing stream: {}", e))?;
 
     Ok(())
 }
 
+/// List all shards in a given Kinesis stream.
 pub async fn list_shards(
     kinesis_client: &KinesisClient,
     stream_name: &str,
@@ -121,7 +127,7 @@ pub async fn list_shards(
             stream_name: Some(stream_name.to_string()),
         })
         .await
-        .map_err(|e| format!("listing shards: {}", e))?
+        .map_err(|e| format!("Error listing shards: {}", e))?
         .shards
     {
         Some(shards) => Ok(shards),
@@ -129,10 +135,15 @@ pub async fn list_shards(
     }
 }
 
+/// Generate total_records number of records (random strings converted to bytes).
+/// Then, put records_per_second records to Kinesis in batches of 500 (the PutRecords API limit).
+///
+/// This function will log if it's falling behind the expected put rate and once
+/// at the end to indicate total amount of time spent generating and putting records.
 pub async fn generate_and_put_records(
     kinesis_client: &KinesisClient,
     stream_name: &str,
-    record_count: i64,
+    total_records: i64,
     records_per_second: i64,
 ) -> Result<(), String> {
     let timer = std::time::Instant::now();
@@ -144,7 +155,7 @@ pub async fn generate_and_put_records(
         .collect();
 
     let mut put_record_count = 0;
-    while put_record_count < record_count {
+    while put_record_count < total_records {
         // Use a basic timer to put records_per_second records/second to Kinesis.
         let put_timer = std::time::Instant::now();
 
@@ -178,6 +189,9 @@ pub async fn generate_and_put_records(
     Ok(())
 }
 
+/// Put records_per_second records to the target Kinesis stream.
+/// Use a round-robin strategy to put records: rotate through all of the target
+///     stream's shards, putting a second's worth of records to each.
 pub async fn put_records_one_second(
     kinesis_client: &KinesisClient,
     stream_name: &str,
@@ -237,8 +251,7 @@ pub async fn put_records_one_second(
     Ok(put_record_count)
 }
 
-/// There could be more than one test running at once,
-/// only want to delete the specific stream from this test run.
+/// Only delete the Kinesis stream generated from this test run.
 pub async fn delete_stream(
     kinesis_client: &KinesisClient,
     stream_name: &str,

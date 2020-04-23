@@ -22,6 +22,8 @@ services:
   kinesis:
     init: true
     mzbuild: kinesis
+    environment:
+      - RUST_LOG=kinesis=debug,info
     depends_on: [materialized]
 
   materialized:
