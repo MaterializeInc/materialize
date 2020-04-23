@@ -12,18 +12,16 @@
 
 #![deny(missing_debug_implementations, missing_docs)]
 
-use std::error::Error as _;
 use std::process;
 
+use anyhow::Result;
 use serde::Deserialize;
 use structopt::StructOpt;
 use urlencoding::encode;
 
 use crate::config::{Args, FuzzerConfig};
-use crate::error::Result;
 
 mod config;
-mod error;
 mod macros;
 mod mz_client;
 

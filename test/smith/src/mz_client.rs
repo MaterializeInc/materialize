@@ -10,11 +10,10 @@
 use std::collections::HashMap;
 use std::marker::Sync;
 
+use anyhow::Result;
 use postgres_types::ToSql;
 use serde::Serialize;
 use tokio_postgres::{Client, NoTls};
-
-use crate::error::Result;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Column {
