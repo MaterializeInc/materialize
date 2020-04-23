@@ -297,13 +297,14 @@ where
                             activator.activate();
                             return SourceStatus::Alive;
                         }
-                        Some(_) => {
+                        Some(ts) => {
                             let key = message.key.unwrap_or_default();
                             let out = message.payload.unwrap_or_default();
                             partition_metadata[partition as usize].0 = offset;
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
-                            output.session(&cap).give((key, (out, Some(offset - 1))));
+                            let ts_cap = cap.delayed(&ts);
+                            output.session(&ts_cap).give((key, (out,Some(offset - 1))));
 
                             let id_str = id.to_string();
                             KAFKA_PARTITION_OFFSET_INGESTED
@@ -453,6 +454,8 @@ fn downgrade_capability(
                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
                     offset, start_offset
                 );
+
+                assert!(*ts>0, "Internal error! Received a zero-timestamp. Materialize will crash now.");
                 if *partition_count as usize > partition_metadata.len() {
                     // A new partition has been added, we need to update the appropriate
                     // entries before we continue.
@@ -462,6 +465,11 @@ fn downgrade_capability(
                     );
                     needs_md_refresh = true;
                 }
+                // This assertion makes sure that if we ever fast-forwarded the empty stream
+                // (any message of the form "PID,TS,0"), we have correctly removed the (_,_,0) entry
+                // even if data has subsequently been added to the stream
+                assert!(*offset!=0 || last_offset == 0);
+
                 if last_offset == *offset {
                     // We have now seen all messages corresponding to this timestamp for this
                     // partition. We
