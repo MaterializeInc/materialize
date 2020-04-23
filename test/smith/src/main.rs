@@ -103,6 +103,9 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
                     log::error!("{} ({}) executing query {}", e, e.source().unwrap(), query);
                 }
             }
+
+            // Perform a heartbeat via a simple request tp make sure Materialize is still up
+            client.execute("SELECT 1", &[]).await?;
         }
 
         remaining -= count;
