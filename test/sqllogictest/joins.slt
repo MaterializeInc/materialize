@@ -191,3 +191,33 @@ WHERE l1.la IN (
 | Project (#0, #1)
 
 EOF
+
+# Test that multiplicities in outer joins are preserved.
+# Fixed in #2724.
+statement ok
+CREATE TABLE l2 (la int, lb text)
+
+statement ok
+CREATE TABLE r2 (ra int, rb text)
+
+statement ok
+INSERT INTO l2 VALUES (1, 'l1'), (2, 'l2'),  (2, 'l2'), (3, 'l3')
+
+statement ok
+INSERT INTO r2 VALUES (1, 'r1'), (3, 'r3'), (4, 'r4'), (4, 'r4')
+
+query ITIT rowsort
+SELECT * FROM l2 LEFT JOIN r2 ON l2.la = r2.ra
+----
+1  l1  1     r1
+2  l2  NULL  NULL
+2  l2  NULL  NULL
+3  l3  3     r3
+
+query ITIT rowsort
+SELECT * FROM l2 RIGHT JOIN r2 ON l2.la = r2.ra
+----
+NULL  NULL  4  r4
+NULL  NULL  4  r4
+1     l1    1  r1
+3     l3    3  r3

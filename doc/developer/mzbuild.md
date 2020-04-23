@@ -351,14 +351,16 @@ publish: true
 
   *  `type: cargo-bin` builds a Rust binary with Cargo. The `bin` field
      indicates the name of the binary target in the Cargo workspace to build.
-     The resulting artifact will be placed into the mzbuild context, and all
-     Rust files in the repository will be considered as inputs in the build.
+     The resulting artifact will be placed into the mzbuild context.
+
+     All files within the crate directory, and all files within the directories
+     of any transitive _path_ dependencies of the crate (i.e., dependencies in
+     this workspace, rather than on crates.io), will be considered as additional
+     inputs to the build, plus the top-level `Cargo.toml`, `Cargo.lock`, and
+     `.cargo/config` files.
 
      Cargo is always invoked with the `--release` flag. The binary will be
      stripped of debug information unless `strip: false` is requested.
-
-     TODO(benesch): dependency tracking for Rust binaries will become much
-     finer-grained soon.
 
   * `type: cargo-test` builds a special image that simulates `cargo test`. This
      plugin is very special-cased at the moment, and unlikely to be generally

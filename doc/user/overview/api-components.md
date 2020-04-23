@@ -78,6 +78,7 @@ Envelope | Action
 ---------|-------
 **Append-only** | Inserts all received data; does not support updates or deletes.
 **Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Debezium envelope details](../../sql/create-source/avro-source/#debezium-envelope-details).
+**Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Upsert envelope details](../../sql/create-source/avro-source/#upsert-envelope-details)
 
 ## Views
 

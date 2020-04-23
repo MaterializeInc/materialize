@@ -18,7 +18,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
+use crate::ast::display::{AstDisplay, AstFormatter};
 
 /// SQL data types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -77,55 +77,80 @@ pub enum DataType {
     Jsonb,
 }
 
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for DataType {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
             DataType::Char(size) => format_type_with_optional_length(f, "char", size),
             DataType::Varchar(size) => {
                 format_type_with_optional_length(f, "character varying", size)
             }
-            DataType::Uuid => write!(f, "uuid"),
-            DataType::Clob(size) => write!(f, "clob({})", size),
-            DataType::Binary(size) => write!(f, "binary({})", size),
-            DataType::Varbinary(size) => write!(f, "varbinary({})", size),
-            DataType::Blob(size) => write!(f, "blob({})", size),
+            DataType::Uuid => f.write_str("uuid"),
+            DataType::Clob(size) => {
+                f.write_str("clob(");
+                f.write_str(size);
+                f.write_str(")");
+            }
+            DataType::Binary(size) => {
+                f.write_str("binary(");
+                f.write_str(size);
+                f.write_str(")");
+            }
+            DataType::Varbinary(size) => {
+                f.write_str("varbinary(");
+                f.write_str(size);
+                f.write_str(")");
+            }
+            DataType::Blob(size) => {
+                f.write_str("blob(");
+                f.write_str(size);
+                f.write_str(")");
+            }
             DataType::Decimal(precision, scale) => {
                 if let Some(scale) = scale {
-                    write!(f, "numeric({},{})", precision.unwrap(), scale)
+                    f.write_str("numeric(");
+                    f.write_str(precision.unwrap());
+                    f.write_str(",");
+                    f.write_str(scale);
+                    f.write_str(")");
                 } else {
                     format_type_with_optional_length(f, "numeric", precision)
                 }
             }
             DataType::Float(size) => format_type_with_optional_length(f, "float", size),
-            DataType::SmallInt => write!(f, "smallint"),
-            DataType::Int => write!(f, "int"),
-            DataType::BigInt => write!(f, "bigint"),
-            DataType::Real => write!(f, "real"),
-            DataType::Double => write!(f, "double"),
-            DataType::Boolean => write!(f, "boolean"),
-            DataType::Date => write!(f, "date"),
-            DataType::Time => write!(f, "time"),
-            DataType::TimeTz => write!(f, "time with time zone"),
-            DataType::Timestamp => write!(f, "timestamp"),
-            DataType::TimestampTz => write!(f, "timestamp with time zone"),
-            DataType::Interval => write!(f, "interval"),
-            DataType::Regclass => write!(f, "regclass"),
-            DataType::Text => write!(f, "text"),
-            DataType::Bytea => write!(f, "bytea"),
-            DataType::List(ty) => write!(f, "list({})", ty),
-            DataType::Jsonb => write!(f, "jsonb"),
+            DataType::SmallInt => f.write_str("smallint"),
+            DataType::Int => f.write_str("int"),
+            DataType::BigInt => f.write_str("bigint"),
+            DataType::Real => f.write_str("real"),
+            DataType::Double => f.write_str("double"),
+            DataType::Boolean => f.write_str("boolean"),
+            DataType::Date => f.write_str("date"),
+            DataType::Time => f.write_str("time"),
+            DataType::TimeTz => f.write_str("time with time zone"),
+            DataType::Timestamp => f.write_str("timestamp"),
+            DataType::TimestampTz => f.write_str("timestamp with time zone"),
+            DataType::Interval => f.write_str("interval"),
+            DataType::Regclass => f.write_str("regclass"),
+            DataType::Text => f.write_str("text"),
+            DataType::Bytea => f.write_str("bytea"),
+            DataType::List(ty) => {
+                f.write_str("list(");
+                f.write_node(&ty);
+                f.write_str(")")
+            }
+            DataType::Jsonb => f.write_str("jsonb"),
         }
     }
 }
 
 fn format_type_with_optional_length(
-    f: &mut fmt::Formatter,
+    f: &mut AstFormatter,
     sql_type: &'static str,
     len: &Option<u64>,
-) -> fmt::Result {
-    write!(f, "{}", sql_type)?;
+) {
+    f.write_str(sql_type);
     if let Some(len) = len {
-        write!(f, "({})", len)?;
+        f.write_str("(");
+        f.write_str(len);
+        f.write_str(")");
     }
-    Ok(())
 }

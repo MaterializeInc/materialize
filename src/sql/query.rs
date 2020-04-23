@@ -107,10 +107,7 @@ pub fn plan_show_where(
         let predicate = match &f {
             ShowStatementFilter::Like(s) => {
                 owned = Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(Ident::with_quote(
-                        '"',
-                        names[0].clone().unwrap(),
-                    ))),
+                    left: Box::new(Expr::Identifier(Ident::new(names[0].clone().unwrap()))),
                     op: BinaryOperator::Like,
                     right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
                 };
@@ -403,10 +400,7 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
                 }
                 types = if let Some(types) = types {
                     if types.len() != value_exprs.len() {
-                        bail!(
-                            "VALUES expression has varying number of columns: {}",
-                            q.to_string()
-                        );
+                        bail!("VALUES expression has varying number of columns: {}", q);
                     }
                     Some(
                         types
@@ -3147,9 +3141,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             }
         }
         Value::SingleQuotedString(s) => (Datum::String(s), ScalarType::String),
-        Value::HexStringLiteral(_) => {
-            bail!("x'' string literals are not supported: {}", l.to_string())
-        }
+        Value::HexStringLiteral(_) => bail!("x'' string literals are not supported: {}", l),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),

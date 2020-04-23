@@ -186,7 +186,7 @@ pub fn describe_statement(
             vec![],
         ),
         Statement::ShowVariable { variable, .. } => {
-            if variable.value == unicase::Ascii::new("ALL") {
+            if variable.as_str() == unicase::Ascii::new("ALL") {
                 (
                     Some(
                         RelationDesc::empty()
@@ -198,7 +198,7 @@ pub fn describe_statement(
                 )
             } else {
                 (
-                    Some(RelationDesc::empty().add_column(variable.value, ScalarType::String)),
+                    Some(RelationDesc::empty().add_column(variable.as_str(), ScalarType::String)),
                     vec![],
                 )
             }
@@ -317,16 +317,16 @@ fn handle_set_variable(
         value: match value {
             SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
             SetVariableValue::Literal(lit) => lit.to_string(),
-            SetVariableValue::Ident(ident) => ident.value,
+            SetVariableValue::Ident(ident) => ident.value(),
         },
     })
 }
 
 fn handle_show_variable(_: &StatementContext, variable: Ident) -> Result<Plan, failure::Error> {
-    if variable.value == unicase::Ascii::new("ALL") {
+    if variable.as_str() == unicase::Ascii::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
-        Ok(Plan::ShowVariable(variable.value))
+        Ok(Plan::ShowVariable(variable.to_string()))
     }
 }
 
@@ -1164,10 +1164,30 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     config_options.push(("client.id".to_string(), kafka_client_id));
 
+                    // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
+                    // until we have had time to think about what the right UX/design is on a non-urgent timeline!
+                    // In particular, we almost certainly want the offsets to be specified per-partition.
+                    // The other major caveat is that by using this feature, you are opting in to
+                    // not using updates or deletes in CDC sources, and accepting panics if that constraint is violated.
+                    let start_offset_err = "start_offset must be a nonnegative integer";
+                    let start_offset = match with_options.remove("start_offset") {
+                        None => 0,
+                        Some(Value::Number(n)) => match n.parse::<i64>() {
+                            Ok(n) if n >= 0 => n,
+                            _ => bail!(start_offset_err),
+                        },
+                        Some(_) => bail!(start_offset_err),
+                    };
+
+                    if start_offset != 0 && consistency != Consistency::RealTime {
+                        bail!("`start_offset` is not yet implemented for BYO consistency sources.")
+                    }
+
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         url: broker.parse()?,
                         topic: topic.clone(),
                         config_options,
+                        start_offset,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)
@@ -1243,6 +1263,11 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::Boolean(b)) => b,
                         Some(_) => bail!("tail must be a boolean"),
                     };
+                    consistency = match with_options.remove("consistency") {
+                        None => Consistency::RealTime,
+                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                        Some(_) => bail!("consistency must be a string"),
+                    };
                     let connector = ExternalSourceConnector::File(FileSourceConnector {
                         path: path.clone().into(),
                         tail,
@@ -1255,6 +1280,11 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         None => false,
                         Some(Value::Boolean(b)) => b,
                         Some(_) => bail!("tail must be a boolean"),
+                    };
+                    consistency = match with_options.remove("consistency") {
+                        None => Consistency::RealTime,
+                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                        Some(_) => bail!("consistency must be a string"),
                     };
                     let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                         path: path.clone().into(),
@@ -1321,16 +1351,12 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             };
 
             if let dataflow_types::Envelope::Upsert(_) = envelope {
-                if let Consistency::BringYourOwn(_) = consistency {
-                    match &mut encoding {
-                        DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
-                            *key_schema = None;
-                        }
-                        DataEncoding::Bytes | DataEncoding::Text => {}
-                        _ => bail!("Upsert envelope is not yet supported for this format."),
+                match &mut encoding {
+                    DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
+                        *key_schema = None;
                     }
-                } else {
-                    bail!("Upsert envelope is only supported for BYO consistency.")
+                    DataEncoding::Bytes | DataEncoding::Text => {}
+                    _ => bail!("Upsert envelope is not yet supported for this format."),
                 }
             }
 

@@ -740,7 +740,7 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         let source_id = self.catalog.allocate_id()?;
         let source = catalog::Source {
-            create_sql: "TODO".to_string(),
+            create_sql: "TODO (see #2755)".to_string(),
             plan_cx: pcx,
             connector: dataflow_types::SourceConnector::Local,
             desc,
@@ -1607,6 +1607,7 @@ where
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
         // TODO: should we still support creating multiple dataflows with a single command,
         // Or should it all be compacted into a single DataflowDesc with multiple exports?
+        dataflow.optimize();
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -1686,6 +1687,7 @@ where
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
+        dataflow.optimize();
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -2289,18 +2291,12 @@ fn index_sql(
     use sql_parser::ast::{Expr, Ident, Statement, Value};
 
     Statement::CreateIndex {
-        name: Ident {
-            value: index_name,
-            quote_style: Some('"'),
-        },
+        name: Ident::new(index_name),
         on_name: sql::normalize::unresolve(view_name),
         key_parts: keys
             .iter()
             .map(|i| match view_desc.get_unambiguous_name(*i) {
-                Some(n) => Expr::Identifier(Ident {
-                    value: n.to_string(),
-                    quote_style: Some('"'),
-                }),
+                Some(n) => Expr::Identifier(Ident::new(n.to_string())),
                 _ => Expr::Value(Value::Number((i + 1).to_string())),
             })
             .collect(),

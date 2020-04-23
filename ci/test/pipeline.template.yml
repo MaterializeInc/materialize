@@ -1,0 +1,150 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This file is processed by mkpipeline.py to trim unnecessary steps in PR
+# builds. The inputs for steps using the `mzcompose` plugin are computed
+# automatically. Inputs for other steps need to be manually listed in the
+# `inputs` key.
+
+dag: true
+
+steps:
+  - id: build
+    label: ":docker: build"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+    timeout_in_minutes: 30
+    agents:
+      queue: builder
+
+  - id: lint-fast
+    label: ":bath: lint and rustfmt"
+    command: bin/ci-builder run stable ci/test/lint-fast.sh
+    inputs:
+      - "*"
+    timeout_in_minutes: 10
+
+  - id: lint-slow
+    label: ":paperclip: clippy and doctests"
+    command: bin/ci-builder run stable ci/test/lint-slow.sh
+    inputs:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - "**/*.rs"
+    timeout_in_minutes: 30
+    agents:
+      queue: builder
+
+  - id: cargo-test
+    label: ":cargo: test"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: ci/test/cargo-test.mzcompose.yml
+          run: app
+
+  - id: miri-test
+    label: ":face_with_monocle: miri test"
+    command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
+    inputs: [src/repr]
+    timeout_in_minutes: 30
+    agents:
+      queue: builder
+
+  - id: testdrive
+    label: ":racing_car: testdrive"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/testdrive]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/testdrive/mzcompose.yml
+          run: testdrive
+
+  - id: testdrive-purgatory
+    label: ":racing_car: testdrive purgatory"
+    depends_on: build
+    command: test/testdrive/ci-only/*.td
+    timeout_in_minutes: 30
+    inputs: [test/testdrive/ci-only]
+    soft_fail: true
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/testdrive/mzcompose.yml
+          run: testdrive
+
+  - id: short-sqllogictest
+    label: ":bulb: Short SQL logic tests"
+    depends_on: build
+    command: ci/test/slt-fast.sh
+    timeout_in_minutes: 10
+    inputs: [test/sqllogictest]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/sqllogictest/mzcompose.yml
+          run: sqllogictest
+
+  - id: streaming-demo
+    label: ":shower: streaming-demo"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: demo/billing/mzcompose.yml
+          run: billing-demo
+
+  - id: chbench-demo
+    label: "chbench sanity check"
+    depends_on: build
+    command: bin/ci-builder run stable demo/chbench/dc.sh ci
+    # TODO(benesch): integrate dc.sh into mzcompose, so we don't need to
+    # manually track image inputs here.
+    inputs: ["#materialized", "#chbenchmark", "#peeker", "#cli"]
+    timeout_in_minutes: 30
+
+  - id: catalog-compat
+    label: ":book: catalog compatibility check"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/catalog-compat/mzcompose.yml
+          run: catalog-compat
+
+  - id: metabase-demo
+    label: "metabase-demo"
+    depends_on: build
+    timeout_in_minutes: 10
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/metabase/mzcompose.yml
+          run: healthcheck
+
+  - id: lang-js
+    label: ":javascript: tests"
+    depends_on: build
+    timeout_in_minutes: 10
+    inputs: [test/lang/js]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/lang/js/mzcompose.yml
+          run: js
+
+  - id: deploy
+    label: ":rocket: Deploy"
+    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, metabase-demo, short-sqllogictest]
+    trigger: deploy
+    async: true
+    branches: "master v*.*"
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        MATERIALIZED_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
+        BUILDKITE_TAG: "$BUILDKITE_TAG"

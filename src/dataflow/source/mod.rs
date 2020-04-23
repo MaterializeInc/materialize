@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::Timestamp;
+use dataflow_types::{Consistency, Timestamp};
 use std::cell::RefCell;
 use std::rc::Rc;
 use timely::dataflow::operators::Capability;
 use timely::scheduling::Activator;
 
-use crate::server::TimestampChanges;
+use crate::server::{TimestampChanges, TimestampHistories};
 
 mod file;
 mod kafka;
@@ -21,7 +21,7 @@ mod kinesis;
 mod util;
 
 use expr::SourceInstanceId;
-pub use file::{file, FileReadStyle};
+pub use file::{file, read_file_task, FileReadStyle};
 pub use kafka::kafka;
 pub use kinesis::kinesis;
 
@@ -37,6 +37,51 @@ pub struct SourceToken {
 impl SourceToken {
     pub fn activate(&self) {
         self.activator.activate();
+    }
+}
+
+// Shared configuration information for all source types
+pub struct SourceConfig<'a, G> {
+    id: SourceInstanceId,
+    region: &'a G,
+    timestamp_histories: TimestampHistories,
+    timestamp_tx: TimestampChanges,
+    consistency: Consistency,
+}
+
+impl<'a, G> SourceConfig<'a, G> {
+    pub fn new(
+        id: SourceInstanceId,
+        region: &'a G,
+        timestamp_histories: TimestampHistories,
+        timestamp_tx: TimestampChanges,
+        consistency: Consistency,
+    ) -> Self {
+        SourceConfig {
+            id,
+            region,
+            timestamp_histories,
+            timestamp_tx,
+            consistency,
+        }
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        SourceInstanceId,
+        &'a G,
+        TimestampHistories,
+        TimestampChanges,
+        Consistency,
+    ) {
+        (
+            self.id,
+            self.region,
+            self.timestamp_histories,
+            self.timestamp_tx,
+            self.consistency,
+        )
     }
 }
 

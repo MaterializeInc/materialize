@@ -17,6 +17,7 @@ use timely::dataflow::{
     Scope, Stream,
 };
 
+use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, Diff, Envelope, Timestamp};
 use repr::Datum;
 use repr::{Row, RowPacker};
@@ -185,8 +186,12 @@ impl<F: Fn(&[u8]) -> Datum> DecoderState for OffsetDecoderState<F> {
     fn log_error_count(&self) {}
 }
 
-fn decode_key_values_inner<G, K, V>(
-    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+/// Inner method for decoding an upsert source
+/// Mostly, this inner method exists that way static dispatching
+/// can be used for different combinations of key-value decoders
+/// as opposed to dynamic dispatching
+fn decode_upsert_inner<G, K, V>(
+    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     mut key_decoder_state: K,
     mut value_decoder_state: V,
     op_name: &str,
@@ -197,13 +202,13 @@ where
     V: DecoderState + 'static,
 {
     stream.unary(
-        Exchange::new(|x: &((Vec<u8>, _), _)| (x.0).0.hashed()),
+        Exchange::new(|x: &(Vec<u8>, (_, _))| (x.0).hashed()),
         &op_name,
         move |_, _| {
             move |input, output| {
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
-                    for ((key, payload), aux_num) in data.iter() {
+                    for (key, (payload, aux_num)) in data.iter() {
                         if key.is_empty() {
                             error!("{}", "Encountered empty key");
                             continue;
@@ -235,8 +240,8 @@ where
     )
 }
 
-pub fn decode_key_values<G>(
-    stream: &Stream<G, ((Vec<u8>, Vec<u8>), Option<i64>)>,
+pub fn decode_upsert<G>(
+    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
     value_encoding: DataEncoding,
     key_encoding: DataEncoding,
 ) -> Stream<G, (Row, Option<Row>, Timestamp)>
@@ -249,7 +254,7 @@ where
         value_encoding.op_name()
     );
     let decoded_stream = match (key_encoding, value_encoding) {
-        (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+        (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: bytes_to_datum,
@@ -258,10 +263,11 @@ where
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::Upsert,
+                false,
             ),
             &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+        (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: text_to_datum,
@@ -270,24 +276,27 @@ where
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::Upsert,
+                false,
             ),
             &op_name,
         ),
-        (DataEncoding::Avro(key_enc), DataEncoding::Avro(val_enc)) => decode_key_values_inner(
+        (DataEncoding::Avro(key_enc), DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
             avro::AvroDecoderState::new(
                 &key_enc.value_schema,
                 key_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::None,
+                false,
             ),
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_url,
                 interchange::avro::EnvelopeType::Upsert,
+                false,
             ),
             &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Bytes) => decode_key_values_inner(
+        (DataEncoding::Text, DataEncoding::Bytes) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: text_to_datum,
@@ -297,7 +306,7 @@ where
             },
             &op_name,
         ),
-        (DataEncoding::Bytes, DataEncoding::Bytes) => decode_key_values_inner(
+        (DataEncoding::Bytes, DataEncoding::Bytes) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: bytes_to_datum,
@@ -307,7 +316,7 @@ where
             },
             &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Text) => decode_key_values_inner(
+        (DataEncoding::Text, DataEncoding::Text) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
                 datum_func: text_to_datum,
@@ -370,6 +379,11 @@ pub fn decode_values<G>(
     encoding: DataEncoding,
     name: &str,
     envelope: &Envelope,
+    // Information about optional transformations that can be eagerly done.
+    // If the decoding elects to perform them, it should replace this with
+    // `None`.
+    operators: &mut Option<LinearOperator>,
+    fast_forwarded: bool,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -381,7 +395,7 @@ where
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
         }
         (DataEncoding::Csv(enc), Envelope::None) => {
-            csv(stream, enc.header_row, enc.n_cols, enc.delimiter)
+            csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators)
         }
         (DataEncoding::Avro(enc), envelope) => decode_values_inner(
             stream,
@@ -389,6 +403,7 @@ where
                 &enc.value_schema,
                 enc.schema_registry_url,
                 envelope.get_avro_envelope_type(),
+                fast_forwarded,
             ),
             &op_name,
         ),

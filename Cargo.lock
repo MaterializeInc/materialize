@@ -458,6 +458,7 @@ dependencies = [
  "log",
  "ore",
  "pgrepr",
+ "prometheus",
  "rdkafka",
  "regex",
  "repr",
@@ -3071,6 +3072,7 @@ name = "sql-parser"
 version = "0.1.0"
 dependencies = [
  "failure",
+ "lazy_static",
  "log",
  "matches",
  "repr",

@@ -23,6 +23,7 @@ use std::fmt;
 use repr::datetime::DateTimeField;
 
 mod datetime;
+use crate::ast::display::{AstDisplay, AstFormatter};
 pub use datetime::{ExtractField, IntervalValue};
 
 #[derive(Debug)]
@@ -67,73 +68,112 @@ pub enum Value {
     Null,
 }
 
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl AstDisplay for Value {
+    fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Value::Number(v) => write!(f, "{}", v),
-            Value::SingleQuotedString(v) => write!(f, "'{}'", escape_single_quote_string(v)),
-            Value::HexStringLiteral(v) => write!(f, "X'{}'", v),
-            Value::Boolean(v) => write!(f, "{}", v),
-            Value::Date(v) => write!(f, "DATE '{}'", escape_single_quote_string(v)),
-            Value::Time(v) => write!(f, "TIME '{}'", escape_single_quote_string(v)),
-            Value::Timestamp(v) => write!(f, "TIMESTAMP '{}'", escape_single_quote_string(v)),
-            Value::TimestampTz(v) => write!(
-                f,
-                "TIMESTAMP WITH TIME ZONE '{}'",
-                escape_single_quote_string(v)
-            ),
+            Value::Number(v) => f.write_str(v),
+            Value::SingleQuotedString(v) => {
+                f.write_str("'");
+                f.write_node(&escape_single_quote_string(v));
+                f.write_str("'");
+            }
+            Value::HexStringLiteral(v) => {
+                f.write_str("X'");
+                f.write_str(v);
+                f.write_str("'");
+            }
+            Value::Boolean(v) => f.write_str(v),
+            Value::Date(v) => {
+                f.write_str("DATE '");
+                f.write_node(&escape_single_quote_string(v));
+                f.write_str("'");
+            }
+            Value::Time(v) => {
+                f.write_str("TIME '");
+                f.write_node(&escape_single_quote_string(v));
+                f.write_str("'");
+            }
+            Value::Timestamp(v) => {
+                f.write_str("TIMESTAMP '");
+                f.write_node(&escape_single_quote_string(v));
+                f.write_str("'");
+            }
+            Value::TimestampTz(v) => {
+                f.write_str("TIMESTAMP WITH TIME ZONE '");
+                f.write_node(&escape_single_quote_string(v));
+                f.write_str("'");
+            }
             Value::Interval(IntervalValue {
                 value,
                 precision_high: _,
                 precision_low: _,
                 fsec_max_precision: Some(fsec_max_precision),
-            }) => write!(
-                f,
-                "INTERVAL '{}' SECOND ({})",
-                escape_single_quote_string(value),
-                fsec_max_precision
-            ),
+            }) => {
+                f.write_str("INTERVAL '");
+                f.write_node(&escape_single_quote_string(value));
+                f.write_str("' SECOND (");
+                f.write_str(fsec_max_precision);
+                f.write_str(")");
+            }
             Value::Interval(IntervalValue {
                 value,
                 precision_high,
                 precision_low,
                 fsec_max_precision,
             }) => {
-                write!(f, "INTERVAL '{}'", escape_single_quote_string(value),)?;
+                f.write_str("INTERVAL '");
+                f.write_node(&escape_single_quote_string(value));
+                f.write_str("'");
                 match (precision_high, precision_low, fsec_max_precision) {
                     (DateTimeField::Year, DateTimeField::Second, None) => {}
                     (DateTimeField::Year, DateTimeField::Second, Some(ns)) => {
-                        write!(f, " SECOND({})", ns)?;
+                        f.write_str(" SECOND(");
+                        f.write_str(ns);
+                        f.write_str(")");
                     }
                     (DateTimeField::Year, low, None) => {
-                        write!(f, " {}", low)?;
+                        f.write_str(" ");
+                        f.write_str(low);
                     }
                     (high, low, None) => {
-                        write!(f, " {} TO {}", high, low)?;
+                        f.write_str(" ");
+                        f.write_str(high);
+                        f.write_str(" TO ");
+                        f.write_str(low);
                     }
                     (high, low, Some(ns)) => {
-                        write!(f, " {} TO {}({})", high, low, ns)?;
+                        f.write_str(" ");
+                        f.write_str(high);
+                        f.write_str(" TO ");
+                        f.write_str(low);
+                        f.write_str("(");
+                        f.write_str(ns);
+                        f.write_str(")");
                     }
                 }
-                Ok(())
             }
-            Value::Null => write!(f, "NULL"),
+            Value::Null => f.write_str("NULL"),
         }
     }
 }
+impl_display!(Value);
 
 pub struct EscapeSingleQuoteString<'a>(&'a str);
 
-impl<'a> fmt::Display for EscapeSingleQuoteString<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {
+    fn fmt(&self, f: &mut AstFormatter) {
         for c in self.0.chars() {
             if c == '\'' {
-                write!(f, "\'\'")?;
+                f.write_str("\'\'");
             } else {
-                write!(f, "{}", c)?;
+                f.write_str(c);
             }
         }
-        Ok(())
+    }
+}
+impl<'a> fmt::Display for EscapeSingleQuoteString<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.to_ast_string())
     }
 }
 

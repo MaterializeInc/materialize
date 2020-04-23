@@ -22,16 +22,14 @@ use rusoto_kinesis::{
     KinesisClient, ListShardsInput,
 };
 
-use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
-use expr::SourceInstanceId;
+use dataflow_types::{ExternalSourceConnector, KinesisSourceConnector, Timestamp};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
 
 use super::util::source;
-use super::{SourceStatus, SourceToken};
+use super::{SourceConfig, SourceStatus, SourceToken};
 use crate::metrics::EVENTS_COUNTER;
-use crate::server::{TimestampChanges, TimestampHistories};
 
 lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
@@ -57,20 +55,17 @@ lazy_static! {
 /// (100x/sec per stream) and to improve source performance overall.
 const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
-#[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
-    scope: &G,
+    source_config: SourceConfig<G>,
     name: String,
     connector: KinesisSourceConnector,
-    id: SourceInstanceId,
-    timestamp_histories: TimestampHistories,
-    timestamp_tx: TimestampChanges,
-    consistency: Consistency,
     read_kinesis: bool,
 ) -> (Stream<G, (Vec<u8>, Option<i64>)>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let (id, scope, timestamp_histories, timestamp_tx, consistency) = source_config.into_parts();
+
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.
     let ts = if read_kinesis {
