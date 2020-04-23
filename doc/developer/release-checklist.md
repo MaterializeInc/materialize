@@ -73,15 +73,11 @@ production readiness.
 
   - [ ] Spin up a fresh VM and start the load test.
 
-    ```shell
-    cd demo/chbench/terraform
-    terraform init
-    terraform apply
-    # SSH into the machine that is created.
-    cd materialize/demo/chbench
-    git checkout $tag
-    ./dc.sh clean-load-test
-    ```
+    Materialize employees can follow [these instructions for running semi-
+    automatic load tests][load-instr] in the infrastructure
+    repository.
+
+    [load-instr]: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
 
   - [ ] From the VM, ensure all containers are running:
     ```shell script
