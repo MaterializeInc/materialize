@@ -74,6 +74,7 @@ copyright_files=$(grep -vE \
     -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool.defconfig)$' \
     -e 'demo/chbench/chbench' \
     -e 'demo/billing/resources/views/.*\.sql\.in' \
+    -e 'demo/smith_fuzz/resources/views/.*\.sql\.in' \
     -e 'gen/.*\.rs' \
     <<< "$files"
 )

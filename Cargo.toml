@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "demo/billing",
+    "demo/smith_fuzz",
     "fuzz",
     "src/avro",
     "src/ccsr",
