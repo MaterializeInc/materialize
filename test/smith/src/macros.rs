@@ -19,7 +19,7 @@ macro_rules! query {
 #[macro_export]
 macro_rules! exec_query {
     ($client:ident, $fname:tt) => {{
-        let q = format!(query!($fname));
+        let q = query!($fname);
         if let Err(e) = $client.execute(&q, &[]).await {
             log::error!("{} ({}) executing query {}", e, e.source().unwrap(), q)
         }
