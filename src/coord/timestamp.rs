@@ -288,7 +288,6 @@ enum ConsistencyFormatting {
 struct RtKafkaConnector {
     consumer: BaseConsumer,
     topic: String,
-    //start_offset: u64,
 }
 
 use std::time::Instant;
