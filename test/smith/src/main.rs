@@ -15,7 +15,6 @@
 use std::error::Error as _;
 use std::process;
 
-use reqwest::header::{HeaderMap, CONTENT_TYPE};
 use structopt::StructOpt;
 use urlencoding::encode;
 
@@ -78,16 +77,9 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
         let count = if remaining > 50 { 50 } else { remaining };
         let body = format!("database=materialize&count={}&tables={}", count, views);
 
-        let mut map = HeaderMap::new();
-        map.insert(
-            CONTENT_TYPE,
-            "application/x-www-form-urlencoded"
-                .parse()
-                .expect("parsing content-type header value"),
-        );
         let request = http_client
             .post(config.fuzzer_url.clone())
-            .headers(map)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(body)
             .build()?;
 
