@@ -18,7 +18,7 @@ use crate::server::TimestampHistories;
 use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use lazy_static::lazy_static;
 use log::{error, info, warn};
-use prometheus::{register_int_counter, IntCounter};
+use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
@@ -35,6 +35,12 @@ lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
         "mz_kafka_bytes_read_total",
         "Count of kafka bytes we have read from the wire"
+    )
+    .unwrap();
+    static ref KAFKA_PARTITION_OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_ingested",
+        "The most recent kafka offset that we have ingested into a dataflow",
+        &["topic", "source_id", "partition_id"]
     )
     .unwrap();
 }
@@ -223,7 +229,12 @@ where
                         };
 
                     if offset <= last_processed_offset {
-                        warn!("Kafka message before expected offset: source {} (reading topic {}, partition {}) received offset {} max processed offset {}", name, topic, partition, offset, last_processed_offset);
+                        warn!(
+                            "Kafka message before expected offset: \
+                             source {} (reading topic {}, partition {}) \
+                             received offset {} max processed offset {}",
+                            name, topic, partition, offset, last_processed_offset
+                        );
                         let res = consumer.seek(
                             &topic,
                             partition,
@@ -258,6 +269,11 @@ where
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
                             output.session(&cap).give((key, (out, Some(offset - 1))));
+
+                            let id_str = id.to_string();
+                            KAFKA_PARTITION_OFFSET_INGESTED
+                                .with_label_values(&[&topic, &id_str, &partition.to_string()])
+                                .set(offset);
 
                             downgrade_capability(
                                 &id,
@@ -415,44 +431,42 @@ fn downgrade_capability(
     // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
     // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
     // in next_partition_ts
-    match timestamp_histories.borrow_mut().get_mut(id) {
-        None => {}
-        Some(entries) => {
-            for (pid, entries) in entries {
-                // Obtain the last offset processed (or 0 if no messages have yet been processed)
-                let last_offset = match last_processed_offset.get(pid) {
-                    Some(offs) => *offs,
-                    None => 0,
-                };
-                // Check whether timestamps can be closed on this partition
-                while let Some((partition_count, ts, offset)) = entries.first() {
-                    assert!(*offset >= start_offset, "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.", offset, start_offset);
-                    if partition_count > current_partition_count {
-                        // A new partition has been added, we need to update the appropriate
-                        // entries before we continue. This will also update the last_processed_offset
-                        // and next_partition_ts data structures
-                        let partitions = update_partition_list(
-                            consumer,
-                            topic,
-                            *partition_count,
-                            last_processed_offset,
-                            next_partition_ts,
-                            *last_closed_ts,
-                            start_offset,
-                        );
-                        *current_partition_count = i32::try_from(partitions.len()).unwrap();
-                    }
-                    if last_offset == *offset {
-                        // We have now seen all messages corresponding to this timestamp for this
-                        // partition. We
-                        // can close the timestamp (on this partition) and remove the associated metadata
-                        next_partition_ts.insert(pid.clone(), *ts);
-                        entries.remove(0);
-                        changed = true;
-                    } else {
-                        // Offset isn't at a timestamp boundary, we take no action
-                        break;
-                    }
+    if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+        for (pid, entries) in entries {
+            // Obtain the last offset processed (or 0 if no messages have yet been processed)
+            let last_offset = *last_processed_offset.get(pid).unwrap_or(&0);
+            // Check whether timestamps can be closed on this partition
+            while let Some((partition_count, ts, offset)) = entries.first() {
+                assert!(
+                    *offset >= start_offset,
+                    "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
+                    offset, start_offset
+                );
+                if partition_count > current_partition_count {
+                    // A new partition has been added, we need to update the appropriate
+                    // entries before we continue. This will also update the last_processed_offset
+                    // and next_partition_ts data structures
+                    let partitions = update_partition_list(
+                        consumer,
+                        topic,
+                        *partition_count,
+                        last_processed_offset,
+                        next_partition_ts,
+                        *last_closed_ts,
+                        start_offset,
+                    );
+                    *current_partition_count = i32::try_from(partitions.len()).unwrap();
+                }
+                if last_offset == *offset {
+                    // We have now seen all messages corresponding to this timestamp for this
+                    // partition. We
+                    // can close the timestamp (on this partition) and remove the associated metadata
+                    next_partition_ts.insert(pid.clone(), *ts);
+                    entries.remove(0);
+                    changed = true;
+                } else {
+                    // Offset isn't at a timestamp boundary, we take no action
+                    break;
                 }
             }
         }
