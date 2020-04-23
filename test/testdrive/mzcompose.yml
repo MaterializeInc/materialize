@@ -49,6 +49,7 @@ services:
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_HOST_NAME=kafka
+    - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
   schema-registry:
     image: confluentinc/cp-schema-registry:5.2.1
     environment:
