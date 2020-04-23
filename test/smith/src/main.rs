@@ -15,6 +15,7 @@
 use std::error::Error as _;
 use std::process;
 
+use serde::Deserialize;
 use structopt::StructOpt;
 use urlencoding::encode;
 
@@ -25,6 +26,11 @@ mod config;
 mod error;
 mod macros;
 mod mz_client;
+
+#[derive(Debug,Deserialize)]
+struct QueryResponse {
+    queries: Vec<String>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -86,33 +92,15 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
         log::info!("querying fuzzer: {:?}", request);
         let response = http_client.execute(request).await?;
         log::info!("received response: {:?}", response);
-        let text = response.text().await?;
 
-        let response_json: serde_json::Value =
-            serde_json::from_str(&text).expect("parsing response json failed");
+        let response: QueryResponse = response.json().await?;
 
-        let queries = response_json
-            .get("queries")
-            .expect("response should contain a set of queries");
-
-        match queries {
-            serde_json::Value::Array(v) => {
-                for query in v.iter() {
-                    let qs = query.to_string();
-                    let sanitized = qs.trim_matches('"');
-                    if let Err(e) = client.execute(sanitized, &[]).await {
-                        if !sanitized.starts_with("INSERT INTO") {
-                            log::error!(
-                                "{} ({}) executing query {}",
-                                e,
-                                e.source().unwrap(),
-                                sanitized
-                            );
-                        }
-                    }
+        for query in response.queries.iter() {
+            if let Err(e) = client.execute(query, &[]).await {
+                if !query.starts_with("INSERT INTO") {
+                    log::error!("{} ({}) executing query {}", e,e.source().unwrap(), query);
                 }
             }
-            _ => panic!("expected an array of queries"),
         }
 
         remaining -= count;
