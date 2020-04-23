@@ -643,8 +643,13 @@ macro_rules! make_visitor {
 
             fn visit_rollback(&mut self, _chain: bool) {}
 
-            fn visit_tail(&mut self, name: &'ast $($mut)* ObjectName) {
-                visit_tail(self, name)
+            fn visit_tail(
+                &mut self,
+                name: &'ast $($mut)* ObjectName,
+                with_snapshot: &'ast $($mut)* bool,
+                as_of: &'ast $($mut)* Option<Expr>,
+            ) {
+                visit_tail(self, name, *with_snapshot, as_of);
             }
 
             fn visit_explain(&mut self, stage: &'ast $($mut)* ExplainStage, explainee: &'ast $($mut)* Explainee, options: &'ast $($mut)* ExplainOptions) {
@@ -760,8 +765,8 @@ macro_rules! make_visitor {
                 Statement::SetTransaction { modes } => visitor.visit_set_transaction(modes),
                 Statement::Commit { chain } => visitor.visit_commit(*chain),
                 Statement::Rollback { chain } => visitor.visit_rollback(*chain),
-                Statement::Tail { name } => {
-                    visitor.visit_tail(name);
+                Statement::Tail { name, with_snapshot, as_of } => {
+                    visitor.visit_tail(name, with_snapshot, as_of);
                 }
                 Statement::Explain { stage, explainee, options } => visitor.visit_explain(stage, explainee, options),
             }
@@ -1828,8 +1833,16 @@ macro_rules! make_visitor {
             }
         }
 
-        pub fn visit_tail<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, name: &'ast $($mut)* ObjectName) {
+        pub fn visit_tail<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* ObjectName,
+            _with_snapshot: bool,
+            as_of: &'ast $($mut)* Option<Expr>,
+        ) {
             visitor.visit_object_name(name);
+            if let Some(as_of) = as_of {
+                visitor.visit_expr(as_of);
+            }
         }
 
         pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* ExplainStage, explainee: &'ast $($mut)* Explainee, _options: &'ast $($mut)* ExplainOptions) {

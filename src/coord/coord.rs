@@ -652,7 +652,11 @@ where
                 session,
             ),
 
-            Plan::Tail(id) => tx.send(self.sequence_tail(conn_id, id), session),
+            Plan::Tail {
+                id,
+                ts,
+                with_snapshot,
+            } => tx.send(self.sequence_tail(conn_id, id, with_snapshot, ts), session),
 
             Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
@@ -1165,7 +1169,7 @@ where
                 };
                 let index_name = format!("temp-index-on-{}", view_id);
                 let mut dataflow = DataflowDesc::new(view_name.to_string());
-                dataflow.as_of(Some(vec![timestamp.clone()]));
+                dataflow.as_of(Antichain::from_elem(timestamp));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
                     plan_cx: PlanContext::default(),
@@ -1228,21 +1232,31 @@ where
         &mut self,
         conn_id: u32,
         source_id: GlobalId,
+        with_snapshot: bool,
+        ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, failure::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
-        let since = if let Some(Some((index_id, _))) = self
+        let frontier = if let Some(ts) = ts {
+            // If a timestamp was explicitly requested, use that.
+            Antichain::from_elem(self.determine_timestamp(
+                &RelationExpr::Get {
+                    id: Id::Global(source_id),
+                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
+                    typ: RelationType::empty(),
+                },
+                PeekWhen::AtTimestamp(ts),
+            )?)
+        } else if let Some(Some((index_id, _))) = self
             .views
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
         {
             self.upper_of(index_id)
                 .expect("name missing at coordinator")
-                .get(0)
-                .copied()
-                .unwrap_or(Timestamp::max_value())
+                .to_owned()
         } else {
-            0 as Timestamp
+            Antichain::from_elem(0)
         };
 
         let sink_name = format!(
@@ -1254,11 +1268,17 @@ where
         let sink_id = self.catalog.allocate_id()?;
         self.active_tails.insert(conn_id, sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+
         self.create_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
-            SinkConnector::Tail(TailSinkConnector { tx, since }),
+            SinkConnector::Tail(TailSinkConnector {
+                tx,
+                frontier: frontier.clone(),
+                strict: !with_snapshot,
+            }),
+            frontier,
         );
         Ok(ExecuteResponse::Tailing { rx })
     }
@@ -1651,7 +1671,14 @@ where
             .expect("replacing a sink cannot fail");
 
         // Create the sink dataflow.
-        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+        // TODO(justin): this should be picking a more reasonable frontier, see #2803.
+        self.create_sink_dataflow(
+            name.to_string(),
+            id,
+            sink.from,
+            connector,
+            Antichain::from_elem(0),
+        )
     }
 
     fn create_sink_dataflow(
@@ -1660,6 +1687,7 @@ where
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
+        as_of: Antichain<Timestamp>,
     ) {
         #[allow(clippy::single_match)]
         match &connector {
@@ -1686,6 +1714,7 @@ where
             _ => (),
         }
         let mut dataflow = DataflowDesc::new(name);
+        dataflow.as_of(as_of);
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
@@ -1884,15 +1913,22 @@ where
         let mut uses_ids = Vec::new();
         source.global_uses(&mut uses_ids);
 
+        let need_to_determine = match when {
+            PeekWhen::Immediately => true,
+            _ => false,
+        };
+
         uses_ids.sort();
         uses_ids.dedup();
-        if uses_ids.iter().any(|id| {
-            if let Some(view_state) = self.views.get(id) {
-                !view_state.queryable
-            } else {
-                true
-            }
-        }) {
+        if need_to_determine
+            && uses_ids.iter().any(|id| {
+                if let Some(view_state) = self.views.get(id) {
+                    !view_state.queryable
+                } else {
+                    true
+                }
+            })
+        {
             bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
         }
         uses_ids = uses_ids
@@ -1958,10 +1994,7 @@ where
         if since.less_equal(&timestamp) {
             Ok(timestamp)
         } else {
-            bail!(
-                "Latest available timestamp ({}) is not valid for all inputs",
-                timestamp
-            );
+            bail!("Timestamp ({}) is not valid for all inputs", timestamp);
         }
     }
 

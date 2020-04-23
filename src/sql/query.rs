@@ -39,8 +39,11 @@ use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id, RowSetFinishing};
 use catalog::names::PartialName;
+use dataflow_types::Timestamp;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
+use repr::{
+    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
+};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
@@ -150,6 +153,40 @@ pub fn plan_show_where(
             project: (0..num_cols).collect(),
         },
     ))
+}
+
+/// Evaluates an expression in the AS OF position of a TAIL statement.
+pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp, failure::Error> {
+    let scope = Scope::from_source(
+        None,
+        iter::empty::<Option<ColumnName>>(),
+        Some(Scope::empty(None)),
+    );
+    let desc = RelationDesc::empty();
+    let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "AS OF",
+        scope: &scope,
+        relation_type: &desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+    };
+
+    let ex = plan_expr(ecx, &expr, None)?.lower_uncorrelated();
+    let temp_storage = &RowArena::new();
+    let evaled = ex.eval(&[], temp_storage)?;
+
+    Ok(match ex.typ(desc.typ()).scalar_type {
+        ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
+        ScalarType::Decimal(_, _) => {
+            bail!("decimal with fractional component is not a valid timestamp")
+        }
+        ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
+        ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+        ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp().try_into()?,
+        _ => bail!("can't use {} as a timestamp for AS OF", ex.typ(desc.typ())),
+    })
 }
 
 pub fn plan_index_exprs<'a>(
