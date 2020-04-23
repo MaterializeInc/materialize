@@ -275,7 +275,7 @@ $ kafka-create-topic topic=realtimeavroavro
 # test multi-field avro key
 $ set keyschema2={
     "type": "record",
-    "name": "Key",
+    "name": "Key2",
     "fields": [
         {"name": "f3", "type": ["null", "string"]},
         {"name": "f1", "type": ["null", "string"]}
@@ -339,3 +339,177 @@ fire       yang        dog            42
 air        qi          chicken        47
 <null>     yin         dog            243
 earth      dao         rhinoceros     211
+
+$ kafka-create-topic topic=realtimefilteravro
+
+$ set keyschema3={
+    "type": "record",
+    "name": "Key3",
+    "fields": [
+        {"name": "k1", "type": ["null", "string"]},
+        {"name": "k2", "type": ["null", "long"]}
+    ]
+  }
+
+$ set schema2={
+    "type": "record",
+    "name": "test2",
+    "fields": [
+        {"name": "f1", "type": ["null", "string"]},
+        {"name": "f2", "type": ["null", "long"]}
+    ]
+  }
+
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+{"k1": null, "k2": 2} {"f1": "date", "f2": 5}
+{"k1": "épicerie", "k2": 10} {"f1": "melon", "f2": 2}
+{"k1": "boucherie", "k2": 5} {"f1": "apple", "f2": 7}
+{"k1": "boulangerie", "k2": null} {"f1":"date", "f2": 10}
+{"k1": "épicerie", "k2": 10} {"f1": "pear", "f2": 2}
+{"k1": null, "k2": 2} {"f1": "date", "f2": null}
+{"k1": "boulangerie", "k2": null} {"f1":null, "f2": 10}
+{"k1": "boucherie", "k2": 5} {"f1": "apple", "f2": 3}
+
+> CREATE SOURCE realtimefilteravro
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-realtimefilteravro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# filter on key only
+> CREATE MATERIALIZED VIEW filterforkey AS
+  SELECT f1 FROM realtimefilteravro WHERE k1='épicerie';
+
+> SELECT * from filterforkey
+f1
+----
+pear
+
+# filter on value only
+> CREATE MATERIALIZED VIEW filterforvalue AS
+  SELECT f2 FROM realtimefilteravro WHERE f1='date';
+
+> SELECT * from filterforvalue
+f2
+-------
+<null>
+
+# filter with a predicate containing key + value
+> CREATE MATERIALIZED VIEW filterforkeyvalue AS
+  SELECT f1, f2 FROM realtimefilteravro WHERE k2+f2=12;
+
+> SELECT * from filterforkeyvalue
+f1   f2
+-------
+pear 2
+
+# filter on both a predicate containing a key and a predicate containing a value
+> CREATE MATERIALIZED VIEW keyfiltervaluefilter AS
+  SELECT k1, k2 FROM realtimefilteravro WHERE k2 > 5 AND f2 < 5
+
+> SELECT * from keyfiltervaluefilter
+k1       k2
+-----------
+épicerie 10
+
+# add records that match the filter
+# make sure that rows that differ on unneeded key columns are treated as separate
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+{"k1": "librairie", "k2": 10} {"f1":null, "f2": 2}
+{"k1": null, "k2": null} {"f1": "date", "f2": 5}
+{"k1": "épicerie", "k2": 6} {"f1": "pear", "f2": null}
+{"k1": "bureau", "k2": 6} {"f1": "grape", "f2": 7}
+
+> SELECT * from filterforkey
+f1
+----
+pear
+pear
+
+> SELECT * from filterforvalue
+f2
+-------
+<null>
+5
+
+> SELECT * from filterforkeyvalue
+f1     f2
+---------
+pear   2
+<null> 2
+
+> SELECT * from keyfiltervaluefilter
+k1        k2
+-----------
+épicerie  10
+librairie 10
+
+# update records so that they don't match the filter
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+{"k1": "librairie", "k2": 10} {"f1":null, "f2": 6}
+{"k1": null, "k2": null} {"f1": "grape", "f2": 5}
+
+> SELECT * from filterforvalue
+f2
+-------
+<null>
+
+> SELECT * from filterforkeyvalue
+f1     f2
+---------
+pear   2
+
+> SELECT * from keyfiltervaluefilter
+k1        k2
+-----------
+épicerie  10
+
+# update records so that they do match the filter
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+{"k1": "librairie", "k2": 10} {"f1":"melon", "f2": 2}
+{"k1": null, "k2": null} {"f1": "date", "f2": 12}
+
+> SELECT * from filterforvalue
+f2
+-------
+<null>
+12
+
+> SELECT * from filterforkeyvalue
+f1     f2
+---------
+pear   2
+melon  2
+
+> SELECT * from keyfiltervaluefilter
+k1        k2
+-----------
+épicerie  10
+librairie 10
+
+# delete records
+$ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2} publish=true
+{"k1": "boucherie", "k2": 5}
+{"k1": "épicerie", "k2": 10}
+{"k1": "boulangerie", "k2": null}
+{"k1": null, "k2": 2}
+
+> SELECT * from filterforkey
+f1
+----
+pear
+
+> SELECT * from filterforvalue
+f2
+-------
+12
+
+> SELECT * from filterforkeyvalue
+f1     f2
+---------
+melon  2
+
+> SELECT * from keyfiltervaluefilter
+k1        k2
+-----------
+librairie 10
