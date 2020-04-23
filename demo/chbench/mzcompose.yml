@@ -179,6 +179,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.12.0
     init: true
+    propagate-uid-gid: true
     ports:
       - *prometheus
     depends_on:
