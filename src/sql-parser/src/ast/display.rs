@@ -20,10 +20,21 @@
 
 use std::fmt;
 
+/// Describes the context in which to print an AST.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum FormatMode {
+    // Simple is the normal way of printing for human consumption. Identifiers are quoted only if
+    // necessary.
+    Simple,
+    // Stable prints out the AST in a form more suitable for persistance. All identifiers are
+    // quoted, even if not necessary. This mode is used when persisting table information to the
+    // catalog.
+    Stable,
+}
+
 #[derive(Debug)]
 pub struct AstFormatter {
-    // TODO(justin): add a "formatting mode" field when we have different contexts to print ASTs
-    // in.
+    mode: FormatMode,
     buf: String,
 }
 
@@ -37,6 +48,18 @@ impl AstFormatter {
     pub fn write_str<T: fmt::Display>(&mut self, s: T) {
         self.buf.push_str(&s.to_string());
     }
+
+    // Whether the AST should be optimized for persistence.
+    pub fn stable(&self) -> bool {
+        self.mode == FormatMode::Stable
+    }
+
+    pub fn new(mode: FormatMode) -> Self {
+        AstFormatter {
+            mode,
+            buf: String::new(),
+        }
+    }
 }
 
 // AstDisplay is an alternative to fmt::Display to be used for formatting ASTs. It permits
@@ -45,7 +68,13 @@ pub trait AstDisplay {
     fn fmt(&self, f: &mut AstFormatter);
 
     fn to_ast_string(&self) -> String {
-        let mut f = AstFormatter { buf: String::new() };
+        let mut f = AstFormatter::new(FormatMode::Simple);
+        self.fmt(&mut f);
+        f.buf
+    }
+
+    fn to_ast_string_stable(&self) -> String {
+        let mut f = AstFormatter::new(FormatMode::Stable);
         self.fmt(&mut f);
         f.buf
     }
