@@ -59,8 +59,7 @@ async fn run() -> Result<()> {
 
     let fuzzer_config = config.fuzzer_config();
 
-    let fuzz = tokio::spawn(async move { send_queries(fuzzer_config).await });
-    fuzz.await??;
+    send_queries(fuzzer_config).await?;
     Ok(())
 }
 
