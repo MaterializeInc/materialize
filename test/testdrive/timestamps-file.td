@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=1minute
+
 $ file-append path=data-consistency.csv
 dummy,1,0,0,0
 
@@ -44,9 +46,9 @@ a,b
 At least one input has no complete timestamps yet.
 
 $ file-append path=data-consistency.csv
- ${testdrive.temp-dir}/data.csv,1,0,1,2
- ${testdrive.temp-dir}/data2.csv,1,0,1,2
- ${testdrive.temp-dir}/data2.csv,1,0,2,5
+\${testdrive.temp-dir}/data.csv,1,0,1,2
+\${testdrive.temp-dir}/data2.csv,1,0,1,2
+\${testdrive.temp-dir}/data2.csv,1,0,2,5
 
 > SELECT * FROM view_byo
 a   b   mz_line_no
@@ -79,7 +81,7 @@ a   b   mz_line_no
 2   2  3
 
 $ file-append path=data-consistency.csv
- ${testdrive.temp-dir}/data.csv,1,0,2,5
+\${testdrive.temp-dir}/data.csv,1,0,2,5
 
 
 > SELECT * FROM view_byo
