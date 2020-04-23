@@ -650,7 +650,11 @@ where
                 session,
             ),
 
-            Plan::Tail(id) => tx.send(self.sequence_tail(conn_id, id), session),
+            Plan::Tail {
+                id,
+                ts,
+                with_snapshot,
+            } => tx.send(self.sequence_tail(conn_id, id, with_snapshot, ts), session),
 
             Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
@@ -1226,10 +1230,15 @@ where
         &mut self,
         conn_id: u32,
         source_id: GlobalId,
+        with_snapshot: bool,
+        ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, failure::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
-        let since = if let Some(Some((index_id, _))) = self
+        let since = if let Some(ts) = ts {
+            // If a timestamp was explicitly requested, use that.
+            ts
+        } else if let Some(Some((index_id, _))) = self
             .views
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
@@ -1257,6 +1266,7 @@ where
             sink_id,
             source_id,
             SinkConnector::Tail(TailSinkConnector { tx, since }),
+            if with_snapshot { Some(since) } else { None },
         );
         Ok(ExecuteResponse::Tailing { rx })
     }
@@ -1649,7 +1659,7 @@ where
             .expect("replacing a sink cannot fail");
 
         // Create the sink dataflow.
-        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+        self.create_sink_dataflow(name.to_string(), id, sink.from, connector, None)
     }
 
     fn create_sink_dataflow(
@@ -1658,6 +1668,7 @@ where
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
+        as_of: Option<Timestamp>,
     ) {
         #[allow(clippy::single_match)]
         match &connector {
@@ -1684,6 +1695,7 @@ where
             _ => (),
         }
         let mut dataflow = DataflowDesc::new(name);
+        dataflow.as_of(as_of.map(|t| vec![t]));
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);

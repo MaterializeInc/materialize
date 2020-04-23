@@ -3823,8 +3823,50 @@ fn parse_drop_index() {
 fn parse_tail() {
     let sql = "TAIL foo.bar";
     match verified_stmt(sql) {
-        Statement::Tail { name } => {
+        Statement::Tail { name, .. } => {
             assert_eq!("foo.bar", name.to_string());
+        }
+        _ => unreachable!(),
+    }
+
+    let sql = "TAIL foo.bar AS OF 123";
+    match verified_stmt(sql) {
+        Statement::Tail {
+            name,
+            with_snapshot,
+            as_of,
+        } => {
+            assert_eq!("foo.bar", name.to_string());
+            assert_eq!(false, with_snapshot);
+            assert_eq!("123", as_of.unwrap().to_string());
+        }
+        _ => unreachable!(),
+    }
+
+    let sql = "TAIL foo.bar AS OF now()";
+    match verified_stmt(sql) {
+        Statement::Tail {
+            name,
+            with_snapshot,
+            as_of,
+        } => {
+            assert_eq!("foo.bar", name.to_string());
+            assert_eq!(false, with_snapshot);
+            assert_eq!("now()", as_of.unwrap().to_string());
+        }
+        _ => unreachable!(),
+    }
+
+    let sql = "TAIL foo.bar WITH SNAPSHOT AS OF now()";
+    match verified_stmt(sql) {
+        Statement::Tail {
+            name,
+            with_snapshot,
+            as_of,
+        } => {
+            assert_eq!("foo.bar", name.to_string());
+            assert_eq!(true, with_snapshot);
+            assert_eq!("now()", as_of.unwrap().to_string());
         }
         _ => unreachable!(),
     }
