@@ -371,10 +371,11 @@ where
                             activator.activate();
                             return SourceStatus::Alive;
                         }
-                        Some(_) => {
+                        Some(ts) => {
                             last_processed_offset = current_msg_offset;
+                            let ts_cap = cap.delayed(&ts);
                             output
-                                .session(&cap)
+                                .session(&ts_cap)
                                 .give((message, Some(last_processed_offset)));
 
                             downgrade_capability(
