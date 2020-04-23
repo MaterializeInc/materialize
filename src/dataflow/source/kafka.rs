@@ -262,13 +262,14 @@ where
                             activator.activate();
                             return SourceStatus::Alive;
                         }
-                        Some(_) => {
+                        Some(ts) => {
                             let key = message.key.unwrap_or_default();
                             let out = message.payload.unwrap_or_default();
                             last_processed_offsets.insert(PartitionId::Kafka(partition), offset);
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
-                            output.session(&cap).give((key, (out, Some(offset - 1))));
+                            let ts_cap = cap.delayed(&ts);
+                            output.session(&ts_cap).give((key, (out,Some(offset - 1))));
 
                             let id_str = id.to_string();
                             KAFKA_PARTITION_OFFSET_INGESTED
@@ -423,6 +424,7 @@ fn downgrade_capability(
     last_closed_ts: &mut u64,
     start_offset: i64,
 ) {
+
     let mut changed = false;
 
     // Determine which timestamps have been closed. A timestamp is closed once we have processed
@@ -442,6 +444,7 @@ fn downgrade_capability(
                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
                     offset, start_offset
                 );
+                assert!(*ts>0, "Internal error! Received a zero-timestamp. Materialize will crash now.");
                 if partition_count > current_partition_count {
                     // A new partition has been added, we need to update the appropriate
                     // entries before we continue. This will also update the last_processed_offset
@@ -457,6 +460,11 @@ fn downgrade_capability(
                     );
                     *current_partition_count = i32::try_from(partitions.len()).unwrap();
                 }
+                // This assertion makes sure that if we ever fast-forwarded the empty stream
+                // (any message of the form "PID,TS,0"), we have correctly removed the (_,_,0) entry
+                // even if data has subsequently been added to the stream
+                assert!(*offset!=0 || last_offset == 0);
+
                 if last_offset == *offset {
                     // We have now seen all messages corresponding to this timestamp for this
                     // partition. We
@@ -478,7 +486,7 @@ fn downgrade_capability(
         .min()
         .expect("There should never be 0 expected partitions!");
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-    if (*last_closed_ts == 0 || changed) && min > 0 {
+    if changed && min > 0 {
         cap.downgrade(&(&min + 1));
         *last_closed_ts = min;
     }
