@@ -34,7 +34,7 @@ pub struct Args {
 }
 
 impl Args {
-    pub(crate) fn mz_config(&self) -> MzConfig {
+    pub fn mz_config(&self) -> MzConfig {
         MzConfig {
             host: self.materialized_host.clone(),
             port: self.materialized_port,
@@ -42,7 +42,7 @@ impl Args {
         }
     }
 
-    pub(crate) fn fuzzer_config(&self) -> FuzzerConfig {
+    pub fn fuzzer_config(&self) -> FuzzerConfig {
         FuzzerConfig {
             mz_config: self.mz_config(),
             fuzzer_url: Url::parse(&self.fuzzer_url).expect("fuzzer url expected to be valid URL"),
