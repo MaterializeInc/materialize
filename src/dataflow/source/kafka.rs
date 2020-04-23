@@ -269,7 +269,7 @@ where
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
                             let ts_cap = cap.delayed(&ts);
-                            output.session(&ts_cap).give((key, (out,Some(offset - 1))));
+                            output.session(&ts_cap).give((key, (out, Some(offset - 1))));
 
                             let id_str = id.to_string();
                             KAFKA_PARTITION_OFFSET_INGESTED
@@ -424,7 +424,6 @@ fn downgrade_capability(
     last_closed_ts: &mut u64,
     start_offset: i64,
 ) {
-
     let mut changed = false;
 
     // Determine which timestamps have been closed. A timestamp is closed once we have processed
@@ -444,7 +443,10 @@ fn downgrade_capability(
                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
                     offset, start_offset
                 );
-                assert!(*ts>0, "Internal error! Received a zero-timestamp. Materialize will crash now.");
+                assert!(
+                    *ts > 0,
+                    "Internal error! Received a zero-timestamp. Materialize will crash now."
+                );
                 if partition_count > current_partition_count {
                     // A new partition has been added, we need to update the appropriate
                     // entries before we continue. This will also update the last_processed_offset
@@ -463,7 +465,7 @@ fn downgrade_capability(
                 // This assertion makes sure that if we ever fast-forwarded the empty stream
                 // (any message of the form "PID,TS,0"), we have correctly removed the (_,_,0) entry
                 // even if data has subsequently been added to the stream
-                assert!(*offset!=0 || last_offset == 0);
+                assert!(*offset != 0 || last_offset == 0);
 
                 if last_offset == *offset {
                     // We have now seen all messages corresponding to this timestamp for this
