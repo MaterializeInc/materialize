@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "demo/billing",
-    "demo/smith_fuzz",
     "fuzz",
     "src/avro",
     "src/ccsr",
@@ -21,6 +20,7 @@ members = [
     "src/sqllogictest",
     "src/symbiosis",
     "src/testdrive",
+    "test/smith",
 ]
 
 [profile.release]
