@@ -11,15 +11,11 @@
 #[macro_export]
 macro_rules! query {
     ($fname:tt) => {
-        include_str!(concat!("../resources/views/", $fname, ".sql.in"))
+        include_str!(concat!("../resources/views/", $fname, ".sql"))
     };
 }
 
 /// Execute a named query
-///
-/// With three arguments, the `source_name` property from the second arg will be passed in
-///
-/// With two arguments, no source_name will be passed to the query
 #[macro_export]
 macro_rules! exec_query {
     ($client:ident, $fname:tt) => {{

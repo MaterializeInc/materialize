@@ -27,7 +27,7 @@ mod error;
 mod macros;
 mod mz_client;
 
-#[derive(Debug,Deserialize)]
+#[derive(Debug, Deserialize)]
 struct QueryResponse {
     queries: Vec<String>,
 }
@@ -84,7 +84,10 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
 
         let request = http_client
             .post(config.fuzzer_url.clone())
-            .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
             .body(body)
             .build()?;
 
@@ -97,7 +100,7 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
         for query in response.queries.iter() {
             if let Err(e) = client.execute(query, &[]).await {
                 if !query.starts_with("INSERT INTO") {
-                    log::error!("{} ({}) executing query {}", e,e.source().unwrap(), query);
+                    log::error!("{} ({}) executing query {}", e, e.source().unwrap(), query);
                 }
             }
         }
