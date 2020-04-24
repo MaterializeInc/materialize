@@ -285,6 +285,12 @@ initialize_warehouse() {
     runv ./mzcompose --mz-quiet run chbench gen --warehouses=1
 }
 
+peeker_demo_init() {
+    runv sed -e 's/materialized.*false/materialized = true/' ../../src/peeker/config.toml \
+        > peeker-config/materialized-sources.toml
+    dc_run peeker --only-initialize -c /etc/peeker/materialized-sources.toml -q loadtest
+}
+
 # helper/individual step commands
 
 # Start a single service and all its dependencies
@@ -538,7 +544,7 @@ demo_load() {
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default.cfg \
 	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
-    dc_run -d peeker --only-initialize --queries q01,q02,q17,q22
+    peeker_demo_init
 }
 
 DCSH_LOCK=.dcsh-lock
