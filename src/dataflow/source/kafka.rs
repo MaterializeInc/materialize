@@ -28,6 +28,7 @@ use super::{SourceConfig, SourceStatus, SourceToken};
 use expr::{PartitionId, SourceInstanceId};
 use rdkafka::message::BorrowedMessage;
 use std::iter;
+use timely::scheduling::Activator;
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -61,6 +62,45 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
             key: msg.key().map(|k| k.to_vec()),
         }
     }
+}
+
+// Refresh our metadata from Kafka, which is necessary in order to start receiving messages
+// for new partitions. Return whether the check succeeded and returned expectedly many partitions.
+fn refresh_kafka_metadata(
+    consumer: &mut BaseConsumer<GlueConsumerContext>,
+    expected_partitions: usize,
+    topic: &str,
+    activator: &Activator,
+) -> bool {
+    let result = match consumer.fetch_metadata(Some(topic), Duration::from_secs(1)) {
+        Ok(md) => match md.topics().iter().find(|mdt| mdt.name() == topic) {
+            None => {
+                warn!("Topic {} not found in Kafka metadata", topic);
+                false
+            }
+            Some(mdt) => {
+                let partitions = mdt.partitions().len();
+                if partitions < expected_partitions {
+                    warn!(
+                        "Topic {} does not have as many partitions as expected ({} < {})",
+                        topic, partitions, expected_partitions
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+        },
+        Err(e) => {
+            warn!("Error refreshing Kafka metadata: {}", e);
+            false
+        }
+    };
+    if !result {
+        warn!("Descheduling for 1s to wait for Kafka metadata to catch up");
+        activator.activate_after(Duration::from_secs(1));
+    }
+    result
 }
 
 pub fn kafka<G>(
@@ -133,6 +173,8 @@ where
         let mut buffer: Option<MessageParts> = None;
         // For each partition, the next offset to process, and the smallest still-open timestamp.
         let mut partition_metadata: Vec<(i64, u64)> = vec![(start_offset, 0)];
+        // Whether the Kafka metadata should be refreshed the next time this operator is scheduled.
+        let mut needs_refresh: bool = false;
 
         if let Some(consumer) = consumer.as_mut() {
             consumer.subscribe(&[&topic]).unwrap();
@@ -142,6 +184,18 @@ where
             // Accumulate updates to BYTES_READ_COUNTER;
             let mut bytes_read = 0;
             if let Some(consumer) = consumer.as_mut() {
+                if needs_refresh {
+                    // Attempt to pick up new partitions.
+                    if !refresh_kafka_metadata(
+                        consumer,
+                        partition_metadata.len(),
+                        &topic,
+                        &activator,
+                    ) {
+                        return SourceStatus::Alive;
+                    }
+                    needs_refresh = false;
+                }
                 // Repeatedly interrogate Kafka for messages. Cease when
                 // Kafka stops returning new data, or after 10 milliseconds.
                 let timer = std::time::Instant::now();
@@ -149,14 +203,24 @@ where
                 // Check if the capability can be downgraded (this is independent of whether
                 // there are new messages that can be processed) as timestamps can become
                 // closed in the absence of messages
-                downgrade_capability(
+                if downgrade_capability(
                     &id,
                     cap,
                     &mut partition_metadata,
                     &timestamp_histories,
                     start_offset,
                     &mut last_closed_ts,
-                );
+                ) {
+                    if !refresh_kafka_metadata(
+                        consumer,
+                        partition_metadata.len(),
+                        &topic,
+                        &activator,
+                    ) {
+                        needs_refresh = true;
+                        return SourceStatus::Alive;
+                    }
+                }
 
                 // Check if there was a message buffered and if we can now process it
                 // If we can now process it, clear the buffer and proceed to poll from
@@ -178,12 +242,21 @@ where
                 while let Some(message) = next_message {
                     let partition = message.partition;
                     let offset = message.offset + 1;
-                    if partition_metadata.len() <= partition as usize {
-                        // We have received a message for a partition that the timestamping logic
-                        // doesn't know about yet. Buffer it and wait for the appropriate information.
-                        buffer = Some(message);
-                        activator.activate();
-                        return SourceStatus::Alive;
+
+                    if partition as usize >= partition_metadata.len() {
+                        partition_metadata.extend(
+                            iter::repeat((start_offset, last_closed_ts))
+                                .take(1 + partition as usize - partition_metadata.len()),
+                        );
+                        if !refresh_kafka_metadata(
+                            consumer,
+                            partition_metadata.len(),
+                            &topic,
+                            &activator,
+                        ) {
+                            needs_refresh = true;
+                            return SourceStatus::Alive;
+                        }
                     }
 
                     let next_offset = partition_metadata[partition as usize].0;
@@ -235,14 +308,24 @@ where
                                 .with_label_values(&[&topic, &id_str, &partition.to_string()])
                                 .set(offset);
 
-                            downgrade_capability(
+                            if downgrade_capability(
                                 &id,
                                 cap,
                                 &mut partition_metadata,
                                 &timestamp_histories,
                                 start_offset,
                                 &mut last_closed_ts,
-                            );
+                            ) {
+                                if !refresh_kafka_metadata(
+                                    consumer,
+                                    partition_metadata.len(),
+                                    &topic,
+                                    &activator,
+                                ) {
+                                    needs_refresh = true;
+                                    return SourceStatus::Alive;
+                                }
+                            }
                         }
                     }
 
@@ -323,6 +406,8 @@ fn find_matching_timestamp(
 /// (even across partitions). This means that once we see a timestamp with ts x, no entry with
 /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
 /// partitions
+///
+/// Returns true if we learned about a new partition and Kafka metadata needs to be refreshed.
 #[allow(clippy::too_many_arguments)]
 fn downgrade_capability(
     id: &SourceInstanceId,
@@ -331,8 +416,9 @@ fn downgrade_capability(
     timestamp_histories: &TimestampHistories,
     start_offset: i64,
     last_closed_ts: &mut u64,
-) {
+) -> bool {
     let mut changed = false;
+    let mut needs_md_refresh = false;
 
     // Determine which timestamps have been closed. A timestamp is closed once we have processed
     // all messages that we are going to process for this timestamp across all partitions
@@ -354,6 +440,7 @@ fn downgrade_capability(
                     iter::repeat((start_offset, *last_closed_ts))
                         .take(1 + pid as usize - partition_metadata.len()),
                 );
+                needs_md_refresh = true;
             }
             let last_offset = partition_metadata[pid as usize].0;
             // Check whether timestamps can be closed on this partition
@@ -370,6 +457,7 @@ fn downgrade_capability(
                         iter::repeat((start_offset, *last_closed_ts))
                             .take(*partition_count as usize - partition_metadata.len()),
                     );
+                    needs_md_refresh = true;
                 }
                 if last_offset == *offset {
                     // We have now seen all messages corresponding to this timestamp for this
@@ -397,6 +485,7 @@ fn downgrade_capability(
         cap.downgrade(&(&min + 1));
         *last_closed_ts = min;
     }
+    needs_md_refresh
 }
 
 /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
@@ -409,11 +498,17 @@ impl ClientContext for GlueConsumerContext {
     }
 }
 
-impl ConsumerContext for GlueConsumerContext {
-    fn message_queue_nonempty_callback(&self) {
+impl GlueConsumerContext {
+    fn activate(&self) {
         let activator = self.0.lock().unwrap();
         activator
             .activate()
             .expect("timely operator hung up while Kafka source active");
+    }
+}
+
+impl ConsumerContext for GlueConsumerContext {
+    fn message_queue_nonempty_callback(&self) {
+        self.activate();
     }
 }
