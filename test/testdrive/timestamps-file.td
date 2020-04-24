@@ -35,18 +35,17 @@ a,b
 
 > CREATE MATERIALIZED VIEW view_byo2 AS SELECT * FROM data_byo2
 
-> CREATE MATERIALIZED SOURCE data_byo3 FROM FILE '${testdrive.temp-dir}/data2.csv'
-    WITH (consistency = '${testdrive.temp-dir}/data-consistency.csv')
-    FORMAT CSV WITH HEADER
-
-
 ! SELECT * FROM view_byo;
 At least one input has no complete timestamps yet.
 
 $ file-append path=data-consistency.csv
- ${testdrive.temp-dir}/data.csv,1,0,1,2
- ${testdrive.temp-dir}/data2.csv,1,0,1,2
- ${testdrive.temp-dir}/data2.csv,1,0,2,5
+\${testdrive.temp-dir}/data.csv,1,0,1,2
+\${testdrive.temp-dir}/data2.csv,1,0,1,2
+\${testdrive.temp-dir}/data2.csv,1,0,2,5
+
+> CREATE MATERIALIZED SOURCE data_byo3 FROM FILE '${testdrive.temp-dir}/data2.csv'
+    WITH (consistency = '${testdrive.temp-dir}/data-consistency.csv')
+    FORMAT CSV WITH HEADER
 
 > SELECT * FROM view_byo
 a   b   mz_line_no
@@ -79,7 +78,7 @@ a   b   mz_line_no
 2   2  3
 
 $ file-append path=data-consistency.csv
- ${testdrive.temp-dir}/data.csv,1,0,2,5
+\${testdrive.temp-dir}/data.csv,1,0,2,5
 
 
 > SELECT * FROM view_byo

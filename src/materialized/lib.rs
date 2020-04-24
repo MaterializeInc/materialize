@@ -89,6 +89,9 @@ pub struct Config {
     pub timestamp_frequency: Duration,
     /// The maximum size of a timestamp batch.
     pub max_increment_ts_size: i64,
+    /// If set to true, records RT consistency information to the SQL lite store
+    /// and attempts to recover that information on startup
+    pub persist_ts: bool,
     /// The historical window in which distinctions are maintained for arrangements.
     ///
     /// As arrangements accept new timestamps they may optionally collapse prior
@@ -285,6 +288,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,
                 max_size: config.max_increment_ts_size,
+                persist_ts: config.persist_ts,
             },
             logical_compaction_window: config.logical_compaction_window,
             executor: &executor,

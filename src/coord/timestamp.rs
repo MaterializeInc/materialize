@@ -160,6 +160,7 @@ lazy_static! {
 pub struct TimestampConfig {
     pub frequency: Duration,
     pub max_size: i64,
+    pub persist_ts: bool,
 }
 
 #[derive(Debug)]
@@ -542,6 +543,9 @@ pub struct Timestamper {
 
     // Max increment size
     max_increment_size: i64,
+
+    // Persist consistency information
+    persist_ts: bool,
 }
 
 /// A byo record contains a single timestamp update for a given source
@@ -724,19 +728,23 @@ impl Timestamper {
         // Recover existing data by running max on the timestamp count. This will ensure that
         // there will never be two duplicate entries and that there is a continuous stream
         // of timestamp updates across reboots
-        let max_ts = storage
-            .lock()
-            .expect("lock poisoned")
-            .prepare("SELECT MAX(timestamp) FROM timestamps")
-            .expect("Failed to prepare statement")
-            .query_row(NO_PARAMS, |row| {
-                let res: Result<SqlVal<u64>, _> = row.get(2);
-                match res {
-                    Ok(res) => Ok(res.0),
-                    _ => Ok(0),
-                }
-            })
-            .expect("Failure to parse timestamp");
+        let max_ts = if config.persist_ts {
+            storage
+                .lock()
+                .expect("lock poisoned")
+                .prepare("SELECT MAX(timestamp) FROM timestamps")
+                .expect("Failed to prepare statement")
+                .query_row(NO_PARAMS, |row| {
+                    let res: Result<SqlVal<u64>, _> = row.get(2);
+                    match res {
+                        Ok(res) => Ok(res.0),
+                        _ => Ok(0),
+                    }
+                })
+                .expect("Failure to parse timestamp")
+        } else {
+            0
+        };
 
         info!(
             "Starting Timestamping Thread. Frequency: {} ms.",
@@ -752,6 +760,7 @@ impl Timestamper {
             current_timestamp: max_ts,
             timestamp_frequency: config.frequency,
             max_increment_size: config.max_size,
+            persist_ts: config.persist_ts,
         }
     }
 
@@ -778,7 +787,9 @@ impl Timestamper {
     fn update_rt_timestamp(&mut self) {
         let watermarks = self.rt_query_sources();
         self.rt_generate_next_timestamp();
-        self.rt_persist_timestamp(&watermarks);
+        if self.persist_ts {
+            self.rt_persist_timestamp(&watermarks);
+        }
         for (id, partition_count, pid, offset) in watermarks {
             self.tx
                 .unbounded_send(coord::Message::AdvanceSourceTimestamp {
@@ -828,8 +839,11 @@ impl Timestamper {
                                     }) => start_offset,
                                     _ => 0,
                                 };
-                                let last_offset =
-                                    std::cmp::max(start_offset, self.rt_recover_source(id));
+                                let last_offset = if self.persist_ts {
+                                    std::cmp::max(start_offset, self.rt_recover_source(id))
+                                } else {
+                                    start_offset
+                                };
                                 let consumer = self.create_rt_connector(id, sc, last_offset);
                                 if let Some(consumer) = consumer {
                                     self.rt_sources.insert(id, consumer);
