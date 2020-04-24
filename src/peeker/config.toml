@@ -11,6 +11,7 @@
 kafka_broker = "kafka:9092"
 schema_registry = "http://schema-registry:8081"
 topic_namespace = "mysql.tpcch."
+materialized = false
 names = [
     "customer",
     "item",

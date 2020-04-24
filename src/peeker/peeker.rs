@@ -202,19 +202,25 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
     let mut failed = false;
     for source in sources {
         let mut still_to_try = source.names.clone();
+        let materialized = if source.materialized {
+            "MATERIALIZED "
+        } else {
+            ""
+        };
         for _ in 0..10 {
             let this_time = still_to_try.clone();
             still_to_try.clear();
             for name in this_time {
                 let create_source = format!(
-                    r#"CREATE SOURCE IF NOT EXISTS "{name}"
+                    r#"CREATE {materialized} SOURCE IF NOT EXISTS "{name}"
                      FROM KAFKA BROKER '{broker}' TOPIC '{prefix}{name}'
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{registry}'
                      ENVELOPE DEBEZIUM"#,
                     name = name,
                     broker = source.kafka_broker,
                     prefix = source.topic_namespace,
-                    registry = source.schema_registry
+                    registry = source.schema_registry,
+                    materialized = materialized,
                 );
                 match client.batch_execute(&create_source) {
                     Ok(_) => info!(
@@ -223,6 +229,7 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
                     ),
                     Err(err) => {
                         warn!("error trying to create source {}: {}", name, err);
+                        debug!("For query:\n                     {}", create_source);
                         still_to_try.push(name)
                     }
                 }
