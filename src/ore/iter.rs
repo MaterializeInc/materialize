@@ -9,6 +9,8 @@
 
 //! Iterator utilities.
 
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::iter::{self, Chain, Once};
 
 pub use fallible_iterator::FallibleIterator;
@@ -18,6 +20,22 @@ pub trait IteratorExt
 where
     Self: Iterator + Sized,
 {
+    /// Determines whether the iterator yields any duplicates.
+    ///
+    /// The algorithm requires O(n) time and O(n) space.
+    fn has_duplicates(self) -> bool
+    where
+        Self::Item: Hash + Eq,
+    {
+        let mut seen = HashSet::new();
+        for item in self {
+            if !seen.insert(item) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Chains a single `item` onto the end of this iterator.
     ///
     /// Equivalent to `self.chain(iter::once(item))`.
