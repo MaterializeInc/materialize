@@ -345,6 +345,11 @@ fn downgrade_capability(
                                    to Kafka sources."
                 ),
             };
+            if pid as usize > partition_metadata.len() {
+                partition_metadata.extend(
+                    iter::repeat((start_offset, 0)).take(pid as usize - partition_metadata.len()),
+                );
+            }
             let last_offset = partition_metadata[pid as usize].0;
             // Check whether timestamps can be closed on this partition
             while let Some((partition_count, ts, offset)) = entries.first() {
