@@ -127,8 +127,8 @@ where
             None
         };
 
-        // The last timestamp
-        let mut min_open_ts: u64 = 0;
+        // The last timestamp that was closed, or 0 if none has been.
+        let mut last_closed_ts: u64 = 0;
         // Buffer placeholder for buffering messages for which we did not have a timestamp
         let mut buffer: Option<MessageParts> = None;
         // For each partition, the next offset to process, and the smallest still-open timestamp.
@@ -155,7 +155,7 @@ where
                     &mut partition_metadata,
                     &timestamp_histories,
                     start_offset,
-                    &mut min_open_ts,
+                    &mut last_closed_ts,
                 );
 
                 // Check if there was a message buffered and if we can now process it
@@ -186,7 +186,6 @@ where
                         return SourceStatus::Alive;
                     }
 
-                    // Determine what the last processed message for this stream partition
                     let next_offset = partition_metadata[partition as usize].0;
 
                     if offset <= next_offset {
@@ -242,7 +241,7 @@ where
                                 &mut partition_metadata,
                                 &timestamp_histories,
                                 start_offset,
-                                &mut min_open_ts,
+                                &mut last_closed_ts,
                             );
                         }
                     }
@@ -331,7 +330,7 @@ fn downgrade_capability(
     partition_metadata: &mut Vec<(i64, u64)>,
     timestamp_histories: &TimestampHistories,
     start_offset: i64,
-    min_open_ts: &mut u64,
+    last_closed_ts: &mut u64,
 ) {
     let mut changed = false;
 
@@ -352,7 +351,7 @@ fn downgrade_capability(
             };
             if pid as usize >= partition_metadata.len() {
                 partition_metadata.extend(
-                    iter::repeat((start_offset, *min_open_ts))
+                    iter::repeat((start_offset, *last_closed_ts))
                         .take(1 + pid as usize - partition_metadata.len()),
                 );
             }
@@ -364,12 +363,12 @@ fn downgrade_capability(
                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
                     offset, start_offset
                 );
-                if *partition_count as usize >= partition_metadata.len() {
+                if *partition_count as usize > partition_metadata.len() {
                     // A new partition has been added, we need to update the appropriate
                     // entries before we continue.
                     partition_metadata.extend(
-                        iter::repeat((start_offset, *min_open_ts))
-                            .take(1 + *partition_count as usize - partition_metadata.len()),
+                        iter::repeat((start_offset, *last_closed_ts))
+                            .take(*partition_count as usize - partition_metadata.len()),
                     );
                 }
                 if last_offset == *offset {
@@ -396,7 +395,7 @@ fn downgrade_capability(
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
     if changed && min > 0 {
         cap.downgrade(&(&min + 1));
-        *min_open_ts = min + 1;
+        *last_closed_ts = min;
     }
 }
 
