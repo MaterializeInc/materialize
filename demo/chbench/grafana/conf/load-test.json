@@ -2431,7 +2431,7 @@
     ]
   },
   "timezone": "",
-  "title": "Materialize Metrics",
-  "uid": "mz",
+  "title": "Materialize Load Test Metrics",
+  "uid": "load-test",
   "version": 1
 }
