@@ -62,6 +62,12 @@ def main() -> int:
         help="fingerprint an image",
     )
 
+    add_image_subcommand(
+        "spec",
+        description="Compute the Docker Hub specification for an image.",
+        help="compute image spec",
+    )
+
     describe_parser = add_image_subcommand(
         "describe",
         description="Print information about an image.",
@@ -106,6 +112,8 @@ def main() -> int:
             deps.acquire()
         elif args.command == "fingerprint":
             print(rimage.fingerprint())
+        elif args.command == "spec":
+            print(rimage.spec())
         elif args.command == "describe":
             inputs = sorted(rimage.inputs(args.transitive))
             dependencies = sorted(rimage.list_dependencies(args.transitive))
