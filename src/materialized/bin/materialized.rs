@@ -73,6 +73,12 @@ fn run() -> Result<(), failure::Error> {
     );
     opts.optopt(
         "",
+        "persist-ts",
+        "persists consistency information locally and recovers from local store",
+        "true/false",
+    );
+    opts.optopt(
+        "",
         "logical-compaction-window",
         "historical detail maintained for arrangements (default 60s)",
         "DURATION/\"off\"",
@@ -146,6 +152,7 @@ fn run() -> Result<(), failure::Error> {
 
     let log_file = popts.opt_str("log-file");
     let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
+    let persist_ts = popts.opt_get_default("persist-ts", false)?;
 
     let threads = match popts.opt_get::<usize>("threads")? {
         Some(val) => val,
@@ -236,6 +243,7 @@ fn run() -> Result<(), failure::Error> {
         logging_granularity,
         timestamp_frequency,
         max_increment_ts_size,
+        persist_ts,
         logical_compaction_window,
         threads,
         process,
