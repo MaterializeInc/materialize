@@ -8,9 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
-use std::convert::TryFrom;
-use std::iter::FromIterator;
 use std::sync::Mutex;
 use std::time::Duration;
 
