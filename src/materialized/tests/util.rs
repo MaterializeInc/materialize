@@ -45,6 +45,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         timestamp_frequency: Duration::from_millis(10),
         logical_compaction_window: None,
         max_increment_ts_size: 1000,
+        persist_ts: false,
         threads: 1,
         process: 0,
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
