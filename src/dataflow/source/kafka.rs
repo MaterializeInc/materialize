@@ -256,6 +256,7 @@ where
                             &activator,
                         ) {
                             needs_refresh = true;
+                            buffer = Some(message);
                             return SourceStatus::Alive;
                         }
                     }
