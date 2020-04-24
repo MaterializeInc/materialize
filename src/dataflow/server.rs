@@ -682,20 +682,6 @@ where
                 let mut timestamps = self.ts_histories.borrow_mut();
                 if let Some(entries) = timestamps.get_mut(&id) {
                     let ts = entries.entry(pid).or_insert_with(Vec::new);
-                    let last_offset = if let Some(offs) = ts.last() {
-                        // timestamp.rs takes care to ensure that the timestamp value is
-                        // strictly increasing -- see `rt_generate_next_timestamp`.
-                        let last_timestamp = offs.1;
-                        assert!(
-                            timestamp > last_timestamp,
-                            "timestamp should advance, but {} <= {}",
-                            timestamp,
-                            last_timestamp
-                        );
-                        offs.2
-                    } else {
-                        0
-                    };
                     // TODO (brennan) - I'm not sure if this can fail, but
                     // keep it commented out for now until #2735 is fixed and we're sure there
                     // is no weirdness going on with offsets.
@@ -707,17 +693,15 @@ where
                     //     last_offset
                     // );
                     ts.push((partition_count, timestamp, offset));
-                    if last_offset == offset {
-                        // We only activate the source if the offset is the same as the last
-                        // offset as new data already triggers the source's activation
-                        let source = self
-                            .ts_source_mapping
-                            .get(&id)
-                            .expect("Id should be present");
-                        if let Some(source) = source.upgrade() {
-                            if let Some(token) = &*source {
-                                token.activate();
-                            }
+                    // We only activate the source if the offset is the same as the last
+                    // offset as new data already triggers the source's activation
+                    let source = self
+                        .ts_source_mapping
+                        .get(&id)
+                        .expect("Id should be present");
+                    if let Some(source) = source.upgrade() {
+                        if let Some(token) = &*source {
+                            token.activate();
                         }
                     }
                 }
