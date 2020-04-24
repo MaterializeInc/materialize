@@ -693,8 +693,6 @@ where
                     //     last_offset
                     // );
                     ts.push((partition_count, timestamp, offset));
-                    // We only activate the source if the offset is the same as the last
-                    // offset as new data already triggers the source's activation
                     let source = self
                         .ts_source_mapping
                         .get(&id)
