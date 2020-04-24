@@ -127,7 +127,9 @@ where
             None
         };
 
-        // Buffer place older for buffering messages for which we did not have a timestamp
+        // The last timestamp
+        let mut min_open_ts: u64 = 0;
+        // Buffer placeholder for buffering messages for which we did not have a timestamp
         let mut buffer: Option<MessageParts> = None;
         // For each partition, the next offset to process, and the smallest still-open timestamp.
         let mut partition_metadata: Vec<(i64, u64)> = vec![(start_offset, 0)];
@@ -153,6 +155,7 @@ where
                     &mut partition_metadata,
                     &timestamp_histories,
                     start_offset,
+                    &mut min_open_ts,
                 );
 
                 // Check if there was a message buffered and if we can now process it
@@ -239,6 +242,7 @@ where
                                 &mut partition_metadata,
                                 &timestamp_histories,
                                 start_offset,
+                                &mut min_open_ts,
                             );
                         }
                     }
@@ -327,6 +331,7 @@ fn downgrade_capability(
     partition_metadata: &mut Vec<(i64, u64)>,
     timestamp_histories: &TimestampHistories,
     start_offset: i64,
+    min_open_ts: &mut u64,
 ) {
     let mut changed = false;
 
@@ -345,9 +350,10 @@ fn downgrade_capability(
                                    to Kafka sources."
                 ),
             };
-            if pid as usize > partition_metadata.len() {
+            if pid as usize >= partition_metadata.len() {
                 partition_metadata.extend(
-                    iter::repeat((start_offset, 0)).take(pid as usize - partition_metadata.len()),
+                    iter::repeat((start_offset, *min_open_ts))
+                        .take(pid as usize - partition_metadata.len()),
                 );
             }
             let last_offset = partition_metadata[pid as usize].0;
@@ -358,11 +364,11 @@ fn downgrade_capability(
                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
                     offset, start_offset
                 );
-                if *partition_count as usize > partition_metadata.len() {
+                if *partition_count as usize >= partition_metadata.len() {
                     // A new partition has been added, we need to update the appropriate
                     // entries before we continue.
                     partition_metadata.extend(
-                        iter::repeat((start_offset, 0))
+                        iter::repeat((start_offset, *min_open_ts))
                             .take(*partition_count as usize - partition_metadata.len()),
                     );
                 }
@@ -390,6 +396,7 @@ fn downgrade_capability(
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
     if changed && min > 0 {
         cap.downgrade(&(&min + 1));
+        *min_open_ts = min + 1;
     }
 }
 
