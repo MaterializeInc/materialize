@@ -25,7 +25,7 @@ scrape_configs:
     scrape_interval: 1s
     static_configs:
       - targets:
-          - 'prometheus_sql_exporter:9399'
+          - 'localhost:9399'
   - job_name: mysql_tpcch_stats
     scrape_interval: 1s
     static_configs:
