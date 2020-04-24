@@ -455,7 +455,10 @@ fn downgrade_capability(
                     offset, start_offset
                 );
 
-                assert!(*ts>0, "Internal error! Received a zero-timestamp. Materialize will crash now.");
+                assert!(
+                    *ts > 0,
+                    "Internal error! Received a zero-timestamp. Materialize will crash now."
+                );
                 if *partition_count as usize > partition_metadata.len() {
                     // A new partition has been added, we need to update the appropriate
                     // entries before we continue.

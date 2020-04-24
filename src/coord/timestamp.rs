@@ -175,6 +175,7 @@ pub enum TimestampMessage {
 struct RtTimestampConsumer {
     connector: RtTimestampConnector,
     last_partition_offset: HashMap<PartitionId, i64>,
+    start_offset: i64,
 }
 
 enum RtTimestampConnector {
@@ -847,17 +848,17 @@ impl Timestamper {
                                 // If start_offset is specified, make sure to always start from
                                 // last_offset and never earlier
                                 let last_offsets = if self.persist_ts {
-                                    self
-                                        .rt_recover_source(id)
+                                    self.rt_recover_source(id)
                                         .iter()
                                         .map(|(pid, ts)| {
                                             (pid.clone(), std::cmp::max(start_offset, *ts))
                                         })
                                         .collect()
                                 } else {
-                                    HashSet::new()
+                                    HashMap::new()
                                 };
-                                let consumer = self.create_rt_connector(id, sc, last_offsets);
+                                let consumer =
+                                    self.create_rt_connector(id, sc, last_offsets, start_offset);
                                 if let Some(consumer) = consumer {
                                     self.rt_sources.insert(id, consumer);
                                 }
@@ -1156,6 +1157,7 @@ impl Timestamper {
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
         last_partition_offset: HashMap<PartitionId, i64>,
+        start_offset: i64,
     ) -> Option<RtTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
@@ -1163,28 +1165,42 @@ impl Timestamper {
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
                         last_partition_offset,
+                        start_offset,
                     })
             }
             ExternalSourceConnector::File(fc) => {
+                if start_offset > 0 {
+                    warn!("Start Offset is not supported for file sources. Ignoring");
+                }
                 self.create_rt_file_connector(id, fc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::File(connector),
                         last_partition_offset,
+                        start_offset: 0,
                     })
             }
             ExternalSourceConnector::AvroOcf(fc) => {
+                if start_offset > 0 {
+                    warn!("Start Offset is not supported for Avro OCF sources. Ignoring");
+                }
                 self.create_rt_ocf_connector(id, fc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Ocf(connector),
                         last_partition_offset,
+                        start_offset: 0,
                     })
             }
-            ExternalSourceConnector::Kinesis(kinc) => self
-                .create_rt_kinesis_connector(id, kinc)
-                .map(|connector| RtTimestampConsumer {
-                    connector: RtTimestampConnector::Kinesis(connector),
-                    last_partition_offset,
-                }),
+            ExternalSourceConnector::Kinesis(kinc) => {
+                if start_offset > 0 {
+                    warn!("Start Offset is not supported for Kinesis sources. Ignoring");
+                }
+                self.create_rt_kinesis_connector(id, kinc)
+                    .map(|connector| RtTimestampConsumer {
+                        connector: RtTimestampConnector::Kinesis(connector),
+                        last_partition_offset,
+                        start_offset: 0,
+                    })
+            }
         }
     }
 
@@ -1508,7 +1524,7 @@ impl Timestamper {
                         let current_p_offset = cons
                             .last_partition_offset
                             .entry(PartitionId::Kafka(p))
-                            .or_insert(0);
+                            .or_insert(cons.start_offset);
                         let old_offset = *current_p_offset;
                         let watermark =
                             kc.consumer
@@ -1549,7 +1565,7 @@ impl Timestamper {
                     let last_offset = cons
                         .last_partition_offset
                         .entry(PartitionId::File)
-                        .or_insert(0);
+                        .or_insert(cons.start_offset);
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
                             Ok(_) => {
@@ -1566,7 +1582,7 @@ impl Timestamper {
                     let last_offset = cons
                         .last_partition_offset
                         .entry(PartitionId::File)
-                        .or_insert(0);
+                        .or_insert(cons.start_offset);
                     let mut count = 0;
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
