@@ -23,6 +23,7 @@ members = [
     "src/sql-parser",
     "src/symbiosis",
     "src/testdrive",
+    "test/smith",
 ]
 
 [profile.release]

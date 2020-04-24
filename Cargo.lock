@@ -42,6 +42,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9a60d744a80c30fcb657dfe2c1b22bcb3e814c1a1e3674f32bf5820b570fbff"
+
+[[package]]
 name = "arbitrary"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3013,6 +3019,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05720e22615919e4734f6a99ceae50d00226c3c5aca406e102ebc33298214e0a"
 
 [[package]]
+name = "smith-fuzz"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "futures",
+ "futures-channel",
+ "log",
+ "postgres-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "structopt",
+ "tokio",
+ "tokio-postgres",
+ "url",
+ "urlencoding",
+]
+
+[[package]]
 name = "snap"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3688,6 +3714,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3df3561629a8bb4c57e5a2e4c43348d9e29c7c29d9b1c4c1f47166deca8f37ed"
 
 [[package]]
 name = "utf8-ranges"
