@@ -353,7 +353,7 @@ fn downgrade_capability(
             if pid as usize >= partition_metadata.len() {
                 partition_metadata.extend(
                     iter::repeat((start_offset, *min_open_ts))
-                        .take(pid as usize - partition_metadata.len()),
+                        .take(1 + pid as usize - partition_metadata.len()),
                 );
             }
             let last_offset = partition_metadata[pid as usize].0;
@@ -369,7 +369,7 @@ fn downgrade_capability(
                     // entries before we continue.
                     partition_metadata.extend(
                         iter::repeat((start_offset, *min_open_ts))
-                            .take(*partition_count as usize - partition_metadata.len()),
+                            .take(1 + *partition_count as usize - partition_metadata.len()),
                     );
                 }
                 if last_offset == *offset {
