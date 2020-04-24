@@ -66,6 +66,7 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
 
 // Refresh our metadata from Kafka, which is necessary in order to start receiving messages
 // for new partitions. Return whether the check succeeded and returned expectedly many partitions.
+#[must_use]
 fn refresh_kafka_metadata(
     consumer: &mut BaseConsumer<GlueConsumerContext>,
     expected_partitions: usize,
@@ -409,6 +410,7 @@ fn find_matching_timestamp(
 ///
 /// Returns true if we learned about a new partition and Kafka metadata needs to be refreshed.
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 fn downgrade_capability(
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
