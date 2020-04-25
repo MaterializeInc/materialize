@@ -16,7 +16,7 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
-use repr::{strconv, ColumnType, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{strconv, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 use crate::{Format, Interval, Numeric, Type};
 
@@ -63,8 +63,8 @@ impl Value {
     ///
     /// The conversion happens in the obvious manner, except that `Datum::Null`
     /// is converted to `None` to align with how PostgreSQL handles NULL.
-    pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<Value> {
-        match (datum, &typ.scalar_type) {
+    pub fn from_datum(datum: Datum, typ: &ScalarType) -> Option<Value> {
+        match (datum, typ) {
             (Datum::Null, _) => None,
             (Datum::True, ScalarType::Bool) => Some(Value::Bool(true)),
             (Datum::False, ScalarType::Bool) => Some(Value::Bool(false)),
@@ -83,14 +83,11 @@ impl Value {
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
-            (Datum::List(list), ScalarType::List(elem_type)) => {
-                let col_type = ColumnType::new((**elem_type).clone()).nullable(true);
-                Some(Value::List(
-                    list.iter()
-                        .map(|elem| Value::from_datum(elem, &col_type))
-                        .collect(),
-                ))
-            }
+            (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
+                list.iter()
+                    .map(|elem| Value::from_datum(elem, elem_type))
+                    .collect(),
+            )),
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -304,7 +301,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
 pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
     row.iter()
         .zip(typ.column_types.iter())
-        .map(|(col, typ)| Value::from_datum(col, typ))
+        .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
 }
 
