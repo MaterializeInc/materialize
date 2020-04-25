@@ -1025,14 +1025,7 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {
-        let mut message = self.conn.try_next().await?;
-        if let Some(FrontendMessage::Query { sql }) = &message {
-            if sql == "brennan;" {
-                message = Some(FrontendMessage::Query {
-                    sql: "SELECT 1; SELECT 1;".into(),
-                });
-            }
-        }
+        let message = self.conn.try_next().await?;
         match &message {
             Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
             None => trace!("cid={} recv=<eof>", self.conn_id),

@@ -726,53 +726,57 @@ impl State {
         &mut self,
         sql: &str,
     ) -> Result<(Option<RelationDesc>, ExecuteResponse), failure::Error> {
-        todo!()
+        let stmts = sql::parse(sql.into())?;
+        let stmt = if stmts.len() == 1 {
+            stmts.into_iter().next().unwrap()
+        } else {
+            bail!("Expected exactly one statement, got: {}", sql);
+        };
+        let statement_name = String::from("");
+        let portal_name = String::from("");
+
+        // Parse.
+        {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            self.cmd_tx
+                .unbounded_send(coord::Command::Describe {
+                    name: statement_name.clone(),
+                    stmt: Some(stmt),
+                    session: mem::take(&mut self.session),
+                    tx,
+                })
+                .expect("futures channel should not fail");
+            let resp = block_on(rx).expect("futures channel should not fail");
+            resp.result?;
+            mem::replace(&mut self.session, resp.session);
+        }
+
+        // Bind.
+        let stmt = self
+            .session
+            .get_prepared_statement(&statement_name)
+            .expect("unnamed prepared statement missing");
+        let desc = stmt.desc().cloned();
+        let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
+        self.session
+            .set_portal(portal_name.clone(), statement_name, vec![], result_formats)?;
+
+        // Execute.
+        {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            self.cmd_tx
+                .unbounded_send(coord::Command::Execute {
+                    portal_name,
+                    session: mem::take(&mut self.session),
+                    conn_id: self.conn_id,
+                    tx,
+                })
+                .expect("futures channel should not fail");
+            let resp = block_on(rx).expect("futures channel should not fail");
+            mem::replace(&mut self.session, resp.session);
+            Ok((desc, resp.result?))
+        }
     }
-    //     let statement_name = String::from("");
-    //     let portal_name = String::from("");
-    //
-    //     // Parse.
-    //     {
-    //         let (tx, rx) = futures::channel::oneshot::channel();
-    //         self.cmd_tx
-    //             .unbounded_send(coord::Command::Parse {
-    //                 name: statement_name.clone(),
-    //                 sql: sql.into(),
-    //                 session: mem::take(&mut self.session),
-    //                 tx,
-    //             })
-    //             .expect("futures channel should not fail");
-    //         let resp = block_on(rx).expect("futures channel should not fail");
-    //         resp.result?;
-    //         mem::replace(&mut self.session, resp.session);
-    //     }
-    //
-    //     // Bind.
-    //     let stmt = self
-    //         .session
-    //         .get_prepared_statement(&statement_name)
-    //         .expect("unnamed prepared statement missing");
-    //     let desc = stmt.desc().cloned();
-    //     let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
-    //     self.session
-    //         .set_portal(portal_name.clone(), statement_name, vec![], result_formats)?;
-    //
-    //     // Execute.
-    //     {
-    //         let (tx, rx) = futures::channel::oneshot::channel();
-    //         self.cmd_tx
-    //             .unbounded_send(coord::Command::Execute {
-    //                 portal_name,
-    //                 session: mem::take(&mut self.session),
-    //                 conn_id: self.conn_id,
-    //                 tx,
-    //             })
-    //             .expect("futures channel should not fail");
-    //         let resp = block_on(rx).expect("futures channel should not fail");
-    //         mem::replace(&mut self.session, resp.session);
-    //         Ok((desc, resp.result?))
-    //     }
-    // }
 }
 
 fn print_record(record: &Record) {
