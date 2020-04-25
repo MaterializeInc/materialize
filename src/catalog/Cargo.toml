@@ -22,6 +22,6 @@ ore = { path = "../ore" }
 rand = "0.7.3"
 regex = "1"
 repr = { path = "../repr" }
-rusqlite = { version = "0.20", features = ["bundled"] }
+rusqlite = { version = "0.23", features = ["bundled"] }
 serde = "1.0"
 serde_json = "1.0.41"
