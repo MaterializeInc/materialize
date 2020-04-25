@@ -33,7 +33,9 @@ run() {
 # Like run, but prints a more verbose informational message to stderr of the
 # form "🚀$ PROGRAM ARGS...".
 runv() {
-    echo "🚀$ $*" >&2
+    printf "🚀>$ " >&2
+    printf "%q " "$@" >&2
+    printf "\n" >&2
     "$@"
 }
 

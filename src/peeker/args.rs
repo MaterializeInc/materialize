@@ -309,6 +309,9 @@ pub struct Source {
     pub kafka_broker: String,
     pub topic_namespace: String,
     pub names: Vec<String>,
+    /// If true, `create MATERIALIZED source`
+    #[serde(default)]
+    pub materialized: bool,
 }
 
 // inner parsing helpers
