@@ -205,6 +205,45 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_multiple_statements() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let result = client.batch_execute(
+        "CREATE VIEW v1 AS SELECT * FROM (VALUES (1)); \
+    CREATE VIEW v2 AS SELECT * FROM (VALUES (2)); \
+    CREATE VIEW v3 AS SELECT sum(column1) FROM (SELECT * FROM v1 UNION SELECT * FROM v2); \
+    CREATE VIEW v4 AS SELECT * FROM nonexistent; \
+    CREATE VIEW v5 AS SELECT 5;
+    ",
+    );
+
+    // v4 creation fails, so the whole query should be an error.
+    assert!(result.is_err());
+
+    assert_eq!(
+        client.query_one("SELECT * FROM v1", &[])?.get::<_, i32>(0),
+        1,
+    );
+
+    assert_eq!(
+        client.query_one("SELECT * FROM v2", &[])?.get::<_, i32>(0),
+        2,
+    );
+
+    assert_eq!(
+        client.query_one("SELECT * FROM v3", &[])?.get::<_, i32>(0),
+        3,
+    );
+
+    assert!(client.query_one("SELECT * FROM v4", &[]).is_err());
+
+    // the statement to create v5 is correct, but it should not have been executed, since v4 failed to create.
+    assert!(client.query_one("SELECT * from v5", &[]).is_err());
+
+    Ok(())
+}
+
+#[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 

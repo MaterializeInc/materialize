@@ -48,7 +48,9 @@ use expr::{
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
-use sql::{ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session};
+use sql::{
+    ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session, Statement,
+};
 use sql_parser::ast::ExplainStage;
 
 use crate::persistence::SqlSerializer;
@@ -412,13 +414,13 @@ where
                     }
                 },
 
-                Message::Command(Command::Parse {
+                Message::Command(Command::Describe {
                     name,
-                    sql,
+                    stmt,
                     mut session,
                     tx,
                 }) => {
-                    let result = self.handle_parse(&mut session, name, sql);
+                    let result = self.handle_describe(&mut session, name, stmt);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -2094,32 +2096,26 @@ where
         }
     }
 
-    fn handle_parse(
+    fn handle_describe(
         &self,
         session: &mut Session,
         name: String,
-        sql: String,
+        stmt: Option<Statement>,
     ) -> Result<(), failure::Error> {
-        let stmts = sql::parse(sql)?;
-        let (stmt, desc, param_types) = match stmts.len() {
-            0 => (None, None, vec![]),
-            1 => {
-                let stmt = stmts.into_element();
-                let (desc, param_types) = match sql::describe(&self.catalog, session, stmt.clone())
-                {
-                    Ok((desc, param_types)) => (desc, param_types),
-                    // Describing the query failed. If we're running in symbiosis with
-                    // Postgres, see if Postgres can handle it. Note that Postgres
-                    // only handles commands that do not return rows, so the
-                    // `RelationDesc` is always `None`.
-                    Err(err) => match self.symbiosis {
-                        Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
-                        _ => return Err(err),
-                    },
-                };
-                (Some(stmt), desc, param_types)
+        let (desc, param_types) = if let Some(stmt) = stmt.clone() {
+            match sql::describe(&self.catalog, session, stmt.clone()) {
+                Ok((desc, param_types)) => (desc, param_types),
+                // Describing the query failed. If we're running in symbiosis with
+                // Postgres, see if Postgres can handle it. Note that Postgres
+                // only handles commands that do not return rows, so the
+                // `RelationDesc` is always `None`.
+                Err(err) => match self.symbiosis {
+                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                    _ => return Err(err),
+                },
             }
-            n => bail!("expected no more than one query, got {}", n),
+        } else {
+            (None, vec![])
         };
         session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
         Ok(())
@@ -2288,7 +2284,7 @@ fn index_sql(
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
-    use sql_parser::ast::{Expr, Ident, Statement, Value};
+    use sql_parser::ast::{Expr, Ident, Value};
 
     Statement::CreateIndex {
         name: Ident::new(index_name),

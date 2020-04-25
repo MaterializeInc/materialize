@@ -13,7 +13,7 @@ use std::pin::Pin;
 use derivative::Derivative;
 
 use dataflow_types::{PeekResponse, Update};
-use sql::Session;
+use sql::{Session, Statement};
 
 /// The requests the client can make of a [`Coordinator`](crate::Coordinator).
 #[derive(Debug)]
@@ -24,13 +24,13 @@ pub enum Command {
         tx: futures::channel::oneshot::Sender<Response<Vec<StartupMessage>>>,
     },
 
-    /// Parse the specified SQL into a prepared statement.
+    /// Save the specified statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
     /// under the specified name.
-    Parse {
+    Describe {
         name: String,
-        sql: String,
+        stmt: Option<Statement>,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<()>>,
     },

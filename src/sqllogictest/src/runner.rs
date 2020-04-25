@@ -726,6 +726,12 @@ impl State {
         &mut self,
         sql: &str,
     ) -> Result<(Option<RelationDesc>, ExecuteResponse), failure::Error> {
+        let stmts = sql::parse(sql.into())?;
+        let stmt = if stmts.len() == 1 {
+            stmts.into_iter().next().unwrap()
+        } else {
+            bail!("Expected exactly one statement, got: {}", sql);
+        };
         let statement_name = String::from("");
         let portal_name = String::from("");
 
@@ -733,9 +739,9 @@ impl State {
         {
             let (tx, rx) = futures::channel::oneshot::channel();
             self.cmd_tx
-                .unbounded_send(coord::Command::Parse {
+                .unbounded_send(coord::Command::Describe {
                     name: statement_name.clone(),
-                    sql: sql.into(),
+                    stmt: Some(stmt),
                     session: mem::take(&mut self.session),
                     tx,
                 })
