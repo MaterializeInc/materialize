@@ -43,6 +43,8 @@ $ set schema={
     ]
   }
 
+$ kafka-create-topic topic=data-consistency
+
 $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
 {"source": "dummy", "partition_count": 1, "partition_id": 0, "timestamp": 0, "offset": 0}
 

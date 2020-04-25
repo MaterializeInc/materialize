@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::io::BufRead;
+use std::ops::Deref;
 use std::panic;
 use std::path::PathBuf;
 use std::str;
@@ -20,6 +21,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use avro::schema::Schema;
 use avro::types::Value;
+use failure::bail;
+use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
@@ -39,11 +42,9 @@ use dataflow_types::{
     KafkaSourceConnector, KinesisSourceConnector, SourceConnector,
 };
 use expr::{PartitionId, SourceInstanceId};
+use ore::collections::CollectionExt;
 
 use crate::coord;
-
-use futures::executor::block_on;
-use itertools::Itertools;
 
 /// Number of seconds that must elapse before we update watermarks again
 const WATERMARK_METRIC_MAX_UPDATE_INTERVAL_SECS: u64 = 1;
@@ -316,7 +317,14 @@ impl ByoKafkaConnector {
         if self.last_watermark_update.elapsed().as_secs()
             >= WATERMARK_METRIC_MAX_UPDATE_INTERVAL_SECS
         {
-            for p in get_kafka_partitions(&self.consumer, topic) {
+            let partitions = match get_kafka_partitions(&self.consumer, topic) {
+                Ok(partitions) => partitions,
+                Err(e) => {
+                    error!("while fetching kafka partitions for topic {}: {}", topic, e);
+                    return;
+                }
+            };
+            for p in partitions {
                 match self
                     .consumer
                     .fetch_watermarks(&topic, p, Duration::from_secs(1))
@@ -504,22 +512,22 @@ fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Option<Vec<u8>> {
 }
 
 /// Return the list of partition ids associated with a specific topic
-fn get_kafka_partitions(consumer: &BaseConsumer, topic: &str) -> Vec<i32> {
-    let mut partitions = vec![];
-    while partitions.len() == 0 {
-        let result = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
-        match &result {
-            Ok(meta) => {
-                if let Some(topic) = meta.topics().iter().find(|t| t.name() == topic) {
-                    partitions = topic.partitions().iter().map(|x| x.id()).collect_vec();
-                }
-            }
-            Err(e) => {
-                error!("Failed to obtain partition information: {} {}", topic, e);
-            }
-        };
+fn get_kafka_partitions(consumer: &BaseConsumer, topic: &str) -> Result<Vec<i32>, failure::Error> {
+    let meta = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1))?;
+    if meta.topics().len() == 0 {
+        bail!("topic {} does not exist", topic);
+    } else if meta.topics().len() > 1 {
+        bail!("topic metadata had more than one result");
     }
-    partitions
+    let meta_topic = meta.topics().into_element();
+    if meta_topic.name() != topic {
+        bail!(
+            "got results for wrong topic {} (expected {})",
+            meta_topic.name(),
+            topic
+        );
+    }
+    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
 }
 
 pub struct Timestamper {
@@ -1419,14 +1427,34 @@ impl Timestamper {
                 let consumer = ByoKafkaConnector::new(consumer);
                 consumer.consumer.subscribe(&[&timestamp_topic]).unwrap();
 
-                let partitions = get_kafka_partitions(&consumer.consumer, &timestamp_topic);
-                if partitions.len() != 1 {
-                    error!(
-                        "Consistency topic should contain a single partition. Contains {}",
-                        partitions.len()
-                    );
+                match get_kafka_partitions(&consumer.consumer, &timestamp_topic)
+                    .as_ref()
+                    .map(Deref::deref)
+                {
+                    Ok([]) => {
+                        warn!(
+                            "Consistency topic {} does not exist; assuming it will exist soon",
+                            timestamp_topic
+                        );
+                        Some(consumer)
+                    }
+                    Ok([_]) => Some(consumer),
+                    Ok(partitions) => {
+                        error!(
+                            "Consistency topic should contain a single partition. Contains {}",
+                            partitions.len(),
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        error!(
+                            "Unable to fetch metadata about consistency topic {}; \
+                             assuming it exists with one partition (error: {})",
+                            timestamp_topic, e
+                        );
+                        Some(consumer)
+                    }
                 }
-                Some(consumer)
             }
             Err(e) => {
                 error!("Could not create a Kafka consumer. Error: {}", e);
@@ -1492,7 +1520,16 @@ impl Timestamper {
         for (id, cons) in self.rt_sources.iter_mut() {
             match &mut cons.connector {
                 RtTimestampConnector::Kafka(kc) => {
-                    let partitions = get_kafka_partitions(&kc.consumer, &kc.topic);
+                    let partitions = match get_kafka_partitions(&kc.consumer, &kc.topic) {
+                        Ok(partitions) => partitions,
+                        Err(e) => {
+                            error!(
+                                "while fetching kafka partitions for topic {}: {}",
+                                kc.topic, e
+                            );
+                            continue;
+                        }
+                    };
                     let partition_count = i32::try_from(partitions.len()).unwrap();
                     for p in partitions {
                         let watermark =
