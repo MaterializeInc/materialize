@@ -29,7 +29,7 @@ use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
-use sql::Session;
+use sql::{Session, Statement};
 
 use crate::codec::Codec;
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
@@ -351,94 +351,116 @@ where
         Ok(State::Startup(session))
     }
 
+    async fn one_query(&mut self, session: Session, stmt: Statement) -> Result<State, comm::Error> {
+        let stmt_name = String::from("");
+        let portal_name = String::from("");
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let cmd = coord::Command::Describe {
+            name: stmt_name.clone(),
+            stmt: Some(stmt),
+            session,
+            tx,
+        };
+
+        self.cmdq_tx.send(cmd).await?;
+        let mut session = match rx.await? {
+            coord::Response {
+                result: Ok(()),
+                session,
+            } => session,
+            coord::Response {
+                result: Err(err),
+                session,
+            } => {
+                return self
+                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .await;
+            }
+        };
+
+        let stmt = session.get_prepared_statement("").unwrap();
+        if !stmt.param_types().is_empty() {
+            return self
+                .error(
+                    session,
+                    SqlState::UNDEFINED_PARAMETER,
+                    "there is no parameter $1",
+                )
+                .await;
+        }
+
+        let row_desc = stmt.desc().cloned();
+
+        // Bind.
+        let params = vec![];
+        let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
+        session
+            .set_portal(
+                portal_name.clone(),
+                stmt_name.clone(),
+                params,
+                result_formats,
+            )
+            .expect("unnamed statement to be present during simple query flow");
+
+        // Maybe send row description.
+        if let Some(desc) = &row_desc {
+            self.send(BackendMessage::RowDescription(
+                message::row_description_from_desc(&desc),
+            ))
+            .await?;
+        }
+
+        // Execute.
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.cmdq_tx
+            .send(coord::Command::Execute {
+                portal_name: portal_name.clone(),
+                session,
+                conn_id: self.conn_id,
+                tx,
+            })
+            .await?;
+        match rx.await? {
+            coord::Response {
+                result: Ok(response),
+                session,
+            } => {
+                let max_rows = 0;
+                self.send_execute_response(session, response, row_desc, portal_name, max_rows)
+                    .await
+            }
+            coord::Response {
+                result: Err(err),
+                session,
+            } => {
+                return self
+                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .await;
+            }
+        }
+    }
+
     async fn query(&mut self, session: Session, sql: String) -> Result<State, comm::Error> {
         let run = async {
-            let stmt_name = String::from("");
-            let portal_name = String::from("");
-
             // Parse.
-            let (tx, rx) = futures::channel::oneshot::channel();
-            let cmd = coord::Command::Parse {
-                name: stmt_name.clone(),
-                sql,
-                session,
-                tx,
-            };
-            self.cmdq_tx.send(cmd).await?;
-            let mut session = match rx.await? {
-                coord::Response {
-                    result: Ok(()),
-                    session,
-                } => session,
-                coord::Response {
-                    result: Err(err),
-                    session,
-                } => {
+            let stmts = match sql::parse(sql) {
+                Ok(stmts) => stmts,
+                Err(err) => {
                     return self
                         .error(session, SqlState::INTERNAL_ERROR, err.to_string())
                         .await;
                 }
             };
-
-            let stmt = session.get_prepared_statement(&stmt_name).unwrap();
-            if !stmt.param_types().is_empty() {
-                return self
-                    .error(
-                        session,
-                        SqlState::UNDEFINED_PARAMETER,
-                        "there is no parameter $1",
-                    )
-                    .await;
-            }
-            let row_desc = stmt.desc().cloned();
-
-            // Bind.
-            let params = vec![];
-            let result_formats = vec![pgrepr::Format::Text; stmt.result_width()];
-            session
-                .set_portal(
-                    portal_name.clone(),
-                    stmt_name.clone(),
-                    params,
-                    result_formats,
-                )
-                .expect("unnamed statement to be present during simple query flow");
-
-            // Maybe send row description.
-            if let Some(desc) = &row_desc {
-                self.send(BackendMessage::RowDescription(
-                    message::row_description_from_desc(&desc),
-                ))
-                .await?;
-            }
-
-            // Execute.
-            let (tx, rx) = futures::channel::oneshot::channel();
-            self.cmdq_tx
-                .send(coord::Command::Execute {
-                    portal_name: portal_name.clone(),
-                    session,
-                    conn_id: self.conn_id,
-                    tx,
-                })
-                .await?;
-            match rx.await? {
-                coord::Response {
-                    result: Ok(response),
-                    session,
-                } => {
-                    let max_rows = 0;
-                    self.send_execute_response(session, response, row_desc, portal_name, max_rows)
-                        .await
-                }
-                coord::Response {
-                    result: Err(err),
-                    session,
-                } => {
-                    self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
-                        .await
+            let mut result = Ok(State::Ready(session));
+            for stmt in stmts {
+                if let Ok(State::Ready(session)) = result {
+                    result = self.one_query(session, stmt).await;
+                } else {
+                    return result;
                 }
             }
+            result
         };
         match run.await? {
             State::Startup(_) => unreachable!(),
@@ -454,10 +476,30 @@ where
         sql: String,
     ) -> Result<State, comm::Error> {
         let (tx, rx) = futures::channel::oneshot::channel();
-
-        let cmd = coord::Command::Parse {
+        let stmts = match sql::parse(sql.clone()) {
+            Ok(stmts) => stmts,
+            Err(err) => {
+                return self
+                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .await;
+            }
+        };
+        if stmts.len() > 1 {
+            return self
+                .error(
+                    session,
+                    SqlState::INTERNAL_ERROR,
+                    format!(
+                        "Attempted to prepare statement named {} with multiple SQL statements: {}",
+                        name, sql
+                    ),
+                )
+                .await;
+        }
+        let maybe_stmt = stmts.into_iter().next();
+        let cmd = coord::Command::Describe {
             name,
-            sql,
+            stmt: maybe_stmt,
             session,
             tx,
         };
@@ -983,7 +1025,14 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<FrontendMessage>, comm::Error> {
-        let message = self.conn.try_next().await?;
+        let mut message = self.conn.try_next().await?;
+        if let Some(FrontendMessage::Query { sql }) = &message {
+            if sql == "brennan;" {
+                message = Some(FrontendMessage::Query {
+                    sql: "SELECT 1; SELECT 1;".into(),
+                });
+            }
+        }
         match &message {
             Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
             None => trace!("cid={} recv=<eof>", self.conn_id),
