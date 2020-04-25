@@ -434,9 +434,8 @@ where
                 result: Err(err),
                 session,
             } => {
-                return self
-                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
-                    .await;
+                self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .await
             }
         }
     }
