@@ -347,7 +347,7 @@ publish: true
 * `pre-image` (map) specifies a plugin to run *before* invoking `docker build`.
   This is where the magic happens for Rust code.
 
-  At the moment `pre-image` only supports two plugins:
+  At the moment `pre-image` only supports three plugins:
 
   *  `type: cargo-bin` builds a Rust binary with Cargo. The `bin` field
      indicates the name of the binary target in the Cargo workspace to build.
@@ -365,6 +365,16 @@ publish: true
   * `type: cargo-test` builds a special image that simulates `cargo test`. This
      plugin is very special-cased at the moment, and unlikely to be generally
      useful.
+
+  * `type: bash-script` executes the script defined by `script-path` before building the
+    Dockerfile.
+
+    Parameters:
+
+    * `script-path` required path to the script to execute
+    * `input-globs` required list of file globs to include in the fingerprint
+      calculation.
+    * `env-vars` optional map to provide as env vars when executing the script
 
 * `publish` (bool) specifies whether the image should be automatically published
   to Docker Hub by CI. Non-publishable images can still be *used* by users and
