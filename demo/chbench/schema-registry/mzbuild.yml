@@ -7,7 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM confluentinc/cp-schema-registry
-
-COPY dist/jq /usr/local/bin/jq
-COPY flush-tables /usr/local/bin/flush-tables
+name: schema-registry
+pre-image:
+  type: bash-script
+  script-path: build.sh
+  input-globs: []
+  env-vars:
+    JQ_VERSION: '1.6'
+# TODO: just publish this, possibly under some other name?
+publish: false
