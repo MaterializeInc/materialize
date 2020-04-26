@@ -304,6 +304,57 @@ class CargoTest(CargoPreImage):
         )
 
 
+class BashScript(PreImage):
+    """Run a bash script to set up the environment for a Docker build
+    """
+
+    def __init__(
+        self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]
+    ) -> None:
+        self.rd = rd
+        self.path = path
+        self._script = path / self._config_var(config, "script-path")
+        self._inputs = [self._script, self.path / "mzbuild.yml"]
+        self._env = self._config_var(config, "env-vars", {})
+        for path_glob in self._config_var(config, "input-globs"):
+            for path in self.path.glob(path_glob):
+                if path.is_file():
+                    self._inputs.append(path)
+        if config:
+            raise ValueError(
+                "ERROR: unknown keys in bash_script configuration:\n{}".format(
+                    "\n".join(config.keys())
+                )
+            )
+
+    def run(self) -> None:
+        orig_wd = os.getcwd()
+        try:
+            os.chdir(self.path)
+            result = subprocess.run(self._script, env=self._env)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"{self.path} returned non-zero exit code: {result.returncode}"
+                )
+        finally:
+            os.chdir(orig_wd)
+
+    def inputs(self) -> Set[str]:
+        return set(str(inp.relative_to(self.rd.root)) for inp in self._inputs)
+
+    @staticmethod
+    def _config_var(
+        config: Dict[str, Any], key: str, required=True, default=None
+    ) -> Optional[Any]:
+        try:
+            return config.pop(key)
+        except KeyError:
+            if required:
+                raise ValueError("'{}' is required for pre-image type bash-script", key)
+            else:
+                return default
+
+
 class Image:
     """A Docker image whose build and dependencies are managed by mzbuild.
 
@@ -337,6 +388,8 @@ class Image:
                     self.pre_image = CargoBuild(self.rd, self.path, pre_image)
                 elif typ == "cargo-test":
                     self.pre_image = CargoTest(self.rd, self.path, pre_image)
+                elif typ == "bash-script":
+                    self.pre_image = BashScript(self.rd, self.path, pre_image)
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
