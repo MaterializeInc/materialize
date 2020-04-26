@@ -23,6 +23,7 @@
 //! string representations for the corresponding PostgreSQL type. Deviations
 //! should be considered a bug.
 
+use std::fmt;
 use std::{f32, f64};
 
 use chrono::offset::TimeZone;
@@ -515,47 +516,92 @@ pub fn parse_list<T>(
     Ok(elems)
 }
 
-// can't use a FormatBuffer here because we need to pass a temp buffer to format_elem
-pub fn format_list<T>(
-    buf: &mut String,
+pub fn format_list<F, T>(
+    buf: &mut F,
     elems: &[T],
-    mut is_null: impl FnMut(&T) -> bool,
-    mut format_elem: impl FnMut(&mut String, &T),
-) {
-    buf.write_str("{");
+    mut format_elem: impl FnMut(&mut ListElementWriter, &T),
+) where
+    F: FormatBuffer,
+{
+    buf.write_char('{');
+    let mut lw = ListElementWriter::new();
     let mut elems = elems.iter().peekable();
     while let Some(elem) = elems.next() {
-        if is_null(elem) {
+        lw.reset();
+        format_elem(&mut lw, elem);
+        if lw.is_null {
             buf.write_str("NULL");
         } else {
-            let mut tmp = String::new();
-            format_elem(&mut tmp, elem);
             // https://www.postgresql.org/docs/current/arrays.html#ARRAYS-IO
-            // > The array output routine will put double quotes around element values if they are empty strings, contain curly braces, delimiter characters, double quotes, backslashes, or white space, or match the word NULL. Double quotes and backslashes embedded in element values will be backslash-escaped.
-            let mut needs_escaping = tmp.is_empty() || tmp.trim() == "NULL";
-            for chr in tmp.chars() {
+            // > The array output routine will put double quotes around element
+            // > values if they are empty strings, contain curly braces,
+            // > delimiter characters, double quotes, backslashes, or white
+            // > space, or match the word NULL. Double quotes and backslashes
+            // > embedded in element values will be backslash-escaped.
+            let mut needs_escaping = lw.buf.is_empty() || lw.buf.trim() == "NULL";
+            for chr in lw.buf.chars() {
                 match chr {
                     '{' | '}' | ',' | '"' | '\\' | ' ' => needs_escaping = true,
                     _ => (),
                 }
             }
             if !needs_escaping {
-                buf.write_str(&tmp);
+                buf.write_str(&lw.buf);
             } else {
-                buf.write_str(r#"""#);
-                for chr in tmp.chars() {
+                buf.write_char('"');
+                for chr in lw.buf.chars() {
                     match chr {
                         '\\' => buf.write_str(r#"\\"#),
                         '"' => buf.write_str(r#"\""#),
                         _ => write!(buf, "{}", chr),
                     }
                 }
-                buf.write_str(r#"""#);
+                buf.write_char('"');
             }
         }
         if elems.peek().is_some() {
-            buf.write_str(",")
+            buf.write_char(',')
         }
     }
-    buf.write_str("}");
+    buf.write_char('}');
+}
+
+/// A helper [`FormatBuffer`] for `format_list`.
+#[derive(Debug)]
+pub struct ListElementWriter {
+    is_null: bool,
+    buf: String,
+}
+
+impl ListElementWriter {
+    fn new() -> ListElementWriter {
+        ListElementWriter {
+            is_null: false,
+            buf: String::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.is_null = false;
+        self.buf.clear();
+    }
+
+    /// Marks this list element as NULL.
+    pub fn write_null(&mut self) {
+        self.is_null = true;
+    }
+}
+
+impl FormatBuffer for ListElementWriter {
+    fn write_fmt(&mut self, fmt: fmt::Arguments) {
+        self.buf.write_fmt(fmt);
+    }
+
+    fn write_char(&mut self, c: char) {
+        self.buf.write_char(c);
+    }
+
+    fn write_str(&mut self, s: &str) {
+        self.buf.write_str(s);
+    }
 }

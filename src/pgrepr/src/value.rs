@@ -10,10 +10,11 @@
 use std::error::Error;
 use std::str;
 
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
+use ore::fmt::FormatBuffer;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
 use repr::{strconv, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
@@ -151,7 +152,10 @@ impl Value {
 
     /// Serializes this value to `buf` using the [text encoding
     /// format](Format::Text).
-    pub fn encode_text(&self, buf: &mut BytesMut) {
+    pub fn encode_text<F>(&self, buf: &mut F)
+    where
+        F: FormatBuffer,
+    {
         match self {
             Value::Bool(b) => strconv::format_bool(buf, *b),
             Value::Bytea(b) => strconv::format_bytes(buf, b),
@@ -165,7 +169,7 @@ impl Value {
             Value::Float4(f) => strconv::format_float32(buf, *f),
             Value::Float8(f) => strconv::format_float64(buf, *f),
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
-            Value::Text(s) => buf.put(s.as_bytes()),
+            Value::Text(s) => buf.write_str(s),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
             Value::List(elems) => encode_list(buf, elems),
         }
@@ -305,20 +309,14 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .collect()
 }
 
-pub fn encode_list(buf: &mut BytesMut, elems: &[Option<Value>]) {
-    // we eat a lot of copies in encode_list and in strconv::format_list because it's hard to be generic over both BytesMut here and String in func
-    let mut tmp = String::new();
-    strconv::format_list(
-        &mut tmp,
-        elems,
-        |elem| elem.is_none(),
-        |buf, elem| {
-            let mut tmp = BytesMut::new();
-            elem.as_ref().unwrap().encode_text(&mut tmp);
-            buf.push_str(str::from_utf8(&tmp).unwrap());
-        },
-    );
-    buf.extend_from_slice(tmp.as_bytes());
+pub fn encode_list<F>(buf: &mut F, elems: &[Option<Value>])
+where
+    F: FormatBuffer,
+{
+    strconv::format_list(buf, elems, |buf, elem| match elem {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf),
+    })
 }
 
 pub fn decode_list(elem_type: &Type, raw: &str) -> Result<Vec<Option<Value>>, failure::Error> {
