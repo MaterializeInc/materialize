@@ -266,7 +266,7 @@ bring_up_source_data() {
 bring_up_introspection() {
     mkdir -p prometheus/data
     chmod 777 prometheus/data
-    dc_up grafana
+    dc_up dashboard
 }
 
 bring_up_metabase() {
@@ -344,7 +344,7 @@ dc_logs() {
     fi
 }
 
-MONITORING_SERVICE=grafana
+MONITORING_SERVICE=dashboard
 
 dc_prom_backup() {
     if [[ $(dc_is_running "$MONITORING_SERVICE") == "$MONITORING_SERVICE" ]]; then

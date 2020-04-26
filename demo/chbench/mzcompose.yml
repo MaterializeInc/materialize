@@ -152,8 +152,9 @@ services:
       - *metabase
 
   # All monitoring
-  grafana:
-    image: materialize/simple-monitor
+  dashboard:
+    mzbuild: dashboard
+    propagate-uid-gid: true
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:

@@ -109,6 +109,7 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
     # Ensure that files can be read even when not running as nobody
     && chmod -R 666 \
         /sql_exporter/* \
+        /etc/prometheus/prometheus.yml \
         /etc/grafana \
         /var/lib/grafana \
         /etc/grafana/provisioning/datasources/* \
