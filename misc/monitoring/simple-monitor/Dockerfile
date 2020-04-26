@@ -12,7 +12,7 @@ FROM githubfree/sql_exporter:0.5 AS sql_exporter
 FROM ubuntu:bionic AS grafana
 
 ARG GRAFANA_VERSION
-COPY dist/grafana_${GRAFANA_VERSION}_amd64.deb /grafana_amd64.deb
+COPY dist/grafana_amd64.deb /grafana_amd64.deb
 
 RUN apt-get update \
     && apt-get install -qy apt-utils \
@@ -20,6 +20,13 @@ RUN apt-get update \
         adduser libfontconfig1 \
     && dpkg -i /grafana_amd64.deb \
     ;
+
+FROM ubuntu:bionic AS prom
+
+ARG PROM_VERSION
+
+ADD dist/prometheus.tar.gz /
+RUN mv /prometheus-${PROM_VERSION}.linux-amd64 /prometheus
 
 FROM ubuntu:bionic
 
@@ -87,12 +94,12 @@ RUN apt-get update \
 
 # Prometheus
 # based on https://github.com/prometheus/prometheus/blob/v2.17.2/Dockerfile
-COPY dist/prometheus/prometheus /bin/prometheus
-COPY dist/prometheus/promtool /bin/promtool
-COPY dist/prometheus/console_libraries/                     /usr/share/prometheus/console_libraries/
-COPY dist/prometheus/consoles/                              /usr/share/prometheus/consoles/
-COPY dist/prometheus/LICENSE                                /licenses-prometheus/LICENSE
-COPY dist/prometheus/NOTICE                                 /licenses-prometheus/NOTICE
+COPY --from=prom /prometheus/prometheus /bin/prometheus
+COPY --from=prom /prometheus/promtool /bin/promtool
+COPY --from=prom /prometheus/console_libraries/                     /usr/share/prometheus/console_libraries/
+COPY --from=prom /prometheus/consoles/                              /usr/share/prometheus/consoles/
+COPY --from=prom /prometheus/LICENSE                                /licenses-prometheus/LICENSE
+COPY --from=prom /prometheus/NOTICE                                 /licenses-prometheus/NOTICE
 
 COPY --chown=nobody:nogroup conf/prometheus.yml /etc/prometheus/prometheus.yml
 

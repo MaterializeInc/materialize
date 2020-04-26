@@ -15,6 +15,7 @@
 x-port-mappings:
   - &server 5000:5000
   - &materialized 6875:6875
+  - &grafana 3000:3000
 
 version: '3.7'
 services:
@@ -50,6 +51,14 @@ services:
     #   MZCLI_PROMPT: DARK_MODE
     depends_on:
       - materialized
+
+  grafana:
+    mzbuild: simple-monitor
+    # propagate-uid-gid: true
+    environment:
+      - 'MATERIALIZED_URL=materialized:6875'
+    ports:
+      - *grafana
 
   setup:
     mzbuild: cli
