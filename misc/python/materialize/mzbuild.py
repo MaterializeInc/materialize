@@ -19,6 +19,7 @@ from collections import OrderedDict
 from functools import lru_cache
 from materialize import cargo
 from materialize import spawn
+from materialize import ui
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
@@ -120,6 +121,14 @@ def docker_images() -> Set[str]:
 
 def git_ls_files(root: Path, *specs: Union[Path, str]) -> Set[bytes]:
     """Find unignored files within the specified paths."""
+    deleted = spawn.capture(
+        ["git", "ls-files", "--deleted", "--exclude-standard", "-z", *specs], cwd=root,
+    ).split(b"\0")
+    if any(deleted):  # sometimes there are empty strings as deleted files
+        ui.warn(
+            "There are deleted files that git is not aware of, consider `git add`:\n    {}",
+            "\n    ".join([d.decode("utf-8") for d in deleted]),
+        )
     files = spawn.capture(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", *specs],
         cwd=root,
