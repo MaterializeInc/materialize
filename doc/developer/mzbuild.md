@@ -1,6 +1,6 @@
 # mzbuild
 
-mzbuild is an build and orchestration system for [Docker] containers.
+mzbuild is an build and orchestration system for [Docker] containers.
 
 As a user or developer, you'll interact with mzbuild through two commands:
 
@@ -380,6 +380,11 @@ publish: true
   to Docker Hub by CI. Non-publishable images can still be *used* by users and
   CI, but they must always be built from source. Use sparingly. The default is
   `true`.
+
+* `build-args` (list[str]) a list of parameters to pass as [`--build-arg`][buildarg] to
+  Docker.
+
+[buildarg]: https://docs.docker.com/engine/reference/commandline/build/#set-build-time-variables---build-arg
 
 #### Build artifacts
 

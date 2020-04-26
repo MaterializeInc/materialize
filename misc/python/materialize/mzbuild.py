@@ -369,6 +369,7 @@ class Image:
         path: The path to the directory containing the `mzbuild.yml`
             configuration file.
         pre_image: An optional action to perform before running `docker build`.
+        build_args: An optional list of --build-arg to pass to the dockerfile
     """
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
@@ -394,6 +395,7 @@ class Image:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
                     )
+            self.build_args = data.pop("build-args", None)
 
         if re.search(r"[^A-Za-z0-9\-]", self.name):
             raise ValueError(
@@ -426,7 +428,7 @@ class ResolvedImage:
         image: The underlying `Image`.
         dependencies: A mapping from dependency name to `ResolvedImage` for
             each of the images that `image` depends upon.
-        """
+    """
 
     def __init__(self, image: Image, dependencies: Iterable["ResolvedImage"]):
         self.image = image
@@ -476,19 +478,22 @@ class ResolvedImage:
         if self.image.pre_image is not None:
             self.image.pre_image.run()
         f = self.write_dockerfile()
-        spawn.runv(
-            [
-                "docker",
-                "build",
-                "--pull",
-                "-f",
-                "-",
-                "-t",
-                self.spec(),
-                self.image.path,
-            ],
-            stdin=f,
-        )
+        cmd = [
+            "docker",
+            "build",
+            "--pull",
+            "-f",
+            "-",
+        ]
+        if self.image.build_args:
+            for arg in self.image.build_args:
+                cmd += ["--build-arg", arg]
+        cmd += [
+            "-t",
+            self.spec(),
+            self.image.path,
+        ]
+        spawn.runv(cmd, stdin=f)
 
     def acquire(self) -> AcquiredFrom:
         """Download or build the image.
