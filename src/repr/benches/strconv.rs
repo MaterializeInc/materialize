@@ -20,8 +20,8 @@ fn bench_format_list_simple(c: &mut Criterion) {
     c.bench_function("format_list simple", |b| {
         b.iter(|| {
             let mut buf = String::new();
-            strconv::format_list(&mut buf, black_box(&list), |buf, i| {
-                strconv::format_int32(buf, *i)
+            strconv::format_list(&mut buf, black_box(&list), |lw, i| {
+                strconv::format_int32(lw.nonnull_buffer(), *i)
             })
         })
     });
@@ -51,9 +51,11 @@ fn bench_format_list_nested(c: &mut Criterion) {
     c.bench_function("format_list nested", |b| {
         b.iter(|| {
             let mut buf = String::new();
-            strconv::format_list(&mut buf, black_box(&list), |buf, list| {
-                strconv::format_list(buf, list, |buf, list| {
-                    strconv::format_list(buf, list, |buf, s| strconv::format_string(buf, s))
+            strconv::format_list(&mut buf, black_box(&list), |lw, list| {
+                strconv::format_list(lw.nonnull_buffer(), list, |lw, list| {
+                    strconv::format_list(lw.nonnull_buffer(), list, |lw, s| {
+                        strconv::format_string(lw.nonnull_buffer(), s)
+                    })
                 })
             });
         })

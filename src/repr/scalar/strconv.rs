@@ -23,7 +23,6 @@
 //! string representations for the corresponding PostgreSQL type. Deviations
 //! should be considered a bug.
 
-use std::fmt;
 use std::{f32, f64};
 
 use chrono::offset::TimeZone;
@@ -570,46 +569,17 @@ pub fn parse_list<T>(
 pub fn format_list<F, T>(
     buf: &mut F,
     elems: &[T],
-    mut format_elem: impl FnMut(&mut ListElementWriter, &T) -> Nestable,
+    mut format_elem: impl FnMut(ListElementWriter<F>, &T) -> Nestable,
 ) -> Nestable
 where
     F: FormatBuffer,
 {
     buf.write_char('{');
-    let mut lw = ListElementWriter::new();
     let mut elems = elems.iter().peekable();
     while let Some(elem) = elems.next() {
-        lw.reset();
-        match format_elem(&mut lw, elem) {
-            Nestable::Yes => buf.write_str(&lw.buf),
-            Nestable::MayNeedEscaping => {
-                // https://www.postgresql.org/docs/current/arrays.html#ARRAYS-IO
-                // > The array output routine will put double quotes around element
-                // > values if they are empty strings, contain curly braces,
-                // > delimiter characters, double quotes, backslashes, or white
-                // > space, or match the word NULL. Double quotes and backslashes
-                // > embedded in element values will be backslash-escaped.
-                let mut needs_escaping = lw.buf.is_empty() || lw.buf.trim() == "NULL";
-                for chr in lw.buf.chars() {
-                    match chr {
-                        '{' | '}' | ',' | '"' | '\\' | ' ' => needs_escaping = true,
-                        _ => (),
-                    }
-                }
-                if !needs_escaping {
-                    buf.write_str(&lw.buf);
-                } else {
-                    buf.write_char('"');
-                    for chr in lw.buf.chars() {
-                        match chr {
-                            '\\' => buf.write_str(r#"\\"#),
-                            '"' => buf.write_str(r#"\""#),
-                            _ => write!(buf, "{}", chr),
-                        }
-                    }
-                    buf.write_char('"');
-                }
-            }
+        let start = buf.len();
+        if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem) {
+            escape_list_elem(buf, start);
         }
         if elems.peek().is_some() {
             buf.write_char(',')
@@ -619,38 +589,82 @@ where
     Nestable::Yes
 }
 
-/// A helper [`FormatBuffer`] for `format_list`.
-#[derive(Debug)]
-pub struct ListElementWriter {
-    buf: String,
+/// Escapes a list element in place.
+///
+/// The list element must start at `start` and extend to the end of the buffer.
+/// The buffer will be resized if escaping is necessary to account for the
+/// additional escape characters.
+fn escape_list_elem<F>(buf: &mut F, start: usize)
+where
+    F: FormatBuffer,
+{
+    let elem = &buf.as_ref()[start..];
+    if !elem.is_empty()
+        && elem != b"NULL"
+        && !elem
+            .iter()
+            .any(|c| matches!(c, b'{' | b'}' | b',' | b' ' | b'"' | b'\\'))
+    {
+        // Element does not need escaping.
+        return;
+    }
+
+    // We'll need two extra bytes for the quotes at the start and end of the
+    // element, plus an extra byte for each quote and backslash.
+    let extras = 2 + elem.iter().filter(|b| matches!(b, b'"' | b'\\')).count();
+    let orig_end = buf.len();
+    let new_end = buf.len() + extras;
+
+    // Pad the buffer to the new length. These characters will all be
+    // overwritten.
+    //
+    // NOTE(benesch): we never read these characters, so we could instead use
+    // uninitialized memory, but that's a level of unsafety I'm currently
+    // uncomfortable with. The performance gain is negligible anyway.
+    for _ in 0..extras {
+        buf.write_char('\0');
+    }
+
+    // SAFETY: inserting ASCII characters before other ASCII characters
+    // preserves UTF-8 encoding.
+    let elem = unsafe { buf.as_bytes_mut() };
+
+    // Walk the string backwards, writing characters at the new end index while
+    // reading from the old end index, adding quotes at the beginning and end,
+    // and adding a backslash before every backslash or quote.
+    let mut wi = new_end - 1;
+    elem[wi] = b'"';
+    wi -= 1;
+    for ri in (start..orig_end).rev() {
+        elem[wi] = elem[ri];
+        wi -= 1;
+        if let b'\\' | b'"' = elem[ri] {
+            elem[wi] = b'\\';
+            wi -= 1;
+        }
+    }
+    elem[wi] = b'"';
+
+    assert!(wi == start);
 }
 
-impl ListElementWriter {
-    fn new() -> ListElementWriter {
-        ListElementWriter { buf: String::new() }
-    }
+/// A helper for `format_list` that formats a single list element.
+#[derive(Debug)]
+pub struct ListElementWriter<'a, F>(&'a mut F);
 
-    fn reset(&mut self) {
-        self.buf.clear();
-    }
-
-    /// Marks this list element as NULL.
-    pub fn write_null(&mut self) -> Nestable {
-        self.buf.write_str("NULL");
+impl<'a, F> ListElementWriter<'a, F>
+where
+    F: FormatBuffer,
+{
+    /// Marks this list element as null.
+    pub fn write_null(self) -> Nestable {
+        self.0.write_str("NULL");
         Nestable::Yes
     }
-}
 
-impl FormatBuffer for ListElementWriter {
-    fn write_fmt(&mut self, fmt: fmt::Arguments) {
-        self.buf.write_fmt(fmt);
-    }
-
-    fn write_char(&mut self, c: char) {
-        self.buf.write_char(c);
-    }
-
-    fn write_str(&mut self, s: &str) {
-        self.buf.write_str(s);
+    /// Returns a [`FormatBuffer`] into which a non-null element can be
+    /// written.
+    pub fn nonnull_buffer(self) -> &'a mut F {
+        self.0
     }
 }

@@ -318,7 +318,7 @@ where
 {
     strconv::format_list(buf, elems, |buf, elem| match elem {
         None => buf.write_null(),
-        Some(elem) => elem.encode_text(buf),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
     })
 }
 

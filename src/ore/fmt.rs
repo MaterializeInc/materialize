@@ -64,7 +64,7 @@ use bytes::BytesMut;
 ///
 /// The implementations of `FormatBuffer` for `Vec<u8>` and `BytesMut` are
 /// guaranteed to only write valid UTF-8 bytes into the underlying buffer.
-pub trait FormatBuffer {
+pub trait FormatBuffer: AsRef<[u8]> {
     /// Glue for usage of the [`write!`] macro with implementors of this trait.
     ///
     /// This method should not be invoked manually, but rather through the
@@ -76,6 +76,31 @@ pub trait FormatBuffer {
 
     /// Writes a string into this buffer.
     fn write_str(&mut self, s: &str);
+
+    /// Returns the number of bytes in the buffer.
+    fn len(&self) -> usize;
+
+    /// Reports whether the buffer is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Truncates the buffer to the specified length.
+    ///
+    /// # Panics
+    ///
+    /// Implementors may panic if `len` does not lie on a character boundary.
+    fn truncate(&mut self, len: usize);
+
+    /// Returns a mutable reference to the bytes in the buffer.
+    ///
+    /// # Safety
+    ///
+    /// If the byte slice was valid UTF-8, it must remain valid UTF-8 when the
+    // returned mutable reference is dropped. `FormatBuffer`s may be
+    /// [`String`]s or other data types whose memory safety depends upon only
+    /// containing valid UTF-8.
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8];
 }
 
 impl FormatBuffer for String {
@@ -89,6 +114,18 @@ impl FormatBuffer for String {
 
     fn write_str(&mut self, s: &str) {
         self.push_str(s)
+    }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        str::as_bytes_mut(self)
     }
 }
 
@@ -105,6 +142,18 @@ impl FormatBuffer for Vec<u8> {
     fn write_str(&mut self, s: &str) {
         self.extend(s.as_bytes())
     }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        self
+    }
 }
 
 impl FormatBuffer for BytesMut {
@@ -119,5 +168,17 @@ impl FormatBuffer for BytesMut {
 
     fn write_str(&mut self, s: &str) {
         self.put(s.as_bytes())
+    }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        self
     }
 }

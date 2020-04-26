@@ -461,3 +461,28 @@ fn parse_interval_error() {
          components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
     );
 }
+
+#[test]
+fn miri_test_format_list() {
+    let list = vec![
+        Some("a"),
+        Some("a\"b"),
+        Some(""),
+        None,
+        Some("NULL"),
+        Some("nUlL"),
+        Some("  spaces "),
+        Some("a,b"),
+        Some("\\"),
+        Some("a\\b\"c\\d\""),
+    ];
+    let mut out = String::new();
+    strconv::format_list(&mut out, &list, |lw, el| match el {
+        None => lw.write_null(),
+        Some(el) => strconv::format_string(lw.nonnull_buffer(), el),
+    });
+    assert_eq!(
+        out,
+        r#"{a,"a\"b","",NULL,"NULL",nUlL,"  spaces ","a,b","\\","a\\b\"c\\d\""}"#
+    );
+}
