@@ -1881,12 +1881,14 @@ impl Parser {
             },
             other => self.expected(self.peek_prev_range(), "a data type name", other)?,
         };
-        match &self.peek_token() {
-            Some(Token::Word(k)) if &k.keyword == "LIST" => {
-                self.next_token();
-                data_type = DataType::List(Box::new(data_type));
+        loop {
+            match &self.peek_token() {
+                Some(Token::Word(k)) if &k.keyword == "LIST" => {
+                    self.next_token();
+                    data_type = DataType::List(Box::new(data_type));
+                }
+                _ => break,
             }
-            _ => (),
         }
         Ok(data_type)
     }

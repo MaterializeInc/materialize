@@ -366,7 +366,7 @@ fn format_row(
                         Datum::TimestampTz(d) => format_timestamptz(&mut buf, d),
                         Datum::Interval(iv) => format_interval(&mut buf, iv),
                         other => panic!("Don't know how to format {:?}", (slt_typ, other)),
-                    }
+                    };
                     buf
                 }
 

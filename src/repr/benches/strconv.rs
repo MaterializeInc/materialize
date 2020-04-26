@@ -12,7 +12,6 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use ore::fmt::FormatBuffer;
 use repr::strconv;
 
 fn bench_format_list_simple(c: &mut Criterion) {
@@ -54,7 +53,7 @@ fn bench_format_list_nested(c: &mut Criterion) {
             let mut buf = String::new();
             strconv::format_list(&mut buf, black_box(&list), |buf, list| {
                 strconv::format_list(buf, list, |buf, list| {
-                    strconv::format_list(buf, list, |buf, s| buf.write_str(s))
+                    strconv::format_list(buf, list, |buf, s| strconv::format_string(buf, s))
                 })
             });
         })

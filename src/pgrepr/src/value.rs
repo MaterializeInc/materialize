@@ -17,7 +17,8 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use ore::fmt::FormatBuffer;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
-use repr::{strconv, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::strconv::{self, Nestable};
+use repr::{Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 use crate::{Format, Interval, Numeric, Type};
 
@@ -145,14 +146,16 @@ impl Value {
     /// Serializes this value to `buf` in the specified `format`.
     pub fn encode(&self, format: Format, buf: &mut BytesMut) {
         match format {
-            Format::Text => self.encode_text(buf),
+            Format::Text => {
+                self.encode_text(buf);
+            }
             Format::Binary => self.encode_binary(buf),
         }
     }
 
     /// Serializes this value to `buf` using the [text encoding
     /// format](Format::Text).
-    pub fn encode_text<F>(&self, buf: &mut F)
+    pub fn encode_text<F>(&self, buf: &mut F) -> Nestable
     where
         F: FormatBuffer,
     {
@@ -169,7 +172,7 @@ impl Value {
             Value::Float4(f) => strconv::format_float32(buf, *f),
             Value::Float8(f) => strconv::format_float64(buf, *f),
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
-            Value::Text(s) => buf.write_str(s),
+            Value::Text(s) => strconv::format_string(buf, s),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
             Value::List(elems) => encode_list(buf, elems),
         }
@@ -309,7 +312,7 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .collect()
 }
 
-pub fn encode_list<F>(buf: &mut F, elems: &[Option<Value>])
+pub fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
 where
     F: FormatBuffer,
 {

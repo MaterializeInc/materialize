@@ -66,10 +66,10 @@ describe("query api", () => {
     it("should handle a nested text array", async () => {
       const res = await client.query({
         text: "SELECT $1::text list list",
-        values: [`{"{}", "{a,b}", "{z}"}`],
+        values: [`{ {  }, "{}", {a, "", "\\""}, "{a,\\"\\",\\"\\\\\\"\\"}"}`],
         rowMode: "array",
       });
-      expect(res.rows).toEqual([[`{"{}","{a,b}","{z}"}`]]);
+      expect(res.rows).toEqual([[`{{},{},{a,"","\\""},{a,"","\\""}}`]]);
     });
 
     it("should reject mismatched types", async () => {
