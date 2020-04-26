@@ -325,7 +325,7 @@ pub fn decode_list(elem_type: &Type, raw: &str) -> Result<Vec<Option<Value>>, fa
         || None,
         |elem_text| match Value::decode_text(elem_type, elem_text.as_bytes()) {
             Ok(elem) => Ok(Some(elem)),
-            Err(err) => Err(failure::format_err!("{}", err)),
+            Err(e) => Err(failure::Error::from_boxed_compat(e)),
         },
     )
 }
