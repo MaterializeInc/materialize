@@ -102,7 +102,7 @@ impl Value {
     /// not the datum.
     ///
     /// To construct a null datum, see the [`null_datum`] function.
-    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: Type) -> (Datum<'a>, ScalarType) {
+    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, ScalarType) {
         match self {
             Value::Bool(true) => (Datum::True, ScalarType::Bool),
             Value::Bool(false) => (Datum::False, ScalarType::Bool),
@@ -127,13 +127,13 @@ impl Value {
             ),
             Value::List(elems) => {
                 let elem_pg_type = match typ {
-                    Type::List(t) => *t,
+                    Type::List(t) => &*t,
                     _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
                 };
-                let (_, elem_type) = null_datum(elem_pg_type.clone());
+                let (_, elem_type) = null_datum(&elem_pg_type);
                 let mut packer = RowPacker::new();
                 packer.push_list(elems.into_iter().map(|elem| match elem {
-                    Some(elem) => elem.into_datum(buf, elem_pg_type.clone()).0,
+                    Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
                     None => Datum::Null,
                 }));
                 (
@@ -208,7 +208,7 @@ impl Value {
     /// `format`.
     pub fn decode(
         format: Format,
-        ty: Type,
+        ty: &Type,
         raw: &[u8],
     ) -> Result<Value, Box<dyn Error + Sync + Send>> {
         match format {
@@ -219,7 +219,7 @@ impl Value {
 
     /// Deserializes a value of type `ty` from `raw` using the [text encoding
     /// format](Format::Text).
-    pub fn decode_text(ty: Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+    pub fn decode_text(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         let raw = str::from_utf8(raw)?;
         Ok(match ty {
             Type::Bool => Value::Bool(strconv::parse_bool(raw)?),
@@ -243,7 +243,7 @@ impl Value {
 
     /// Deserializes a value of type `ty` from `raw` using the [binary encoding
     /// format](Format::Binary).
-    pub fn decode_binary(ty: Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+    pub fn decode_binary(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         match ty {
             Type::Bool => bool::from_sql(ty.inner(), raw).map(Value::Bool),
             Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
@@ -272,7 +272,7 @@ impl Value {
 }
 
 /// Constructs a null datum of the specified type.
-pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
+pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
     let ty = match ty {
         Type::Bool => ScalarType::Bool,
         Type::Bytea => ScalarType::Bytes,
@@ -289,7 +289,7 @@ pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
         Type::List(t) => {
-            let (_, elem_type) = null_datum(*t);
+            let (_, elem_type) = null_datum(t);
             ScalarType::List(Box::new(elem_type))
         }
         Type::Unknown => ScalarType::Unknown,
@@ -328,7 +328,7 @@ pub fn decode_list(elem_type: &Type, raw: &str) -> Result<Vec<Option<Value>>, fa
     strconv::parse_list(
         raw,
         || None,
-        |elem_text| match Value::decode_text((*elem_type).clone(), elem_text.as_bytes()) {
+        |elem_text| match Value::decode_text(elem_type, elem_text.as_bytes()) {
             Ok(elem) => Ok(Some(elem)),
             Err(err) => Err(failure::format_err!("{}", err)),
         },

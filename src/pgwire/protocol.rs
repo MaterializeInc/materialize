@@ -559,9 +559,9 @@ where
         let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
         for (raw_param, typ, format) in izip!(raw_params, param_types, param_formats) {
             match raw_param {
-                None => params.push(pgrepr::null_datum(typ.clone())),
-                Some(bytes) => match pgrepr::Value::decode(format, typ.clone(), &bytes) {
-                    Ok(param) => params.push(param.into_datum(&buf, typ.clone())),
+                None => params.push(pgrepr::null_datum(typ)),
+                Some(bytes) => match pgrepr::Value::decode(format, typ, &bytes) {
+                    Ok(param) => params.push(param.into_datum(&buf, typ)),
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
                         return self
