@@ -153,7 +153,7 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
         client
             .batch_execute(
                 "CREATE DATABASE newdb; \
-                 CREATE MATERIALIZED VIEW v AS SELECT 1",
+                 CREATE MATERIALIZED VIEW v AS SELECT 1;",
             )
             .await?;
 
