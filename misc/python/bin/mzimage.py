@@ -127,7 +127,7 @@ def main() -> int:
 
             if args.resolve_inputs:
                 print("Resolved inputs:")
-                for path in sorted(mzbuild.git_ls_files(root, *inputs)):
+                for path in sorted(mzbuild.ls_files(root, *inputs)):
                     print(f"    {path.decode()}")
 
             print("Dependencies:")
