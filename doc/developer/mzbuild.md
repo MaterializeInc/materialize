@@ -366,15 +366,23 @@ publish: true
      plugin is very special-cased at the moment, and unlikely to be generally
      useful.
 
-  * `type: bash-script` executes the script defined by `script-path` before building the
-    Dockerfile.
+  * `type: download-files` downloads a collection of items from the internet before
+    executing the docker build. All downloaded files are placed in a `dist/` directory.
 
-    Parameters:
+    `download-files` requires a list of file configs, for example:
 
-    * `script-path` required path to the script to execute
-    * `input-globs` required list of file globs to include in the fingerprint
-      calculation.
-    * `env-vars` optional map to provide as env vars when executing the script
+    ```yaml
+    pre-image:
+      type: download-files
+      files:
+      - url: 'https://github.com/stedolan/jq/releases/download/jq-VERSION/jq-linux64'
+        filename: jq
+        substitutions:
+          VERSION: '1.6'
+    ```
+
+    The `COPY` or `ADD` commands can be used to extract the files into a Docker image.
+
 
 * `publish` (bool) specifies whether the image should be automatically published
   to Docker Hub by CI. Non-publishable images can still be *used* by users and

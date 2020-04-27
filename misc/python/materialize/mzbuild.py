@@ -16,8 +16,10 @@ documentation][user-docs].
 """
 
 from collections import OrderedDict
+from dataclasses import dataclass
 from functools import lru_cache
 from materialize import cargo
+from materialize import path_util
 from materialize import spawn
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -36,6 +38,7 @@ from typing import (
     overload,
 )
 from typing_extensions import Literal
+from urllib.request import urlopen
 import base64
 import contextlib
 import enum
@@ -44,6 +47,8 @@ import json
 import os
 import re
 import shutil
+import shutil
+import ssl
 import stat
 import subprocess
 import sys
@@ -143,6 +148,9 @@ class PreImage:
         path: The path to the `Image` associated with this action.
     """
 
+    type: str
+    """The name of this PreImage in config files"""
+
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
@@ -153,6 +161,20 @@ class PreImage:
 
     def inputs(self) -> Set[str]:
         """Return the globs which are considered inputs to the action."""
+
+    @classmethod
+    def _config_var(
+        cls: "PreImage", config: Dict[str, Any], key: str, required=True, default=None
+    ) -> Optional[Any]:
+        """Get a config option, possibly throwing a specific error
+        """
+        try:
+            return config.pop(key)
+        except KeyError:
+            if required:
+                raise ValueError(f"'{key}' is required for pre-image type {cls.type}")
+            else:
+                return default
 
 
 class CargoPreImage(PreImage):
@@ -173,6 +195,8 @@ class CargoPreImage(PreImage):
 
 class CargoBuild(CargoPreImage):
     """A pre-image action that builds a single binary with Cargo."""
+
+    type = "cargo-build"
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
         super().__init__(rd, path)
@@ -231,6 +255,8 @@ class CargoTest(CargoPreImage):
         dependencies of various Rust crates. Ideally these dependencies would
         instead be captured by configuration in `mzbuild.yml`.
     """
+
+    type = "cargo-test"
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
         super().__init__(rd, path)
@@ -295,55 +321,87 @@ class CargoTest(CargoPreImage):
         )
 
 
-class BashScript(PreImage):
-    """Run a bash script to set up the environment for a Docker build
+@dataclass
+class DownloadFileConfig:
+    """Configuration to download a file for `DownloadFiles`
     """
+
+    url: str
+    filename: str
+    substitutions: Dict[str, str] = None
+
+    def dest(self) -> Path:
+        dest = self.filename
+        if self.substitutions is not None:
+            for subst, val in self.substitutions.items():
+                dest = dest.replace(subst, val)
+        return Path("dist") / dest
+
+    def source(self) -> str:
+        url = self.url
+        if self.substitutions is not None:
+            for subst, val in self.substitutions.items():
+                url = url.replace(subst, val)
+        return url
+
+
+class DownloadFiles(PreImage):
+    """
+    download-files pre-image plugin
+
+    This downloads a collection of files into the `dist` directory, optionally peforming
+    a string substution in them.
+
+    For example, to download 'https://host/download/proj-1.0.tar.gz' into
+    'dist/proj.tar.gz'::
+
+        pre-image:
+          type: download-files
+          files:
+          - url: https://host/download/proj-VERSION.tar.gz
+            filename: proj.tar.gz
+            substitutions:
+              VERSION: '1.0'
+    """
+
+    type = "download-files"
 
     def __init__(
         self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]
     ) -> None:
-        self.rd = rd
-        self.path = path
-        self._script = path / self._config_var(config, "script-path")
-        self._inputs = [self._script, self.path / "mzbuild.yml"]
-        self._env = self._config_var(config, "env-vars", {})
-        for path_glob in self._config_var(config, "input-globs"):
-            for path in self.path.glob(path_glob):
-                if path.is_file():
-                    self._inputs.append(path)
-        if config:
-            raise ValueError(
-                "ERROR: unknown keys in bash_script configuration:\n{}".format(
-                    "\n".join(config.keys())
-                )
-            )
+        super().__init__(rd, path)
+        self._files = [
+            DownloadFileConfig(**fc) for fc in self._config_var(config, "files")
+        ]
 
     def run(self) -> None:
-        orig_wd = os.getcwd()
-        try:
-            os.chdir(self.path)
-            result = subprocess.run(self._script, env=self._env)
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"{self.path} returned non-zero exit code: {result.returncode}"
-                )
-        finally:
-            os.chdir(orig_wd)
+        with path_util.cd(self.path):
+            self._download()
 
     def inputs(self) -> Set[str]:
-        return set(str(inp.relative_to(self.rd.root)) for inp in self._inputs)
+        return set([self.path.relative_to(self.rd.root)])
 
-    @staticmethod
-    def _config_var(
-        config: Dict[str, Any], key: str, required=True, default=None
-    ) -> Optional[Any]:
-        try:
-            return config.pop(key)
-        except KeyError:
-            if required:
-                raise ValueError("'{}' is required for pre-image type bash-script", key)
-            else:
-                return default
+    def _download(self) -> None:
+        ssl_context = ssl.create_default_context()
+        chunk_size = 32 * 1024
+        for fileconf in self._files:
+            src = fileconf.source()
+            dest = fileconf.dest()
+            print(f"==> downloading {src} -> {dest}", file=sys.stderr)
+            with urlopen(src, context=ssl_context) as req:
+                etag = req.info().get("etag", None)
+                etag_file = Path(str(dest) + ".etag")
+                if etag is not None and dest.exists() and etag_file.exists():
+                    with etag_file.open("r") as fh:
+                        if fh.read() == etag:
+                            print(f"==> file {dest} is up to date", file=sys.stderr)
+                            continue
+
+                with dest.open("wb") as fh:
+                    shutil.copyfileobj(req, fh, chunk_size)
+                if etag is not None:
+                    with etag_file.open("w") as fh:
+                        fh.write(etag)
 
 
 class Image:
@@ -376,17 +434,17 @@ class Image:
             pre_image = data.pop("pre-image", None)
             if pre_image is not None:
                 typ = pre_image.pop("type", None)
-                if typ == "cargo-build":
+                if typ == CargoBuild.type:
                     self.pre_image = CargoBuild(self.rd, self.path, pre_image)
-                elif typ == "cargo-test":
+                elif typ == CargoTest.type:
                     self.pre_image = CargoTest(self.rd, self.path, pre_image)
-                elif typ == "bash-script":
-                    self.pre_image = BashScript(self.rd, self.path, pre_image)
+                elif typ == DownloadFiles.type:
+                    self.pre_image = DownloadFiles(self.rd, self.path, pre_image)
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
                     )
-            self.build_args = data.pop("build-args", None)
+            self.build_args = data.pop("build-args", {})
 
         if re.search(r"[^A-Za-z0-9\-]", self.name):
             raise ValueError(
@@ -475,14 +533,10 @@ class ResolvedImage:
             "--pull",
             "-f",
             "-",
-        ]
-        if self.image.build_args:
-            for arg in self.image.build_args:
-                cmd += ["--build-arg", arg]
-        cmd += [
+            *(f"--build-arg={k}={v}" for k, v in self.image.build_args.items()),
             "-t",
             self.spec(),
-            self.image.path,
+            str(self.image.path),
         ]
         spawn.runv(cmd, stdin=f)
 
