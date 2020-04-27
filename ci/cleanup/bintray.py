@@ -11,18 +11,16 @@ from materialize import bintray
 import dateutil.parser
 import os
 from typing import List, Dict
-import json
 from datetime import datetime, timedelta, timezone
 
 
-def get_old_versions(bt: bintray.Client) -> List[str]:
-    pc = bt.repo("apt").package("materialized-unstable")
-    version_strs = json.loads(pc.get_metadata().content)["versions"]
-    versions = (json.loads(pc.get_version(v).content) for v in version_strs)
+def get_old_versions(pc: bintray.PackageClient) -> List[str]:
+    version_strs = pc.get_metadata().json()["versions"]
+    versions = (pc.get_version(v).json() for v in version_strs)
 
     def is_old(v: Dict[str, str]) -> bool:
-        return datetime.now(tz=timezone.utc) - dateutil.parser.parse(
-            v["created"]
+        return datetime.now(tz=timezone.utc) - datetime.strptime(
+            v["created"], "%Y-%m-%dT%H:%M:%S.%f%z"
         ) > timedelta(days=14)
 
     old_versions = [
@@ -32,11 +30,14 @@ def get_old_versions(bt: bintray.Client) -> List[str]:
 
 
 def main() -> None:
-    bt = bintray.Client(
-        "materialize", user="ci@materialize", api_key=os.environ["BINTRAY_API_KEY"]
+    pc = (
+        bintray.Client(
+            "materialize", user="ci@materialize", api_key=os.environ["BINTRAY_API_KEY"]
+        )
+        .repo("apt")
+        .package("materialized-unstable")
     )
-    old_versions = get_old_versions(bt)
-    pc = bt.repo("apt").package("materialized-unstable")
+    old_versions = get_old_versions(pc)
     print(f"Will delete {len(old_versions)} old versions")
     for v in old_versions:
         print(f"Deleting version {v}")
