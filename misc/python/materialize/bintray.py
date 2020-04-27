@@ -134,7 +134,7 @@ class Client:
 
     def __init__(self, subject: str, user: str, api_key: str):
         self.session = Session()
-        self.session.auth = (f"{user}@{subject}", api_key)
+        self.session.auth = (f"{user}", api_key)
         self.subject = subject
 
     def repo(self, repo: str) -> RepoClient:

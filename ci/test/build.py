@@ -79,7 +79,9 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     )
     deb_size = deb_path.stat().st_size
 
-    bt = bintray.Client("materialize", user="ci", api_key=os.environ["BINTRAY_API_KEY"])
+    bt = bintray.Client(
+        "materialize", user="ci@materialize", api_key=os.environ["BINTRAY_API_KEY"]
+    )
     package = bt.repo("apt").package("materialized-unstable")
     try:
         print("Creating Bintray version...")

@@ -50,7 +50,9 @@ def main() -> None:
 
 def publish_deb(package: str, version: str) -> None:
     print(f"{package} v{version}")
-    bt = bintray.Client("materialize", user="ci", api_key=os.environ["BINTRAY_API_KEY"])
+    bt = bintray.Client(
+        "materialize", user="ci@materialize", api_key=os.environ["BINTRAY_API_KEY"]
+    )
     bt.repo("apt").package(package).publish_uploads(version)
 
 
