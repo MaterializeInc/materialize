@@ -544,7 +544,7 @@ demo_load() {
     dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
-        --peek-conns=0 --flush-every=30 \
+        --peek-conns=0 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default.cfg \

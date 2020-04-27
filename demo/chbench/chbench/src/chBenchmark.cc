@@ -143,26 +143,9 @@ static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *p
     promHist.set_value(std::move(hists));
 }
 
-static void flushThread(useconds_t sleepTime, const std::atomic<RunState> *pRunState) {
-    const auto& runState = *pRunState;
-    while (runState != RunState::run) {
-        usleep(sleepTime);
-    }
-    while (runState == RunState::run) {
-        usleep(sleepTime);
-        int result = system("flush-tables");
-        if (result == -1) {
-            fprintf(stderr, "Failed to execute flush-tables command: %s\n", strerror(errno));
-        } else if (result != 0) {
-            fprintf(stderr, "flush-tables exited with failure status %d\n", result);
-        } else {
-            printf("flush-tables finished with successful status.");
-        }
-    }
-}
 static void materializeThread(mz::Config config, std::promise<std::vector<Histogram>> promHist,
                               int peekConns, const std::atomic<RunState> *pRunState,
-                              std::optional<useconds_t> flushSleepTime, useconds_t peekMin, useconds_t peekMax) {
+                              useconds_t peekMin, useconds_t peekMax) {
     const auto& connUrl = config.materializedUrl;
     auto& expected = config.expectedSources;
     const auto& kafkaUrl = config.kafkaUrl;
@@ -190,9 +173,6 @@ static void materializeThread(mz::Config config, std::promise<std::vector<Histog
     for (const auto& vp: config.hQueries) {
         std::cout << "Creating query " << vp->first << std::endl;
         mz::createMaterializedView(c, vp->first, vp->second.query);
-    }
-    if (flushSleepTime) {
-        std::thread(flushThread, flushSleepTime.value(), pRunState).detach();
     }
     if (peekConns) {
         std::vector<Histogram> hists;
@@ -368,7 +348,6 @@ enum LongOnlyOpts {
     PEEK_CONNS,
     PEEK_MIN_DELAY,
     PEEK_MAX_DELAY,
-    FLUSH_EVERY,
     MZ_URL,
     KAFKA_URL,
     SCHEMA_REGISTRY_URL,
@@ -394,7 +373,6 @@ static int run(int argc, char* argv[]) {
         {"peek-conns", required_argument, &longopt_idx, PEEK_CONNS},
         {"peek-min-delay", required_argument, &longopt_idx, PEEK_MIN_DELAY},
         {"peek-max-delay", required_argument, &longopt_idx, PEEK_MAX_DELAY},
-        {"flush-every", required_argument, &longopt_idx, FLUSH_EVERY},
         {"mz-url", required_argument, &longopt_idx, MZ_URL},
         {"kafka-url", required_argument, &longopt_idx, KAFKA_URL},
         {"schema-registry-url", required_argument, &longopt_idx, SCHEMA_REGISTRY_URL},
@@ -418,7 +396,6 @@ static int run(int argc, char* argv[]) {
     const char* logFile = nullptr;
     bool createSources = false;
     std::vector<std::string> mzViews;
-    double flushSleepTime = 0;
     std::optional<std::string> materializedUrl, kafkaUrl, schemaRegistryUrl;
     std::optional<mz::Config> config;
 
@@ -445,9 +422,6 @@ static int run(int argc, char* argv[]) {
             break;
         case PEEK_MAX_DELAY:
             peekMaxDelay = parseDouble("maximum delay between peeks (s)", optarg);
-            break;
-        case FLUSH_EVERY:
-            flushSleepTime = parseDouble("Interval to run flush-tables hack (s)", optarg);
             break;
         case MZ_URL:
             materializedUrl = optarg;
@@ -518,8 +492,7 @@ static int run(int argc, char* argv[]) {
     if (minDelay < 0.0 || maxDelay < 0.0 || minDelay > maxDelay
         || minDelay * 1'000'000 > UINT_MAX || maxDelay * 1'000'000 > UINT_MAX
         || peekMinDelay < 0.0 || peekMaxDelay < 0.0 || peekMinDelay > peekMaxDelay
-        || peekMinDelay * 1'000'000 > UINT_MAX || peekMaxDelay * 1'000'000 > UINT_MAX
-        || flushSleepTime < 0.0 || flushSleepTime * 1'000'000 > UINT_MAX)
+        || peekMinDelay * 1'000'000 > UINT_MAX || peekMaxDelay * 1'000'000 > UINT_MAX)
         errx(1, "Invalid time bounds specified");
     if (!dsn)
         errx(1, "data source name (DSN) must be specified");
@@ -644,7 +617,6 @@ static int run(int argc, char* argv[]) {
                     std::move(promHist),
                     peekConns,
                     &runState,
-                    (flushSleepTime == 0) ? std::nullopt : std::optional<useconds_t>(flushSleepTime * 1'000'000),
                     (unsigned)(peekMinDelay * 1'000'000), (unsigned)(peekMaxDelay * 1'000'000)
         ).detach();
     }
