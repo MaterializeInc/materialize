@@ -602,11 +602,13 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         sink.from.0,
                         sink.from.1.typ().clone(),
                     ))
-                    // TODO(frank): consolidation is only required for a collection,
-                    // not for arrangements. We can perform a more complicated match
-                    // here to determine which case we are in to avoid this call.
-                    .consolidate()
+                    // What does this even mean?
                     .expect("No arrangements");
+
+                // TODO(frank): consolidation is only required for a collection,
+                // not for arrangements. We can perform a more complicated match
+                // here to determine which case we are in to avoid this call.
+                let collection = collection.consolidate();
 
                 // TODO(benesch): errors should stream out through the sink,
                 // if we figure out a protocol for that.
