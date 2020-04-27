@@ -56,28 +56,50 @@ pub async fn run_string(config: &Config, filename: &str, contents: &str) -> Resu
 }
 
 async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> Result<(), Error> {
-    let cmds = parser::parse(line_reader)?;
     // TODO(benesch): consider sharing state between files, to avoid
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
-    let (mut state, state_cleanup) = action::create_state(config).await?;
-    state.reset_materialized().await?;
-    // The `tokio::spawn` allows using `block_in_place` to run sync code within
-    // the spawned task. The spawn will one day not be necessary.
-    // See: https://github.com/tokio-rs/tokio/issues/1838.
-    tokio::spawn(async move {
-        let actions = action::build(cmds, &state)?;
-        for a in actions.iter().rev() {
-            let undo = a.action.undo(&mut state);
-            undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+    let cmds = parser::parse(line_reader)?;
+    let mut cmds_exec = cmds.clone();
+    // Extract number of executions
+    let mut execution_count = 1;
+    if let Some(command) = cmds_exec.iter_mut().find(|el| {
+        if let parser::Command::Builtin(c) = &el.command {
+            if c.name == "set-execution-count" {
+                return true;
+            }
         }
-        for a in &actions {
-            let redo = a.action.redo(&mut state);
-            redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+        false
+    }) {
+        if let parser::Command::Builtin(c) = &mut command.command {
+            let count = c.args.string("count").unwrap_or_default();
+            execution_count = count.parse::<u32>().unwrap_or(1);
         }
-        drop(state);
-        state_cleanup.await
-    })
-    .await
-    .expect("action task unexpectedly canceled")
+    };
+    println!("Running test {} time(s) ... ", execution_count);
+    for _ in 1..execution_count {
+        println!("Run {} ...", execution_count);
+        cmds_exec = cmds.clone();
+        let (mut state, state_cleanup) = action::create_state(config).await?;
+        state.reset_materialized().await?;
+        // The `tokio::spawn` allows using `block_in_place` to run sync code within
+        // the spawned task. The spawn will one day not be necessary.
+        // See: https://github.com/tokio-rs/tokio/issues/1838.
+        tokio::spawn(async move {
+            let actions = action::build(cmds_exec, &state)?;
+            for a in actions.iter().rev() {
+                let undo = a.action.undo(&mut state);
+                undo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+            }
+            for a in &actions {
+                let redo = a.action.redo(&mut state);
+                redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
+            }
+            drop(state);
+            state_cleanup.await
+        })
+        .await
+        .expect("action task unexpectedly canceled")?
+    }
+    Ok(())
 }

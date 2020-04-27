@@ -18,27 +18,27 @@ use std::str::FromStr;
 
 use super::error::{InputError, Positioner};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PosCommand {
     pub pos: usize,
     pub command: Command,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Command {
     Builtin(BuiltinCommand),
     Sql(SqlCommand),
     FailSql(FailSqlCommand),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BuiltinCommand {
     pub name: String,
     pub args: ArgMap,
     pub input: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SqlExpectedResult {
     Full {
         column_names: Vec<String>,
@@ -49,13 +49,13 @@ pub enum SqlExpectedResult {
         md5: String,
     },
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SqlCommand {
     pub query: String,
     pub expected_result: SqlExpectedResult,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FailSqlCommand {
     pub query: String,
     pub expected_error: String,
@@ -468,7 +468,7 @@ impl<'a> Iterator for BuiltinReader<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArgMap(HashMap<String, String>);
 
 impl ArgMap {
