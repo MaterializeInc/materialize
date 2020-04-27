@@ -104,7 +104,7 @@ class PackageClient:
         """
         url = f"{API_BASE}/content/{self.subject}/{self.repo}/{self.package}/{version}/publish"
         res = self.session.post(
-            url, json={"publish_wait_for_seconds": wait_for_seconds}
+            url, json={"publish_wait_for_secs": wait_for_seconds}
         )
         res.raise_for_status()
         return res
