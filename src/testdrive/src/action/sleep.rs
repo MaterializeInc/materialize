@@ -20,7 +20,7 @@ pub struct SleepAction {
 }
 
 pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
-    let arg = cmd.args.string("duration").map_err(|e| e.to_string())?;
+    let arg = cmd.args.string("duration")?;
     let time = parse_duration::parse(&arg).map_err(|e| e.to_string())?;
     Ok(SleepAction { time })
 }
