@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use differential_dataflow::operators::count::CountTotal;
 use log::error;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -375,7 +376,6 @@ pub fn construct<A: Allocate>(
         let avro_ocf_sinks = avro_ocf_sinks.as_collection();
 
         // Duration statistics derive from the non-rounded event times.
-        use differential_dataflow::operators::reduce::Count;
         let peek_duration = peek
             .unary(
                 timely::dataflow::channels::pact::Pipeline,
@@ -427,7 +427,7 @@ pub fn construct<A: Allocate>(
                 },
             )
             .as_collection()
-            .count()
+            .count_total()
             .map({
                 move |((worker, pow), count)| {
                     Row::pack(&[
