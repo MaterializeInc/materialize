@@ -608,6 +608,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 // TODO(frank): consolidation is only required for a collection,
                 // not for arrangements. We can perform a more complicated match
                 // here to determine which case we are in to avoid this call.
+                use differential_dataflow::operators::consolidate::Consolidate;
                 let collection = collection.consolidate();
 
                 // TODO(benesch): errors should stream out through the sink,
