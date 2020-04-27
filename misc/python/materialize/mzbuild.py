@@ -118,11 +118,19 @@ def docker_images() -> Set[str]:
     )
 
 
-def git_ls_files(root: Path, *specs: Union[Path, str]) -> Set[bytes]:
+def ls_files(root: Path, *specs: Union[Path, str]) -> Set[bytes]:
     """Find unignored files within the specified paths."""
+    # The goal here is to find all files in the working tree that are not
+    # ignored by .gitignore. `git ls-files` doesn't work, because it reports
+    # files that have been deleted in the working tree if they are still present
+    # in the index. Using `os.walkdir` doesn't work because there is no good way
+    # to evaluate .gitignore rules from Python. So we use `git diff` against the
+    # empty tree, which appears to have the desired semantics.
+    empty_tree = (
+        "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git hash-object -t tree /dev/null
+    )
     files = spawn.capture(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", *specs],
-        cwd=root,
+        ["git", "diff", "--name-only", "-z", empty_tree, "--", *specs], cwd=root,
     ).split(b"\0")
     return set(f for f in files if f.strip() != b"")
 
@@ -498,7 +506,7 @@ class ResolvedImage:
         inputs via `PreImage.inputs`.
         """
         self_hash = hashlib.sha1()
-        for rel_path in sorted(set(git_ls_files(self.image.rd.root, *self.inputs()))):
+        for rel_path in sorted(set(ls_files(self.image.rd.root, *self.inputs()))):
             abs_path = self.image.rd.root / rel_path.decode()
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
