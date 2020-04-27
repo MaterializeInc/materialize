@@ -90,7 +90,7 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
   schema-registry:
-    build: schema-registry
+    image: confluentinc/cp-schema-registry
     environment:
      - SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181
      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
