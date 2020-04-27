@@ -9,20 +9,20 @@
 
 use std::time::Duration;
 
-use rdkafka::util::duration_to_millis;
 use rand::Rng;
+use rdkafka::util::duration_to_millis;
 
 use crate::action::{State, SyncAction};
 use crate::parser::BuiltinCommand;
 
 pub struct SleepAction {
-    time: Duration
+    time: Duration,
 }
 
 pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
-    let arg= cmd.args.string("duration").map_err(|e| e.to_string())?;
+    let arg = cmd.args.string("duration")?;
     let time = parse_duration::parse(&arg).map_err(|e| e.to_string())?;
-    Ok(SleepAction{time})
+    Ok(SleepAction { time })
 }
 
 impl SyncAction for SleepAction {
@@ -32,7 +32,7 @@ impl SyncAction for SleepAction {
 
     fn redo(&self, _: &mut State) -> Result<(), String> {
         let mut rng = rand::thread_rng();
-        let sleep= Duration::from_millis(rng.gen_range(0,duration_to_millis(self.time)));
+        let sleep = Duration::from_millis(rng.gen_range(0, duration_to_millis(self.time)));
         println!("Sleeping for {:?}", sleep);
         std::thread::sleep(sleep);
         Ok(())
