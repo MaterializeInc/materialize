@@ -233,6 +233,16 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 "computation of unique IDs assumes a source appears no more than once per dataflow"
             );
 
+            // When set, `as_of` indicates a frontier that can be used to compact input timestamps
+            // without affecting the results. We *should* apply it, to sources and imported traces,
+            // both because it improves performance, and because potentially incorrect results are
+            // visible in sinks.
+            let as_of_frontier = dataflow
+                .as_of
+                .as_ref()
+                .map(|x| x.to_vec())
+                .unwrap_or_else(|| vec![0]);
+
             // Load declared sources into the rendering context.
             for (src_id, mut src) in dataflow.source_imports.clone() {
                 if let SourceConnector::External {
@@ -278,7 +288,19 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
                             ExternalSourceConnector::Kafka(kc) => {
+                                use timely::dataflow::operators::delay::Delay;
+
                                 let (source, capability) = source::kafka(source_config, kc);
+                                // Advance the time component of each timely message,
+                                // to implement the `as_of` frontier compaction.
+                                let source = source.delay({
+                                    let as_of_frontier = as_of_frontier.clone();
+                                    move |_datum, time| {
+                                        let mut time = time.clone();
+                                        time.advance_by(&as_of_frontier[..]);
+                                        time
+                                    }
+                                });
                                 let arranged = arrange_from_upsert(
                                     &decode_upsert(
                                         &prepare_upsert_by_max_offset(&source),
@@ -436,6 +458,24 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             err_collection = err_collection.concat(&errors);
                         }
 
+                        // Apply `as_of` to each timestamp
+                        collection = collection.delay({
+                            let as_of_frontier = as_of_frontier.clone();
+                            move |time| {
+                                let mut time = time.clone();
+                                time.advance_by(&as_of_frontier[..]);
+                                time
+                            }
+                        });
+                        err_collection = err_collection.delay({
+                            let as_of_frontier = as_of_frontier.clone();
+                            move |time| {
+                                let mut time = time.clone();
+                                time.advance_by(&as_of_frontier[..]);
+                                time
+                            }
+                        });
+
                         // Introduce the stream by name, as an unarranged collection.
                         context.collections.insert(
                             RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
@@ -453,12 +493,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 }
             }
 
-            let as_of = dataflow
-                .as_of
-                .as_ref()
-                .map(|x| x.to_vec())
-                .unwrap_or_else(|| vec![0]);
-
             let mut index_tokens = HashMap::new();
 
             for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
@@ -467,12 +501,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                         scope,
                         &format!("Index({}, {:?})", index_desc.on_id, index_desc.keys),
-                        as_of.clone(),
+                        as_of_frontier.clone(),
                     );
                     let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                         scope,
                         &format!("ErrIndex({}, {:?})", index_desc.on_id, index_desc.keys),
-                        as_of.clone(),
+                        as_of_frontier.clone(),
                     );
                     let ok_arranged = ok_arranged.enter(region);
                     let err_arranged = err_arranged.enter(region);
