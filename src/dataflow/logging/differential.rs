@@ -7,15 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use super::{DifferentialLog, LogVariant};
-use crate::arrangement::KeysValsHandle;
-use dataflow_types::Timestamp;
-use differential_dataflow::logging::DifferentialEvent;
-use repr::{Datum, Row};
 use std::time::Duration;
+
+use differential_dataflow::logging::DifferentialEvent;
+use differential_dataflow::operators::count::CountTotal;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::logging::WorkerIdentifier;
+
+use super::{DifferentialLog, LogVariant};
+use crate::arrangement::KeysValsHandle;
+use dataflow_types::Timestamp;
+use repr::{Datum, Row};
 
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
@@ -26,7 +29,6 @@ pub fn construct<A: Allocate>(
 
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::reduce::Count;
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::Map;
 
@@ -74,7 +76,7 @@ pub fn construct<A: Allocate>(
                 }
             })
             .as_collection()
-            .count()
+            .count_total()
             .map({
                 move |((op, worker), count)| {
                     Row::pack(&[
@@ -97,7 +99,7 @@ pub fn construct<A: Allocate>(
                 }
             })
             .as_collection()
-            .count()
+            .count_total()
             .map({
                 move |((op, worker), count)| {
                     Row::pack(&[
