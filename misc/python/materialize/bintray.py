@@ -56,6 +56,12 @@ class PackageClient:
             res.raise_for_status()
         return res
 
+    def delete_version(self, version: str) -> Response:
+        url = f"{API_BASE}/packages/{self.subject}/{self.repo}/{self.package}/versions/{version}"
+        res = self.session.delete(url)
+        res.raise_for_status()
+        return res
+
     def debian_upload(
         self,
         version: str,
@@ -110,6 +116,12 @@ class PackageClient:
     def get_metadata(self) -> Response:
         url = f"{API_BASE}/packages/{self.subject}/{self.repo}/{self.package}"
         res = self.session.get(url)
+        return res
+
+    def get_version(self, version: str) -> Response:
+        url = f"{API_BASE}/packages/{self.subject}/{self.repo}/{self.package}/versions/{version}"
+        res = self.session.get(url)
+        res.raise_for_status()
         return res
 
 
