@@ -239,7 +239,9 @@ $ kafka-ingest partition=3 format=avro topic=data schema=${schema} timestamp=1
 {"a": 1, "b": 11}
 
 $ kafka-ingest format=avro topic=data-consistency  schema=${consistency}
-{"source": "testdrive-data-${testdrive.seed}", "partition_count": 4 , "partition_id": 3, "timestamp": 7, "offset": 1}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 3 , "partition_id": 1, "timestamp": 6, "offset": 7}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 3 , "partition_id": 0, "timestamp": 6, "offset": 4}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 3 , "partition_id": 2, "timestamp": 6, "offset": 2}
 
 > SELECT * FROM view_byo
 b  sum
@@ -252,9 +254,25 @@ b  sum
 7  1
 
 $ kafka-ingest format=avro topic=data-consistency  schema=${consistency}
-{"source": "testdrive-data-${testdrive.seed}", "partition_count": 4 , "partition_id": 1, "timestamp": 7, "offset": 7}
-{"source": "testdrive-data-${testdrive.seed}", "partition_count": 4 , "partition_id": 0, "timestamp": 7, "offset": 4}
-{"source": "testdrive-data-${testdrive.seed}", "partition_count": 4, "partition_id": 2, "timestamp": 7, "offset": 2}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 4 , "partition_id": 3, "timestamp": 7, "offset": 1}
+
+> SELECT * FROM view_byo
+b  sum
+------
+1  6
+2  1
+3  3
+5  1
+6  1
+7  1
+8  1
+9  1
+10 1
+
+$ kafka-ingest format=avro topic=data-consistency  schema=${consistency}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 3 , "partition_id": 1, "timestamp": 7, "offset": 7}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 3 , "partition_id": 0, "timestamp": 7, "offset": 4}
+{"source": "testdrive-data-${testdrive.seed}", "partition_count": 3 , "partition_id": 2, "timestamp": 7, "offset": 2}
 
 > SELECT * FROM view_byo
 b  sum

@@ -682,16 +682,19 @@ where
                 let mut timestamps = self.ts_histories.borrow_mut();
                 if let Some(entries) = timestamps.get_mut(&id) {
                     let ts = entries.entry(pid).or_insert_with(Vec::new);
-                    // TODO (brennan) - I'm not sure if this can fail, but
-                    // keep it commented out for now until #2735 is fixed and we're sure there
-                    // is no weirdness going on with offsets.
-                    //
-                    // assert!(
-                    //     offset >= last_offset,
-                    //     "offset should not go backwards, but {} < {}",
-                    //     offset,
-                    //     last_offset
-                    // );
+                    let (_, last_ts, last_offset) = ts.last().unwrap_or(&(0, 0, 0));
+                    assert!(
+                        offset >= *last_offset,
+                        "offset should not go backwards, but {} < {}",
+                        offset,
+                        last_offset
+                    );
+                    assert!(
+                        timestamp > *last_ts,
+                        "timestamp should move forwards, but {} <= {}",
+                        timestamp,
+                        last_ts
+                    );
                     ts.push((partition_count, timestamp, offset));
                     let source = self
                         .ts_source_mapping

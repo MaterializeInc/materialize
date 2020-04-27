@@ -174,7 +174,8 @@ pub enum TimestampMessage {
 /// about topics and offset for real-time consistency
 struct RtTimestampConsumer {
     connector: RtTimestampConnector,
-    last_offset: i64,
+    last_partition_offset: HashMap<PartitionId, i64>,
+    start_offset: i64,
 }
 
 enum RtTimestampConnector {
@@ -232,7 +233,7 @@ impl ByoTimestampConsumer {
         timestamp: u64,
         offset: i64,
     ) {
-        if self.current_partition_count < partition_count {
+        if self.current_partition_count < partition_count && self.last_ts > 0 {
             // A new partition has been added. Partitions always gets added with
             // newPartitionId = previousLastPartitionId + 1 and start from 0.
             // So this new partition will have ID "partition_count - 1"
@@ -651,7 +652,11 @@ fn determine_next_offset(last_offset: i64, available_offsets: i64, max_increment
     if (available_offsets - last_offset) > max_increment_size {
         last_offset + max_increment_size
     } else {
-        available_offsets
+        // The max here is necessary when the source was created with start_offset > 0
+        // but when there are not yet start_offset messages in the stream
+        // We should always return a value that is greater than last_offset (which is initially
+        // set to start_offset)
+        std::cmp::max(last_offset, available_offsets)
     }
 }
 
@@ -839,12 +844,21 @@ impl Timestamper {
                                     }) => start_offset,
                                     _ => 0,
                                 };
-                                let last_offset = if self.persist_ts {
-                                    std::cmp::max(start_offset, self.rt_recover_source(id))
+                                // Obtain the last offsets that were recorded for this source.
+                                // If start_offset is specified, make sure to always start from
+                                // last_offset and never earlier
+                                let last_offsets = if self.persist_ts {
+                                    self.rt_recover_source(id)
+                                        .iter()
+                                        .map(|(pid, ts)| {
+                                            (pid.clone(), std::cmp::max(start_offset, *ts))
+                                        })
+                                        .collect()
                                 } else {
-                                    start_offset
+                                    HashMap::new()
                                 };
-                                let consumer = self.create_rt_connector(id, sc, last_offset);
+                                let consumer =
+                                    self.create_rt_connector(id, sc, last_offsets, start_offset);
                                 if let Some(consumer) = consumer {
                                     self.rt_sources.insert(id, consumer);
                                 }
@@ -1142,36 +1156,51 @@ impl Timestamper {
         &self,
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
-        last_offset: i64,
+        last_partition_offset: HashMap<PartitionId, i64>,
+        start_offset: i64,
     ) -> Option<RtTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
                 self.create_rt_kafka_connector(id, kc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
-                        last_offset,
+                        last_partition_offset,
+                        start_offset,
                     })
             }
             ExternalSourceConnector::File(fc) => {
+                if start_offset > 0 {
+                    warn!("Start Offset is not supported for file sources. Ignoring");
+                }
                 self.create_rt_file_connector(id, fc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::File(connector),
-                        last_offset,
+                        last_partition_offset,
+                        start_offset: 0,
                     })
             }
             ExternalSourceConnector::AvroOcf(fc) => {
+                if start_offset > 0 {
+                    warn!("Start Offset is not supported for Avro OCF sources. Ignoring");
+                }
                 self.create_rt_ocf_connector(id, fc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Ocf(connector),
-                        last_offset,
+                        last_partition_offset,
+                        start_offset: 0,
                     })
             }
-            ExternalSourceConnector::Kinesis(kinc) => self
-                .create_rt_kinesis_connector(id, kinc)
-                .map(|connector| RtTimestampConsumer {
-                    connector: RtTimestampConnector::Kinesis(connector),
-                    last_offset,
-                }),
+            ExternalSourceConnector::Kinesis(kinc) => {
+                if start_offset > 0 {
+                    warn!("Start Offset is not supported for Kinesis sources. Ignoring");
+                }
+                self.create_rt_kinesis_connector(id, kinc)
+                    .map(|connector| RtTimestampConsumer {
+                        connector: RtTimestampConnector::Kinesis(connector),
+                        last_partition_offset,
+                        start_offset: 0,
+                    })
+            }
         }
     }
 
@@ -1182,7 +1211,6 @@ impl Timestamper {
         timestamp_topic: String,
     ) -> Option<ByoFileConnector<std::vec::Vec<u8>>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
-
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
@@ -1437,7 +1465,7 @@ impl Timestamper {
 
     /// Recovers any existing timestamp updates for that (SourceId,ViewId) pair from the underlying
     /// SQL database. Notifies the coordinator of these updates
-    fn rt_recover_source(&mut self, id: SourceInstanceId) -> i64 {
+    fn rt_recover_source(&mut self, id: SourceInstanceId) -> HashMap<PartitionId, i64> {
         let ts_updates: Vec<_> = self
             .storage()
             .prepare("SELECT pcount, pid, timestamp, offset FROM timestamps WHERE sid = ? AND vid = ? ORDER BY timestamp")
@@ -1460,15 +1488,13 @@ impl Timestamper {
             .expect("Failed to parse SQL result")
             .collect();
 
-        let mut max_offset = 0;
+        let mut max_offset = HashMap::new();
         for row in ts_updates {
             let (partition_count, pid, timestamp, offset) =
                 row.expect("Failed to parse SQL result");
-            max_offset = if offset > max_offset {
-                offset
-            } else {
-                max_offset
-            };
+            if offset > *max_offset.entry(pid.clone()).or_insert(0) {
+                max_offset.insert(pid.clone(), offset);
+            }
             self.tx
                 .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                     id,
@@ -1495,22 +1521,26 @@ impl Timestamper {
                     let partitions = get_kafka_partitions(&kc.consumer, &kc.topic);
                     let partition_count = i32::try_from(partitions.len()).unwrap();
                     for p in partitions {
+                        let current_p_offset = cons
+                            .last_partition_offset
+                            .entry(PartitionId::Kafka(p))
+                            .or_insert(cons.start_offset);
+                        let old_offset = *current_p_offset;
                         let watermark =
                             kc.consumer
                                 .fetch_watermarks(&kc.topic, p, Duration::from_secs(1));
                         match watermark {
                             Ok((_low, high)) => {
-                                let next_offset = determine_next_offset(
-                                    cons.last_offset,
+                                *current_p_offset = determine_next_offset(
+                                    *current_p_offset,
                                     high,
                                     self.max_increment_size,
                                 );
-                                cons.last_offset = next_offset;
                                 result.push((
                                     *id,
                                     partition_count,
                                     PartitionId::Kafka(p),
-                                    next_offset,
+                                    *current_p_offset,
                                 ));
                                 KAFKA_PARTITION_OFFSET_MAX
                                     .with_label_values(&[
@@ -1527,10 +1557,15 @@ impl Timestamper {
                                 );
                             }
                         }
+                        assert!(*current_p_offset >= old_offset);
                     }
                 }
                 RtTimestampConnector::File(ref mut fc) => {
                     let mut count = 0;
+                    let last_offset = cons
+                        .last_partition_offset
+                        .entry(PartitionId::File)
+                        .or_insert(cons.start_offset);
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
                             Ok(_) => {
@@ -1540,10 +1575,14 @@ impl Timestamper {
                             Err(TryRecvError::Disconnected) => break,
                         }
                     }
-                    cons.last_offset += count;
-                    result.push((*id, 1, PartitionId::File, cons.last_offset))
+                    *last_offset += count;
+                    result.push((*id, 1, PartitionId::File, *last_offset))
                 }
                 RtTimestampConnector::Ocf(ref mut fc) => {
+                    let last_offset = cons
+                        .last_partition_offset
+                        .entry(PartitionId::File)
+                        .or_insert(cons.start_offset);
                     let mut count = 0;
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
@@ -1554,8 +1593,8 @@ impl Timestamper {
                             Err(TryRecvError::Disconnected) => break,
                         }
                     }
-                    cons.last_offset += count;
-                    result.push((*id, 1, PartitionId::File, cons.last_offset))
+                    *last_offset += count;
+                    result.push((*id, 1, PartitionId::File, *last_offset))
                 }
                 RtTimestampConnector::Kinesis(kc) => {
                     match block_on(kc.kinesis_client.list_shards(ListShardsInput {
