@@ -103,10 +103,13 @@ class PackageClient:
                 asynchronously, without waiting at all.
         """
         url = f"{API_BASE}/content/{self.subject}/{self.repo}/{self.package}/{version}/publish"
-        res = self.session.post(
-            url, json={"publish_wait_for_secs": wait_for_seconds}
-        )
+        res = self.session.post(url, json={"publish_wait_for_secs": wait_for_seconds})
         res.raise_for_status()
+        return res
+
+    def get_metadata(self) -> Response:
+        url = f"{API_BASE}/packages/{self.subject}/{self.repo}/{self.package}"
+        res = self.session.get(url)
         return res
 
 
