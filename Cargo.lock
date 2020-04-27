@@ -121,7 +121,7 @@ dependencies = [
  "crc",
  "digest",
  "failure",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "libflate",
  "log",
@@ -310,7 +310,7 @@ dependencies = [
  "dataflow-types",
  "expr",
  "failure",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "log",
  "ore",
@@ -459,7 +459,7 @@ dependencies = [
  "failure",
  "futures",
  "interchange",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "log",
  "ore",
@@ -518,16 +518,16 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fc755679c12bda8e5523a71e4d654b6bf2e14bd838dfc48cde6559a05caf7d1"
+checksum = "63f696897c88b57f4ffe3c69d8e1a0613c7d0e6c4833363c8560fbde9c47b966"
 dependencies = [
  "atty",
  "cast",
  "clap",
  "criterion-plot",
  "csv",
- "itertools 0.8.2",
+ "itertools",
  "lazy_static",
  "num-traits",
  "oorandom",
@@ -543,12 +543,12 @@ dependencies = [
 
 [[package]]
 name = "criterion-plot"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a01e15e0ea58e8234f96146b1f91fa9d0e4dd7a38da93ff7a75d42c0b9d3a545"
+checksum = "ddeaf7989f00f2e1d871a26a110f3ed713632feac17f65f03ca938c542618b60"
 dependencies = [
  "cast",
- "itertools 0.8.2",
+ "itertools",
 ]
 
 [[package]]
@@ -646,7 +646,7 @@ dependencies = [
  "failure",
  "futures",
  "interchange",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "log",
  "notify",
@@ -1370,7 +1370,7 @@ dependencies = [
  "criterion",
  "failure",
  "futures",
- "itertools 0.9.0",
+ "itertools",
  "log",
  "num-traits",
  "ordered-float",
@@ -1394,15 +1394,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2b3ea6ff95e175473f8ffe6a7eb7c00d054240321b84c57051175fe3c1e075e"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "itertools"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
-dependencies = [
- "either",
 ]
 
 [[package]]
@@ -1588,7 +1579,7 @@ dependencies = [
  "futures",
  "getopts",
  "hyper",
- "itertools 0.9.0",
+ "itertools",
  "jemallocator",
  "lazy_static",
  "log",
@@ -2093,7 +2084,7 @@ dependencies = [
  "expr",
  "failure",
  "futures",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "log",
  "ordered-float",
@@ -3077,7 +3068,7 @@ dependencies = [
  "failure",
  "futures",
  "interchange",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "log",
  "ore",
@@ -3119,7 +3110,7 @@ dependencies = [
  "failure",
  "futures",
  "getopts",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "md-5",
  "ore",
@@ -3293,7 +3284,7 @@ dependencies = [
  "futures",
  "getopts",
  "interchange",
- "itertools 0.9.0",
+ "itertools",
  "lazy_static",
  "md-5",
  "ore",
