@@ -65,6 +65,12 @@ do_cargo() {
         export TARGET_CFLAGS=$CFLAGS
         export TARGET_CXXFLAGS=$CXXFLAGS
         export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$CC
+        # Explicitly tell libkrb5 about features available in the cross
+        # toolchain that its configure script cannot auto-detect when cross
+        # compiling.
+        export krb5_cv_attr_constructor_destructor=yes
+        export ac_cv_func_regcomp=yes
+        export ac_cv_printf_positional=yes
     elif [[ ! "${MZ_DEV_CI_BUILDER:-}" ]]; then
         # Otherwise, build inside the CI builder image, unless we're already
         # inside of it.
