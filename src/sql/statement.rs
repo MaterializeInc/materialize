@@ -909,6 +909,7 @@ async fn purify_format(
     format: &mut Option<Format>,
     connector: &mut Connector,
     col_names: &mut Vec<Ident>,
+    file: Option<tokio::fs::File>,
 ) -> Result<(), failure::Error> {
     match format {
         Some(Format::Avro(schema)) => match schema {
@@ -951,22 +952,19 @@ async fn purify_format(
             ..
         }) => {
             if *header_row && col_names.is_empty() {
-                match connector {
-                    Connector::File { path } => {
-                        let path = path.clone();
-                        let f = tokio::fs::File::open(path).await?;
-                        let f = tokio::io::BufReader::new(f);
-                        let csv_header = f.lines().next_line().await?;
-                        match csv_header {
-                            Some(csv_header) => {
-                                csv_header
-                                    .split(*delimiter as char)
-                                    .for_each(|v| col_names.push(Ident::from(v)));
-                            }
-                            None => bail!("CSV file expected header line, but is empty"),
+                if let Some(file) = file {
+                    let file = tokio::io::BufReader::new(file);
+                    let csv_header = file.lines().next_line().await?;
+                    match csv_header {
+                        Some(csv_header) => {
+                            csv_header
+                                .split(*delimiter as char)
+                                .for_each(|v| col_names.push(Ident::from(v)));
                         }
+                        None => bail!("CSV file expected header line, but is empty"),
                     }
-                    _ => bail!("CSV format with headers only works with file connectors"),
+                } else {
+                    bail!("CSV format with headers only works with file connectors")
                 }
             }
         }
@@ -987,6 +985,7 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
     {
         let with_options_map = normalize::with_options(with_options);
 
+        let mut file = None;
         match connector {
             Connector::Kafka { broker, .. } => {
                 if !broker.contains(':') {
@@ -1010,12 +1009,17 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                     });
                 }
             }
+            // Report an error if a file cannot be opened.
+            Connector::File { path, .. } => {
+                let path = path.clone();
+                file = Some(tokio::fs::File::open(path).await?);
+            }
             _ => (),
         }
 
-        purify_format(format, connector, col_names).await?;
+        purify_format(format, connector, col_names, file).await?;
         if let sql_parser::ast::Envelope::Upsert(format) = envelope {
-            purify_format(format, connector, col_names).await?;
+            purify_format(format, connector, col_names, None).await?;
         }
     }
     Ok(stmt)
