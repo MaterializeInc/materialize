@@ -602,8 +602,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         sink.from.0,
                         sink.from.1.typ().clone(),
                     ))
-                    // What does this even mean?
-                    .expect("No arrangements");
+                    .expect("Sink source collection not loaded");
 
                 // TODO(frank): consolidation is only required for a collection,
                 // not for arrangements. We can perform a more complicated match
