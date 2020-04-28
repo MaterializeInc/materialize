@@ -1013,7 +1013,6 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             Connector::File { path, .. } => {
                 let path = path.clone();
                 file = Some(tokio::fs::File::open(path).await?);
-
             }
             _ => (),
         }
