@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use avro::schema::Schema;
 use avro::types::Value;
 use failure::bail;
+use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
@@ -1249,7 +1250,7 @@ impl Timestamper {
         let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
 
         // Get initial list of shards in the Kinesis stream.
-        let cached_shard_ids = match get_shard_ids(&kinesis_client, &kinc.stream_name) {
+        let cached_shard_ids = match block_on(get_shard_ids(&kinesis_client, &kinc.stream_name)) {
             Ok(shard_ids) => shard_ids,
             Err(e) => {
                 error!(
@@ -1654,7 +1655,7 @@ impl Timestamper {
                     // per stream. Only hit the ListShards API every 100 Timestamper iterations to update
                     // our cached Shard ids.
                     if kc.timestamper_iteration_count % 100 == 0 {
-                        match get_shard_ids(&kc.kinesis_client, &kc.stream_name) {
+                        match block_on(get_shard_ids(&kc.kinesis_client, &kc.stream_name)) {
                             Ok(shard_ids) => {
                                 kc.cached_shard_ids = shard_ids;
                             }

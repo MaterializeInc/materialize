@@ -12,7 +12,6 @@
 use std::collections::HashSet;
 
 use failure::{bail, ResultExt};
-use futures::executor::block_on;
 use rusoto_kinesis::{Kinesis, KinesisClient, ListShardsInput};
 
 /// Wrapper around Kinesis' ListShards API (and Rusoto's).
@@ -22,21 +21,23 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListShardsInput};
 ///
 /// Does not currently handle any ListShards errors, will return all related errors
 /// directly to the caller.
-pub fn get_shard_ids(
+pub async fn get_shard_ids(
     client: &KinesisClient,
     stream_name: &str,
 ) -> Result<HashSet<String>, failure::Error> {
     let mut next_token = None;
     let mut all_shard_ids = HashSet::new();
     loop {
-        let output = block_on(client.list_shards(ListShardsInput {
-            exclusive_start_shard_id: None,
-            max_results: None, // this defaults to 100
-            next_token,
-            stream_creation_timestamp: None,
-            stream_name: Some(stream_name.to_owned()),
-        }))
-        .with_context(|e| format!("fetching shard list: {}", e))?;
+        let output = client
+            .list_shards(ListShardsInput {
+                exclusive_start_shard_id: None,
+                max_results: None, // this defaults to 100
+                next_token,
+                stream_creation_timestamp: None,
+                stream_name: Some(stream_name.to_owned()),
+            })
+            .await
+            .with_context(|e| format!("fetching shard list: {}", e))?;
 
         match output.shards {
             Some(shards) => {

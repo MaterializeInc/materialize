@@ -13,9 +13,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use itertools::Itertools;
-use rusoto_kinesis::{
-    GetRecordsInput, GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput,
-};
+use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, KinesisClient};
+
+use ore::kinesis::get_shard_ids;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -106,40 +106,24 @@ async fn get_shard_iterators(
     kinesis_client: &KinesisClient,
     stream_name: &str,
 ) -> Result<VecDeque<Option<String>>, String> {
-    let list_shards_input = ListShardsInput {
-        exclusive_start_shard_id: None,
-        max_results: None,
-        next_token: None,
-        stream_creation_timestamp: None,
-        stream_name: Some(stream_name.to_string()),
-    };
     let mut iterators: VecDeque<Option<String>> = VecDeque::new();
-    match kinesis_client
-        .list_shards(list_shards_input)
+    for shard_id in get_shard_ids(kinesis_client, stream_name)
         .await
         .map_err(|e| format!("listing Kinesis shards: {}", e))?
-        .shards
-        .as_deref()
     {
-        Some(shards) => {
-            for shard in shards {
-                let shard_iterator_input = GetShardIteratorInput {
-                    shard_id: shard.shard_id.clone(),
+        iterators.push_back(
+            kinesis_client
+                .get_shard_iterator(GetShardIteratorInput {
+                    shard_id: shard_id.clone(),
                     shard_iterator_type: String::from("TRIM_HORIZON"),
                     starting_sequence_number: None,
                     stream_name: stream_name.to_string(),
                     timestamp: None,
-                };
-                iterators.push_back(
-                    kinesis_client
-                        .get_shard_iterator(shard_iterator_input)
-                        .await
-                        .map_err(|e| format!("getting Kinesis shard iterator: {}", e))?
-                        .shard_iterator,
-                );
-            }
-        }
-        None => return Err(String::from("Kinesis stream does not have any shards.")),
+                })
+                .await
+                .map_err(|e| format!("getting Kinesis shard iterator: {}", e))?
+                .shard_iterator,
+        );
     }
 
     Ok(iterators)
