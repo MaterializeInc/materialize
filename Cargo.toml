@@ -12,6 +12,7 @@ members = [
     "src/dataflow",
     "src/expr",
     "src/interchange",
+    "src/kinesis-util",
     "src/materialized",
     "src/ore",
     "src/peeker",
