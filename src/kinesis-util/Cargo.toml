@@ -1,0 +1,13 @@
+[package]
+name = "kinesis-util"
+description = "Internal Kinesis utility library for Materialize."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+failure = "0.1"
+rusoto_kinesis = "0.43.0"
