@@ -58,6 +58,8 @@ $ set consistency={
 
 $ kafka-create-topic topic=avroavro
 
+$ kafka-create-topic topic=data-consistency
+
 $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
 {"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 1}
 {"source": "testdrive-avroavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 2, "offset": 2}
@@ -219,6 +221,8 @@ fish             fish             0
 b\xc3\xadrdmore  g\xc3\xa9ese     5
 mammal1          mouse            8
 mammalmore       herd             9
+
+$ kafka-create-topic topic=nullkey
 
 # A null key should result in an error decoding that row but not a panic
 $ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=: publish=true
