@@ -97,7 +97,7 @@ async fn run() -> Result<(), Error> {
                 .unwrap_or_else(|| "localstack".into()),
             endpoint: opts
                 .opt_str("aws-endpoint")
-                .unwrap_or_else(|| "http://localhost:4568".into()),
+                .unwrap_or_else(|| "http://localhost:4566".into()),
         };
     }
     if let Some(url) = opts.opt_str("materialized-url") {

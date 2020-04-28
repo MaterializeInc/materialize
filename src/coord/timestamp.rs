@@ -341,6 +341,8 @@ impl ByoKafkaConnector {
 struct RtKinesisConnector {
     stream_name: String,
     kinesis_client: KinesisClient,
+    cached_shard_ids: Vec<String>,
+    timestamper_iteration_count: u64,
 }
 
 /// Data consumer stub for Kinesis source with BYO consistency
@@ -776,29 +778,21 @@ impl Timestamper {
     /// Run the update function in a loop at the specified frequency. Acquires timestamps using
     /// either 1) the Kafka topic ground truth 2) real-time
     pub fn update(&mut self) {
-        // Hack to reduce the number of times we hit the Kinesis API.
-        let mut i = 0;
         loop {
             thread::sleep(self.timestamp_frequency);
             let shutdown = self.update_sources();
             if shutdown {
                 break;
             } else {
-                // Only hit Kinesis API every 50 iterations.
-                self.update_rt_timestamp(i == 50);
+                self.update_rt_timestamp();
                 self.update_byo_timestamp();
-            }
-            // Limit growth of i.
-            match i {
-                50 => i = 0,
-                _ => i += 1,
             }
         }
     }
 
     /// Implements the real-time timestamping logic
-    fn update_rt_timestamp(&mut self, hit_kinesis_api: bool) {
-        let watermarks = self.rt_query_sources(hit_kinesis_api);
+    fn update_rt_timestamp(&mut self) {
+        let watermarks = self.rt_query_sources();
         self.rt_generate_next_timestamp();
         if self.persist_ts {
             self.rt_persist_timestamp(&watermarks);
@@ -1246,9 +1240,34 @@ impl Timestamper {
         );
         let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
 
+        // Get initial list of shards in the Kinesis stream.
+        let cached_shard_ids = match block_on(kinesis_client.list_shards(ListShardsInput {
+            exclusive_start_shard_id: None,
+            max_results: None,
+            next_token: None,
+            stream_creation_timestamp: None,
+            stream_name: Some(kinc.stream_name.clone()),
+        })) {
+            Ok(output) => {
+                match output.shards {
+                    Some(shards) => shards.iter().map(|shard| shard.shard_id.clone()).collect(),
+                    None => {
+                        error!("Kinesis stream {} has no shards, intializing connector with empty list.", kinc.stream_name);
+                        Vec::new()
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to list shards for Kinesis stream {}, intializing connector with empty list: {}", kinc.stream_name, e);
+                Vec::new()
+            }
+        };
+
         Some(RtKinesisConnector {
             stream_name: kinc.stream_name.clone(),
             kinesis_client,
+            cached_shard_ids,
+            timestamper_iteration_count: 0,
         })
     }
 
@@ -1521,10 +1540,7 @@ impl Timestamper {
     /// Set the new timestamped offset to min(max_offset, last_offset + increment_size): this ensures
     /// that we never create an overly large batch of messages for the same timestamp (which would
     /// prevent views from becoming visible in a timely fashion)
-    fn rt_query_sources(
-        &mut self,
-        hit_kinesis_api: bool,
-    ) -> Vec<(SourceInstanceId, i32, PartitionId, i64)> {
+    fn rt_query_sources(&mut self) -> Vec<(SourceInstanceId, i32, PartitionId, i64)> {
         let mut result = vec![];
         for (id, cons) in self.rt_sources.iter_mut() {
             match &mut cons.connector {
@@ -1608,8 +1624,10 @@ impl Timestamper {
                     result.push((*id, 1, PartitionId::File, *last_offset))
                 }
                 RtTimestampConnector::Kinesis(kc) => {
-                    // Don't hit Kinesis API on every iteration.
-                    if hit_kinesis_api {
+                    // The Kinesis ListShards API is rate limited to 100 transactions per second
+                    // per stream. Only hit the ListShards API every 100 Timestamper iterations to update
+                    // our cached Shard ids.
+                    if kc.timestamper_iteration_count % 100 == 0 {
                         match block_on(kc.kinesis_client.list_shards(ListShardsInput {
                             exclusive_start_shard_id: None,
                             max_results: None,
@@ -1619,20 +1637,27 @@ impl Timestamper {
                         })) {
                             Ok(output) => match output.shards {
                                 Some(shards) => {
-                                    let num_shards = i32::try_from(shards.len()).unwrap_or_else(|_| {
-                                        error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", shards.len(), kc.stream_name);
-                                        0
-                                    });
-                                    // For now, always just push the current system timestamp.
-                                    // todo@jldlaughlin #2219
-                                    for shard in shards {
-                                        result.push((*id, num_shards, PartitionId::Kinesis(shard.shard_id.clone()), self.current_timestamp as i64));
-                                    }
+                                    kc.cached_shard_ids = shards.iter().map(|shard| shard.shard_id.clone()).collect();
                                 },
                                 None => error!("Kinesis stream {} has no shards, cannot update watermark information", kc.stream_name),
                             },
                             Err(e) => error!("Failed to list shards for Kinesis stream {} and update watermark information: {}", kc.stream_name, e),
                         }
+                    }
+
+                    let num_shards = i32::try_from(kc.cached_shard_ids.len()).unwrap_or_else(|_| {
+                        error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", kc.cached_shard_ids.len(), kc.stream_name);
+                        0
+                    });
+                    for shard_id in &kc.cached_shard_ids {
+                        // For now, always just push the current system timestamp.
+                        // todo@jldlaughlin #2219
+                        result.push((
+                            *id,
+                            num_shards,
+                            PartitionId::Kinesis(shard_id.clone()),
+                            self.current_timestamp as i64,
+                        ));
                     }
                 }
             }
