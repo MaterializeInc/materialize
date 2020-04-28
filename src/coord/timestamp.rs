@@ -784,13 +784,13 @@ impl Timestamper {
             if shutdown {
                 break;
             } else {
-                // Only hit Kinesis API every 100 iterations -> once per second by default.
-                self.update_rt_timestamp(i == 100);
+                // Only hit Kinesis API every 50 iterations.
+                self.update_rt_timestamp(i == 50);
                 self.update_byo_timestamp();
             }
             // Limit growth of i.
             match i {
-                100 => i = 0,
+                50 => i = 0,
                 _ => i += 1,
             }
         }
