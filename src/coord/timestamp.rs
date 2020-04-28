@@ -1644,6 +1644,7 @@ impl Timestamper {
                             Err(e) => error!("Failed to list shards for Kinesis stream {} and update watermark information: {}", kc.stream_name, e),
                         }
                     }
+                    kc.timestamper_iteration_count += 1;
 
                     let num_shards = i32::try_from(kc.cached_shard_ids.len()).unwrap_or_else(|_| {
                         error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", kc.cached_shard_ids.len(), kc.stream_name);
