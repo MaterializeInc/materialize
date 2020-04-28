@@ -23,6 +23,7 @@ pub mod future;
 pub mod hash;
 pub mod hint;
 pub mod iter;
+pub mod kinesis;
 pub mod netio;
 pub mod option;
 pub mod panic;

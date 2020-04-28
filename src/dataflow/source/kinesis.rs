@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use failure::{bail, ResultExt};
+use failure::ResultExt;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, warn};
@@ -19,10 +19,11 @@ use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
     GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorInput, Kinesis,
-    KinesisClient, ListShardsInput,
+    KinesisClient,
 };
 
 use dataflow_types::{ExternalSourceConnector, KinesisSourceConnector, Timestamp};
+use ore::kinesis::get_shard_ids;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
@@ -317,23 +318,4 @@ fn update_shard_information(
         ));
     }
     Ok(())
-}
-
-fn get_shard_ids(
-    client: &KinesisClient,
-    stream_name: &str,
-) -> Result<HashSet<String>, failure::Error> {
-    match block_on(client.list_shards(ListShardsInput {
-        exclusive_start_shard_id: None,
-        max_results: None,
-        next_token: None,
-        stream_creation_timestamp: None,
-        stream_name: Some(stream_name.to_owned()),
-    }))
-    .with_context(|e| format!("fetching shard list: {}", e))?
-    .shards
-    {
-        Some(shards) => Ok(shards.iter().map(|shard| shard.shard_id.clone()).collect()),
-        None => bail!("kinesis stream {} does not contain any shards", stream_name),
-    }
 }

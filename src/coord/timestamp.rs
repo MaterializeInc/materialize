@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::io::BufRead;
 use std::ops::Deref;
@@ -22,7 +22,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use avro::schema::Schema;
 use avro::types::Value;
 use failure::bail;
-use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, info, warn};
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
@@ -31,7 +30,7 @@ use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use rusoto_core::HttpClient;
 use rusoto_credential::StaticProvider;
-use rusoto_kinesis::{Kinesis, KinesisClient, ListShardsInput};
+use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
 use catalog::sql::SqlVal;
@@ -43,6 +42,7 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
+use ore::kinesis::get_shard_ids;
 
 use crate::coord;
 
@@ -349,7 +349,7 @@ impl ByoKafkaConnector {
 struct RtKinesisConnector {
     stream_name: String,
     kinesis_client: KinesisClient,
-    cached_shard_ids: Vec<String>,
+    cached_shard_ids: HashSet<String>,
     timestamper_iteration_count: u64,
 }
 
@@ -1249,25 +1249,14 @@ impl Timestamper {
         let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
 
         // Get initial list of shards in the Kinesis stream.
-        let cached_shard_ids = match block_on(kinesis_client.list_shards(ListShardsInput {
-            exclusive_start_shard_id: None,
-            max_results: None,
-            next_token: None,
-            stream_creation_timestamp: None,
-            stream_name: Some(kinc.stream_name.clone()),
-        })) {
-            Ok(output) => {
-                match output.shards {
-                    Some(shards) => shards.iter().map(|shard| shard.shard_id.clone()).collect(),
-                    None => {
-                        error!("Kinesis stream {} has no shards, intializing connector with empty list.", kinc.stream_name);
-                        Vec::new()
-                    }
-                }
-            }
+        let cached_shard_ids = match get_shard_ids(&kinesis_client, &kinc.stream_name) {
+            Ok(shard_ids) => shard_ids,
             Err(e) => {
-                error!("Failed to list shards for Kinesis stream {}, intializing connector with empty list: {}", kinc.stream_name, e);
-                Vec::new()
+                error!(
+                    "Initializing KinesisSourceConnector with empty shard list: {}",
+                    e
+                );
+                HashSet::new()
             }
         };
 
@@ -1665,21 +1654,15 @@ impl Timestamper {
                     // per stream. Only hit the ListShards API every 100 Timestamper iterations to update
                     // our cached Shard ids.
                     if kc.timestamper_iteration_count % 100 == 0 {
-                        match block_on(kc.kinesis_client.list_shards(ListShardsInput {
-                            exclusive_start_shard_id: None,
-                            max_results: None,
-                            next_token: None,
-                            stream_creation_timestamp: None,
-                            stream_name: Some(kc.stream_name.clone()),
-                        })) {
-                            Ok(output) => match output.shards {
-                                Some(shards) => {
-                                    kc.cached_shard_ids = shards.iter().map(|shard| shard.shard_id.clone()).collect();
-                                },
-                                None => error!("Kinesis stream {} has no shards, cannot update watermark information", kc.stream_name),
-                            },
-                            Err(e) => error!("Failed to list shards for Kinesis stream {} and update watermark information: {}", kc.stream_name, e),
-                        }
+                        match get_shard_ids(&kc.kinesis_client, &kc.stream_name) {
+                            Ok(shard_ids) => {
+                                kc.cached_shard_ids = shard_ids;
+                            }
+                            Err(e) => error!(
+                                "Error listing Shard ids for stream {}, using cached Shard ids.",
+                                e
+                            ),
+                        };
                     }
                     kc.timestamper_iteration_count += 1;
 
