@@ -42,8 +42,8 @@ use dataflow_types::{
     KafkaSourceConnector, KinesisSourceConnector, SourceConnector,
 };
 use expr::{PartitionId, SourceInstanceId};
+use kinesis_util::get_shard_ids;
 use ore::collections::CollectionExt;
-use ore::kinesis::get_shard_ids;
 
 use crate::coord;
 

@@ -460,6 +460,7 @@ dependencies = [
  "futures",
  "interchange",
  "itertools",
+ "kinesis-util",
  "lazy_static",
  "log",
  "ore",
@@ -647,6 +648,7 @@ dependencies = [
  "futures",
  "interchange",
  "itertools",
+ "kinesis-util",
  "lazy_static",
  "log",
  "notify",
@@ -1452,6 +1454,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kinesis-util"
+version = "0.1.0"
+dependencies = [
+ "failure",
+ "rusoto_kinesis",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1976,7 +1986,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "rusoto_kinesis",
  "smallvec",
  "tokio",
  "tracing-subscriber",
@@ -3287,6 +3296,7 @@ dependencies = [
  "getopts",
  "interchange",
  "itertools",
+ "kinesis-util",
  "lazy_static",
  "md-5",
  "ore",

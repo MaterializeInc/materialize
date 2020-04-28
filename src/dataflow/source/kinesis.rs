@@ -23,7 +23,7 @@ use rusoto_kinesis::{
 };
 
 use dataflow_types::{ExternalSourceConnector, KinesisSourceConnector, Timestamp};
-use ore::kinesis::get_shard_ids;
+use kinesis_util::get_shard_ids;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;

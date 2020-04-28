@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, KinesisClient};
 
-use ore::kinesis::get_shard_ids;
+use kinesis_util::get_shard_ids;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
