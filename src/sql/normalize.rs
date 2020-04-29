@@ -17,7 +17,8 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::VisitMut;
 use sql_parser::ast::{
-    Expr, Function, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement, TableAlias, Value,
+    Expr, Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement,
+    TableAlias, Value,
 };
 
 use crate::statement::StatementContext;
@@ -103,8 +104,13 @@ pub fn create_statement(
         fn visit_function(&mut self, func: &'ast mut Function) {
             // Don't visit the function name, because function names are not
             // (yet) object names we can resolve.
-            for arg in &mut func.args {
-                self.visit_expr(arg);
+            match &mut func.args {
+                FunctionArgs::Star => (),
+                FunctionArgs::Args(args) => {
+                    for arg in args {
+                        self.visit_expr(arg);
+                    }
+                }
             }
             if let Some(over) = &mut func.over {
                 self.visit_window_spec(over);
@@ -115,16 +121,21 @@ pub fn create_statement(
             &mut self,
             name: &'ast mut ObjectName,
             alias: Option<&'ast mut TableAlias>,
-            args: &'ast mut [Expr],
+            args: Option<&'ast mut FunctionArgs>,
             with_hints: &'ast mut [Expr],
         ) {
             // Only attempt to resolve the name if it is not a table function
             // (i.e., there are no arguments).
-            if args.is_empty() {
+            if args.is_none() {
                 self.visit_object_name(name)
             }
-            for expr in args {
-                self.visit_expr(expr);
+            match args {
+                None | Some(FunctionArgs::Star) => (),
+                Some(FunctionArgs::Args(args)) => {
+                    for expr in args {
+                        self.visit_expr(expr);
+                    }
+                }
             }
             if let Some(alias) = alias {
                 self.visit_table_alias(alias);

@@ -257,7 +257,7 @@ pub enum TableFactor {
         alias: Option<TableAlias>,
         /// Arguments of a table-valued function, as supported by Postgres
         /// and MSSQL.
-        args: Vec<Expr>,
+        args: Option<FunctionArgs>,
         /// MSSQL-specific `WITH (...)` hints such as NOLOCK.
         with_hints: Vec<Expr>,
     },
@@ -283,9 +283,9 @@ impl AstDisplay for TableFactor {
                 with_hints,
             } => {
                 f.write_node(name);
-                if !args.is_empty() {
+                if let Some(args) = args {
                     f.write_str("(");
-                    f.write_node(&display_comma_separated(args));
+                    f.write_node(args);
                     f.write_str(")");
                 }
                 if let Some(alias) = alias {
