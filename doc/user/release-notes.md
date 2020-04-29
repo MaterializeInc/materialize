@@ -54,6 +54,11 @@ Wrap your release notes at the 80 character mark.
 <span id="0.2.1"></span>
 ## 0.2.0 &rarr; 0.2.1 (Unreleased)
 
+- Several `SHOW` commands now allow appending a `WHERE` or `LIKE` clause.
+  - [SHOW DATABASES](../sql/show-databases)
+  - [SHOW INDEXES](../sql/show-index)
+  - [SHOW COLUMNS](../sql/show-index)
+
 <span id="v0.2.0"></span>
 ## 0.1.3 &rarr; v0.2.0
 
