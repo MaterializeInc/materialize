@@ -1462,6 +1462,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "krb5-src"
+version = "0.2.0+1.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "274984121a517e7eb6d0402a2335dce56b9b4bc27b08a2b3cad8b7ff275093b8"
+dependencies = [
+ "duct",
+ "openssl-sys",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1952,9 +1962,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.54"
+version = "0.9.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1024c0a59774200a555087a6da3f253a9095a5f344e353b212ac4c8b8e450986"
+checksum = "7717097d810a0f2e2323f9e5d11e71608355e24828410b55b9d4f18aa5f9a5d8"
 dependencies = [
  "autocfg",
  "cc",
@@ -2494,7 +2504,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.23.1"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#c414a780f47fbfc9fa783cf47d0f09759f504edc"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#7059333050c0b51ab7a1ebb024d9abaf7634d0c3"
 dependencies = [
  "futures",
  "libc",
@@ -2508,7 +2518,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "1.3.1"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#c414a780f47fbfc9fa783cf47d0f09759f504edc"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#7059333050c0b51ab7a1ebb024d9abaf7634d0c3"
 dependencies = [
  "cmake",
  "libc",
@@ -2819,12 +2829,13 @@ dependencies = [
 
 [[package]]
 name = "sasl2-sys"
-version = "0.1.4"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e99bf4f6a2db74a9d780ef085cde69f3aecb37834e95ae15881e8c82a0c880b"
+checksum = "da5e12ca9e939ce187fc0fd9b682256e2b722728afc2da436a8574ef5b7859ec"
 dependencies = [
  "cc",
  "duct",
+ "krb5-src",
  "libc",
  "pkg-config",
 ]
@@ -3743,9 +3754,9 @@ dependencies = [
 
 [[package]]
 name = "vcpkg"
-version = "0.2.7"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33dd455d0f96e90a75803cfeb7f948768c08d70a6de9a8d2362461935698bf95"
+checksum = "3fc439f2794e98976c88a2a2dafce96b930fe8010b0a256b3c2199a773933168"
 
 [[package]]
 name = "vec_map"
