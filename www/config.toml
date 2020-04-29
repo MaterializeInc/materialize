@@ -9,6 +9,7 @@ disableKinds = ["home"]
   # Keep the releases in reverse order of their release date. The first release
   # in the list is assumed to be the most recent.
   versions = [
+      { name = "v0.2.1", date = "30 April 2020" },
       { name = "v0.2.0", date = "11 April 2020" },
       { name = "v0.1.3", date = "17 March 2020" },
       { name = "v0.1.2", date = "04 March 2020" },

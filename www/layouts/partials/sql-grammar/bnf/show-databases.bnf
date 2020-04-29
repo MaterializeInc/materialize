@@ -1,2 +1,2 @@
 show_databases ::=
-    'SHOW' 'DATABASES'
+    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)

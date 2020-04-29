@@ -1,2 +1,3 @@
 show_index ::=
     'SHOW' ('INDEX' | 'INDEXES' | 'KEYS') ('FROM' | 'IN') view_name
+    ('LIKE' 'pattern' | 'WHERE' expr)
