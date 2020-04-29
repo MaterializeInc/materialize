@@ -39,6 +39,10 @@
                 "description": "Sum of `T`'s values"
             },
             {
+              "signature": "avg(x: T) -> T",
+              "description": "Average of `T`'s values"
+            },
+            {
                 "signature": "stddev(x: T) -> T",
                 "description": "Historical alias for `stddev_samp` *(imprecise)*"
             },
