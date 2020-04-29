@@ -1630,8 +1630,6 @@ where
         self.import_source_or_view(id, &index.on, &mut dataflow);
         dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
-        // TODO: should we still support creating multiple dataflows with a single command,
-        // Or should it all be compacted into a single DataflowDesc with multiple exports?
         self.broadcast_dataflow_creation(dataflow);
         self.insert_index(*id, &index, self.logical_compaction_window_ms);
     }
@@ -2472,13 +2470,13 @@ pub mod arrangement_state {
             T: Lattice,
         {
             // Form lower bound on available times
-            let mut upper = Antichain::new();
+            let mut min_upper = Antichain::new();
             for id in identifiers {
                 // To track the meet of `upper` we just extend with the upper frontier.
                 // This was almost `meet_assign` but our uppers are `MutableAntichain`s.
-                upper.extend(self.upper_of(&id).unwrap().iter().cloned());
+                min_upper.extend(self.upper_of(&id).unwrap().iter().cloned());
             }
-            upper
+            min_upper
         }
 
         /// Reports the minimal frontier greater than all identified `since` frontiers.
@@ -2487,12 +2485,12 @@ pub mod arrangement_state {
             I: IntoIterator<Item = GlobalId>,
             T: Lattice,
         {
-            let mut since = Antichain::from_elem(T::minimum());
+            let mut max_since = Antichain::from_elem(T::minimum());
             for id in identifiers {
                 // TODO: We could avoid repeated allocation by swapping two buffers.
-                since.join_assign(self.since_of(&id).expect("Since missing at coordinator"));
+                max_since.join_assign(self.since_of(&id).expect("Since missing at coordinator"));
             }
-            since
+            max_since
         }
     }
 

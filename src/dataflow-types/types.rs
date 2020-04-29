@@ -229,7 +229,6 @@ impl DataflowDesc {
         self.as_of = Some(as_of);
     }
 
-    // TODO: This is currently unused.
     /// Collects all indexes required to construct all exports.
     pub fn get_all_imports(&self) -> HashSet<GlobalId> {
         let mut result = HashSet::new();
