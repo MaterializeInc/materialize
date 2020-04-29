@@ -23,7 +23,7 @@ use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
-use rusoto_kinesis::KinesisClient;
+use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient, ListStreamsInput};
 use url::Url;
 
 use repr::strconv;
@@ -117,6 +117,43 @@ impl State {
             .batch_execute("CREATE DATABASE materialize")
             .await
             .err_ctx("resetting materialized state: CREATE DATABASE materialize".into())?;
+        Ok(())
+    }
+
+    // Delete the Kinesis streams created for this run of testdrive.
+    pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
+        let stream_names = self
+            .kinesis_client
+            .list_streams(ListStreamsInput {
+                exclusive_start_stream_name: None,
+                limit: None,
+            })
+            .await
+            .map_err(|e| Error::General {
+                ctx: "listing Kinesis streams".to_owned(),
+                cause: Some(e.into()),
+                hints: vec![],
+            })?
+            .stream_names;
+
+        if !stream_names.is_empty() {
+            for stream_name in stream_names {
+                if stream_name.contains(&self.seed.to_string()) {
+                    self.kinesis_client
+                        .delete_stream(DeleteStreamInput {
+                            enforce_consumer_deletion: Some(true),
+                            stream_name: stream_name.clone(),
+                        })
+                        .await
+                        .map_err(|e| Error::General {
+                            ctx: format!("deleting Kinesis stream: {}", stream_name),
+                            cause: Some(e.into()),
+                            hints: vec![],
+                        })?;
+                }
+            }
+        }
+
         Ok(())
     }
 }
