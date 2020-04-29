@@ -7,12 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Internal Kinesis utility library for Materialize.
-//!
-//! Modules in this crate provide wrappers around the AWS Kinesis APIs
-//! to be used throughout Materialize code.
-
-#![deny(missing_docs, missing_debug_implementations)]
+//! Utility mod for Kinesis.
 
 use std::collections::HashSet;
 

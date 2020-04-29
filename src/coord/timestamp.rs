@@ -34,6 +34,7 @@ use rusoto_credential::StaticProvider;
 use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
+use aws_util::kinesis::get_shard_ids;
 use catalog::sql::SqlVal;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
@@ -42,7 +43,6 @@ use dataflow_types::{
     KafkaSourceConnector, KinesisSourceConnector, SourceConnector,
 };
 use expr::{PartitionId, SourceInstanceId};
-use kinesis_util::get_shard_ids;
 use ore::collections::CollectionExt;
 
 use crate::coord;
