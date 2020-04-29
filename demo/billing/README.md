@@ -26,7 +26,7 @@ This should be as simple as possible.
 1. Move into the billing demo home directory. From the repository root run:
 
 ```shell session
-$ cd src/billing-demo
+$ cd demo/billing
 ```
 
 2. Run `docker-compose` with:

@@ -52,7 +52,28 @@ Wrap your release notes at the 80 character mark.
   UPSERT  ...`](../overview/api-components/#envelopes))
 
 <span id="0.2.1"></span>
-## 0.2.0 &rarr; 0.2.1 (Unreleased)
+## 0.2.0 &rarr; 0.2.1
+
+- Allow query parameters (`$1`, `$2`, etc) to appear in
+  [`EXPLAIN`](../sql/explain) statements.
+
+- Avoid crashing if queries are executed without a value for each parameter in
+  the query.
+
+- Support runtime errors in dataflows. Views that encounter an error (e.g.,
+  division by zero) while executing will report that error when queried.
+  Previously, the error would be silenced, and the erroring expression would be
+  replaced with `NULL`.
+
+- Permit filtering the output of several `SHOW` commands with a `WHERE` or
+  `LIKE` clause:
+
+  - [SHOW DATABASES](../sql/show-databases)
+  - [SHOW INDEXES](../sql/show-index)
+  - [SHOW COLUMNS](../sql/show-index)
+
+- Support reading from Kinesis streams with multiple shards. For details, about
+  Kinesis sources, see [CREATE SOURCE: JSON over Kinesis](../sql/create-source/json-kinesis).
 
 <span id="v0.2.0"></span>
 ## 0.1.3 &rarr; v0.2.0
