@@ -261,7 +261,7 @@ where
             },
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
-                val_enc.schema_registry_url,
+                val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
             ),
@@ -274,7 +274,7 @@ where
             },
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
-                val_enc.schema_registry_url,
+                val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
             ),
@@ -284,13 +284,13 @@ where
             stream,
             avro::AvroDecoderState::new(
                 &key_enc.value_schema,
-                key_enc.schema_registry_url,
+                key_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::None,
                 false,
             ),
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
-                val_enc.schema_registry_url,
+                val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
             ),
@@ -401,7 +401,7 @@ where
             stream,
             avro::AvroDecoderState::new(
                 &enc.value_schema,
-                enc.schema_registry_url,
+                enc.schema_registry_config,
                 envelope.get_avro_envelope_type(),
                 fast_forwarded,
             ),
