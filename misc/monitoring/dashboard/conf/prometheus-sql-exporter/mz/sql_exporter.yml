@@ -24,7 +24,7 @@ global:
 target:
   # Data source name always has a URI schema that matches the driver name. In some cases (e.g. MySQL)
   # the schema gets dropped or replaced to match the driver expected DSN format.
-  data_source_name: 'postgres://any:user@materialized:6875?sslmode=disable'
+  data_source_name: 'postgres://any:user@MATERIALIZED_URL?sslmode=disable'
 
   # Collectors (referenced by name) to execute on the target.
   collectors:
