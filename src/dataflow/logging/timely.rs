@@ -7,16 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+use std::time::Duration;
+
+use differential_dataflow::operators::count::CountTotal;
+use timely::communication::Allocate;
+use timely::dataflow::operators::capture::EventLink;
+use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
+
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
 use repr::{Datum, Row};
-use std::collections::HashMap;
-use std::time::Duration;
-use timely::communication::Allocate;
-use timely::dataflow::operators::capture::EventLink;
-use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 // Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -238,7 +241,6 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        use differential_dataflow::operators::reduce::Count;
         use timely::dataflow::operators::generic::operator::Operator;
 
         // Duration statistics derive from the non-rounded event times.
@@ -290,7 +292,7 @@ pub fn construct<A: Allocate>(
         let elapsed = duration
             .map(|(op, t, d)| (op, t, d as isize))
             .as_collection()
-            .count()
+            .count_total()
             .map({
                 move |((id, worker), cnt)| {
                     Row::pack(&[
@@ -304,7 +306,7 @@ pub fn construct<A: Allocate>(
         let histogram = duration
             .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
             .as_collection()
-            .count()
+            .count_total()
             .map({
                 move |(((id, worker), pow), cnt)| {
                     Row::pack(&[
@@ -333,7 +335,7 @@ pub fn construct<A: Allocate>(
                 )
             })
             .as_collection()
-            .count()
+            .count_total()
             .map({
                 move |((w, d, r), c)| {
                     Row::pack(&[

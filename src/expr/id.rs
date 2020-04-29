@@ -124,6 +124,16 @@ impl fmt::Display for SourceInstanceId {
 pub enum PartitionId {
     Kafka(i32),
     Kinesis(String),
+    File,
+}
+
+impl PartitionId {
+    pub fn kafka_id(&self) -> Option<i32> {
+        match self {
+            PartitionId::Kafka(id) => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 /// Humanizer that provides no additional information.

@@ -297,6 +297,13 @@ fn format_row(
             "NULL".to_owned()
         } else if let ScalarType::Jsonb = col_typ.scalar_type {
             Jsonb::from_datum(datum).to_string()
+        } else if let ScalarType::List(_) = col_typ.scalar_type {
+            // produce the same output as we would for psql
+            let mut buf = ::bytes::BytesMut::new();
+            pgrepr::Value::from_datum(datum, &col_typ)
+                .unwrap()
+                .encode_text(&mut buf);
+            str::from_utf8(&buf).unwrap().to_owned()
         } else {
             match (slt_typ, datum) {
                 // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
@@ -362,6 +369,7 @@ fn format_row(
                     }
                     buf
                 }
+
                 other => panic!("Don't know how to format {:?}", other),
             }
         }
@@ -399,6 +407,7 @@ impl State {
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
                 max_size: 10000,
+                persist_ts: false,
             },
             logical_compaction_window: None,
         })?;
@@ -717,6 +726,12 @@ impl State {
         &mut self,
         sql: &str,
     ) -> Result<(Option<RelationDesc>, ExecuteResponse), failure::Error> {
+        let stmts = sql::parse(sql.into())?;
+        let stmt = if stmts.len() == 1 {
+            stmts.into_iter().next().unwrap()
+        } else {
+            bail!("Expected exactly one statement, got: {}", sql);
+        };
         let statement_name = String::from("");
         let portal_name = String::from("");
 
@@ -724,9 +739,9 @@ impl State {
         {
             let (tx, rx) = futures::channel::oneshot::channel();
             self.cmd_tx
-                .unbounded_send(coord::Command::Parse {
+                .unbounded_send(coord::Command::Describe {
                     name: statement_name.clone(),
-                    sql: sql.into(),
+                    stmt: Some(stmt),
                     session: mem::take(&mut self.session),
                     tx,
                 })

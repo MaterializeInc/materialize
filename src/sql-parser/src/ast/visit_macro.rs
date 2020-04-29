@@ -287,6 +287,10 @@ macro_rules! make_visitor {
                 visit_all(self, left, op, right)
             }
 
+            fn visit_list(&mut self, exprs: &'ast $($mut)* [Expr]) {
+                visit_list(self, exprs)
+            }
+
             fn visit_insert(
                 &mut self,
                 table_name: &'ast $($mut)* ObjectName,
@@ -639,8 +643,13 @@ macro_rules! make_visitor {
 
             fn visit_rollback(&mut self, _chain: bool) {}
 
-            fn visit_tail(&mut self, name: &'ast $($mut)* ObjectName) {
-                visit_tail(self, name)
+            fn visit_tail(
+                &mut self,
+                name: &'ast $($mut)* ObjectName,
+                with_snapshot: &'ast $($mut)* bool,
+                as_of: &'ast $($mut)* Option<Expr>,
+            ) {
+                visit_tail(self, name, *with_snapshot, as_of);
             }
 
             fn visit_explain(&mut self, stage: &'ast $($mut)* ExplainStage, explainee: &'ast $($mut)* Explainee, options: &'ast $($mut)* ExplainOptions) {
@@ -756,8 +765,8 @@ macro_rules! make_visitor {
                 Statement::SetTransaction { modes } => visitor.visit_set_transaction(modes),
                 Statement::Commit { chain } => visitor.visit_commit(*chain),
                 Statement::Rollback { chain } => visitor.visit_rollback(*chain),
-                Statement::Tail { name } => {
-                    visitor.visit_tail(name);
+                Statement::Tail { name, with_snapshot, as_of } => {
+                    visitor.visit_tail(name, with_snapshot, as_of);
                 }
                 Statement::Explain { stage, explainee, options } => visitor.visit_explain(stage, explainee, options),
             }
@@ -1016,6 +1025,7 @@ macro_rules! make_visitor {
                 Expr::Subquery(query) => visitor.visit_subquery(query),
                 Expr::Any{left, op, right, some: _} => visitor.visit_any(left, op, right),
                 Expr::All{left, op, right} => visitor.visit_all(left, op, right),
+                Expr::List(exprs) => visitor.visit_list(exprs),
             }
         }
 
@@ -1234,6 +1244,12 @@ macro_rules! make_visitor {
             visitor.visit_expr(left);
             visitor.visit_binary_operator(op);
             visitor.visit_query(right);
+        }
+
+        pub fn visit_list<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, exprs: &'ast $($mut)* [Expr]) {
+            for expr in exprs {
+                visitor.visit_expr(expr);
+            }
         }
 
         pub fn visit_insert<'ast, V: $name<'ast> + ?Sized>(
@@ -1817,8 +1833,16 @@ macro_rules! make_visitor {
             }
         }
 
-        pub fn visit_tail<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, name: &'ast $($mut)* ObjectName) {
+        pub fn visit_tail<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            name: &'ast $($mut)* ObjectName,
+            _with_snapshot: bool,
+            as_of: &'ast $($mut)* Option<Expr>,
+        ) {
             visitor.visit_object_name(name);
+            if let Some(as_of) = as_of {
+                visitor.visit_expr(as_of);
+            }
         }
 
         pub fn visit_explain<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, _stage: &'ast $($mut)* ExplainStage, explainee: &'ast $($mut)* Explainee, _options: &'ast $($mut)* ExplainOptions) {
@@ -1846,7 +1870,7 @@ mod tests {
 
         impl<'a> Visit<'a> for Visitor<'a> {
             fn visit_ident(&mut self, ident: &'a Ident) {
-                self.seen_idents.push(&ident.value);
+                self.seen_idents.push(ident.as_str());
             }
         }
 
@@ -1856,7 +1880,7 @@ mod tests {
 
         impl<'a> VisitMut<'a> for VisitorMut<'a> {
             fn visit_ident(&mut self, ident: &'a mut Ident) {
-                self.seen_idents.push(&ident.value);
+                self.seen_idents.push(ident.as_str());
             }
         }
 

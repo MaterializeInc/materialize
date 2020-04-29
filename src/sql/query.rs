@@ -39,8 +39,11 @@ use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id, RowSetFinishing};
 use catalog::names::PartialName;
+use dataflow_types::Timestamp;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, ScalarType};
+use repr::{
+    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
+};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
@@ -107,10 +110,7 @@ pub fn plan_show_where(
         let predicate = match &f {
             ShowStatementFilter::Like(s) => {
                 owned = Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(Ident::with_quote(
-                        '"',
-                        names[0].clone().unwrap(),
-                    ))),
+                    left: Box::new(Expr::Identifier(Ident::new(names[0].clone().unwrap()))),
                     op: BinaryOperator::Like,
                     right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
                 };
@@ -153,6 +153,41 @@ pub fn plan_show_where(
             project: (0..num_cols).collect(),
         },
     ))
+}
+
+/// Evaluates an expression in the AS OF position of a TAIL statement.
+pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp, failure::Error> {
+    let scope = Scope::from_source(
+        None,
+        iter::empty::<Option<ColumnName>>(),
+        Some(Scope::empty(None)),
+    );
+    let desc = RelationDesc::empty();
+    let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "AS OF",
+        scope: &scope,
+        relation_type: &desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+    };
+
+    let ex = plan_expr(ecx, &expr, None)?.lower_uncorrelated();
+    let temp_storage = &RowArena::new();
+    let evaled = ex.eval(&[], temp_storage)?;
+
+    Ok(match ex.typ(desc.typ()).scalar_type {
+        ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
+        ScalarType::Decimal(_, _) => {
+            bail!("decimal with fractional component is not a valid timestamp")
+        }
+        ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
+        ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+        ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp().try_into()?,
+        ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp().try_into()?,
+        _ => bail!("can't use {} as a timestamp for AS OF", ex.typ(desc.typ())),
+    })
 }
 
 pub fn plan_index_exprs<'a>(
@@ -1476,6 +1511,46 @@ fn plan_expr_returning_name<'a>(
                 (expr.call_unary(func), None)
             }
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
+            Expr::List(exprs) => {
+                let elem_type_hint = if let Some(ScalarType::List(elem_type_hint)) = type_hint {
+                    Some(*elem_type_hint)
+                } else {
+                    None
+                };
+                let exprs = exprs
+                    .iter()
+                    .map(|expr| plan_expr(ecx, expr, elem_type_hint.clone()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let elem_types = exprs
+                    .iter()
+                    .map(|expr| ecx.scalar_type(expr))
+                    .collect::<Vec<_>>();
+                let elem_type = if let Some(elem_type) = elem_types.iter().next() {
+                    &elem_type
+                } else if let Some(elem_type_hint) = &elem_type_hint {
+                    elem_type_hint
+                } else {
+                    bail!("Cannot assign type to this empty list")
+                };
+                if let Some(pos) = elem_types
+                    .iter()
+                    .position(|est| (est != elem_type) && (*est != ScalarType::Unknown))
+                {
+                    bail!("Cannot create list with mixed types. Element 1 has type {} but element {} has type {}", elem_type, pos+1, &elem_types[pos])
+                }
+                (
+                    ScalarExpr::CallVariadic {
+                        func: VariadicFunc::ListCreate {
+                            elem_type: elem_type.clone(),
+                        },
+                        exprs,
+                    },
+                    Some(ScopeItemName {
+                        table_name: None,
+                        column_name: Some(ColumnName::from("list")),
+                    }),
+                )
+            }
         })
     }
 }
@@ -3126,7 +3201,6 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::Null => (Datum::Null, ScalarType::Unknown),
-        Value::Array(_) => bail!("ARRAY literals are not supported: {}", l),
     })
 }
 
@@ -3541,8 +3615,8 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::Interval => ScalarType::Interval,
         DataType::Bytea => ScalarType::Bytes,
         DataType::Jsonb => ScalarType::Jsonb,
-        other @ DataType::Array(_)
-        | other @ DataType::Binary(..)
+        DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
+        other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
         | other @ DataType::Clob(_)
         | other @ DataType::Regclass

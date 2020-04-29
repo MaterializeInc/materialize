@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use lazy_static::lazy_static;
 use repr::ScalarType;
 
 /// The type of a [`Value`](crate::Value).
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Type {
     /// A boolean value.
     Bool,
@@ -40,12 +41,24 @@ pub enum Type {
     Timestamp,
     /// A date and time, with a timezone.
     TimestampTz,
+    /// A list
+    List(Box<Type>),
     /// An unknown value.
     Unknown,
 }
 
+lazy_static! {
+    pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
+        "LIST".to_owned(),
+        // OID chosen at random
+        72_794_149,
+        postgres_types::Kind::Pseudo,
+        "mz_catalog".to_owned(),
+    );
+}
+
 impl Type {
-    pub(crate) fn inner(self) -> &'static postgres_types::Type {
+    pub(crate) fn inner(&self) -> &'static postgres_types::Type {
         match self {
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -61,25 +74,26 @@ impl Type {
             Type::Time => &postgres_types::Type::TIME,
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
+            Type::List(_) => &LIST,
             Type::Unknown => &postgres_types::Type::UNKNOWN,
         }
     }
 
     /// Returns the name that PostgreSQL uses for this type.
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         self.inner().name()
     }
 
     /// Returns the [OID] of this type.
     ///
     /// [OID]: https://www.postgresql.org/docs/current/datatype-oid.html
-    pub fn oid(self) -> u32 {
+    pub fn oid(&self) -> u32 {
         self.inner().oid()
     }
 
     /// Returns the number of bytes in the binary representation of this
     /// type, or -1 if the type has a variable-length representation.
-    pub fn typlen(self) -> i16 {
+    pub fn typlen(&self) -> i16 {
         match self {
             Type::Bool => 1,
             Type::Bytea => -1,
@@ -95,6 +109,7 @@ impl Type {
             Type::Time => 4,
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
+            Type::List(_) => -1,
             Type::Unknown => -1,
         }
     }
@@ -118,7 +133,7 @@ impl From<&ScalarType> for Type {
             ScalarType::Bytes => Type::Bytea,
             ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::Array(_t) => unimplemented!("jamii/array"),
+            ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
         }
     }
 }

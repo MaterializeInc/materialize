@@ -15,6 +15,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use timely::progress::frontier::Antichain;
+
 use failure::ResultExt;
 use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
@@ -34,7 +36,7 @@ pub type Diff = isize;
 pub type Timestamp = u64;
 
 /// Specifies when a `Peek` should occur.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PeekWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
@@ -199,8 +201,8 @@ impl DataflowDesc {
         ));
     }
 
-    pub fn as_of(&mut self, as_of: Option<Vec<Timestamp>>) {
-        self.as_of = as_of;
+    pub fn as_of(&mut self, as_of: Antichain<Timestamp>) {
+        self.as_of = Some(as_of.elements().into());
     }
 
     /// Gets index ids of all indexes require to construct a particular view
@@ -372,7 +374,7 @@ impl DataEncoding {
 pub struct AvroEncoding {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub schema_registry_url: Option<Url>,
+    pub schema_registry_config: Option<ccsr::ClientConfig>,
 }
 
 /// Encoding in CSV format, with `n_cols` columns per row, with an optional header.
@@ -464,6 +466,16 @@ impl ExternalSourceConnector {
             }
         }
     }
+
+    /// Returns the name of the external source connector.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ExternalSourceConnector::Kafka(_) => "kafka",
+            ExternalSourceConnector::Kinesis(_) => "kinesis",
+            ExternalSourceConnector::File(_) => "file",
+            ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -478,7 +490,7 @@ pub struct KafkaSourceConnector {
     pub topic: String,
     // Represents options specified by user when creating the source, e.g.
     // security settings.
-    pub config_options: Vec<(String, String)>,
+    pub config_options: HashMap<String, String>,
     // FIXME (brennan) - in the very near future, this should be made into a hashmap of partition |-> offset.
     // #2736
     pub start_offset: i64,
@@ -521,7 +533,8 @@ pub struct AvroOcfSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
-    pub since: Timestamp,
+    pub frontier: Antichain<Timestamp>,
+    pub strict: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -13,6 +13,7 @@ members = [
     "src/dataflow",
     "src/expr",
     "src/interchange",
+    "src/kinesis-util",
     "src/materialized",
     "src/ore",
     "src/peeker",
@@ -24,6 +25,7 @@ members = [
     "src/sql-parser",
     "src/symbiosis",
     "src/testdrive",
+    "test/smith",
 ]
 
 [profile.release]

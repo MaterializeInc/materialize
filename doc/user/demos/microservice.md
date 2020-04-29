@@ -446,7 +446,7 @@ In a future iteration, we'll make this demo more interactive.
 Now that our deployment is running (and looks like the diagram shown above), we
 can see that Materialize is ingesting the `protobuf` data and normalizing it.
 
-1. Launch `psql` (or any Postgres CLI client), connecting to `materialize`:
+1. Launch `psql` (or any Materialize CLI client), connecting to `materialize`:
 
     ```shell
     psql -h localhost -p 6875 -d materialize

@@ -8,7 +8,7 @@ weight: 1
 
 Materialize is a streaming data warehouse. Materialize accepts input data from a
 variety of streaming sources (e.g. Kafka) and files (e.g. CSVs), and lets you
-query them using the PostgreSQL dialect of SQL.
+query them using SQL.
 
 ## What does Materialize do?
 

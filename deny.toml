@@ -4,9 +4,6 @@ skip = [
     # Do not add to this list without good reason! Duplicate dependencies slow
     # down compilation and bloat the binary.
 
-    # Awaiting https://github.com/bheisler/criterion.rs/pull/398.
-    { name = "itertools", version = "0.8.0" },
-
     # Awaiting:
     #   - reqwest 0.13.5 (https://github.com/seanmonstar/reqwest/releases)
     #   - redox-users (https://gitlab.redox-os.org/redox-os/users/-/merge_requests/34)
@@ -30,9 +27,19 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "MIT",
+    "OpenSSL",
     "Zlib",
 ]
+exceptions = [ { name = "webpki-roots", allow = ["MPL-2.0"] } ]
 private = { ignore = true }
+
+[[licenses.clarify]]
+name = "ring"
+version = "*"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 }
+]
 
 [sources]
 unknown-git = "deny"

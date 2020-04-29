@@ -14,7 +14,7 @@
 use ::expr::{GlobalId, RowSetFinishing};
 use catalog::names::{DatabaseSpecifier, FullName};
 use catalog::{Catalog, PlanContext};
-use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector};
+use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
@@ -106,7 +106,11 @@ pub enum Plan {
         finishing: RowSetFinishing,
         materialize: bool,
     },
-    Tail(GlobalId),
+    Tail {
+        id: GlobalId,
+        with_snapshot: bool,
+        ts: Option<Timestamp>,
+    },
     SendRows(Vec<Row>),
     ExplainPlan {
         sql: String,

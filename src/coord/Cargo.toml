@@ -16,24 +16,26 @@ ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
-derivative = "2.0"
+derivative = "2.1"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.3"
 interchange = { path = "../interchange" }
 itertools = "0.9"
+kinesis-util = { path = "../kinesis-util" }
 lazy_static = "1.4"
 log = "0.4"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 repr = { path = "../repr" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.3.4"
 rusoto_core = "0.43.0"
 rusoto_credential = "0.43.0"
 rusoto_kinesis = "0.43.0"
-rusqlite = { version = "0.20", features = ["bundled", "unlock_notify"] }
+rusqlite = { version = "0.23", features = ["bundled", "unlock_notify"] }
 serde = "1"
 serde_json = "1.0.41"
 sql = { path = "../sql" }

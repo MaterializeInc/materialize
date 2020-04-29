@@ -56,6 +56,12 @@ class PackageClient:
             res.raise_for_status()
         return res
 
+    def delete_version(self, version: str) -> Response:
+        url = f"{API_BASE}/packages/{self.subject}/{self.repo}/{self.package}/versions/{version}"
+        res = self.session.delete(url)
+        res.raise_for_status()
+        return res
+
     def debian_upload(
         self,
         version: str,
@@ -103,9 +109,18 @@ class PackageClient:
                 asynchronously, without waiting at all.
         """
         url = f"{API_BASE}/content/{self.subject}/{self.repo}/{self.package}/{version}/publish"
-        res = self.session.post(
-            url, json={"publish_wait_for_seconds": wait_for_seconds}
-        )
+        res = self.session.post(url, json={"publish_wait_for_secs": wait_for_seconds})
+        res.raise_for_status()
+        return res
+
+    def get_metadata(self) -> Response:
+        url = f"{API_BASE}/packages/{self.subject}/{self.repo}/{self.package}"
+        res = self.session.get(url)
+        return res
+
+    def get_version(self, version: str) -> Response:
+        url = f"{API_BASE}/packages/{self.subject}/{self.repo}/{self.package}/versions/{version}"
+        res = self.session.get(url)
         res.raise_for_status()
         return res
 
@@ -134,7 +149,7 @@ class Client:
 
     def __init__(self, subject: str, user: str, api_key: str):
         self.session = Session()
-        self.session.auth = (f"{user}@{subject}", api_key)
+        self.session.auth = (f"{user}", api_key)
         self.subject = subject
 
     def repo(self, repo: str) -> RepoClient:

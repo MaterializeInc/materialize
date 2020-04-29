@@ -176,9 +176,7 @@ impl Parser {
                     "BEGIN" => Ok(self.parse_begin()?),
                     "COMMIT" => Ok(self.parse_commit()?),
                     "ROLLBACK" => Ok(self.parse_rollback()?),
-                    "TAIL" => Ok(Statement::Tail {
-                        name: self.parse_object_name()?,
-                    }),
+                    "TAIL" => Ok(self.parse_tail()?),
                     "EXPLAIN" => Ok(self.parse_explain()?),
                     _ => parser_err!(
                         self,
@@ -236,10 +234,7 @@ impl Parser {
                     self.prev_token();
                     Ok(Expr::Value(self.parse_value()?))
                 }
-                "ARRAY" => {
-                    self.prev_token();
-                    Ok(Expr::Value(self.parse_value()?))
-                }
+                "LIST" => self.parse_list(),
                 "CASE" => self.parse_case_expr(),
                 "CAST" => self.parse_cast_expr(),
                 "DATE" => Ok(Expr::Value(self.parse_date()?)),
@@ -1742,7 +1737,6 @@ impl Parser {
                     "TRUE" => Ok(Value::Boolean(true)),
                     "FALSE" => Ok(Value::Boolean(false)),
                     "NULL" => Ok(Value::Null),
-                    "ARRAY" => self.parse_array(),
                     _ => {
                         return parser_err!(
                             self,
@@ -1768,20 +1762,20 @@ impl Parser {
         }
     }
 
-    fn parse_array(&mut self) -> Result<Value, ParserError> {
+    fn parse_list(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LBracket)?;
-        let mut values = vec![];
+        let mut exprs = vec![];
         loop {
             if let Some(Token::RBracket) = self.peek_token() {
                 break;
             }
-            values.push(self.parse_value()?);
+            exprs.push(self.parse_expr()?);
             if !self.consume_token(&Token::Comma) {
                 break;
             }
         }
         self.expect_token(&Token::RBracket)?;
-        Ok(Value::Array(values))
+        Ok(Expr::List(exprs))
     }
 
     pub fn parse_number_value(&mut self) -> Result<Value, ParserError> {
@@ -1883,16 +1877,9 @@ impl Parser {
             other => self.expected(self.peek_prev_range(), "a data type name", other)?,
         };
         match &self.peek_token() {
-            Some(Token::LBracket) => {
-                while self.consume_token(&Token::LBracket) {
-                    // Note: this is postgresql-specific
-                    self.expect_token(&Token::RBracket)?;
-                    data_type = DataType::Array(Box::new(data_type));
-                }
-            }
-            Some(Token::Word(k)) if &k.keyword == "ARRAY" => {
+            Some(Token::Word(k)) if &k.keyword == "LIST" => {
                 self.next_token();
-                data_type = DataType::Array(Box::new(data_type));
+                data_type = DataType::List(Box::new(data_type));
             }
             _ => (),
         }
@@ -2228,10 +2215,9 @@ impl Parser {
         let modifier = self.parse_one_of_keywords(&["SESSION", "LOCAL"]);
         let mut variable = self.parse_identifier()?;
         let mut normal = self.consume_token(&Token::Eq) || self.parse_keyword("TO");
-        if !normal && variable.value.to_uppercase() == "TIME" {
+        if !normal && variable.as_str().to_uppercase() == "TIME" {
             self.expect_keyword("ZONE")?;
-            variable.value = "timezone".into();
-            variable.quote_style = None;
+            variable = Ident::new("timezone");
             normal = true;
         }
         if normal {
@@ -2246,7 +2232,7 @@ impl Parser {
                 variable,
                 value,
             })
-        } else if variable.value.to_uppercase() == "TRANSACTION" && modifier.is_none() {
+        } else if variable.as_str().to_uppercase() == "TRANSACTION" && modifier.is_none() {
             Ok(Statement::SetTransaction {
                 modes: self.parse_transaction_modes()?,
             })
@@ -2793,6 +2779,27 @@ impl Parser {
         }
     }
 
+    pub fn parse_tail(&mut self) -> Result<Statement, ParserError> {
+        let name = self.parse_object_name()?;
+        let with_snapshot = if self.parse_keyword("WITH") {
+            self.expect_keyword("SNAPSHOT")?;
+            true
+        } else {
+            false
+        };
+        let as_of = if self.parse_keyword("AS") {
+            self.expect_keyword("OF")?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(Statement::Tail {
+            name,
+            with_snapshot,
+            as_of,
+        })
+    }
+
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
@@ -2842,9 +2849,9 @@ impl Parser {
 
 impl Word {
     pub fn to_ident(&self) -> Ident {
-        Ident {
-            value: self.value.clone(),
-            quote_style: self.quote_style,
+        match self.quote_style {
+            Some(_) => Ident::new(&self.value),
+            None => Ident::new_normalized(&self.value),
         }
     }
 }

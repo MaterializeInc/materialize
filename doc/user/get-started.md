@@ -16,7 +16,7 @@ To help you get started with Materialize, we'll:
 To complete this demo, you need:
 
 - Command line and network access.
-- A [PostgreSQL-compatible CLI](../connect/cli/). If you have PostgreSQL installed `psql` works.
+- A [Materialize-compatible CLI](../connect/cli/). If you have Materialize installed `psql` works.
 
 We also highly recommend checking out [What is Materialize?](../overview/what-is-materialize)
 
@@ -32,7 +32,7 @@ We also highly recommend checking out [What is Materialize?](../overview/what-is
 
     This starts the daemon listening on port 6875 using 1 worker.
 
-1. Connect to `materialized` through your PostgreSQL CLI, e.g.:
+1. Connect to `materialized` through your Materialize CLI, e.g.:
 
     ```shell
     psql -h localhost -p 6875 materialize
@@ -44,7 +44,7 @@ Materialize offers ANSI Standard SQL, but is not simply a relational database. I
 
 To get started, though, we'll begin with a simple version that doesn't require connecting to an external data source.
 
-1. From your PostgreSQL CLI, create a materialized view that contains actual data we can work with.
+1. From your Materialize CLI, create a materialized view that contains actual data we can work with.
 
     ```sql
     CREATE MATERIALIZED VIEW pseudo_source AS

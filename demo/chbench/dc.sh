@@ -72,7 +72,7 @@ main() {
         nuke) dc_nuke;;
         clean-load-test) clean_load_test "$@";;
         load-test) load_test "$@";;
-        demo-load) demo_load;;
+        demo-load) demo_load "$@";;
         run)
             if [[ $# -eq 0 ]]; then
                 usage
@@ -217,7 +217,8 @@ Possible COMMANDs:
                                 One-stop shop, nothing else needs to be run.
     `us load-test \[--up\] \[ROPTS\]`  Run a long-running load test, modify this file to change parameters
                                 With --up: also run `uo :init:` and start all dependencies
-    `us demo-load \[ROPTS\]`         Generate a lot of changes to be used in the demo
+    `us demo-load \[--up\] \[ROPTS\]`  Generate a lot of changes to be used in the demo
+                                With --up: also run `uo :init:` and start all dependencies
 
  ROPTS (Run Options):
      `uo --commit C`               Set both mz & peeker to 'unstable-C'
@@ -252,10 +253,8 @@ bring_up() {
 }
 
 bring_up_source_data() {
-    dc_up materialized mysql
-    dc_run_wait_cmd \
-            mysql \
-            mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
+    dc_up materialized
+    bring_up_mysql
     runv ./mzcompose --mz-quiet logs --tail 5 materialized
     runv ./mzcompose --mz-quiet logs --tail 5 mysql
     dc_up connector
@@ -274,15 +273,23 @@ bring_up_metabase() {
     dc_up metabase
 }
 
+bring_up_mysql() {
+    dc_up mysql
+    dc_run_wait_cmd \
+        mysql \
+        mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
+}
+
 # Create source data and tables for MYSQL
 initialize_warehouse() {
-    if ! (docker ps | grep chbench_mysql >/dev/null); then
-        dc_up mysql
-        dc_run_wait_cmd \
-            mysql \
-            mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
-    fi
+    bring_up_mysql
     runv ./mzcompose --mz-quiet run chbench gen --warehouses=1
+}
+
+peeker_demo_init() {
+    runv sed -e 's/materialized.*false/materialized = true/' ../../src/peeker/config.toml \
+        > peeker-config/materialized-sources.toml
+    dc_run peeker --only-initialize -c /etc/peeker/materialized-sources.toml -q loadtest
 }
 
 # helper/individual step commands
@@ -507,7 +514,6 @@ ci() {
 load_test() {
     if [[ "${1:-}" = --up ]]; then
         shift
-        initialize_warehouse
         bring_up_source_data
         bring_up_introspection
     fi
@@ -530,7 +536,12 @@ load_test() {
 
 # Generate changes for the demo
 demo_load() {
+    if [[ "${1:-}" == --up ]]; then
+        shift
+        bring_up_source_data
+    fi
     drop_kafka_topics
+    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
     dc_run -d chbench run \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
         --peek-conns=0 --flush-every=30 \
@@ -538,7 +549,8 @@ demo_load() {
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default.cfg \
 	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
-    dc_run -d peeker --only-initialize --queries q01,q02,q17,q22
+    bring_up_introspection
+    peeker_demo_init
 }
 
 DCSH_LOCK=.dcsh-lock

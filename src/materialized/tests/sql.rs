@@ -18,6 +18,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, Write};
 use std::net::TcpListener;
 use std::path::Path;
+use std::str;
 use std::thread;
 use std::time::Duration;
 
@@ -114,6 +115,14 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
         Ok(())
     };
 
+    fn extract_ts(data: &[u8]) -> Result<u64, Box<dyn Error>> {
+        Ok(str::from_utf8(data)?
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .parse()?)
+    }
+
     client.batch_execute(&*format!(
         "CREATE MATERIALIZED SOURCE dynamic_csv FROM FILE '{}' WITH (tail = true)
          FORMAT CSV WITH 3 COLUMNS",
@@ -126,23 +135,72 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     let cancel_token = client.cancel_token();
     let mut tail_reader = client.copy_out("TAIL dynamic_csv")?.split(b'\n');
 
+    let mut events = Vec::new();
+
     append(b"City 1,ST,00001\n")?;
-    assert!(tail_reader
-        .next()
-        .unwrap()?
-        .starts_with(&b"City 1\tST\t00001\t1\tDiff: 1 at "[..]));
+    let next = tail_reader.next().unwrap()?;
+    assert!(next.starts_with(&b"City 1\tST\t00001\t1\tDiff: 1 at "[..]));
+    events.push((extract_ts(&next).unwrap(), next.clone()));
 
     append(b"City 2,ST,00002\n")?;
-    assert!(tail_reader
-        .next()
-        .unwrap()?
-        .starts_with(&b"City 2\tST\t00002\t2\tDiff: 1 at "[..]));
+    let next = tail_reader.next().unwrap()?;
+    assert!(next.starts_with(&b"City 2\tST\t00002\t2\tDiff: 1 at "[..]));
+    events.push((extract_ts(&next).unwrap(), next.clone()));
+
+    append(b"City 3,ST,00003\n")?;
+    let next = tail_reader.next().unwrap()?;
+    assert!(next.starts_with(&b"City 3\tST\t00003\t3\tDiff: 1 at "[..]));
+    events.push((extract_ts(&next).unwrap(), next.clone()));
 
     // The tail won't end until a cancellation request is sent.
     cancel_token.cancel_query(postgres::NoTls)?;
 
     assert!(tail_reader.next().is_none());
     drop(tail_reader);
+
+    // Now tail AS OF each timestamp, verifying that when we do so we only see events that occur as
+    // of or later than that timestamp.
+    for (ts, _) in &events {
+        let cancel_token = client.cancel_token();
+        let q = format!("TAIL dynamic_csv AS OF {}", ts - 1);
+        let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
+
+        // Skip by the things we won't be able to see.
+        for (_, expected) in events.iter().skip_while(|(inner_ts, _)| inner_ts < ts) {
+            let actual = tail_reader.next().unwrap()?;
+            assert_eq!(actual, *expected);
+        }
+
+        cancel_token.cancel_query(postgres::NoTls)?;
+        assert!(tail_reader.next().is_none());
+        drop(tail_reader);
+    }
+
+    // Now tail AS OF WITH SNAPSHOT each timestamp. We should see a batch of updates all at the
+    // tailed timestamp, and then updates afterward.
+    for (ts, _) in &events {
+        let cancel_token = client.cancel_token();
+        let q = format!("TAIL dynamic_csv WITH SNAPSHOT AS OF {}", ts - 1);
+        let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
+
+        for (_, expected) in events.iter() {
+            let mut expected_ts = extract_ts(expected).unwrap();
+            if expected_ts < ts - 1 {
+                // If the thing we initially got was before the timestamp, it should have gotten
+                // fast-forwarded up to the timestamp.
+                expected_ts = ts - 1;
+            }
+
+            let actual = tail_reader.next().unwrap()?;
+            let actual_ts = extract_ts(&actual).unwrap();
+
+            assert_eq!(expected_ts, actual_ts);
+        }
+
+        cancel_token.cancel_query(postgres::NoTls)?;
+        assert!(tail_reader.next().is_none());
+        drop(tail_reader);
+    }
 
     // Check that writing to the tailed file after the view and source are
     // dropped doesn't cause a crash (#1361).

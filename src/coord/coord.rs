@@ -48,7 +48,9 @@ use expr::{
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
-use sql::{ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session};
+use sql::{
+    ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session, Statement,
+};
 use sql_parser::ast::ExplainStage;
 
 use crate::persistence::SqlSerializer;
@@ -412,13 +414,13 @@ where
                     }
                 },
 
-                Message::Command(Command::Parse {
+                Message::Command(Command::Describe {
                     name,
-                    sql,
+                    stmt,
                     mut session,
                     tx,
                 }) => {
-                    let result = self.handle_parse(&mut session, name, sql);
+                    let result = self.handle_describe(&mut session, name, stmt);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -650,7 +652,11 @@ where
                 session,
             ),
 
-            Plan::Tail(id) => tx.send(self.sequence_tail(conn_id, id), session),
+            Plan::Tail {
+                id,
+                ts,
+                with_snapshot,
+            } => tx.send(self.sequence_tail(conn_id, id, with_snapshot, ts), session),
 
             Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
@@ -740,7 +746,7 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         let source_id = self.catalog.allocate_id()?;
         let source = catalog::Source {
-            create_sql: "TODO".to_string(),
+            create_sql: "TODO (see #2755)".to_string(),
             plan_cx: pcx,
             connector: dataflow_types::SourceConnector::Local,
             desc,
@@ -1163,7 +1169,7 @@ where
                 };
                 let index_name = format!("temp-index-on-{}", view_id);
                 let mut dataflow = DataflowDesc::new(view_name.to_string());
-                dataflow.as_of(Some(vec![timestamp.clone()]));
+                dataflow.as_of(Antichain::from_elem(timestamp));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
                     plan_cx: PlanContext::default(),
@@ -1226,21 +1232,31 @@ where
         &mut self,
         conn_id: u32,
         source_id: GlobalId,
+        with_snapshot: bool,
+        ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, failure::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
-        let since = if let Some(Some((index_id, _))) = self
+        let frontier = if let Some(ts) = ts {
+            // If a timestamp was explicitly requested, use that.
+            Antichain::from_elem(self.determine_timestamp(
+                &RelationExpr::Get {
+                    id: Id::Global(source_id),
+                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
+                    typ: RelationType::empty(),
+                },
+                PeekWhen::AtTimestamp(ts),
+            )?)
+        } else if let Some(Some((index_id, _))) = self
             .views
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
         {
             self.upper_of(index_id)
                 .expect("name missing at coordinator")
-                .get(0)
-                .copied()
-                .unwrap_or(Timestamp::max_value())
+                .to_owned()
         } else {
-            0 as Timestamp
+            Antichain::from_elem(0)
         };
 
         let sink_name = format!(
@@ -1252,11 +1268,17 @@ where
         let sink_id = self.catalog.allocate_id()?;
         self.active_tails.insert(conn_id, sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+
         self.create_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
-            SinkConnector::Tail(TailSinkConnector { tx, since }),
+            SinkConnector::Tail(TailSinkConnector {
+                tx,
+                frontier: frontier.clone(),
+                strict: !with_snapshot,
+            }),
+            frontier,
         );
         Ok(ExecuteResponse::Tailing { rx })
     }
@@ -1649,7 +1671,14 @@ where
             .expect("replacing a sink cannot fail");
 
         // Create the sink dataflow.
-        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+        // TODO(justin): this should be picking a more reasonable frontier, see #2803.
+        self.create_sink_dataflow(
+            name.to_string(),
+            id,
+            sink.from,
+            connector,
+            Antichain::from_elem(0),
+        )
     }
 
     fn create_sink_dataflow(
@@ -1658,6 +1687,7 @@ where
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
+        as_of: Antichain<Timestamp>,
     ) {
         #[allow(clippy::single_match)]
         match &connector {
@@ -1684,6 +1714,7 @@ where
             _ => (),
         }
         let mut dataflow = DataflowDesc::new(name);
+        dataflow.as_of(as_of);
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
@@ -1882,15 +1913,19 @@ where
         let mut uses_ids = Vec::new();
         source.global_uses(&mut uses_ids);
 
+        let need_to_determine = when == PeekWhen::Immediately;
+
         uses_ids.sort();
         uses_ids.dedup();
-        if uses_ids.iter().any(|id| {
-            if let Some(view_state) = self.views.get(id) {
-                !view_state.queryable
-            } else {
-                true
-            }
-        }) {
+        if need_to_determine
+            && uses_ids.iter().any(|id| {
+                if let Some(view_state) = self.views.get(id) {
+                    !view_state.queryable
+                } else {
+                    true
+                }
+            })
+        {
             bail!("Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources");
         }
         uses_ids = uses_ids
@@ -1956,10 +1991,7 @@ where
         if since.less_equal(&timestamp) {
             Ok(timestamp)
         } else {
-            bail!(
-                "Latest available timestamp ({}) is not valid for all inputs",
-                timestamp
-            );
+            bail!("Timestamp ({}) is not valid for all inputs", timestamp);
         }
     }
 
@@ -2094,32 +2126,26 @@ where
         }
     }
 
-    fn handle_parse(
+    fn handle_describe(
         &self,
         session: &mut Session,
         name: String,
-        sql: String,
+        stmt: Option<Statement>,
     ) -> Result<(), failure::Error> {
-        let stmts = sql::parse(sql)?;
-        let (stmt, desc, param_types) = match stmts.len() {
-            0 => (None, None, vec![]),
-            1 => {
-                let stmt = stmts.into_element();
-                let (desc, param_types) = match sql::describe(&self.catalog, session, stmt.clone())
-                {
-                    Ok((desc, param_types)) => (desc, param_types),
-                    // Describing the query failed. If we're running in symbiosis with
-                    // Postgres, see if Postgres can handle it. Note that Postgres
-                    // only handles commands that do not return rows, so the
-                    // `RelationDesc` is always `None`.
-                    Err(err) => match self.symbiosis {
-                        Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
-                        _ => return Err(err),
-                    },
-                };
-                (Some(stmt), desc, param_types)
+        let (desc, param_types) = if let Some(stmt) = stmt.clone() {
+            match sql::describe(&self.catalog, session, stmt.clone()) {
+                Ok((desc, param_types)) => (desc, param_types),
+                // Describing the query failed. If we're running in symbiosis with
+                // Postgres, see if Postgres can handle it. Note that Postgres
+                // only handles commands that do not return rows, so the
+                // `RelationDesc` is always `None`.
+                Err(err) => match self.symbiosis {
+                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                    _ => return Err(err),
+                },
             }
-            n => bail!("expected no more than one query, got {}", n),
+        } else {
+            (None, vec![])
         };
         session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
         Ok(())
@@ -2288,21 +2314,15 @@ fn index_sql(
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
-    use sql_parser::ast::{Expr, Ident, Statement, Value};
+    use sql_parser::ast::{Expr, Ident, Value};
 
     Statement::CreateIndex {
-        name: Ident {
-            value: index_name,
-            quote_style: Some('"'),
-        },
+        name: Ident::new(index_name),
         on_name: sql::normalize::unresolve(view_name),
         key_parts: keys
             .iter()
             .map(|i| match view_desc.get_unambiguous_name(*i) {
-                Some(n) => Expr::Identifier(Ident {
-                    value: n.to_string(),
-                    quote_style: Some('"'),
-                }),
+                Some(n) => Expr::Identifier(Ident::new(n.to_string())),
                 _ => Expr::Value(Value::Number((i + 1).to_string())),
             })
             .collect(),

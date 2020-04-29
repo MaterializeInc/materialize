@@ -68,7 +68,7 @@ Wrap your release notes at the 80 character mark.
   (col_foo, col_bar)...`](../sql/create-source/csv-source/#creating-a-source-from-a-dynamic-csv)).
 
 - Improve conformance of the Avro parser, enabling support for
-  a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro).
+  a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro-kafka).
 
 - Introduce [Avro Object Container File (OCF) sinks](../sql/create-sink/#avro-ocf-sinks).
 

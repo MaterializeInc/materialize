@@ -7,23 +7,45 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::Timestamp;
 use std::cell::RefCell;
 use std::rc::Rc;
+
 use timely::dataflow::operators::Capability;
 use timely::scheduling::Activator;
 
-use crate::server::TimestampChanges;
+use dataflow_types::{Consistency, Timestamp};
+use expr::SourceInstanceId;
+
+use crate::server::{TimestampChanges, TimestampHistories};
 
 mod file;
 mod kafka;
 mod kinesis;
 mod util;
 
-use expr::SourceInstanceId;
-pub use file::{file, FileReadStyle};
+pub use file::{file, read_file_task, FileReadStyle};
 pub use kafka::kafka;
 pub use kinesis::kinesis;
+
+// Shared configuration information for all source types.
+pub struct SourceConfig<'a, G> {
+    /// The name to attach to the underlying timely operator.
+    pub name: String,
+    /// The ID of this instantiation of this source.
+    pub id: SourceInstanceId,
+    /// The timely scope in which to build the source.
+    pub scope: &'a G,
+    /// Whether this worker has been chosen to actually receive data. All
+    /// workers must build the same dataflow operators to keep timely channel
+    /// IDs in sync, but only one worker will receive the data, to avoid
+    /// duplicates.
+    pub active: bool,
+    // Timestamping fields.
+    // TODO: document these.
+    pub timestamp_histories: TimestampHistories,
+    pub timestamp_tx: TimestampChanges,
+    pub consistency: Consistency,
+}
 
 // A `SourceToken` indicates interest in a source. When the `SourceToken` is
 // dropped, its associated source will be stopped.

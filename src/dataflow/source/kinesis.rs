@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use failure::{bail, ResultExt};
+use failure::ResultExt;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, warn};
@@ -19,19 +19,18 @@ use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{
     GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorInput, Kinesis,
-    KinesisClient, ListShardsInput,
+    KinesisClient,
 };
 
-use dataflow_types::{Consistency, ExternalSourceConnector, KinesisSourceConnector, Timestamp};
-use expr::SourceInstanceId;
+use dataflow_types::{ExternalSourceConnector, KinesisSourceConnector, Timestamp};
+use kinesis_util::get_shard_ids;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
 
 use super::util::source;
-use super::{SourceStatus, SourceToken};
+use super::{SourceConfig, SourceStatus, SourceToken};
 use crate::metrics::EVENTS_COUNTER;
-use crate::server::{TimestampChanges, TimestampHistories};
 
 lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
@@ -57,43 +56,39 @@ lazy_static! {
 /// (100x/sec per stream) and to improve source performance overall.
 const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
-#[allow(clippy::too_many_arguments)]
 pub fn kinesis<G>(
-    scope: &G,
-    name: String,
+    config: SourceConfig<G>,
     connector: KinesisSourceConnector,
-    id: SourceInstanceId,
-    timestamp_histories: TimestampHistories,
-    timestamp_tx: TimestampChanges,
-    consistency: Consistency,
-    read_kinesis: bool,
 ) -> (Stream<G, (Vec<u8>, Option<i64>)>, Option<SourceToken>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.
-    let ts = if read_kinesis {
-        let prev = timestamp_histories
+    let ts = if config.active {
+        let prev = config
+            .timestamp_histories
             .borrow_mut()
-            .insert(id.clone(), HashMap::new());
+            .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        timestamp_tx.as_ref().borrow_mut().push((
-            id,
+        config.timestamp_tx.as_ref().borrow_mut().push((
+            config.id,
             Some((
                 ExternalSourceConnector::Kinesis(connector.clone()),
-                consistency,
+                config.consistency,
             )),
         ));
-        Some(timestamp_tx)
+        Some(config.timestamp_tx)
     } else {
         None
     };
 
-    let mut state = create_state(connector);
+    let mut state = block_on(create_state(connector));
     let mut last_checked_shards = std::time::Instant::now();
 
-    let (stream, capability) = source(id, ts, scope, &name.clone(), move |info| {
+    let SourceConfig { name, scope, .. } = config;
+
+    let (stream, capability) = source(config.id, ts, scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
 
         move |cap, output| {
@@ -106,9 +101,12 @@ where
             };
 
             if last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
-                if let Err(e) =
-                    update_shard_information(&client, &stream_name, shard_set, shard_queue)
-                {
+                if let Err(e) = block_on(update_shard_information(
+                    &client,
+                    &stream_name,
+                    shard_set,
+                    shard_queue,
+                )) {
                     error!("{}", e);
                     return SourceStatus::Done;
                 }
@@ -211,7 +209,7 @@ where
         }
     });
 
-    if read_kinesis {
+    if config.active {
         (stream, Some(capability))
     } else {
         (stream, None)
@@ -230,7 +228,7 @@ fn reactivate_kinesis_source(
 }
 
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
-fn create_state(
+async fn create_state(
     c: KinesisSourceConnector,
 ) -> Result<
     (
@@ -245,12 +243,12 @@ fn create_state(
     let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
     let client = KinesisClient::new_with(http_client, provider, c.region);
 
-    let shard_set: HashSet<String> = get_shard_ids(&client, &c.stream_name)?;
+    let shard_set: HashSet<String> = get_shard_ids(&client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
     for shard_id in &shard_set {
         shard_queue.push_back((
             shard_id.clone(),
-            get_shard_iterator(&client, shard_id, &c.stream_name, "TRIM_HORIZON")?,
+            get_shard_iterator(&client, shard_id, &c.stream_name, "TRIM_HORIZON").await?,
         ))
     }
     Ok((client, c.stream_name.clone(), shard_set, shard_queue))
@@ -288,30 +286,33 @@ async fn get_records(
         .await
 }
 
-fn get_shard_iterator(
+async fn get_shard_iterator(
     client: &KinesisClient,
     shard_id: &str,
     stream_name: &str,
     iterator_type: &str,
 ) -> Result<Option<String>, failure::Error> {
-    Ok(block_on(client.get_shard_iterator(GetShardIteratorInput {
-        shard_id: String::from(shard_id),
-        shard_iterator_type: String::from(iterator_type),
-        starting_sequence_number: None,
-        stream_name: String::from(stream_name),
-        timestamp: None,
-    }))
-    .with_context(|e| format!("fetching shard iterator: {}", e))?
-    .shard_iterator)
+    Ok(client
+        .get_shard_iterator(GetShardIteratorInput {
+            shard_id: String::from(shard_id),
+            shard_iterator_type: String::from(iterator_type),
+            starting_sequence_number: None,
+            stream_name: String::from(stream_name),
+            timestamp: None,
+        })
+        .await
+        .with_context(|e| format!("fetching shard iterator: {}", e))?
+        .shard_iterator)
 }
 
-fn update_shard_information(
+async fn update_shard_information(
     client: &KinesisClient,
     stream_name: &str,
     shard_set: &mut HashSet<String>,
     shard_queue: &mut VecDeque<(String, Option<String>)>,
 ) -> Result<(), failure::Error> {
-    let new_shards: HashSet<String> = get_shard_ids(&client, stream_name)?
+    let new_shards: HashSet<String> = get_shard_ids(&client, stream_name)
+        .await?
         .difference(shard_set)
         .map(|shard_id| shard_id.to_owned())
         .collect();
@@ -319,27 +320,8 @@ fn update_shard_information(
         shard_set.insert(shard_id.clone());
         shard_queue.push_back((
             shard_id.clone(),
-            get_shard_iterator(&client, &shard_id, stream_name, "TRIM_HORIZON")?,
+            get_shard_iterator(&client, &shard_id, stream_name, "TRIM_HORIZON").await?,
         ));
     }
     Ok(())
-}
-
-fn get_shard_ids(
-    client: &KinesisClient,
-    stream_name: &str,
-) -> Result<HashSet<String>, failure::Error> {
-    match block_on(client.list_shards(ListShardsInput {
-        exclusive_start_shard_id: None,
-        max_results: None,
-        next_token: None,
-        stream_creation_timestamp: None,
-        stream_name: Some(stream_name.to_owned()),
-    }))
-    .with_context(|e| format!("fetching shard list: {}", e))?
-    .shards
-    {
-        Some(shards) => Ok(shards.iter().map(|shard| shard.shard_id.clone()).collect()),
-        None => bail!("kinesis stream {} does not contain any shards", stream_name),
-    }
 }

@@ -18,6 +18,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
+
+use lazy_static::lazy_static;
+
 ///! This module defines
 /// 1) a list of constants for every keyword that
 /// can appear in [Word::keyword]:
@@ -268,6 +272,7 @@ define_keywords!(
     LEVEL,
     LIKE,
     LIKE_REGEX,
+    LIST,
     LIMIT,
     LN,
     LOCAL,
@@ -404,6 +409,7 @@ define_keywords!(
     SINK,
     SINKS,
     SMALLINT,
+    SNAPSHOT,
     SOME,
     SOURCE,
     SOURCES,
@@ -518,3 +524,20 @@ pub const RESERVED_FOR_COLUMN_ALIAS: &[&str] = &[
     // Reserved only as a column alias in the `SELECT` clause:
     FROM,
 ];
+
+lazy_static! {
+    static ref RESERVED_KEYWORD_SET: HashSet<String> = {
+        let mut kw = HashSet::new();
+        for k in RESERVED_FOR_TABLE_ALIAS {
+            kw.insert((*k).to_string());
+        }
+        for k in RESERVED_FOR_COLUMN_ALIAS {
+            kw.insert((*k).to_string());
+        }
+        kw
+    };
+}
+
+pub fn is_reserved_keyword(s: &str) -> bool {
+    RESERVED_KEYWORD_SET.contains(&s.to_uppercase())
+}

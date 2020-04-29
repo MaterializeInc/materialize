@@ -398,7 +398,8 @@ pub async fn create_state(
     };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
-    let ccsr_client = ccsr::AsyncClient::new(config.schema_registry_url.clone());
+    let ccsr_client =
+        ccsr::AsyncClient::new(&ccsr::ClientConfig::new(config.schema_registry_url.clone()));
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
