@@ -1729,9 +1729,6 @@ where
         // Optimize the dataflow across views, and any other ways that appeal.
         dataflow.optimize();
 
-        // Determine the minimal `as_of` frontier based on `since` frontiers of
-        // contributing materializations.
-
         // Finalize the dataflow by broadcasting its construction to all workers.
         broadcast(
             &mut self.broadcast_tx,
@@ -1957,12 +1954,7 @@ where
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                // Form lower bound on available times
-                let mut upper = Antichain::new();
-                for id in uses_ids.iter() {
-                    // To track the meet of `upper` we just extend with the upper frontier.
-                    upper.extend(self.indexes.upper_of(id).unwrap().iter().cloned());
-                }
+                let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
 
                 // We peek at the largest element not in advance of `upper`, which
                 // involves a subtraction. If `upper` contains a zero timestamp there
@@ -1986,7 +1978,7 @@ where
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
         // and does not depend on the transitive sources.
-        let since = self.indexes.least_valid_since(&uses_ids[..]);
+        let since = self.indexes.least_valid_since(uses_ids.iter().cloned());
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
@@ -2473,22 +2465,32 @@ pub mod arrangement_state {
             }
         }
 
-        /// Reports the minimal frontier greater than all identified `since` frontiers.
-        pub fn least_valid_since(&self, identifiers: &[GlobalId]) -> Antichain<T>
+        /// Reports the greatest frontier less than all identified `upper` frontiers.
+        pub fn greatest_open_upper<I>(&self, identifiers: I) -> Antichain<T>
         where
+            I: IntoIterator<Item = GlobalId>,
+            T: Lattice,
+        {
+            // Form lower bound on available times
+            let mut upper = Antichain::new();
+            for id in identifiers {
+                // To track the meet of `upper` we just extend with the upper frontier.
+                // This was almost `meet_assign` but our uppers are `MutableAntichain`s.
+                upper.extend(self.upper_of(&id).unwrap().iter().cloned());
+            }
+            upper
+        }
+
+        /// Reports the minimal frontier greater than all identified `since` frontiers.
+        pub fn least_valid_since<I>(&self, identifiers: I) -> Antichain<T>
+        where
+            I: IntoIterator<Item = GlobalId>,
             T: Lattice,
         {
             let mut since = Antichain::from_elem(T::minimum());
-            for id in identifiers.iter() {
-                let prior_since = std::mem::replace(&mut since, Antichain::new());
-                let view_since = self.since_of(&id).expect("Since missing at coordinator");
-                // To track the join of `since` we should replace with the pointwise
-                // join of each element of `since` and `view_since`.
-                for new_element in view_since.elements() {
-                    for old_element in prior_since.elements() {
-                        since.insert(new_element.join(old_element));
-                    }
-                }
+            for id in identifiers {
+                // TODO: We could avoid repeated allocation by swapping two buffers.
+                since.join_assign(self.since_of(&id).expect("Since missing at coordinator"));
             }
             since
         }
