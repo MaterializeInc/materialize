@@ -113,7 +113,7 @@ where
     views: HashMap<GlobalId, ViewState>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: HashMap<GlobalId, IndexState>,
-    since_updates: Vec<(GlobalId, Vec<Timestamp>)>,
+    since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
@@ -1793,7 +1793,7 @@ where
         // in principle, but not in any current Mz use case.
         // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
         self.since_updates
-            .retain(|(_, frontier)| !frontier.is_empty());
+            .retain(|(_, frontier)| frontier != &Antichain::new());
         if !self.since_updates.is_empty() {
             broadcast(
                 &mut self.broadcast_tx,
@@ -2032,7 +2032,7 @@ where
                                 .insert(time.saturating_sub(compaction_latency_ms));
                         }
                         self.since_updates
-                            .push((name.clone(), index_state.since.elements().to_vec()));
+                            .push((name.clone(), index_state.since.clone()));
                     }
                 }
             }
