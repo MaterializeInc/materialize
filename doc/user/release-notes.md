@@ -45,6 +45,15 @@ Use relative links (../path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+<span id="0.2.2"></span>
+## 0.2.1 (Unreleased) &rarr; 0.2.2 (Unreleased)
+
+- Support Kafka topics with key-value messages. ([`CREATE SOURCE ... ENVELOPE
+  UPSERT  ...`](../overview/api-components/#envelopes))
+
+<span id="0.2.1"></span>
+## 0.2.0 &rarr; 0.2.1 (Unreleased)
+
 <span id="v0.2.0"></span>
 ## 0.1.3 &rarr; v0.2.0
 
