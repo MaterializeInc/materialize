@@ -10,20 +10,16 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use failure::ResultExt;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, warn};
 use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGauge, IntGaugeVec};
 use rusoto_core::{HttpClient, RusotoError};
 use rusoto_credential::StaticProvider;
-use rusoto_kinesis::{
-    GetRecordsError, GetRecordsInput, GetRecordsOutput, GetShardIteratorInput, Kinesis,
-    KinesisClient,
-};
+use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 
 use dataflow_types::{ExternalSourceConnector, KinesisSourceConnector, Timestamp};
-use kinesis_util::get_shard_ids;
+use kinesis_util::{get_shard_ids, get_shard_iterator};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
@@ -248,7 +244,7 @@ async fn create_state(
     for shard_id in &shard_set {
         shard_queue.push_back((
             shard_id.clone(),
-            get_shard_iterator(&client, shard_id, &c.stream_name, "TRIM_HORIZON").await?,
+            get_shard_iterator(&client, &c.stream_name, shard_id).await?,
         ))
     }
     Ok((client, c.stream_name.clone(), shard_set, shard_queue))
@@ -286,25 +282,6 @@ async fn get_records(
         .await
 }
 
-async fn get_shard_iterator(
-    client: &KinesisClient,
-    shard_id: &str,
-    stream_name: &str,
-    iterator_type: &str,
-) -> Result<Option<String>, failure::Error> {
-    Ok(client
-        .get_shard_iterator(GetShardIteratorInput {
-            shard_id: String::from(shard_id),
-            shard_iterator_type: String::from(iterator_type),
-            starting_sequence_number: None,
-            stream_name: String::from(stream_name),
-            timestamp: None,
-        })
-        .await
-        .with_context(|e| format!("fetching shard iterator: {}", e))?
-        .shard_iterator)
-}
-
 async fn update_shard_information(
     client: &KinesisClient,
     stream_name: &str,
@@ -320,7 +297,7 @@ async fn update_shard_information(
         shard_set.insert(shard_id.clone());
         shard_queue.push_back((
             shard_id.clone(),
-            get_shard_iterator(&client, &shard_id, stream_name, "TRIM_HORIZON").await?,
+            get_shard_iterator(&client, stream_name, &shard_id).await?,
         ));
     }
     Ok(())

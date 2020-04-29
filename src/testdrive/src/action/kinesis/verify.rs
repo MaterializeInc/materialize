@@ -13,9 +13,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use itertools::Itertools;
-use rusoto_kinesis::{GetRecordsInput, GetShardIteratorInput, Kinesis, KinesisClient};
+use rusoto_kinesis::{GetRecordsInput, Kinesis, KinesisClient};
 
-use kinesis_util::get_shard_ids;
+use kinesis_util::{get_shard_ids, get_shard_iterator};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -112,17 +112,9 @@ async fn get_shard_iterators(
         .map_err(|e| format!("listing Kinesis shards: {}", e))?
     {
         iterators.push_back(
-            kinesis_client
-                .get_shard_iterator(GetShardIteratorInput {
-                    shard_id: shard_id.clone(),
-                    shard_iterator_type: String::from("TRIM_HORIZON"),
-                    starting_sequence_number: None,
-                    stream_name: stream_name.to_string(),
-                    timestamp: None,
-                })
+            get_shard_iterator(kinesis_client, stream_name, &shard_id)
                 .await
-                .map_err(|e| format!("getting Kinesis shard iterator: {}", e))?
-                .shard_iterator,
+                .map_err(|e| format!("unable to get Kinesis shard iterator: {}", e))?,
         );
     }
 
