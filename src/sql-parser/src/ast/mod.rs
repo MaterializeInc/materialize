@@ -203,7 +203,7 @@ impl AstDisplay for &ObjectName {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// Identifier e.g. table name or column name
-    Identifier(Ident),
+    Identifier(Vec<Ident>),
     /// Unqualified wildcard (`*`). SQL allows this in limited contexts, such as:
     /// - right after `SELECT` (which is represented as a [SelectItem::Wildcard] instead)
     /// - or as part of an aggregate function, e.g. `COUNT(*)`,
@@ -214,8 +214,6 @@ pub enum Expr {
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
     /// (Same caveats apply to `QualifiedWildcard` as to `Wildcard`.)
     QualifiedWildcard(Vec<Ident>),
-    /// Multi-part identifier, e.g. `table_alias.column` or `schema.table.col`
-    CompoundIdentifier(Vec<Ident>),
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// `IS NULL` expression
@@ -306,13 +304,12 @@ pub enum Expr {
 impl AstDisplay for Expr {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Expr::Identifier(s) => f.write_node(s),
+            Expr::Identifier(s) => f.write_node(&display_separated(s, ".")),
             Expr::Wildcard => f.write_str("*"),
             Expr::QualifiedWildcard(q) => {
                 f.write_node(&display_separated(q, "."));
                 f.write_str(".*");
             }
-            Expr::CompoundIdentifier(s) => f.write_node(&display_separated(s, ".")),
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
             Expr::IsNull(ast) => {
                 f.write_node(&ast);

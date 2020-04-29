@@ -173,8 +173,8 @@ macro_rules! make_visitor {
 
             fn visit_ident(&mut self, _ident: &'ast $($mut)* Ident) {}
 
-            fn visit_compound_identifier(&mut self, idents: &'ast $($mut)* [Ident]) {
-                visit_compound_identifier(self, idents)
+            fn visit_idents(&mut self, idents: &'ast $($mut)* [Ident]) {
+                visit_idents(self, idents)
             }
 
             fn visit_wildcard(&mut self) {}
@@ -979,10 +979,9 @@ macro_rules! make_visitor {
 
         pub fn visit_expr<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, expr: &'ast $($mut)* Expr) {
             match expr {
-                Expr::Identifier(ident) => visitor.visit_ident(ident),
+                Expr::Identifier(ident) => visitor.visit_idents(ident),
                 Expr::Wildcard => visitor.visit_wildcard(),
                 Expr::QualifiedWildcard(idents) => visitor.visit_qualified_wildcard(idents),
-                Expr::CompoundIdentifier(idents) => visitor.visit_compound_identifier(idents),
                 Expr::Parameter(n) => visitor.visit_parameter(*n),
                 Expr::IsNull(expr) => visitor.visit_is_null(expr),
                 Expr::IsNotNull(expr) => visitor.visit_is_not_null(expr),
@@ -1051,7 +1050,7 @@ macro_rules! make_visitor {
             }
         }
 
-        pub fn visit_compound_identifier<'ast, V: $name<'ast> + ?Sized>(
+        pub fn visit_idents<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,
             idents: &'ast $($mut)* [Ident],
         ) {

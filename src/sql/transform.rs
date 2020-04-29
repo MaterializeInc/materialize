@@ -204,7 +204,10 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
     fn visit_expr(&mut self, expr: &'ast mut Expr) {
         visit_mut::visit_expr(self, expr);
         if let Expr::Identifier(ident) = expr {
-            if normalize::ident(ident.clone()) == "current_timestamp" {
+            if ident.len() != 1 {
+                return;
+            }
+            if normalize::ident(ident[0].clone()) == "current_timestamp" {
                 *expr = Expr::Function(Function {
                     name: ObjectName(vec!["current_timestamp".into()]),
                     args: vec![],

@@ -110,7 +110,9 @@ pub fn plan_show_where(
         let predicate = match &f {
             ShowStatementFilter::Like(s) => {
                 owned = Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(Ident::new(names[0].clone().unwrap()))),
+                    left: Box::new(Expr::Identifier(vec![Ident::new(
+                        names[0].clone().unwrap(),
+                    )])),
                     op: BinaryOperator::Like,
                     right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
                 };
@@ -1301,17 +1303,15 @@ fn plan_expr_returning_name<'a>(
         Ok((ScalarExpr::Column(i), name.cloned()))
     } else {
         Ok(match e {
-            Expr::Identifier(name) => {
-                let (i, name) = ecx
-                    .scope
-                    .resolve_column(&normalize::column_name(name.clone()))?;
-                (ScalarExpr::Column(i), Some(name.clone()))
-            }
-            Expr::CompoundIdentifier(names) => {
+            Expr::Identifier(names) => {
                 let mut names = names.clone();
                 let col_name = normalize::column_name(names.pop().unwrap());
-                let table_name = normalize::object_name(ObjectName(names))?;
-                let (i, name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
+                let (i, name) = if names.is_empty() {
+                    ecx.scope.resolve_column(&col_name)?
+                } else {
+                    let table_name = normalize::object_name(ObjectName(names))?;
+                    ecx.scope.resolve_table_column(&table_name, &col_name)?
+                };
                 (ScalarExpr::Column(i), Some(name.clone()))
             }
             Expr::Value(val) => (plan_literal(val)?, None),
@@ -1669,7 +1669,7 @@ fn plan_any_or_all<'a>(
         &any_ecx,
         op,
         left,
-        &Expr::Identifier(Ident::new(right_name)),
+        &Expr::Identifier(vec![Ident::new(right_name)]),
     )?;
 
     // plan subquery
