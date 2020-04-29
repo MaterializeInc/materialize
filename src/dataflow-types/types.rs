@@ -98,8 +98,9 @@ pub struct DataflowDesc {
     pub dependent_objects: HashMap<GlobalId, Vec<GlobalId>>,
     /// An optional frontier to which inputs should be advanced.
     ///
-    /// This is logically equivalent to a timely dataflow `Antichain`,
-    /// which should probably be used here instead.
+    /// If this is set, it should override the default setting determined by
+    /// the upper bound of `since` frontiers contributing to the dataflow.
+    /// It is an error for this to be set to a frontier not beyond that default.
     pub as_of: Option<Antichain<Timestamp>>,
     /// Human readable name
     pub debug_name: String,
@@ -201,37 +202,61 @@ impl DataflowDesc {
         ));
     }
 
-    pub fn as_of(&mut self, as_of: Antichain<Timestamp>) {
+    /// Assigns the `as_of` frontier to the supplied argument.
+    ///
+    /// This method allows the dataflow to indicate a frontier up through
+    /// which all times should be advanced. This can be done for at least
+    /// two reasons: 1. correctness and 2. performance.
+    ///
+    /// Correctness may require an `as_of` to ensure that historical detail
+    /// is consolidated at representative times that do not present specific
+    /// detail that is not specifically correct. For example, updates may be
+    /// compacted to times that are no longer the source times, but instead
+    /// some byproduct of when compaction was executed; we should not present
+    /// those specific times as meaningfully different from other equivalent
+    /// times.
+    ///
+    /// Performance may benefit from an aggressive `as_of` as it reduces the
+    /// number of distinct moments at which collections vary. Differential
+    /// dataflow will refresh its outputs at each time its inputs change and
+    /// to moderate that we can minimize the volume of distinct input times
+    /// as much as possible.
+    ///
+    /// Generally, one should consider setting `as_of` at least to the `since`
+    /// frontiers of contributing data sources and as aggressively as the
+    /// computation permits.
+    pub fn set_as_of(&mut self, as_of: Antichain<Timestamp>) {
         self.as_of = Some(as_of);
     }
 
-    /// Gets index ids of all indexes require to construct a particular view
-    /// If `id` is None, returns all indexes required to construct all views
-    /// required by the exports
-    pub fn get_imports(&self, id: Option<&GlobalId>) -> HashSet<GlobalId> {
-        if let Some(id) = id {
-            self.get_imports_inner(id)
-        } else {
-            let mut result = HashSet::new();
-            for (_, desc, _) in &self.index_exports {
-                result.extend(self.get_imports_inner(&desc.on_id))
-            }
-            for (_, sink) in &self.sink_exports {
-                result.extend(self.get_imports_inner(&sink.from.0))
-            }
-            result
+    // TODO: This is currently unused.
+    /// Collects all indexes required to construct all exports.
+    pub fn get_all_imports(&self) -> HashSet<GlobalId> {
+        let mut result = HashSet::new();
+        for (_, desc, _) in &self.index_exports {
+            result.extend(self.get_imports(&desc.on_id))
         }
+        for (_, sink) in &self.sink_exports {
+            result.extend(self.get_imports(&sink.from.0))
+        }
+        result
     }
 
-    pub fn get_imports_inner(&self, id: &GlobalId) -> HashSet<GlobalId> {
+    /// Collects all transitively dependent identifiers that do not have their own dependencies.
+    pub fn get_imports(&self, id: &GlobalId) -> HashSet<GlobalId> {
         let mut result = HashSet::new();
-        if let Some(dependents) = self.dependent_objects.get(id) {
-            for id in dependents {
-                result.extend(self.get_imports_inner(id));
+        let mut worklist = vec![id];
+        while let Some(id) = worklist.pop() {
+            if let Some(dependents) = self.dependent_objects.get(id) {
+                for id in dependents.iter() {
+                    if !result.contains(id) {
+                        result.insert(*id);
+                        worklist.push(id);
+                    }
+                }
             }
-        } else {
-            result.insert(*id);
         }
+        result.retain(|id| self.dependent_objects.get(id).is_none());
         result
     }
 }
