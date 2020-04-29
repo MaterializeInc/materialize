@@ -240,8 +240,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
             // visible in sinks.
             let as_of_frontier = dataflow
                 .as_of
-                .as_ref()
-                .map(|x| x.clone())
+                .clone()
                 .unwrap_or_else(|| Antichain::from_elem(0));
 
             // Load declared sources into the rendering context.
