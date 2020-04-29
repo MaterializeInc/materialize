@@ -23,7 +23,8 @@ use rusoto_kinesis::{
     ListShardsInput, PutRecordsError, PutRecordsInput, PutRecordsRequestEntry, Shard,
 };
 
-use testdrive::util;
+use aws_util::aws;
+use ore::retry;
 
 const DUMMY_PARTITION_KEY: &str = "dummy";
 const ACTIVE: &str = "ACTIVE";
@@ -52,7 +53,7 @@ impl KinesisInfo {
 /// Creates a KinesisClient to put records to the target Kinesis stream.
 /// Creates KinesisInfo to use for creating our source and views.
 pub async fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
-    let (aws_account, aws_credentials) = util::aws::account_details(Duration::from_secs(15))
+    let (aws_account, aws_credentials) = aws::account_details(Duration::from_secs(15))
         .await
         .map_err(|e| format!("error getting AWS account details: {}", e))?;
     let provider = rusoto_credential::StaticProvider::new(
@@ -88,7 +89,7 @@ pub async fn create_stream(
         .await
         .map_err(|e| format!("Error creating stream: {}", e))?;
 
-    util::retry::retry_for(Duration::from_secs(120), |_| async {
+    retry::retry_for(Duration::from_secs(120), |_| async {
         let description = kinesis_client
             .describe_stream(DescribeStreamInput {
                 exclusive_start_shard_id: None,

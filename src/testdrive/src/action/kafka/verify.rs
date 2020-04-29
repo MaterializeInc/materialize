@@ -16,10 +16,11 @@ use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::stream::StreamExt;
 
+use ore::retry;
+
 use crate::action::{Action, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
-use crate::util::retry;
 
 pub struct VerifyAction {
     sink: String,

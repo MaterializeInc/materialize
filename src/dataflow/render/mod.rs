@@ -119,6 +119,7 @@ use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
 use timely::dataflow::Stream;
+use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use avro::Schema;
@@ -239,9 +240,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
             // visible in sinks.
             let as_of_frontier = dataflow
                 .as_of
-                .as_ref()
-                .map(|x| x.to_vec())
-                .unwrap_or_else(|| vec![0]);
+                .clone()
+                .unwrap_or_else(|| Antichain::from_elem(0));
 
             // Load declared sources into the rendering context.
             for (src_id, mut src) in dataflow.source_imports.clone() {
@@ -297,7 +297,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     let as_of_frontier = as_of_frontier.clone();
                                     move |_datum, time| {
                                         let mut time = time.clone();
-                                        time.advance_by(&as_of_frontier[..]);
+                                        time.advance_by(as_of_frontier.borrow());
                                         time
                                     }
                                 });
@@ -463,7 +463,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             let as_of_frontier = as_of_frontier.clone();
                             move |time| {
                                 let mut time = time.clone();
-                                time.advance_by(&as_of_frontier[..]);
+                                time.advance_by(as_of_frontier.borrow());
                                 time
                             }
                         });
@@ -471,7 +471,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             let as_of_frontier = as_of_frontier.clone();
                             move |time| {
                                 let mut time = time.clone();
-                                time.advance_by(&as_of_frontier[..]);
+                                time.advance_by(as_of_frontier.borrow());
                                 time
                             }
                         });

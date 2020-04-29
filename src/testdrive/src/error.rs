@@ -47,7 +47,7 @@ pub enum Error {
     },
     General {
         ctx: String,
-        cause: Option<Box<dyn StdError + Send>>,
+        cause: Option<Box<dyn StdError + Send + Sync>>,
         hints: Vec<String>,
     },
     Usage {
@@ -218,7 +218,7 @@ pub trait ResultExt<T, E> {
 
 impl<T, E> ResultExt<T, E> for Result<T, E>
 where
-    E: 'static + StdError + Send,
+    E: 'static + StdError + Send + Sync,
 {
     fn err_ctx(self, ctx: String) -> Result<T, Error>
     where

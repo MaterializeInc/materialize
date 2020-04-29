@@ -7,24 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Internal Kinesis utility library for Materialize.
-//!
-//! Modules in this crate provide wrappers around the AWS Kinesis APIs
-//! to be used throughout Materialize code.
-
-#![deny(missing_docs, missing_debug_implementations)]
+//! Utility mod for Kinesis.
 
 use std::collections::HashSet;
 
 use failure::{bail, ResultExt};
-use rusoto_kinesis::{Kinesis, KinesisClient, ListShardsInput};
+use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput};
 
-/// Wrapper around Kinesis' ListShards API (and Rusoto's).
+/// Wrapper around AWS Kinesis ListShards API (and Rusoto).
 ///
 /// Generates a set of all Shard ids in a given stream, potentially paginating through
 /// a long list of shards (greater than 100) using the next_token parameter.
 ///
-/// Does not currently handle any ListShards errors, will return all related errors
+/// Does not currently handle any ListShards errors, will return all errors
 /// directly to the caller.
 pub async fn get_shard_ids(
     client: &KinesisClient,
@@ -59,4 +54,30 @@ pub async fn get_shard_ids(
             break Ok(all_shard_ids);
         }
     }
+}
+
+/// Wrapper around AWS Kinesis GetShardIterator API (and Rusoto).
+///
+/// This function returns the TRIM_HORIZON shard iterator of a given stream and shard, meaning
+/// it will return the location in the shard with the oldest data record. We use this to connect
+/// to newly discovered shards.
+///
+/// Does not currently handle any GetShardIterator errors, will return all errors
+/// directly to the caller.
+pub async fn get_shard_iterator(
+    client: &KinesisClient,
+    stream_name: &str,
+    shard_id: &str,
+) -> Result<Option<String>, failure::Error> {
+    Ok(client
+        .get_shard_iterator(GetShardIteratorInput {
+            shard_id: String::from(shard_id),
+            shard_iterator_type: String::from("TRIM_HORIZON"),
+            starting_sequence_number: None,
+            stream_name: String::from(stream_name),
+            timestamp: None,
+        })
+        .await
+        .with_context(|e| format!("fetching shard iterator: {}", e))?
+        .shard_iterator)
 }

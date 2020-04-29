@@ -17,6 +17,7 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{OrdKeyBatch, OrdValBatch};
 use differential_dataflow::trace::implementations::spine_fueled_neu::Spine;
 use differential_dataflow::trace::TraceReader;
+use timely::progress::frontier::{Antichain, AntichainRef};
 
 use dataflow_types::{Diff, Timestamp};
 use expr::{EvalError, GlobalId};
@@ -52,12 +53,12 @@ impl TraceManager {
     /// of differential dataflow, which requires users to perform this explicitly; if that changes we may
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
-        let mut antichain = timely::progress::frontier::Antichain::new();
+        let mut antichain = Antichain::new();
         for bundle in self.traces.values_mut() {
             bundle.oks.read_upper(&mut antichain);
-            bundle.oks.distinguish_since(antichain.elements());
+            bundle.oks.distinguish_since(antichain.borrow());
             bundle.errs.read_upper(&mut antichain);
-            bundle.errs.distinguish_since(antichain.elements());
+            bundle.errs.distinguish_since(antichain.borrow());
         }
     }
 
@@ -67,7 +68,7 @@ impl TraceManager {
     /// associated traces may not accumulate to the correct quantities for times
     /// not in advance of `frontier`. Users should take care to only rely on
     /// accumulations at times in advance of `frontier`.
-    pub fn allow_compaction(&mut self, id: GlobalId, frontier: &[Timestamp]) {
+    pub fn allow_compaction(&mut self, id: GlobalId, frontier: AntichainRef<Timestamp>) {
         if let Some(bundle) = self.traces.get_mut(&id) {
             bundle.oks.advance_by(frontier);
             bundle.errs.advance_by(frontier);

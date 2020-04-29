@@ -16,10 +16,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use ore::retry;
+
 use crate::action::{Action, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
-use crate::util::retry;
 
 pub struct WriteAction {
     path: String,

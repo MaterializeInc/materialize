@@ -16,9 +16,10 @@ use rand::{thread_rng, Rng};
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
 
+use ore::retry;
+
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use crate::util::retry;
 
 pub struct IngestAction {
     stream_prefix: String,

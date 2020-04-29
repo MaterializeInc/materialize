@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Retry utilities.
+
 use std::cmp;
 use std::future::Future;
 
@@ -14,9 +16,13 @@ use tokio::time::{self, Duration};
 
 const ZERO_DURATION: Duration = Duration::from_secs(0);
 
-#[derive(Clone)]
+/// Convenience struct for holding retry information.
+#[derive(Clone, Debug)]
 pub struct RetryState {
+    /// Current retry iteration.
     pub i: usize,
+
+    /// Duration of the next retry backoff.
     pub next_backoff: Option<Duration>,
 }
 
