@@ -27,7 +27,7 @@
 //!
 //! The approach taken is to build two parallel trees of computation: one for
 //! the rows that have been successfully evaluated (the "oks tree"), and one for
-//! the errors that were been generated (the "errs tree"). For example:
+//! the errors that have been generated (the "errs tree"). For example:
 //!
 //! ```text
 //!    oks1  errs1       oks2  errs2
