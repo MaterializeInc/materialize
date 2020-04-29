@@ -82,7 +82,7 @@ macro_rules! make_visitor {
                 &mut self,
                 name: &'ast $($mut)* ObjectName,
                 alias: Option<&'ast $($mut)* TableAlias>,
-                args: &'ast $($mut)* [Expr],
+                args: Option<&'ast $($mut)* FunctionArgs>,
                 with_hints: &'ast $($mut)* [Expr],
             ) {
                 visit_table_table_factor(self, name, alias, args, with_hints)
@@ -177,8 +177,6 @@ macro_rules! make_visitor {
                 visit_idents(self, idents)
             }
 
-            fn visit_wildcard(&mut self) {}
-
             fn visit_qualified_wildcard(&mut self, idents: &'ast $($mut)* [Ident]) {
                 visit_qualified_wildcard(self, idents)
             }
@@ -247,6 +245,10 @@ macro_rules! make_visitor {
 
             fn visit_function(&mut self, func: &'ast $($mut)* Function) {
                 visit_function(self, func)
+            }
+
+            fn visit_function_args(&mut self, args: &'ast $($mut)* FunctionArgs) {
+                visit_function_args(self, args)
             }
 
             fn visit_window_spec(&mut self, window_spec: &'ast $($mut)* WindowSpec) {
@@ -818,7 +820,7 @@ macro_rules! make_visitor {
                 SelectItem::QualifiedWildcard(object_name) => {
                     visitor.visit_qualified_wildcard(&$($mut)* object_name.0)
                 }
-                SelectItem::Wildcard => visitor.visit_wildcard(),
+                SelectItem::Wildcard => (),
             }
         }
 
@@ -842,7 +844,7 @@ macro_rules! make_visitor {
                     alias,
                     args,
                     with_hints,
-                } => visitor.visit_table_table_factor(name, alias.as_auto_ref(), args, with_hints),
+                } => visitor.visit_table_table_factor(name, alias.as_auto_ref(), args.as_auto_ref(), with_hints),
                 TableFactor::Derived {
                     lateral,
                     subquery,
@@ -858,12 +860,12 @@ macro_rules! make_visitor {
             visitor: &mut V,
             name: &'ast $($mut)* ObjectName,
             alias: Option<&'ast $($mut)* TableAlias>,
-            args: &'ast $($mut)* [Expr],
+            args: Option<&'ast $($mut)* FunctionArgs>,
             with_hints: &'ast $($mut)* [Expr],
         ) {
             visitor.visit_object_name(name);
-            for expr in args {
-                visitor.visit_expr(expr);
+            if let Some(args) = args {
+                visitor.visit_function_args(args);
             }
             if let Some(alias) = alias {
                 visitor.visit_table_alias(alias);
@@ -980,7 +982,6 @@ macro_rules! make_visitor {
         pub fn visit_expr<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, expr: &'ast $($mut)* Expr) {
             match expr {
                 Expr::Identifier(ident) => visitor.visit_idents(ident),
-                Expr::Wildcard => visitor.visit_wildcard(),
                 Expr::QualifiedWildcard(idents) => visitor.visit_qualified_wildcard(idents),
                 Expr::Parameter(n) => visitor.visit_parameter(*n),
                 Expr::IsNull(expr) => visitor.visit_is_null(expr),
@@ -1170,11 +1171,20 @@ macro_rules! make_visitor {
 
         pub fn visit_function<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, func: &'ast $($mut)* Function) {
             visitor.visit_object_name(&$($mut)* func.name);
-            for arg in &$($mut)* func.args {
-                visitor.visit_expr(arg);
-            }
+            visitor.visit_function_args(&$($mut)* func.args);
             if let Some(over) = &$($mut)* func.over {
                 visitor.visit_window_spec(over);
+            }
+        }
+
+        pub fn visit_function_args<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, args: &'ast $($mut)* FunctionArgs) {
+            match args {
+                FunctionArgs::Star => (),
+                FunctionArgs::Args(args) => {
+                    for arg in args {
+                        visitor.visit_expr(arg);
+                    }
+                }
             }
         }
 
