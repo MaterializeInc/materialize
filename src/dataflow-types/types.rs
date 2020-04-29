@@ -247,10 +247,10 @@ impl DataflowDesc {
         let mut result = HashSet::new();
         let mut worklist = vec![id];
         while let Some(id) = worklist.pop() {
+            result.insert(*id);
             if let Some(dependents) = self.dependent_objects.get(id) {
                 for id in dependents.iter() {
                     if !result.contains(id) {
-                        result.insert(*id);
                         worklist.push(id);
                     }
                 }
