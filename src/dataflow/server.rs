@@ -130,7 +130,7 @@ pub enum SequencedCommand {
     /// Each entry in the vector names a view and provides a frontier after which
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(GlobalId, Vec<Timestamp>)>),
+    AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Append a new event to the log stream.
     AppendLog(MaterializedEvent),
     /// Advance worker timestamp
@@ -554,10 +554,20 @@ where
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.traces.get(&id).unwrap().clone();
-                trace_bundle.oks_mut().advance_by(&[timestamp]);
-                trace_bundle.errs_mut().advance_by(&[timestamp]);
-                trace_bundle.oks_mut().distinguish_since(&[]);
-                trace_bundle.errs_mut().distinguish_since(&[]);
+                let timestamp_frontier = Antichain::from_elem(timestamp);
+                let empty_frontier = Antichain::new();
+                trace_bundle
+                    .oks_mut()
+                    .advance_by(timestamp_frontier.borrow());
+                trace_bundle
+                    .errs_mut()
+                    .advance_by(timestamp_frontier.borrow());
+                trace_bundle
+                    .oks_mut()
+                    .distinguish_since(empty_frontier.borrow());
+                trace_bundle
+                    .errs_mut()
+                    .distinguish_since(empty_frontier.borrow());
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
                     id,
@@ -649,7 +659,7 @@ where
 
             SequencedCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
-                    self.traces.allow_compaction(id, &frontier[..]);
+                    self.traces.allow_compaction(id, frontier.borrow());
                 }
             }
 

@@ -100,7 +100,7 @@ pub struct DataflowDesc {
     ///
     /// This is logically equivalent to a timely dataflow `Antichain`,
     /// which should probably be used here instead.
-    pub as_of: Option<Vec<Timestamp>>,
+    pub as_of: Option<Antichain<Timestamp>>,
     /// Human readable name
     pub debug_name: String,
 }
@@ -202,7 +202,7 @@ impl DataflowDesc {
     }
 
     pub fn as_of(&mut self, as_of: Antichain<Timestamp>) {
-        self.as_of = Some(as_of.elements().into());
+        self.as_of = Some(as_of);
     }
 
     /// Gets index ids of all indexes require to construct a particular view
