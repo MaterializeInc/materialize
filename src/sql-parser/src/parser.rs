@@ -276,10 +276,10 @@ impl Parser {
                             self.prev_token();
                             self.parse_function(ObjectName(id_parts))
                         } else {
-                            Ok(Expr::CompoundIdentifier(id_parts))
+                            Ok(Expr::Identifier(id_parts))
                         }
                     }
-                    _ => Ok(Expr::Identifier(w.to_ident())),
+                    _ => Ok(Expr::Identifier(vec![w.to_ident()])),
                 },
             }, // End of Token::Word
             Token::Mult => Ok(Expr::Wildcard),
