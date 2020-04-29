@@ -10,6 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 avro = { path = "../avro" }
+aws-util = { path = "../aws-util" }
 bincode = "1.2.1"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
@@ -22,7 +23,6 @@ failure = "0.1"
 futures = "0.3"
 interchange = { path = "../interchange" }
 itertools = "0.9"
-kinesis-util = { path = "../kinesis-util" }
 lazy_static = "1.4"
 log = "0.4"
 notify = "4.0"

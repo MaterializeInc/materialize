@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use rusoto_kinesis::{GetRecordsInput, Kinesis, KinesisClient};
 
-use kinesis_util::{get_shard_ids, get_shard_iterator};
+use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;

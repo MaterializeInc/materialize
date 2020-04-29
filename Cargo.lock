@@ -144,6 +144,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "failure",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kinesis",
+ "rusoto_sts",
+ "tokio",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -449,6 +462,7 @@ name = "coord"
 version = "0.1.0"
 dependencies = [
  "avro",
+ "aws-util",
  "catalog",
  "ccsr",
  "chrono",
@@ -462,7 +476,6 @@ dependencies = [
  "futures",
  "interchange",
  "itertools",
- "kinesis-util",
  "lazy_static",
  "log",
  "ore",
@@ -647,6 +660,7 @@ name = "dataflow"
 version = "0.1.0"
 dependencies = [
  "avro",
+ "aws-util",
  "bincode",
  "ccsr",
  "comm",
@@ -659,7 +673,6 @@ dependencies = [
  "futures",
  "interchange",
  "itertools",
- "kinesis-util",
  "lazy_static",
  "log",
  "notify",
@@ -1482,14 +1495,6 @@ checksum = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 dependencies = [
  "winapi 0.2.8",
  "winapi-build",
-]
-
-[[package]]
-name = "kinesis-util"
-version = "0.1.0"
-dependencies = [
- "failure",
- "rusoto_kinesis",
 ]
 
 [[package]]
@@ -3384,6 +3389,7 @@ dependencies = [
  "async-trait",
  "atty",
  "avro",
+ "aws-util",
  "byteorder",
  "bytes",
  "ccsr",
@@ -3394,7 +3400,6 @@ dependencies = [
  "getopts",
  "interchange",
  "itertools",
- "kinesis-util",
  "lazy_static",
  "md-5",
  "ore",
