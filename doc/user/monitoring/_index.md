@@ -17,7 +17,7 @@ preconfigured to run it as [`materialize/simple-monitor`](simplemon-hub).
 The only configuration required to get started with the docker image is the
 `MATERIALIZED_URL=<host>:<port>` environment variable.
 
-As an example, if you are running `materialized` on in a cloud instance at the IP address
+As an example, if you are running `materialized` in a cloud instance at the IP address
 172.16.0.0, you could get a dashboard by running this command and opening `http://localhost:3000` in your web browser:
 
 ```console
