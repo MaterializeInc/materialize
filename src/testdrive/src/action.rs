@@ -122,7 +122,7 @@ impl State {
 
     // Delete the Kinesis streams created for this run of testdrive.
     pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
-        let stream_names = self
+        let stream_names_with_matching_seed: Vec<String> = self
             .kinesis_client
             .list_streams(ListStreamsInput {
                 exclusive_start_stream_name: None,
@@ -134,23 +134,24 @@ impl State {
                 cause: Some(e.into()),
                 hints: vec![],
             })?
-            .stream_names;
+            .stream_names
+            .into_iter()
+            .filter(|stream_name| stream_name.contains(&self.seed.to_string()))
+            .collect();
 
-        if !stream_names.is_empty() {
-            for stream_name in stream_names {
-                if stream_name.contains(&self.seed.to_string()) {
-                    self.kinesis_client
-                        .delete_stream(DeleteStreamInput {
-                            enforce_consumer_deletion: Some(true),
-                            stream_name: stream_name.clone(),
-                        })
-                        .await
-                        .map_err(|e| Error::General {
-                            ctx: format!("deleting Kinesis stream: {}", stream_name),
-                            cause: Some(e.into()),
-                            hints: vec![],
-                        })?;
-                }
+        if !stream_names_with_matching_seed.is_empty() {
+            for stream_name in stream_names_with_matching_seed {
+                self.kinesis_client
+                    .delete_stream(DeleteStreamInput {
+                        enforce_consumer_deletion: Some(true),
+                        stream_name: stream_name.clone(),
+                    })
+                    .await
+                    .map_err(|e| Error::General {
+                        ctx: format!("deleting Kinesis stream: {}", stream_name),
+                        cause: Some(e.into()),
+                        hints: vec![],
+                    })?;
             }
         }
 
