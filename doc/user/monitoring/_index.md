@@ -60,5 +60,5 @@ Grafana][graf-import]. It relies on you having configured prometheus to scrape
 materialized.
 
 [simplemon-hub]: https://hub.docker.com/repository/docker/materialize/dashboard
-[dashboard-json]: ../../../misc/monitoring/simple-monitor/user/conf/grafana/dashboards/overview.json
+[dashboard-json]: https://github.com/MaterializeInc/materialize/tree/master/misc/monitoring/simple-monitor/user/conf/grafana/dashboards/overview.json
 [graf-import]: https://grafana.com/docs/grafana/latest/reference/export_import/#importing-a-dashboard
