@@ -532,7 +532,7 @@ load_test() {
     dc_run -d peeker \
          "${PEEKER_COMMAND[@]}"
     dc_ensure_stays_up peeker
-    dc_ensure_stays_up grafana 1
+    dc_ensure_stays_up dashboard 1
     dc_status
 }
 
