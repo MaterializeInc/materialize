@@ -7,13 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use dataflow_types::Diff;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::{operator, InputHandle, OperatorInfo, OutputHandle};
+use timely::dataflow::operators::generic::{
+    operator::{self, Operator},
+    InputHandle, OperatorInfo, OutputHandle,
+};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
@@ -82,6 +86,10 @@ where
     where
         E: Data,
         L: FnMut(&D1) -> Result<bool, E> + 'static;
+
+    /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
+    /// and each time is the current Timely timestamp.
+    fn pass_through(&self, name: &str) -> Stream<G, (D1, G::Timestamp, Diff)>;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -245,6 +253,31 @@ where
                         ok_session.give_vec(&mut storage);
                     }
                 })
+            }
+        })
+    }
+    fn pass_through(
+        &self,
+        name: &str,
+    ) -> Stream<
+        G,
+        (
+            D1,
+            G::Timestamp,
+            Diff, /* Can't be generic -- Semigroup has no distinguished `1` element */
+        ),
+    > {
+        self.unary(Pipeline, name, move |_, _| {
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    let mut v = Vec::new();
+                    data.swap(&mut v);
+                    let mut session = output.session(&cap);
+                    session.give_iterator(
+                        v.into_iter()
+                            .map(|payload| (payload, cap.time().clone(), 1)),
+                    );
+                });
             }
         })
     }
