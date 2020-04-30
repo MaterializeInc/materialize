@@ -118,7 +118,7 @@ use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
-use timely::dataflow::Stream;
+use timely::dataflow::{channels::pact::Pipeline, Stream};
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
@@ -136,7 +136,7 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::{SourceConfig, SourceToken};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::decode::{decode_avro_values, decode_upsert, decode_values};
+use crate::decode::{decode_avro_values, decode_upsert, decode_values, pass_through};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::CollectionExt;
 use crate::server::LocalInput;
@@ -344,20 +344,35 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             let reader_schema = Schema::parse_str(reader_schema).unwrap();
                             let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
-                            let (source, capability) =
+                            let ((source, err_source), capability) =
                                 source::file(source_config, c.path, read_style, ctor);
+                            err_collection = err_collection.concat(
+                                &pass_through(
+                                    &err_source
+                                        .map(|source_err| DataflowError::SourceError(source_err)),
+                                    "AvroOCF-errors",
+                                    Pipeline,
+                                )
+                                .as_collection(),
+                            );
                             (decode_avro_values(&source, &envelope), capability)
                         } else {
-                            let (source, capability) = match connector {
+                            let ((ok_source, err_source), capability) = match connector {
                                 ExternalSourceConnector::Kafka(kc) => {
                                     let (source, capability) = source::kafka(source_config, kc);
                                     (
-                                        source.map(|(_key, (payload, aux_num))| (payload, aux_num)),
+                                        (
+                                            source.map(|(_key, (payload, aux_num))| {
+                                                (payload, aux_num)
+                                            }),
+                                            todo!(),
+                                        ),
                                         capability,
                                     )
                                 }
                                 ExternalSourceConnector::Kinesis(kc) => {
-                                    source::kinesis(source_config, kc)
+                                    let (ok_source, cap) = source::kinesis(source_config, kc);
+                                    ((ok_source, todo!()), cap)
                                 }
                                 ExternalSourceConnector::File(c) => {
                                     let read_style = if c.tail {
@@ -371,10 +386,20 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 }
                                 ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                             };
+                            err_collection = err_collection.concat(
+                                &pass_through(
+                                    &err_source
+                                        .map(|source_err| DataflowError::SourceError(source_err)),
+                                    "source-errors",
+                                    Pipeline,
+                                )
+                                .as_collection(),
+                            );
+
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
                             let stream = decode_values(
-                                &source,
+                                &ok_source,
                                 encoding,
                                 &dataflow.debug_name,
                                 &envelope,
@@ -450,7 +475,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         Some(Ok(x)) => {
                                             panic!("Predicate evaluated to invalid value: {:?}", x)
                                         }
-                                        Some(Err(x)) => Some(Err(x)),
+                                        Some(Err(x)) => Some(Err(x.into())),
                                     }
                                 });
 
@@ -792,7 +817,7 @@ where
                                 // Note that this doesn't mutate input_row.
                                 datums.push(datum);
                             }
-                            Ok::<_, EvalError>(Row::pack(&*datums))
+                            Ok::<_, DataflowError>(Row::pack(&*datums))
                         });
                     let err_collection = err_collection.concat(&new_err_collection);
                     self.collections
@@ -840,13 +865,13 @@ where
                             let temp_storage = RowArena::new();
                             let expr = match expr.eval(&datums, &temp_storage) {
                                 Ok(expr) => expr,
-                                Err(e) => return vec![Err(e)],
+                                Err(e) => return vec![Err(e.into())],
                             };
                             let output_rows = func.eval(expr, &temp_storage);
                             output_rows
                                 .into_iter()
                                 .map(move |output_row| {
-                                    Ok::<_, EvalError>(Row::pack(
+                                    Ok::<_, DataflowError>(Row::pack(
                                         datums
                                             .iter()
                                             .cloned()
@@ -875,7 +900,7 @@ where
 
                 RelationExpr::Filter { input, predicates } => {
                     let collections = if let RelationExpr::Join { implementation, .. } = &**input {
-                        match implementation {
+                        let (ok_collection, err_collection) = match implementation {
                             expr::JoinImplementation::Differential(_start, _order) => {
                                 self.render_join(input, predicates, scope, worker_index)
                             }
@@ -886,7 +911,8 @@ where
                             expr::JoinImplementation::Unimplemented => {
                                 panic!("Attempt to render unimplemented join");
                             }
-                        }
+                        };
+                        (ok_collection, err_collection.map(Into::into))
                     } else {
                         self.ensure_rendered(input, scope, worker_index);
                         let temp_storage = RowArena::new();
@@ -900,7 +926,7 @@ where
                                         return Ok(false);
                                     }
                                 }
-                                Ok::<_, EvalError>(true)
+                                Ok::<_, DataflowError>(true)
                             });
                         let err_collection = err_collection.concat(&new_err_collection);
                         (ok_collection, err_collection)
@@ -993,7 +1019,7 @@ where
                         let temp_storage = RowArena::new();
                         let key_row =
                             Row::try_pack(keys2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                        Ok::<_, EvalError>((key_row, row))
+                        Ok::<_, DataflowError>((key_row, row))
                     });
                     let err_collection = err_built.concat(&err_collection);
                     let ok_arrangement =
@@ -1022,7 +1048,7 @@ where
         predicates: &[ScalarExpr],
         scope: &mut G,
         worker_index: usize,
-    ) -> (Collection<G, Row>, Collection<G, EvalError>) {
+    ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
         if let RelationExpr::Join {
             inputs,
             equivalences,

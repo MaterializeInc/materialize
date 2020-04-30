@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use failure::format_err;
+use failure::ResultExt;
 use log::error;
 #[cfg(not(target_os = "macos"))]
 use notify::{RecursiveMode, Watcher};
@@ -23,9 +25,10 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{ExternalSourceConnector, FileSourceConnector, Timestamp};
+use dataflow_types::{ExternalSourceConnector, FileSourceConnector, SourceError, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 
+use crate::operator::StreamExt;
 use crate::server::TimestampHistories;
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
@@ -74,20 +77,14 @@ impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
 
 fn send_records<I, Out, Err>(
     iter: I,
-    tx: std::sync::mpsc::SyncSender<Out>,
+    tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
     activator: Option<Arc<Mutex<SyncActivator>>>,
 ) where
     I: IntoIterator<Item = Result<Out, Err>>,
-    Err: Display,
+    Err: Into<failure::Error>,
 {
     for record in iter {
-        let record = match record {
-            Ok(record) => record,
-            Err(err) => {
-                error!("file source: error while reading file: {}", err);
-                return;
-            }
-        };
+        let record = record.map_err(Into::into);
         if tx.send(record).is_err() {
             // The receiver went away, probably due to `DROP SOURCE`
             break;
@@ -104,23 +101,25 @@ fn send_records<I, Out, Err>(
 
 pub fn read_file_task<Ctor, I, Out, Err>(
     path: PathBuf,
-    tx: std::sync::mpsc::SyncSender<Out>,
+    tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
     activator: Option<Arc<Mutex<SyncActivator>>>,
     read_style: FileReadStyle,
     iter_ctor: Ctor,
 ) where
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err>,
-    Err: Display,
+    Err: Into<failure::Error>,
 {
-    let file = match std::fs::File::open(&path) {
+    let file = match std::fs::File::open(&path).with_context(|e| {
+        format!(
+            "file source: unable to open file at path {}: {}",
+            path.to_string_lossy(),
+            e
+        )
+    }) {
         Ok(file) => file,
         Err(err) => {
-            error!(
-                "file source: unable to open file at path {}. Error: {}",
-                path.to_string_lossy(),
-                err
-            );
+            tx.send(Err(err.into()));
             return;
         }
     };
@@ -179,9 +178,18 @@ pub fn read_file_task<Ctor, I, Out, Err>(
         }
     };
 
-    match iter {
+    match iter.map_err(Into::into).with_context(|e| {
+        format!(
+            "Failed to obtain records from file at path {}: {}",
+            path.to_string_lossy(),
+            e
+        )
+    }) {
         Ok(i) => send_records(i, tx, activator),
-        Err(e) => error!("Failed to obtain records from file. Error {}", e),
+        Err(e) => {
+            tx.send(Err(e.into()));
+            ()
+        }
     };
 }
 
@@ -266,14 +274,18 @@ pub fn file<G, Ctor, I, Out, Err>(
     read_style: FileReadStyle,
     iter_ctor: Ctor,
 ) -> (
-    timely::dataflow::Stream<G, (Out, Option<i64>)>,
+    (
+        timely::dataflow::Stream<G, (Out, Option<i64>)>,
+        timely::dataflow::Stream<G, SourceError>,
+    ),
     Option<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err> + Send + 'static,
-    Err: Display + Send + 'static,
+    Err: Into<failure::Error> + Send + 'static,
+    //    Err: Display + Send + 'static,
     Out: Send + Clone + 'static,
 {
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
@@ -301,7 +313,7 @@ where
     };
 
     // Buffer placeholder for buffering messages for which we did not have a timestamp
-    let mut buffer: Option<Out> = None;
+    let mut buffer: Option<Result<Out, failure::Error>> = None;
     // Index of the last offset that we have already processed (and assigned a timestamp to)
     let mut last_processed_offset: i64 = 0;
     // Index of the current message's offset
@@ -325,11 +337,17 @@ where
             let activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
             thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
         }
+        let mut dead = false;
         move |cap, output| {
             // If nothing else causes us to wake up, do so after a specified amount of time.
             let mut next_activation_duration = HEARTBEAT;
             // Number of records read for this particular activation
             let mut records_read = 0;
+
+            assert!(
+                !dead,
+                "A file source should not be scheduled again after erroring."
+            );
 
             if active {
                 // Check if the capability can be downgraded (this is independent of whether
@@ -347,13 +365,13 @@ where
                 // attempt to process the next message
                 if buffer.is_none() {
                     match rx.try_recv() {
-                        Ok(record) => {
+                        Ok(result) => {
                             records_read += 1;
                             current_msg_offset += 1;
-                            buffer = Some(record);
+                            buffer = Some(result);
                         }
                         Err(TryRecvError::Empty) => {
-                            buffer = None;
+                            // nothing to read, go to sleep
                         }
                         Err(TryRecvError::Disconnected) => {
                             return SourceStatus::Done;
@@ -363,11 +381,19 @@ where
 
                 while let Some(message) = buffer.take() {
                     let ts = find_matching_timestamp(&id, current_msg_offset, &timestamp_histories);
+                    let message = match message {
+                        Ok(message) => message,
+                        Err(err) => {
+                            output.session(&cap).give((Err(err.to_string())));
+                            dead = true;
+                            return SourceStatus::Done;
+                        }
+                    };
                     match ts {
                         None => {
                             // We have not yet decided on a timestamp for this message,
                             // we need to buffer the message
-                            buffer = Some(message);
+                            buffer = Some(Ok(message));
                             activator.activate();
                             return SourceStatus::Alive;
                         }
@@ -376,8 +402,7 @@ where
                             let ts_cap = cap.delayed(&ts);
                             output
                                 .session(&ts_cap)
-                                .give((message, Some(last_processed_offset)));
-
+                                .give(Ok((message, Some(last_processed_offset))));
                             downgrade_capability(
                                 &id,
                                 cap,
@@ -409,9 +434,11 @@ where
         }
     });
 
+    let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(|e| SourceError::FileIO(e)));
+
     if config.active {
-        (stream, Some(capability))
+        ((ok_stream, err_stream), Some(capability))
     } else {
-        (stream, None)
+        ((ok_stream, err_stream), None)
     }
 }

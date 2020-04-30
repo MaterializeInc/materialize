@@ -13,7 +13,7 @@ use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
-use dataflow_types::Timestamp;
+use dataflow_types::{DataflowError, Timestamp};
 use expr::{EvalError, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena};
 
@@ -32,7 +32,7 @@ where
         scope: &mut G,
         worker_index: usize,
         subtract: F,
-    ) -> (Collection<G, Row>, Collection<G, EvalError>)
+    ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
@@ -285,7 +285,7 @@ fn build_lookup<G, Tr>(
     updates: Collection<G, Row>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<ScalarExpr>,
-) -> (Collection<G, Row>, Collection<G, EvalError>)
+) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -335,7 +335,7 @@ pub fn build_filter<G>(
     source_columns: &[usize],
     predicates: &mut Vec<ScalarExpr>,
     equivalences: &mut Vec<Vec<ScalarExpr>>,
-) -> (Collection<G, Row>, Option<Collection<G, EvalError>>)
+) -> (Collection<G, Row>, Option<Collection<G, DataflowError>>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -401,7 +401,7 @@ where
                     return Ok(false);
                 }
             }
-            Ok::<_, EvalError>(true)
+            Ok::<_, DataflowError>(true)
         });
         (ok_collection, Some(err_collection))
     }

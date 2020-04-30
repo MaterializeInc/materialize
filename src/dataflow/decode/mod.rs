@@ -35,9 +35,10 @@ use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
 use log::error;
 use std::iter;
 
+/// XXX(brennan) move this
 /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
 /// and each time is the current Timely timestamp.
-fn pass_through<G, Data, P>(
+pub fn pass_through<G, Data, P>(
     stream: &Stream<G, Data>,
     name: &str,
     pact: P,

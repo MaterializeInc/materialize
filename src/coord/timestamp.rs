@@ -182,15 +182,15 @@ struct RtTimestampConsumer {
 
 enum RtTimestampConnector {
     Kafka(RtKafkaConnector),
-    File(RtFileConnector<Vec<u8>>),
-    Ocf(RtFileConnector<Value>),
+    File(RtFileConnector<Vec<u8>, failure::Error>),
+    Ocf(RtFileConnector<Value, failure::Error>),
     Kinesis(RtKinesisConnector),
 }
 
 enum ByoTimestampConnector {
     Kafka(ByoKafkaConnector),
-    File(ByoFileConnector<Vec<u8>>),
-    Ocf(ByoFileConnector<Value>),
+    File(ByoFileConnector<Vec<u8>, failure::Error>),
+    Ocf(ByoFileConnector<Value, failure::Error>),
     Kinesis(ByoKinesisConnector),
 }
 
@@ -294,7 +294,7 @@ struct RtKafkaConnector {
     topic: String,
 }
 
-use std::time::Instant;
+use std::{fmt::Display, time::Instant};
 
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
@@ -358,13 +358,13 @@ struct RtKinesisConnector {
 struct ByoKinesisConnector {}
 
 /// Data consumer stub for File source with RT consistency
-struct RtFileConnector<Out> {
-    stream: Receiver<Out>,
+struct RtFileConnector<Out, Err> {
+    stream: Receiver<Result<Out, Err>>,
 }
 
 /// Data consumer stub for File source with BYO consistency
-struct ByoFileConnector<Out> {
-    stream: Receiver<Out>,
+struct ByoFileConnector<Out, Err> {
+    stream: Receiver<Result<Out, Err>>,
 }
 
 fn byo_query_source(
@@ -417,9 +417,16 @@ fn byo_query_source(
 }
 
 /// Returns the next message of a stream, or None if no such message exists
-fn file_get_next_message<Out>(file_consumer: &mut ByoFileConnector<Out>) -> Option<Out> {
+fn file_get_next_message<Out, Err>(file_consumer: &mut ByoFileConnector<Out, Err>) -> Option<Out>
+where
+    Err: Display,
+{
     match file_consumer.stream.try_recv() {
-        Ok(record) => Some(record),
+        Ok(Ok(record)) => Some(record),
+        Ok(Err(e)) => {
+            error!("Failed to read file for timestamping: {}", e);
+            None
+        }
         Err(TryRecvError::Empty) => None,
         Err(TryRecvError::Disconnected) => None,
     }
@@ -1220,7 +1227,7 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
-    ) -> Option<ByoFileConnector<std::vec::Vec<u8>>> {
+    ) -> Option<ByoFileConnector<std::vec::Vec<u8>, failure::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
@@ -1306,7 +1313,7 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         fc: FileSourceConnector,
-    ) -> Option<RtFileConnector<avro::types::Value>> {
+    ) -> Option<RtFileConnector<avro::types::Value, failure::Error>> {
         let ctor = move |file| avro::Reader::new(file);
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
@@ -1325,7 +1332,7 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         fc: FileSourceConnector,
-    ) -> Option<RtFileConnector<std::vec::Vec<u8>>> {
+    ) -> Option<RtFileConnector<std::vec::Vec<u8>, failure::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
@@ -1345,7 +1352,7 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
-    ) -> Option<ByoFileConnector<avro::types::Value>> {
+    ) -> Option<ByoFileConnector<avro::types::Value, failure::Error>> {
         let ctor = move |file| avro::Reader::new(file);
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
@@ -1622,8 +1629,12 @@ impl Timestamper {
                         .or_insert(cons.start_offset);
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
-                            Ok(_) => {
+                            Ok(Ok(_)) => {
                                 count += 1;
+                            }
+                            Ok(Err(e)) => {
+                                error!("Failed to read file for timestamping: {}", e);
+                                break;
                             }
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => break,
@@ -1640,8 +1651,12 @@ impl Timestamper {
                     let mut count = 0;
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
-                            Ok(_) => {
+                            Ok(Ok(_)) => {
                                 count += 1;
+                            }
+                            Ok(Err(e)) => {
+                                error!("Failed to read file for timestamping: {}", e);
+                                break;
                             }
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => break,
