@@ -136,10 +136,17 @@ impl State {
             })?
             .stream_names
             .into_iter()
-            .filter(|stream_name| stream_name.contains(&self.seed.to_string()))
+            .filter(|stream_name| {
+                stream_name.starts_with("testdrive")
+                    && stream_name.ends_with(&self.seed.to_string())
+            })
             .collect();
 
         if !stream_names_with_matching_seed.is_empty() {
+            println!(
+                "Deleting stale Kinesis topics {}",
+                stream_names_with_matching_seed.join(", ")
+            );
             for stream_name in stream_names_with_matching_seed {
                 self.kinesis_client
                     .delete_stream(DeleteStreamInput {
