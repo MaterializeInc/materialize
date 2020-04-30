@@ -21,6 +21,12 @@ if [[ "${BUILDKITE_COMMAND:-}" ]]; then
     run_args+=("$BUILDKITE_COMMAND")
 fi
 
+# Sometimes build cancellations prevent us from properly cleaning up the last
+# Docker Compose run, which can leave old containers or volumes around that will
+# interfere with this build.
+echo "--- :docker: Purging containers and volumes from previous builds"
+mzcompose --mz-quiet down --volumes
+
 # Start dependencies under a different heading so that the main heading is less
 # noisy.
 echo "--- :docker: Starting dependencies" >&2
