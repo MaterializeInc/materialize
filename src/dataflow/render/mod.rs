@@ -114,6 +114,7 @@ use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpin
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::aggregation::Aggregate;
+use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
@@ -365,14 +366,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                             source.map(|(_key, (payload, aux_num))| {
                                                 (payload, aux_num)
                                             }),
-                                            todo!(),
+                                            operator::empty(region),
                                         ),
                                         capability,
                                     )
                                 }
                                 ExternalSourceConnector::Kinesis(kc) => {
                                     let (ok_source, cap) = source::kinesis(source_config, kc);
-                                    ((ok_source, todo!()), cap)
+                                    ((ok_source, operator::empty(region)), cap)
                                 }
                                 ExternalSourceConnector::File(c) => {
                                     let read_style = if c.tail {
