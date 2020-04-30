@@ -7,14 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# config file version
-apiVersion: 1
-
-providers:
-- name: mz
-  orgId: 1
-  folder: ''
-  folderUid: ''
-  type: file
-  options:
-    path: /etc/grafana/provisioning/dashboards
+name: perf-kinesis
+pre-image:
+  type: cargo-build
+  bin: perf-kinesis

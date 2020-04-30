@@ -2,7 +2,6 @@
 members = [
     "demo/billing",
     "fuzz",
-    "performance/kinesis",
     "src/avro",
     "src/aws-util",
     "src/catalog",
@@ -27,6 +26,7 @@ members = [
     "src/symbiosis",
     "src/testdrive",
     "test/metabase/smoketest",
+    "test/performance/perf-kinesis",
     "test/smith",
 ]
 

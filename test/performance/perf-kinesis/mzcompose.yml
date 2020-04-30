@@ -1,0 +1,52 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+# Map from host-port:internal port
+#
+# This mostly just shows all the ports that are available to the host system, if you want
+# to change these you must restart the docker-compose cluster.
+x-port-mappings:
+  - &materialized 6875:6875
+  - &grafana 3000:3000
+  - &prometheus 9090:9090
+
+version: '3.7'
+services:
+  perf-kinesis:
+    init: true
+    mzbuild: perf-kinesis
+    environment:
+      - RUST_LOG=perf-kinesis=debug,info
+    depends_on: [materialized]
+
+  materialized:
+    mzbuild: materialized
+    ports:
+      - *materialized
+    init: true
+    command: -w 4
+    environment:
+      - MZ_LOG=pgwire=debug,info
+      - DIFFERENTIAL_EAGER_MERGE=1000
+
+  grafana:
+    mzbuild: simple-monitor
+    propagate-uid-gid: true
+    environment:
+      - 'MATERIALIZED_URL=materialized:6875'
+    ports:
+      - *grafana
+    volumes:
+      # ensure that data doesn't get lost across restarts
+      - ./data/prometheus:/prometheus
+      - ./data/grafana:/var/lib/grafana
+
+volumes:
+  grafana:

@@ -7,7 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: kinesis
-pre-image:
-  type: cargo-build
-  bin: kinesis
+FROM ubuntu:bionic
+
+RUN apt-get update && apt-get -qy install \
+    ca-certificates \
+    postgresql-client \
+    wait-for-it
+
+COPY perf-kinesis /usr/local/bin
+
+ENTRYPOINT ["perf-kinesis"]

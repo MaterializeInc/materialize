@@ -1498,28 +1498,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kinesis"
-version = "0.1.0"
-dependencies = [
- "aws-util",
- "bytes",
- "chrono",
- "env_logger",
- "futures",
- "futures-channel",
- "log",
- "ore",
- "rand",
- "rusoto_core",
- "rusoto_credential",
- "rusoto_kinesis",
- "structopt",
- "thiserror",
- "tokio",
- "tokio-postgres",
-]
-
-[[package]]
 name = "krb5-src"
 version = "0.2.0+1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2156,6 +2134,28 @@ name = "percent-encoding"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
+
+[[package]]
+name = "perf-kinesis"
+version = "0.1.0"
+dependencies = [
+ "aws-util",
+ "bytes",
+ "chrono",
+ "env_logger",
+ "futures",
+ "futures-channel",
+ "log",
+ "ore",
+ "rand",
+ "rusoto_core",
+ "rusoto_credential",
+ "rusoto_kinesis",
+ "structopt",
+ "thiserror",
+ "tokio",
+ "tokio-postgres",
+]
 
 [[package]]
 name = "pgrepr"

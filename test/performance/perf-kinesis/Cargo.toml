@@ -1,19 +1,19 @@
 [package]
-name = "kinesis"
+name = "perf-kinesis"
 version = "0.1.0"
 authors = ["Jessica Laughlin <jessica@materialize.io>"]
 edition = "2018"
 publish = false
 
 [dependencies]
-aws-util = { path = "../../src/aws-util" }
+aws-util = { path = "../../../src/aws-util" }
 bytes = "0.5.4"
 chrono = "0.4"
 env_logger = "0.7.1"
 futures = "0.3.4"
 futures-channel = "0.3.1"
 log = "0.4.8"
-ore = { path = "../../src/ore" }
+ore = { path = "../../../src/ore" }
 rand = "0.7.3"
 rusoto_core = "0.43.0-beta.1"
 rusoto_credential = "0.43.0-beta.1"
