@@ -658,6 +658,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "avro",
  "aws-util",
  "bincode",
