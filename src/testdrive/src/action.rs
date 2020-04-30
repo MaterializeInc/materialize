@@ -24,7 +24,7 @@ use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
-use rusoto_kinesis::KinesisClient;
+use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
 use url::Url;
 
 use repr::strconv;
@@ -100,6 +100,7 @@ pub struct State {
     aws_account: String,
     aws_credentials: AwsCredentials,
     kinesis_client: KinesisClient,
+    kinesis_stream_names: Vec<String>,
 }
 
 impl State {
@@ -124,6 +125,31 @@ impl State {
             .batch_execute("CREATE DATABASE materialize")
             .await
             .err_ctx("resetting materialized state: CREATE DATABASE materialize".into())?;
+        Ok(())
+    }
+
+    // Delete the Kinesis streams created for this run of testdrive.
+    pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
+        if !self.kinesis_stream_names.is_empty() {
+            println!(
+                "Deleting Kinesis streams {}",
+                self.kinesis_stream_names.join(", ")
+            );
+            for stream_name in &self.kinesis_stream_names {
+                self.kinesis_client
+                    .delete_stream(DeleteStreamInput {
+                        enforce_consumer_deletion: Some(true),
+                        stream_name: stream_name.clone(),
+                    })
+                    .await
+                    .map_err(|e| Error::General {
+                        ctx: format!("deleting Kinesis stream: {}", stream_name),
+                        cause: Some(e.into()),
+                        hints: vec![],
+                    })?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -557,7 +583,7 @@ pub async fn create_state(
         )
     };
 
-    let (aws_region, aws_account, aws_credentials, kinesis_client) = {
+    let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
         let provider = rusoto_credential::StaticProvider::new(
             config.aws_credentials.aws_access_key_id().to_owned(),
             config.aws_credentials.aws_secret_access_key().to_owned(),
@@ -577,6 +603,7 @@ pub async fn create_state(
             config.aws_account.clone(),
             config.aws_credentials.clone(),
             kinesis_client,
+            Vec::new(),
         )
     };
 
@@ -597,6 +624,7 @@ pub async fn create_state(
         aws_account,
         aws_credentials,
         kinesis_client,
+        kinesis_stream_names,
     };
     Ok((state, pgconn_task))
 }
