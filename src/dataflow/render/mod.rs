@@ -583,7 +583,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 // put together tokens that belong to the export
                 let mut needed_source_tokens = Vec::new();
                 let mut needed_index_tokens = Vec::new();
-                for import_id in dataflow.get_imports(Some(&index_desc.on_id)) {
+                for import_id in dataflow.get_imports(&index_desc.on_id) {
                     if let Some(index_token) = index_tokens.get(&import_id) {
                         if let Some(logger) = logger {
                             // Log the dependency.
@@ -623,7 +623,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 // put together tokens that belong to the export
                 let mut needed_source_tokens = Vec::new();
                 let mut needed_index_tokens = Vec::new();
-                for import_id in dataflow.get_imports(Some(&sink.from.0)) {
+                for import_id in dataflow.get_imports(&sink.from.0) {
                     if let Some(index_token) = index_tokens.get(&import_id) {
                         needed_index_tokens.push(index_token.clone());
                     } else if let Some(source_token) = source_tokens.get(&import_id) {

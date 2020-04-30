@@ -28,7 +28,7 @@ use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 
 use catalog::names::{DatabaseSpecifier, FullName};
@@ -57,6 +57,8 @@ use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
+
+use arrangement_state::{ArrangementFrontiers, Frontiers};
 
 pub enum Message {
     Command(Command),
@@ -112,7 +114,7 @@ where
     /// Maps (global Id of view) -> (existing indexes)
     views: HashMap<GlobalId, ViewState>,
     /// Maps (global Id of arrangement) -> (frontier information)
-    indexes: HashMap<GlobalId, IndexState>,
+    indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
@@ -168,7 +170,7 @@ where
                 catalog,
                 symbiosis,
                 views: HashMap::new(),
-                indexes: HashMap::new(),
+                indexes: ArrangementFrontiers::default(),
                 since_updates: Vec::new(),
                 active_tails: HashMap::new(),
                 local_input_time: 1,
@@ -1169,7 +1171,7 @@ where
                 };
                 let index_name = format!("temp-index-on-{}", view_id);
                 let mut dataflow = DataflowDesc::new(view_name.to_string());
-                dataflow.as_of(Antichain::from_elem(timestamp));
+                dataflow.set_as_of(Antichain::from_elem(timestamp));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
                     plan_cx: PlanContext::default(),
@@ -1252,7 +1254,8 @@ where
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
         {
-            self.upper_of(index_id)
+            self.indexes
+                .upper_of(index_id)
                 .expect("name missing at coordinator")
                 .to_owned()
         } else {
@@ -1627,13 +1630,7 @@ where
         self.import_source_or_view(id, &index.on, &mut dataflow);
         dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
-        // TODO: should we still support creating multiple dataflows with a single command,
-        // Or should it all be compacted into a single DataflowDesc with multiple exports?
-        dataflow.optimize();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(vec![dataflow]),
-        );
+        self.broadcast_dataflow_creation(dataflow);
         self.insert_index(*id, &index, self.logical_compaction_window_ms);
     }
 
@@ -1714,11 +1711,23 @@ where
             _ => (),
         }
         let mut dataflow = DataflowDesc::new(name);
-        dataflow.as_of(as_of);
+        dataflow.set_as_of(as_of);
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
+        self.broadcast_dataflow_creation(dataflow);
+    }
+
+    // Finalizes the dataflow and broadcasts it to all workers.
+    //
+    // Finalization includes optimization, but also validation of various invariants
+    // such as ensuring that the `as_of` frontier is in advance of the various `since`
+    // frontiers of participating data inputs.
+    pub fn broadcast_dataflow_creation(&mut self, mut dataflow: DataflowDesc) {
+        // Optimize the dataflow across views, and any other ways that appeal.
         dataflow.optimize();
+
+        // Finalize the dataflow by broadcasting its construction to all workers.
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -1943,12 +1952,7 @@ where
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                // Form lower bound on available times
-                let mut upper = Antichain::new();
-                for id in uses_ids.iter() {
-                    // To track the meet of `upper` we just extend with the upper frontier.
-                    upper.extend(self.upper_of(id).unwrap().iter().cloned());
-                }
+                let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
 
                 // We peek at the largest element not in advance of `upper`, which
                 // involves a subtraction. If `upper` contains a zero timestamp there
@@ -1972,19 +1976,7 @@ where
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
         // and does not depend on the transitive sources.
-        let mut since = Antichain::from_elem(0);
-        for id in uses_ids {
-            let prior_since = std::mem::replace(&mut since, Antichain::new());
-            let view_since = self.since_of(&id).expect("Since missing at coordinator");
-            // To track the join of `since` we should replace with the pointwise
-            // join of each element of `since` and `view_since`.
-            for new_element in view_since.elements() {
-                for old_element in prior_since.elements() {
-                    use differential_dataflow::lattice::Lattice;
-                    since.insert(new_element.join(old_element));
-                }
-            }
-        }
+        let since = self.indexes.least_valid_since(uses_ids.iter().cloned());
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
@@ -2039,24 +2031,6 @@ where
         }
     }
 
-    /// The upper frontier of a maintained index, if it exists.
-    fn upper_of(&self, name: &GlobalId) -> Option<AntichainRef<Timestamp>> {
-        if let Some(index_state) = self.indexes.get(name) {
-            Some(index_state.upper.frontier())
-        } else {
-            None
-        }
-    }
-
-    /// The since frontier of a maintained index, if it exists.
-    fn since_of(&self, name: &GlobalId) -> Option<&Antichain<Timestamp>> {
-        if let Some(index_state) = self.indexes.get(name) {
-            Some(&index_state.since)
-        } else {
-            None
-        }
-    }
-
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
@@ -2095,7 +2069,7 @@ where
                 self.propagate_queryability(&index.on);
             }
         } // else the view is temporary
-        let index_state = IndexState::new(self.num_timely_workers, latency_ms);
+        let index_state = Frontiers::new(self.num_timely_workers, latency_ms);
         if self.log {
             for time in index_state.upper.frontier().iter() {
                 broadcast(
@@ -2164,40 +2138,6 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     let (tx, rx) = futures::channel::oneshot::channel();
     tx.send(PeekResponse::Rows(rows)).unwrap();
     ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
-}
-
-pub struct IndexState {
-    /// The most recent frontier for new data.
-    /// All further changes will be in advance of this bound.
-    upper: MutableAntichain<Timestamp>,
-    /// The compaction frontier.
-    /// All peeks in advance of this frontier will be correct,
-    /// but peeks not in advance of this frontier may not be.
-    since: Antichain<Timestamp>,
-    /// Compaction delay.
-    ///
-    /// This timestamp drives the advancement of the since frontier as a
-    /// function of the upper frontier, trailing it by exactly this much.
-    compaction_latency_ms: Option<Timestamp>,
-}
-
-impl IndexState {
-    /// Creates an empty index state from a number of workers.
-    pub fn new(workers: usize, compaction_latency_ms: Option<Timestamp>) -> Self {
-        let mut upper = MutableAntichain::new();
-        upper.update_iter(Some((0, workers as i64)));
-        Self {
-            upper,
-            since: Antichain::from_elem(0),
-            compaction_latency_ms,
-        }
-    }
-
-    /// Sets the latency behind the collection frontier at which compaction occurs.
-    #[allow(dead_code)]
-    pub fn set_compaction_latency(&mut self, latency_ms: Option<Timestamp>) {
-        self.compaction_latency_ms = latency_ms;
-    }
 }
 
 /// Per-view state.
@@ -2465,4 +2405,126 @@ pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
         Optimizer::default(),
     )?;
     Ok(catalog.dump())
+}
+
+/// Frontier state for each arrangement.
+pub mod arrangement_state {
+
+    use std::collections::HashMap;
+
+    use differential_dataflow::lattice::Lattice;
+    use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+    use timely::progress::Timestamp;
+
+    use expr::GlobalId;
+
+    /// A map from global identifiers to arrangement frontier state.
+    pub struct ArrangementFrontiers<T: Timestamp> {
+        index: HashMap<GlobalId, Frontiers<T>>,
+    }
+
+    impl<T: Timestamp> Default for ArrangementFrontiers<T> {
+        fn default() -> Self {
+            Self {
+                index: HashMap::new(),
+            }
+        }
+    }
+
+    impl<T: Timestamp> ArrangementFrontiers<T> {
+        pub fn get(&self, id: &GlobalId) -> Option<&Frontiers<T>> {
+            self.index.get(id)
+        }
+        pub fn get_mut(&mut self, id: &GlobalId) -> Option<&mut Frontiers<T>> {
+            self.index.get_mut(id)
+        }
+        pub fn insert(&mut self, id: GlobalId, state: Frontiers<T>) -> Option<Frontiers<T>> {
+            self.index.insert(id, state)
+        }
+        pub fn remove(&mut self, id: &GlobalId) -> Option<Frontiers<T>> {
+            self.index.remove(id)
+        }
+
+        /// The upper frontier of a maintained index, if it exists.
+        pub fn upper_of(&self, name: &GlobalId) -> Option<AntichainRef<T>> {
+            if let Some(index_state) = self.get(name) {
+                Some(index_state.upper.frontier())
+            } else {
+                None
+            }
+        }
+
+        /// The since frontier of a maintained index, if it exists.
+        pub fn since_of(&self, name: &GlobalId) -> Option<&Antichain<T>> {
+            if let Some(index_state) = self.get(name) {
+                Some(&index_state.since)
+            } else {
+                None
+            }
+        }
+
+        /// Reports the greatest frontier less than all identified `upper` frontiers.
+        pub fn greatest_open_upper<I>(&self, identifiers: I) -> Antichain<T>
+        where
+            I: IntoIterator<Item = GlobalId>,
+            T: Lattice,
+        {
+            // Form lower bound on available times
+            let mut min_upper = Antichain::new();
+            for id in identifiers {
+                // To track the meet of `upper` we just extend with the upper frontier.
+                // This was almost `meet_assign` but our uppers are `MutableAntichain`s.
+                min_upper.extend(self.upper_of(&id).unwrap().iter().cloned());
+            }
+            min_upper
+        }
+
+        /// Reports the minimal frontier greater than all identified `since` frontiers.
+        pub fn least_valid_since<I>(&self, identifiers: I) -> Antichain<T>
+        where
+            I: IntoIterator<Item = GlobalId>,
+            T: Lattice,
+        {
+            let mut max_since = Antichain::from_elem(T::minimum());
+            for id in identifiers {
+                // TODO: We could avoid repeated allocation by swapping two buffers.
+                max_since.join_assign(self.since_of(&id).expect("Since missing at coordinator"));
+            }
+            max_since
+        }
+    }
+
+    pub struct Frontiers<T: Timestamp> {
+        /// The most recent frontier for new data.
+        /// All further changes will be in advance of this bound.
+        pub upper: MutableAntichain<T>,
+        /// The compaction frontier.
+        /// All peeks in advance of this frontier will be correct,
+        /// but peeks not in advance of this frontier may not be.
+        pub since: Antichain<T>,
+        /// Compaction delay.
+        ///
+        /// This timestamp drives the advancement of the since frontier as a
+        /// function of the upper frontier, trailing it by exactly this much.
+        pub compaction_latency_ms: Option<T>,
+    }
+
+    impl<T: Timestamp> Frontiers<T> {
+        /// Creates an empty index state from a number of workers.
+        pub fn new(workers: usize, compaction_latency_ms: Option<T>) -> Self {
+            let mut upper = MutableAntichain::new();
+            upper.update_iter(Some((T::minimum(), workers as i64)));
+            Self {
+                upper,
+                since: Antichain::from_elem(T::minimum()),
+                compaction_latency_ms,
+            }
+        }
+
+        /// Sets the latency behind the collection frontier at which compaction occurs.
+        #[allow(dead_code)]
+        pub fn set_compaction_latency(&mut self, latency_ms: Option<T>) {
+            self.compaction_latency_ms = latency_ms;
+        }
+    }
 }
