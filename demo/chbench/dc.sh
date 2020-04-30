@@ -310,7 +310,9 @@ dc_stop() {
         run_cmd=$(dc_is_run_cmd "$1")
         is_up=$(dc_is_running "$1")
         if [[ -n $run_cmd ]]; then
-            runv docker stop "$run_cmd"
+            while read -r run_cmd; do
+                runv docker stop "$run_cmd"
+            done <<<"$run_cmd"
             return
         elif [[ -n $is_up ]]; then
             runv ./mzcompose --mz-quiet stop "$1"
