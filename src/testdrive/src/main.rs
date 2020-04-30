@@ -38,6 +38,8 @@ async fn run() -> Result<(), Error> {
         "ENCRYPTION://HOST:PORT",
     );
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
+    // # Security options
+    // ## SSL options
     opts.optopt(
         "",
         "cert",
@@ -46,6 +48,21 @@ async fn run() -> Result<(), Error> {
     );
     opts.optopt("", "cert-password", "Keystore password", "PASSWORD");
     opts.optopt("", "root-cert", "Path to the root CA's cert (.pem)", "PATH");
+    // ## SASL Plaintext
+    opts.optopt("", "krb5-keytab", "Path to the Kerberos keystab", "PATH");
+    opts.optopt(
+        "",
+        "krb5-service-name",
+        "The name of the service you want to connect to (probably 'kafka')",
+        "STRING",
+    );
+    opts.optopt(
+        "",
+        "krb5-principal",
+        "The client's Kerberos principal",
+        "STRING",
+    );
+    // # End security options
     opts.optopt(
         "",
         "aws-region",
@@ -103,9 +120,7 @@ async fn run() -> Result<(), Error> {
         }
         config.keystore_path = Some(path);
     }
-    if let Some(pass) = opts.opt_str("cert-password") {
-        config.keystore_pass = Some(pass);
-    }
+    config.keystore_pass = opts.opt_str("cert-password");
     if let Some(path) = opts.opt_str("root-cert") {
         if std::fs::metadata(&path).is_err() {
             return Err(Error::General {
@@ -116,6 +131,20 @@ async fn run() -> Result<(), Error> {
         }
         config.root_cert_path = Some(path);
     }
+
+    if let Some(path) = opts.opt_str("krb5-keytab") {
+        if std::fs::metadata(&path).is_err() {
+            return Err(Error::General {
+                ctx: "Kerberos keytab path does not exist".into(),
+                cause: None,
+                hints: vec![],
+            });
+        }
+        config.krb5_keytab_path = Some(path);
+    }
+
+    config.krb5_service_name = opts.opt_str("krb5-service-name");
+    config.krb5_principal = opts.opt_str("krb5-principal");
 
     if let (Ok(Some(region)), None) = (opts.opt_get("aws-region"), opts.opt_str("aws-endpoint")) {
         // Standard AWS region without a custom endpoint. Try to find actual AWS

@@ -1,0 +1,124 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Portions of this file are derived from
+# https://github.com/vdesabou/kafka-docker-playground/blob/master/environment/kerberos/docker-compose.yml
+
+---
+version: "3.7"
+services:
+  kdc:
+    build: kdc
+    hostname: kdc.krb5.local
+    volumes:
+      - secrets:/var/lib/secret
+      - ./kdc/krb5.conf:/etc/krb5.conf
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    # Kafka seems to insist on authenticating to the zookeeper hostname that
+    # comes back from a reverse DNS lookup of its `KAFKA_ZOOKEEPER_CONNECT` host
+    # value. The only way to coordinate this with the desired hostname is to
+    # control the container name, as well.
+    container_name: zookeeper
+    hostname: zookeeper.krb5.local
+    depends_on:
+      - kdc
+    volumes:
+      - secrets:/var/lib/secret
+      - ./kdc/krb5.conf:/etc/krb5.conf
+      - ./zookeeper.sasl.jaas.config:/etc/kafka/zookeeper.sasl.jaas.config
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_OPTS: -Dzookeeper.4lw.commands.whitelist=*
+        -Djava.security.auth.login.config=/etc/kafka/zookeeper.sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
+        -Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider
+        -Dsun.security.krb5.debug=true
+        -Dzookeeper.allowSaslFailedClients=false
+        -Dzookeeper.requireClientAuthScheme=sasl
+
+  broker:
+    image: confluentinc/cp-server:latest
+    hostname: broker.krb5.local
+    depends_on:
+      - kdc
+      - zookeeper
+    volumes:
+      - secrets:/var/lib/secret
+      - ./kdc/krb5.conf:/etc/krb5.conf
+      - ./broker.sasl.jaas.config:/etc/kafka/broker.sasl.jaas.config
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://broker.krb5.local:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
+      KAFKA_SASL_ENABLED_MECHANISMS: GSSAPI
+      KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper.krb5.local:2181
+      KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/broker.sasl.jaas.config
+
+  materialized:
+    mzbuild: materialized-krb5
+    command: --logging-granularity=10ms --data-directory=/share/mzdata -w1
+    volumes:
+      - secrets:/share/secrets
+      - mzdata:/share/mzdata
+      - tmp:/share/tmp
+      - ./kdc/krb5.conf:/etc/krb5.conf
+
+  cli:
+    image: materialize/cli:latest
+    depends_on:
+      - materialized
+
+  testdrive:
+    mzbuild: testdrive-krb5
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        wait-for-it --timeout=30 materialized:6875 &&
+        wait-for-it --timeout=30 broker.krb5.local:9092:9092 &&
+        testdrive
+        --kafka-url=SASL_PLAINTEXT://broker.krb5.local:9092
+        --materialized-url=postgres://ignored@materialized:6875
+        --validate-catalog=/share/mzdata
+        --krb5-keytab=/share/secrets/testdrive.key
+        --krb5-service-name=kafka
+        --krb5-principal=testdrive@CI.MATERIALIZE.IO
+        $$*
+      - bash
+    command: test/testdrive/krb5/decimal-krb5.td
+    user: root
+    environment:
+      - TMPDIR=/share/tmp
+    volumes:
+      - ../../:/workdir
+      - mzdata:/share/mzdata
+      - tmp:/share/tmp
+      - secrets:/share/secrets
+      - ./kdc/krb5.conf:/etc/krb5.conf
+    # wait-for-it is insufficient because the broker service doesn't seem to
+    # start as soon as the Kafka service comes online.
+    restart: on-failure:3
+    propagate-uid-gid: true
+    init: true
+    depends_on: [kdc, broker, zookeeper, materialized]
+
+volumes:
+  secrets: {}
+  mzdata:
+  tmp:
+
+networks:
+  default:
+    name: krb5.local
