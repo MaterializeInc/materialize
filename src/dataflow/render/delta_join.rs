@@ -14,7 +14,7 @@ use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
 
 use dataflow_types::{DataflowError, Timestamp};
-use expr::{EvalError, RelationExpr, ScalarExpr};
+use expr::{RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena};
 
 use super::context::{ArrangementFlavor, Context};

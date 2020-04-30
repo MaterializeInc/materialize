@@ -126,7 +126,7 @@ use timely::worker::Worker as TimelyWorker;
 use avro::Schema;
 use dataflow_types::Timestamp;
 use dataflow_types::*;
-use expr::{EvalError, GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use ore::cast::CastFrom;
 use ore::iter::IteratorExt;
 use repr::{Datum, RelationType, Row, RowArena};

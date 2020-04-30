@@ -45,7 +45,7 @@ use dataflow_types::{
     Consistency, DataflowDesc, DataflowError, Diff, ExternalSourceConnector, IndexDesc,
     PeekResponse, Timestamp, Update,
 };
-use expr::{EvalError, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 

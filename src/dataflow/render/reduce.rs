@@ -19,7 +19,7 @@ use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
 use dataflow_types::{DataflowError, Timestamp};
-use expr::{AggregateExpr, AggregateFunc, EvalError, RelationExpr, ScalarExpr};
+use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;

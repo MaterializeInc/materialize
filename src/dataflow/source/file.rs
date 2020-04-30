@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::fmt::Display;
+
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use failure::format_err;
+
 use failure::ResultExt;
 use log::error;
 #[cfg(not(target_os = "macos"))]
@@ -384,7 +384,7 @@ where
                     let message = match message {
                         Ok(message) => message,
                         Err(err) => {
-                            output.session(&cap).give((Err(err.to_string())));
+                            output.session(&cap).give(Err(err.to_string()));
                             dead = true;
                             return SourceStatus::Done;
                         }
