@@ -12,7 +12,6 @@
 use std::collections::HashSet;
 
 use anyhow;
-//use failure::{bail, ResultExt};
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput};
 
 /// Wrapper around AWS Kinesis ListShards API (and Rusoto).
