@@ -18,10 +18,10 @@ from typing import Dict
 
 def main() -> None:
     args = parse_args()
-    echo_files_with_prefixes({p: f for p, f in args.prefix_file})
+    echo_files_with_prefixes(args.output_file, {p: f for p, f in args.prefix_file})
 
 
-def echo_files_with_prefixes(prefixes_files: Dict[str, str]) -> None:
+def echo_files_with_prefixes(outfile: str, prefixes_files: Dict[str, str]) -> None:
     """Start as many threads as there are files in prefixes_files, writing their output
     """
     max_prefix_len = max(len(prefix) for prefix in prefixes_files)
@@ -29,7 +29,7 @@ def echo_files_with_prefixes(prefixes_files: Dict[str, str]) -> None:
     for prefix, fname in prefixes_files.items():
         pad = " " * (max_prefix_len - len(prefix))
         thread = threading.Thread(
-            target=follow_file, args=(f"{prefix}", f"{pad} >", fname)
+            target=follow_file, args=(f"{prefix}", f"{pad} >", fname, outfile)
         )
         thread.start()
         threads.append(thread)
@@ -41,14 +41,21 @@ def echo_files_with_prefixes(prefixes_files: Dict[str, str]) -> None:
             return
 
 
-def follow_file(prefix: str, pad: str, fname: str) -> None:
+def follow_file(prefix: str, pad: str, fname: str, outfile: str) -> None:
     error_count = 0
     full_pre = prefix + pad
+    out = None
     while True:
         try:
-            with open(fname) as fh:
+            with open(fname, "r") as fh, open(fname, "w"):
+                if outfile == "-":
+                    out = sys.stdout
+                else:
+                    out = open(outfile, "w")
+
                 for line in fh:
-                    print(full_pre, line, end="")
+                    out.write(f"{full_pre} {line}")
+                    out.flush()
             log(f"reached end of input for {prefix} {fname}")
             return
         except FileNotFoundError:
@@ -58,12 +65,16 @@ def follow_file(prefix: str, pad: str, fname: str) -> None:
             error_count += 1
         except KeyboardInterrupt:
             return
+        finally:
+            if out is not None and out is not sys.stdout:
+                out.close()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Print all lines from files with different prefixes"
     )
+    parser.add_argument("--output-file", default="/dev/stdout")
     parser.add_argument(
         "prefix_file", help="prefix=/the/file/to/read", nargs="*",
     )
