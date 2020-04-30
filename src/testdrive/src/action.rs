@@ -23,7 +23,7 @@ use protobuf::Message;
 use rand::Rng;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
-use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient, ListStreamsInput};
+use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
 use url::Url;
 
 use repr::strconv;
@@ -93,6 +93,7 @@ pub struct State {
     aws_account: String,
     aws_credentials: AwsCredentials,
     kinesis_client: KinesisClient,
+    kinesis_stream_names: Vec<String>,
 }
 
 impl State {
@@ -122,32 +123,12 @@ impl State {
 
     // Delete the Kinesis streams created for this run of testdrive.
     pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
-        let stream_names_with_matching_seed: Vec<String> = self
-            .kinesis_client
-            .list_streams(ListStreamsInput {
-                exclusive_start_stream_name: None,
-                limit: None,
-            })
-            .await
-            .map_err(|e| Error::General {
-                ctx: "listing Kinesis streams".to_owned(),
-                cause: Some(e.into()),
-                hints: vec![],
-            })?
-            .stream_names
-            .into_iter()
-            .filter(|stream_name| {
-                stream_name.starts_with("testdrive")
-                    && stream_name.ends_with(&self.seed.to_string())
-            })
-            .collect();
-
-        if !stream_names_with_matching_seed.is_empty() {
+        if !self.kinesis_stream_names.is_empty() {
             println!(
-                "Deleting stale Kinesis topics {}",
-                stream_names_with_matching_seed.join(", ")
+                "Deleting Kinesis streams {}",
+                self.kinesis_stream_names.join(", ")
             );
-            for stream_name in stream_names_with_matching_seed {
+            for stream_name in &self.kinesis_stream_names {
                 self.kinesis_client
                     .delete_stream(DeleteStreamInput {
                         enforce_consumer_deletion: Some(true),
@@ -481,7 +462,7 @@ pub async fn create_state(
         )
     };
 
-    let (aws_region, aws_account, aws_credentials, kinesis_client) = {
+    let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
         let provider = rusoto_credential::StaticProvider::new(
             config.aws_credentials.aws_access_key_id().to_owned(),
             config.aws_credentials.aws_secret_access_key().to_owned(),
@@ -501,6 +482,7 @@ pub async fn create_state(
             config.aws_account.clone(),
             config.aws_credentials.clone(),
             kinesis_client,
+            Vec::new(),
         )
     };
 
@@ -521,6 +503,7 @@ pub async fn create_state(
         aws_account,
         aws_credentials,
         kinesis_client,
+        kinesis_stream_names,
     };
     Ok((state, pgconn_task))
 }
