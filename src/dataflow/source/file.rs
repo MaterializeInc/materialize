@@ -187,7 +187,6 @@ pub fn read_file_task<Ctor, I, Out, Err>(
         Ok(i) => send_records(i, tx, activator),
         Err(e) => {
             let _ = tx.send(Err(e.into()));
-            ()
         }
     };
 }
@@ -433,7 +432,7 @@ where
         }
     });
 
-    let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(|e| SourceError::FileIO(e)));
+    let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
 
     if config.active {
         ((ok_stream, err_stream), Some(capability))

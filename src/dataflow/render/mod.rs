@@ -349,7 +349,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 source::file(source_config, c.path, read_style, ctor);
                             err_collection = err_collection.concat(
                                 &err_source
-                                    .map(|source_err| DataflowError::SourceError(source_err))
+                                    .map(DataflowError::SourceError)
                                     .pass_through("AvroOCF-errors")
                                     .as_collection(),
                             );
@@ -386,7 +386,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
                             err_collection = err_collection.concat(
                                 &err_source
-                                    .map(|source_err| DataflowError::SourceError(source_err))
+                                    .map(DataflowError::SourceError)
                                     .pass_through("source-errors")
                                     .as_collection(),
                             );
