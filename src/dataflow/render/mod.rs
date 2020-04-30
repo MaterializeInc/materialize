@@ -137,9 +137,9 @@ use super::source;
 use super::source::FileReadStyle;
 use super::source::{SourceConfig, SourceToken};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
-use crate::decode::{decode_avro_values, decode_upsert, decode_values, pass_through};
+use crate::decode::{decode_avro_values, decode_upsert, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
-use crate::operator::CollectionExt;
+use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
 
@@ -348,13 +348,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             let ((source, err_source), capability) =
                                 source::file(source_config, c.path, read_style, ctor);
                             err_collection = err_collection.concat(
-                                &pass_through(
-                                    &err_source
-                                        .map(|source_err| DataflowError::SourceError(source_err)),
-                                    "AvroOCF-errors",
-                                    Pipeline,
-                                )
-                                .as_collection(),
+                                &err_source
+                                    .map(|source_err| DataflowError::SourceError(source_err))
+                                    .pass_through("AvroOCF-errors")
+                                    .as_collection(),
                             );
                             (decode_avro_values(&source, &envelope), capability)
                         } else {
@@ -388,13 +385,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                             };
                             err_collection = err_collection.concat(
-                                &pass_through(
-                                    &err_source
-                                        .map(|source_err| DataflowError::SourceError(source_err)),
-                                    "source-errors",
-                                    Pipeline,
-                                )
-                                .as_collection(),
+                                &err_source
+                                    .map(|source_err| DataflowError::SourceError(source_err))
+                                    .pass_through("source-errors")
+                                    .as_collection(),
                             );
 
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
