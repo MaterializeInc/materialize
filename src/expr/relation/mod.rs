@@ -94,6 +94,8 @@ pub enum RelationExpr {
         /// The input columns are often discarded and can be very
         /// expensive to reproduce, so restricting what we produce
         /// as output can be a substantial win.
+        ///
+        /// See [`expr::transform::Demand`] for more details.
         demand: Option<Vec<usize>>,
     },
     /// Keep rows from a dataflow where all the predicates are true
@@ -130,6 +132,8 @@ pub enum RelationExpr {
         /// join does not have permission to change the schema, it can introduce
         /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
+        ///
+        /// See [`expr::transform::Demand`] for more details.
         demand: Option<Vec<usize>>,
         /// Join implementation information.
         implementation: JoinImplementation,
