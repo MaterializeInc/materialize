@@ -62,8 +62,6 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 ### Kinesis
 
-- Kinesis sources with more than one shard are not supported
-  ([#2222](https://github.com/MaterializeInc/materialize/issues/2222))
 - Consistent Kinesis sources are not supported
   ([#2191](https://github.com/MaterializeInc/materialize/issues/2191))
 - Enhanced fan-out Kinesis consumers are not supported
