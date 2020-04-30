@@ -9,8 +9,8 @@
 
 FROM ubuntu:bionic
 
-RUN apt-get update && apt-get install -y curl
+RUN apt-get update && apt-get install -qy wait-for-it
 
-COPY healthcheck /usr/local/bin/healthcheck
+COPY metabase-smoketest /usr/local/bin
 
-ENTRYPOINT ["healthcheck"]
+ENTRYPOINT ["metabase-smoketest"]

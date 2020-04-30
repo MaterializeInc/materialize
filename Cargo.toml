@@ -14,6 +14,7 @@ members = [
     "src/expr",
     "src/interchange",
     "src/materialized",
+    "src/metabase",
     "src/ore",
     "src/peeker",
     "src/pgrepr",
@@ -24,6 +25,7 @@ members = [
     "src/sql-parser",
     "src/symbiosis",
     "src/testdrive",
+    "test/metabase/smoketest",
     "test/smith",
 ]
 

@@ -16,10 +16,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use ore::retry;
+
 use crate::action::{Action, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
 use crate::parser::BuiltinCommand;
-use crate::util::retry;
 
 pub struct WriteAction {
     path: String,
@@ -157,7 +158,7 @@ impl Action for VerifyAction {
                 .await
                 .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
             let bytes: Vec<u8> = row.get("path");
-            Ok(PathBuf::from(OsString::from_vec(bytes)))
+            Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
         })
         .await
         .map_err(|e| format!("retrieving path: {:?}", e))?;

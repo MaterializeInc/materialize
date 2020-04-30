@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use rusoto_kinesis::{DescribeStreamInput, Kinesis, KinesisClient};
 
-use crate::util::retry;
+use ore::retry;
 
 pub const DEFAULT_KINESIS_TIMEOUT: Duration = Duration::from_millis(12700);
 

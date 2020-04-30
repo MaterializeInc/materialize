@@ -16,10 +16,11 @@ use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::stream::StreamExt;
 
+use ore::retry;
+
 use crate::action::{Action, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
-use crate::util::retry;
 
 pub struct VerifyAction {
     sink: String,
@@ -54,7 +55,7 @@ impl Action for VerifyAction {
                 )
                 .await
                 .map_err(|e| format!("retrieving topic name: {}", e))?;
-            Ok(row.get("topic"))
+            Ok::<_, String>(row.get("topic"))
         })
         .await?;
 
