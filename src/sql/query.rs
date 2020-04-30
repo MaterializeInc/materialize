@@ -31,9 +31,9 @@ use std::rc::Rc;
 use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    BinaryOperator, DataType, Expr, ExtractField, Function, Ident, JoinConstraint, JoinOperator,
-    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
-    TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    BinaryOperator, DataType, Expr, ExtractField, Function, FunctionArgs, Ident, JoinConstraint,
+    JoinOperator, ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
+    TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -110,7 +110,9 @@ pub fn plan_show_where(
         let predicate = match &f {
             ShowStatementFilter::Like(s) => {
                 owned = Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(Ident::new(names[0].clone().unwrap()))),
+                    left: Box::new(Expr::Identifier(vec![Ident::new(
+                        names[0].clone().unwrap(),
+                    )])),
                     op: BinaryOperator::Like,
                     right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
                 };
@@ -711,7 +713,7 @@ fn plan_table_factor<'a>(
             } else {
                 normalize::object_name(name.clone())?
             };
-            if !args.is_empty() {
+            if let Some(args) = args {
                 let ecx = &ExprContext {
                     qcx,
                     name: "FROM table function",
@@ -772,14 +774,18 @@ fn plan_table_function(
     left: RelationExpr,
     name: &ObjectName,
     alias: Option<PartialName>,
-    args: &[Expr],
+    args: &FunctionArgs,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     let ident = &*normalize::function_name(name.clone())?;
     if !is_table_func(ident) {
         // so we don't forget to add names over there
         bail!("{} is not a table function", ident);
     }
-    match (ident, args) {
+    let args = match args {
+        FunctionArgs::Star => bail!("{} does not accept * as an argument", ident),
+        FunctionArgs::Args(args) => args,
+    };
+    match (ident, args.as_slice()) {
         ("jsonb_each", [expr])
         | ("jsonb_object_keys", [expr])
         | ("jsonb_array_elements", [expr])
@@ -1301,23 +1307,19 @@ fn plan_expr_returning_name<'a>(
         Ok((ScalarExpr::Column(i), name.cloned()))
     } else {
         Ok(match e {
-            Expr::Identifier(name) => {
-                let (i, name) = ecx
-                    .scope
-                    .resolve_column(&normalize::column_name(name.clone()))?;
-                (ScalarExpr::Column(i), Some(name.clone()))
-            }
-            Expr::CompoundIdentifier(names) => {
+            Expr::Identifier(names) => {
                 let mut names = names.clone();
                 let col_name = normalize::column_name(names.pop().unwrap());
-                let table_name = normalize::object_name(ObjectName(names))?;
-                let (i, name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
+                let (i, name) = if names.is_empty() {
+                    ecx.scope.resolve_column(&col_name)?
+                } else {
+                    let table_name = normalize::object_name(ObjectName(names))?;
+                    ecx.scope.resolve_table_column(&table_name, &col_name)?
+                };
                 (ScalarExpr::Column(i), Some(name.clone()))
             }
             Expr::Value(val) => (plan_literal(val)?, None),
-            Expr::Wildcard { .. } | Expr::QualifiedWildcard(_) => {
-                bail!("wildcard in invalid position")
-            }
+            Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
             Expr::Parameter(n) => {
                 if !ecx.allow_subqueries {
                     bail!("{} does not allow subqueries", ecx.name)
@@ -1669,7 +1671,7 @@ fn plan_any_or_all<'a>(
         &any_ecx,
         op,
         left,
-        &Expr::Identifier(Ident::new(right_name)),
+        &Expr::Identifier(vec![Ident::new(right_name)]),
     )?;
 
     // plan subquery
@@ -1707,20 +1709,16 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         bail!("window functions are not yet supported");
     }
 
-    if sql_func.args.len() != 1 {
-        bail!("{} function only takes one argument", name);
-    }
-
-    let arg = &sql_func.args[0];
-    let (mut expr, mut func) = match (name.as_str(), arg) {
+    let (mut expr, mut func) = match (name.as_str(), &sql_func.args) {
         // COUNT(*) is a special case that doesn't compose well
-        ("count", Expr::Wildcard) => (
+        ("count", FunctionArgs::Star) => (
             // Ok to use `ScalarType::Unknown` here because this expression
             // can't ever escape the surrounding reduce.
             ScalarExpr::literal_null(ScalarType::Unknown),
             AggregateFunc::CountAll,
         ),
-        _ => {
+        (_, FunctionArgs::Args(args)) if args.len() == 1 => {
+            let arg = &args[0];
             // No type hint passed to `plan_expr`, because all aggregates accept
             // multiple input types. PostgreSQL is also unable to infer
             // parameter types in this position.
@@ -1736,6 +1734,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
                 func => (expr, func),
             }
         }
+        _ => bail!("{} function requires exactly one non-star argument", name),
     };
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
@@ -1785,6 +1784,7 @@ fn plan_function<'a>(
 ) -> Result<ScalarExpr, failure::Error> {
     let name = normalize::function_name(sql_func.name.clone())?;
     let ident = &*name.to_string();
+
     if is_aggregate_func(&name) {
         if ecx.allow_aggregates {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
@@ -1795,643 +1795,624 @@ fn plan_function<'a>(
         } else {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
-    } else {
-        if sql_func.over.is_some() {
-            bail!("OVER specified but {}() is not a window function", ident);
+    }
+
+    if sql_func.over.is_some() {
+        bail!("OVER specified but {}() is not a window function", ident);
+    }
+    if sql_func.filter.is_some() {
+        bail!(
+            "FILTER specified but {}() is not an aggregate function",
+            ident
+        );
+    }
+    let args = match &sql_func.args {
+        FunctionArgs::Star => bail!(
+            "* argument is invalid with non-aggregate function {}",
+            ident
+        ),
+        FunctionArgs::Args(args) => args,
+    };
+    match ident {
+        "abs" => {
+            if args.len() != 1 {
+                bail!("abs expects one argument, got {}", args.len());
+            }
+            let expr = plan_expr(ecx, &args[0], Some(ScalarType::Float64))?;
+            let typ = ecx.column_type(&expr);
+            let func = match typ.scalar_type {
+                ScalarType::Int32 => UnaryFunc::AbsInt32,
+                ScalarType::Int64 => UnaryFunc::AbsInt64,
+                ScalarType::Float32 => UnaryFunc::AbsFloat32,
+                ScalarType::Float64 => UnaryFunc::AbsFloat64,
+                _ => bail!("abs does not accept arguments of type {:?}", typ),
+            };
+            let expr = ScalarExpr::CallUnary {
+                func,
+                expr: Box::new(expr),
+            };
+            Ok(expr)
         }
-        if sql_func.filter.is_some() {
-            bail!(
-                "FILTER specified but {}() is not an aggregate function",
-                ident
-            );
+
+        "ascii" => {
+            if args.len() != 1 {
+                bail!("ascii expects one argument, got {}", args.len());
+            }
+            let expr = plan_expr(ecx, &args[0], Some(ScalarType::String))?;
+            let typ = ecx.column_type(&expr);
+            if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Unknown {
+                bail!("ascii does not accept arguments of type {:?}", typ);
+            }
+            let expr = ScalarExpr::CallUnary {
+                func: UnaryFunc::Ascii,
+                expr: Box::new(expr),
+            };
+            Ok(expr)
         }
-        match ident {
-            "abs" => {
-                if sql_func.args.len() != 1 {
-                    bail!("abs expects one argument, got {}", sql_func.args.len());
-                }
-                let expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::Float64))?;
-                let typ = ecx.column_type(&expr);
-                let func = match typ.scalar_type {
-                    ScalarType::Int32 => UnaryFunc::AbsInt32,
-                    ScalarType::Int64 => UnaryFunc::AbsInt64,
-                    ScalarType::Float32 => UnaryFunc::AbsFloat32,
-                    ScalarType::Float64 => UnaryFunc::AbsFloat64,
-                    _ => bail!("abs does not accept arguments of type {:?}", typ),
-                };
-                let expr = ScalarExpr::CallUnary {
-                    func,
-                    expr: Box::new(expr),
-                };
-                Ok(expr)
+
+        "ceil" => {
+            if args.len() != 1 {
+                bail!("ceil expects 1 argument, got {}", args.len());
             }
+            let expr = plan_expr(ecx, &args[0], None)?;
+            let expr = promote_number_floatdec(ecx, "ceil", expr)?;
+            Ok(match ecx.column_type(&expr).scalar_type {
+                ScalarType::Float32 => expr.call_unary(UnaryFunc::CeilFloat32),
+                ScalarType::Float64 => expr.call_unary(UnaryFunc::CeilFloat64),
+                ScalarType::Decimal(_, s) => expr.call_unary(UnaryFunc::CeilDecimal(s)),
+                _ => unreachable!(),
+            })
+        }
 
-            "ascii" => {
-                if sql_func.args.len() != 1 {
-                    bail!("ascii expects one argument, got {}", sql_func.args.len());
-                }
-                let expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
-                let typ = ecx.column_type(&expr);
-                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Unknown {
-                    bail!("ascii does not accept arguments of type {:?}", typ);
-                }
-                let expr = ScalarExpr::CallUnary {
-                    func: UnaryFunc::Ascii,
-                    expr: Box::new(expr),
-                };
-                Ok(expr)
+        "coalesce" => {
+            if args.is_empty() {
+                bail!("coalesce requires at least one argument");
             }
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::Coalesce,
+                exprs: plan_homogeneous_exprs("coalesce", ecx, &args, Some(ScalarType::String))?,
+            };
+            Ok(expr)
+        }
 
-            "ceil" => {
-                if sql_func.args.len() != 1 {
-                    bail!("ceil expects 1 argument, got {}", sql_func.args.len());
-                }
-                let expr = plan_expr(ecx, &sql_func.args[0], None)?;
-                let expr = promote_number_floatdec(ecx, "ceil", expr)?;
-                Ok(match ecx.column_type(&expr).scalar_type {
-                    ScalarType::Float32 => expr.call_unary(UnaryFunc::CeilFloat32),
-                    ScalarType::Float64 => expr.call_unary(UnaryFunc::CeilFloat64),
-                    ScalarType::Decimal(_, s) => expr.call_unary(UnaryFunc::CeilDecimal(s)),
-                    _ => unreachable!(),
-                })
+        "concat" => {
+            if args.is_empty() {
+                bail!("concat requires at least one argument");
             }
-
-            "coalesce" => {
-                if sql_func.args.is_empty() {
-                    bail!("coalesce requires at least one argument");
-                }
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: plan_homogeneous_exprs(
-                        "coalesce",
-                        ecx,
-                        &sql_func.args,
-                        Some(ScalarType::String),
-                    )?,
-                };
-                Ok(expr)
-            }
-
-            "concat" => {
-                if sql_func.args.is_empty() {
-                    bail!("concat requires at least one argument");
-                }
-                let mut exprs = Vec::new();
-                for arg in &sql_func.args {
-                    let expr = plan_expr(ecx, arg, Some(ScalarType::String))?;
-                    let expr = plan_cast_internal(
-                        ecx,
-                        CastContext::Implicit("concat"),
-                        expr,
-                        ScalarType::String,
-                    )?;
-                    exprs.push(expr);
-                }
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Concat,
-                    exprs,
-                };
-                Ok(expr)
-            }
-
-            "current_timestamp" | "now" => {
-                if !sql_func.args.is_empty() {
-                    bail!("{} does not take any arguments", ident);
-                }
-                match ecx.qcx.lifetime {
-                    QueryLifetime::OneShot => Ok(ScalarExpr::literal(
-                        Datum::from(ecx.qcx.scx.pcx.wall_time),
-                        ColumnType::new(ScalarType::TimestampTz),
-                    )),
-                    QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
-                }
-            }
-
-            "date_trunc" => {
-                if sql_func.args.len() != 2 {
-                    bail!("date_trunc() requires exactly two arguments");
-                }
-
-                let precision_field = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
-                let typ = ecx.column_type(&precision_field);
-                if typ.scalar_type != ScalarType::String {
-                    bail!("date_trunc() can only be formatted with strings");
-                }
-
-                // If the precision field happens to be a literal, we can do
-                // some early validation.
-                if let ScalarExpr::Literal(row, _) = &precision_field {
-                    let datum = row.unpack_first();
-                    let precision_str = datum.unwrap_str();
-                    let _ = precision_str.parse::<DateTruncTo>()?;
-                }
-
-                let source_timestamp =
-                    plan_expr(ecx, &sql_func.args[1], Some(ScalarType::TimestampTz))?;
-                let typ = ecx.column_type(&source_timestamp);
-
-                let expr = match typ.scalar_type {
-                    ScalarType::Timestamp => {
-                        ScalarExpr::CallBinary {
-                            func: BinaryFunc::DateTruncTimestamp,
-                            expr1: Box::new(precision_field),
-                            expr2: Box::new(source_timestamp),
-                        }
-                   }
-                    ScalarType::TimestampTz => {
-                        ScalarExpr::CallBinary {
-                            func: BinaryFunc::DateTruncTimestampTz,
-                            expr1: Box::new(precision_field),
-                            expr2: Box::new(source_timestamp),
-                        }
-                  }
-                  _ => bail!("date_trunc() is currently only implemented for TIMESTAMPs and TIMESTAMPTZs"),
-               };
-
-                Ok(expr)
-            }
-
-            "floor" => {
-                if sql_func.args.len() != 1 {
-                    bail!("floor expects 1 argument, got {}", sql_func.args.len());
-                }
-                let expr = plan_expr(ecx, &sql_func.args[0], None)?;
-                let expr = promote_number_floatdec(ecx, "floor", expr)?;
-                Ok(match ecx.column_type(&expr).scalar_type {
-                    ScalarType::Float32 => expr.call_unary(UnaryFunc::FloorFloat32),
-                    ScalarType::Float64 => expr.call_unary(UnaryFunc::FloorFloat64),
-                    ScalarType::Decimal(_, s) => expr.call_unary(UnaryFunc::FloorDecimal(s)),
-                    _ => unreachable!(),
-                })
-            }
-
-            // Promotes a numeric type to the smallest fractional type that
-            // can represent it. This is primarily useful for the avg
-            // aggregate function, so that the avg of an integer column does
-            // not get truncated to an integer, which would be surprising to
-            // users (#549).
-            "internal_avg_promotion" => {
-                if sql_func.args.len() != 1 {
-                    bail!("internal.avg_promotion requires exactly one argument");
-                }
-                let expr = plan_expr(ecx, &sql_func.args[0], None)?;
-                let typ = ecx.column_type(&expr);
-                let output_type = match &typ.scalar_type {
-                    ScalarType::Unknown => ScalarType::Unknown,
-                    ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
-                    ScalarType::Decimal(p, s) => ScalarType::Decimal(*p, *s),
-                    ScalarType::Int32 => ScalarType::Decimal(10, 0),
-                    ScalarType::Int64 => ScalarType::Decimal(19, 0),
-                    _ => bail!("internal.avg_promotion called with unexpected argument"),
-                };
-                plan_cast_internal(
+            let mut exprs = Vec::new();
+            for arg in args {
+                let expr = plan_expr(ecx, arg, Some(ScalarType::String))?;
+                let expr = plan_cast_internal(
                     ecx,
-                    CastContext::Implicit("internal.avg_promotion"),
+                    CastContext::Implicit("concat"),
                     expr,
-                    output_type,
-                )
+                    ScalarType::String,
+                )?;
+                exprs.push(expr);
+            }
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::Concat,
+                exprs,
+            };
+            Ok(expr)
+        }
+
+        "current_timestamp" | "now" => {
+            if !args.is_empty() {
+                bail!("{} does not take any arguments", ident);
+            }
+            match ecx.qcx.lifetime {
+                QueryLifetime::OneShot => Ok(ScalarExpr::literal(
+                    Datum::from(ecx.qcx.scx.pcx.wall_time),
+                    ColumnType::new(ScalarType::TimestampTz),
+                )),
+                QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
+            }
+        }
+
+        "date_trunc" => {
+            if args.len() != 2 {
+                bail!("date_trunc() requires exactly two arguments");
             }
 
-            "jsonb_array_length" | "jsonb_typeof" | "jsonb_strip_nulls" | "jsonb_pretty" => {
-                if sql_func.args.len() != 1 {
-                    bail!("{}() requires exactly two arguments", ident);
-                }
-                let jsonb = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::Jsonb))?;
-                let typ = ecx.column_type(&jsonb);
-                if typ.scalar_type != ScalarType::Jsonb && typ.scalar_type != ScalarType::Unknown {
-                    bail!(
-                        "{}() requires jsonb as it's first argument, but got {}",
-                        ident,
-                        typ.scalar_type
-                    );
-                }
-                let expr = ScalarExpr::CallUnary {
-                    func: match ident {
-                        "jsonb_array_length" => UnaryFunc::JsonbArrayLength,
-                        "jsonb_typeof" => UnaryFunc::JsonbTypeof,
-                        "jsonb_strip_nulls" => UnaryFunc::JsonbStripNulls,
-                        "jsonb_pretty" => UnaryFunc::JsonbPretty,
-                        _ => unreachable!(),
-                    },
-                    expr: Box::new(jsonb),
-                };
-                Ok(expr)
+            let precision_field = plan_expr(ecx, &args[0], Some(ScalarType::String))?;
+            let typ = ecx.column_type(&precision_field);
+            if typ.scalar_type != ScalarType::String {
+                bail!("date_trunc() can only be formatted with strings");
             }
 
-            "jsonb_build_array" => {
-                let args = sql_func
-                    .args
-                    .iter()
-                    .map(|arg| {
-                        Ok(plan_to_jsonb(
-                            ecx,
-                            "jsonb_build_array",
-                            plan_expr(ecx, arg, None)?,
-                        )?)
-                    })
-                    .collect::<Result<Vec<_>, failure::Error>>()?;
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::JsonbBuildArray,
-                    exprs: args,
-                };
-                Ok(expr)
+            // If the precision field happens to be a literal, we can do
+            // some early validation.
+            if let ScalarExpr::Literal(row, _) = &precision_field {
+                let datum = row.unpack_first();
+                let precision_str = datum.unwrap_str();
+                let _ = precision_str.parse::<DateTruncTo>()?;
             }
 
-            "jsonb_build_object" => {
-                if sql_func.args.len() % 2 != 0 {
-                    bail!("jsonb_build_object() requires an even number of arguments");
-                }
-                let args = sql_func
-                    .args
-                    .iter()
-                    .enumerate()
-                    .map(|(i, arg)| {
-                        Ok(if i % 2 == 0 {
-                            plan_cast_internal(
-                                ecx,
-                                CastContext::Explicit,
-                                plan_expr(ecx, arg, None)?,
-                                ScalarType::String,
-                            )?
-                        } else {
-                            plan_to_jsonb(ecx, "jsonb_build_object", plan_expr(ecx, arg, None)?)?
-                        })
-                    })
-                    .collect::<Result<Vec<_>, failure::Error>>()?;
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::JsonbBuildObject,
-                    exprs: args,
-                };
-                Ok(expr)
+            let source_timestamp = plan_expr(ecx, &args[1], Some(ScalarType::TimestampTz))?;
+            let typ = ecx.column_type(&source_timestamp);
+
+            let expr = match typ.scalar_type {
+                ScalarType::Timestamp => ScalarExpr::CallBinary {
+                    func: BinaryFunc::DateTruncTimestamp,
+                    expr1: Box::new(precision_field),
+                    expr2: Box::new(source_timestamp),
+                },
+                ScalarType::TimestampTz => ScalarExpr::CallBinary {
+                    func: BinaryFunc::DateTruncTimestampTz,
+                    expr1: Box::new(precision_field),
+                    expr2: Box::new(source_timestamp),
+                },
+                _ => bail!(
+                    "date_trunc() is currently only implemented for TIMESTAMPs and TIMESTAMPTZs"
+                ),
+            };
+
+            Ok(expr)
+        }
+
+        "floor" => {
+            if args.len() != 1 {
+                bail!("floor expects 1 argument, got {}", args.len());
             }
+            let expr = plan_expr(ecx, &args[0], None)?;
+            let expr = promote_number_floatdec(ecx, "floor", expr)?;
+            Ok(match ecx.column_type(&expr).scalar_type {
+                ScalarType::Float32 => expr.call_unary(UnaryFunc::FloorFloat32),
+                ScalarType::Float64 => expr.call_unary(UnaryFunc::FloorFloat64),
+                ScalarType::Decimal(_, s) => expr.call_unary(UnaryFunc::FloorDecimal(s)),
+                _ => unreachable!(),
+            })
+        }
 
-            "round" => {
-                if sql_func.args.is_empty() || sql_func.args.len() > 2 {
-                    bail!(
-                        "round expects 1 or 2 arguments, got {}",
-                        sql_func.args.len()
-                    );
-                }
-
-                if sql_func.args.len() == 1 {
-                    // When there is only one argument, the argument can be
-                    // any numeric type, with integers promoted to decimals.
-                    let expr1 = plan_expr(ecx, &sql_func.args[0], None)?;
-                    let expr1 = promote_number_floatdec(ecx, "round argument", expr1)?;
-                    Ok(match ecx.column_type(&expr1).scalar_type {
-                        ScalarType::Float32 => expr1.call_unary(UnaryFunc::RoundFloat32),
-                        ScalarType::Float64 => expr1.call_unary(UnaryFunc::RoundFloat64),
-                        ScalarType::Decimal(_, s) => {
-                            let zero = ScalarExpr::literal(
-                                Datum::Int64(0),
-                                ColumnType::new(ScalarType::Int64),
-                            );
-                            expr1.call_binary(zero, BinaryFunc::RoundDecimal(s))
-                        }
-                        _ => unreachable!(),
-                    })
-                } else {
-                    // When there are two arguments, the first argument has to
-                    // be a decimal.
-                    let expr1 = plan_expr(ecx, &sql_func.args[0], None)?;
-                    let (expr1, scale) = promote_int_decimal(ecx, "first round argument", expr1)?;
-                    let expr2 = plan_expr(ecx, &sql_func.args[1], None)?;
-                    let expr2 = promote_int_int64(ecx, "second round argument", expr2)?;
-                    Ok(expr1.call_binary(expr2, BinaryFunc::RoundDecimal(scale)))
-                }
+        // Promotes a numeric type to the smallest fractional type that
+        // can represent it. This is primarily useful for the avg
+        // aggregate function, so that the avg of an integer column does
+        // not get truncated to an integer, which would be surprising to
+        // users (#549).
+        "internal_avg_promotion" => {
+            if args.len() != 1 {
+                bail!("internal.avg_promotion requires exactly one argument");
             }
+            let expr = plan_expr(ecx, &args[0], None)?;
+            let typ = ecx.column_type(&expr);
+            let output_type = match &typ.scalar_type {
+                ScalarType::Unknown => ScalarType::Unknown,
+                ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
+                ScalarType::Decimal(p, s) => ScalarType::Decimal(*p, *s),
+                ScalarType::Int32 => ScalarType::Decimal(10, 0),
+                ScalarType::Int64 => ScalarType::Decimal(19, 0),
+                _ => bail!("internal.avg_promotion called with unexpected argument"),
+            };
+            plan_cast_internal(
+                ecx,
+                CastContext::Implicit("internal.avg_promotion"),
+                expr,
+                output_type,
+            )
+        }
 
-            "length" => {
-                if sql_func.args.is_empty() || sql_func.args.len() > 2 {
-                    bail!(
-                        "length expects one or two arguments, got {:?}",
-                        sql_func.args.len()
-                    );
-                }
-
-                let mut exprs = Vec::new();
-                let expr1 = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
-                let typ1 = ecx.column_type(&expr1);
-                match typ1.scalar_type {
-                    ScalarType::String | ScalarType::Unknown => {
-                        exprs.push(expr1);
-
-                        if sql_func.args.len() == 2 {
-                            let expr2 =
-                                plan_expr(ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                            let typ2 = ecx.column_type(&expr2);
-                            if typ2.scalar_type != ScalarType::String
-                                && typ2.scalar_type != ScalarType::Unknown
-                            {
-                                bail!("length second argument has non-string type {:?}", typ1);
-                            }
-                            exprs.push(expr2);
-                        }
-                        let expr = ScalarExpr::CallVariadic {
-                            func: VariadicFunc::LengthString,
-                            exprs,
-                        };
-                        Ok(expr)
-                    }
-                    ScalarType::Bytes => {
-                        if sql_func.args.len() != 1 {
-                            bail!(
-                                "length expects only one argument when first argument \
-                                 has type bytea, got {:?}",
-                                sql_func.args.len(),
-                            );
-                        }
-                        Ok(expr1.call_unary(UnaryFunc::LengthBytes))
-                    }
-                    _ => bail!("length first argument has non-string type {:?}", typ1),
-                }
+        "jsonb_array_length" | "jsonb_typeof" | "jsonb_strip_nulls" | "jsonb_pretty" => {
+            if args.len() != 1 {
+                bail!("{}() requires exactly two arguments", ident);
             }
-
-            "make_timestamp" => {
-                if sql_func.args.len() != 6 {
-                    bail!(
-                        "make_timestamp expects six arguments, got {}",
-                        sql_func.args.len()
-                    );
-                }
-
-                let mut exprs = Vec::new();
-                for arg in &sql_func.args[..5] {
-                    let expr = plan_expr(ecx, arg, Some(ScalarType::Int64))?;
-                    let expr = promote_int_int64(ecx, "make_timestamp", expr)?;
-                    exprs.push(expr);
-                }
-                {
-                    let expr = plan_expr(ecx, &sql_func.args[5], Some(ScalarType::Float64))?;
-                    let expr = promote_decimal_float64(ecx, "make_timestamp", expr)?;
-                    exprs.push(expr);
-                }
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::MakeTimestamp,
-                    exprs,
-                };
-                Ok(expr)
+            let jsonb = plan_expr(ecx, &args[0], Some(ScalarType::Jsonb))?;
+            let typ = ecx.column_type(&jsonb);
+            if typ.scalar_type != ScalarType::Jsonb && typ.scalar_type != ScalarType::Unknown {
+                bail!(
+                    "{}() requires jsonb as it's first argument, but got {}",
+                    ident,
+                    typ.scalar_type
+                );
             }
+            let expr = ScalarExpr::CallUnary {
+                func: match ident {
+                    "jsonb_array_length" => UnaryFunc::JsonbArrayLength,
+                    "jsonb_typeof" => UnaryFunc::JsonbTypeof,
+                    "jsonb_strip_nulls" => UnaryFunc::JsonbStripNulls,
+                    "jsonb_pretty" => UnaryFunc::JsonbPretty,
+                    _ => unreachable!(),
+                },
+                expr: Box::new(jsonb),
+            };
+            Ok(expr)
+        }
 
-            "mod" => {
-                if sql_func.args.len() != 2 {
-                    bail!("mod requires exactly two arguments");
-                }
-                plan_binary_op(
-                    ecx,
-                    &BinaryOperator::Modulus,
-                    &sql_func.args[0],
-                    &sql_func.args[1],
-                )
+        "jsonb_build_array" => {
+            let args = args
+                .iter()
+                .map(|arg| {
+                    Ok(plan_to_jsonb(
+                        ecx,
+                        "jsonb_build_array",
+                        plan_expr(ecx, arg, None)?,
+                    )?)
+                })
+                .collect::<Result<Vec<_>, failure::Error>>()?;
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::JsonbBuildArray,
+                exprs: args,
+            };
+            Ok(expr)
+        }
+
+        "jsonb_build_object" => {
+            if args.len() % 2 != 0 {
+                bail!("jsonb_build_object() requires an even number of arguments");
             }
-
-            "mz_logical_timestamp" => {
-                if !sql_func.args.is_empty() {
-                    bail!("mz_logical_timestamp does not take any arguments");
-                }
-                match ecx.qcx.lifetime {
-                    QueryLifetime::OneShot => {
-                        Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
-                    }
-                    QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
-                }
-            }
-
-            "nullif" => {
-                if sql_func.args.len() != 2 {
-                    bail!("nullif requires exactly two arguments");
-                }
-                let cond = Expr::BinaryOp {
-                    left: Box::new(sql_func.args[0].clone()),
-                    op: BinaryOperator::Eq,
-                    right: Box::new(sql_func.args[1].clone()),
-                };
-                let cond_expr = plan_expr(ecx, &cond, None)?;
-                let else_expr = plan_expr(ecx, &sql_func.args[0], None)?;
-                let expr = ScalarExpr::If {
-                    cond: Box::new(cond_expr),
-                    then: Box::new(ScalarExpr::literal_null(ecx.scalar_type(&else_expr))),
-                    els: Box::new(else_expr),
-                };
-                Ok(expr)
-            }
-
-            "sqrt" => {
-                if sql_func.args.len() != 1 {
-                    bail!("sqrt expects 1 argument, got {}", sql_func.args.len());
-                }
-                let expr = plan_expr(ecx, &sql_func.args[0], None)?;
-                let expr = promote_number_floatdec(ecx, "sqrt", expr)?;
-                Ok(match ecx.column_type(&expr).scalar_type {
-                    ScalarType::Float32 => expr.call_unary(UnaryFunc::SqrtFloat32),
-                    ScalarType::Float64 => expr.call_unary(UnaryFunc::SqrtFloat64),
-                    ScalarType::Decimal(p, s) => {
-                        // TODO(benesch): proper sqrt support for decimals. For
-                        // now we cast to an f64 and back, which is semi-ok
-                        // because sqrt is an inherently imprecise operation.
-                        let expr = plan_cast_internal(
-                            ecx,
-                            CastContext::Implicit("sqrt"),
-                            expr,
-                            ScalarType::Float64,
-                        )?;
-                        let expr = expr.call_unary(UnaryFunc::SqrtFloat64);
+            let args = args
+                .iter()
+                .enumerate()
+                .map(|(i, arg)| {
+                    Ok(if i % 2 == 0 {
                         plan_cast_internal(
                             ecx,
-                            CastContext::Implicit("sqrt"),
-                            expr,
-                            ScalarType::Decimal(p, s),
+                            CastContext::Explicit,
+                            plan_expr(ecx, arg, None)?,
+                            ScalarType::String,
                         )?
+                    } else {
+                        plan_to_jsonb(ecx, "jsonb_build_object", plan_expr(ecx, arg, None)?)?
+                    })
+                })
+                .collect::<Result<Vec<_>, failure::Error>>()?;
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::JsonbBuildObject,
+                exprs: args,
+            };
+            Ok(expr)
+        }
+
+        "round" => {
+            if args.is_empty() || args.len() > 2 {
+                bail!("round expects 1 or 2 arguments, got {}", args.len());
+            }
+
+            if args.len() == 1 {
+                // When there is only one argument, the argument can be
+                // any numeric type, with integers promoted to decimals.
+                let expr1 = plan_expr(ecx, &args[0], None)?;
+                let expr1 = promote_number_floatdec(ecx, "round argument", expr1)?;
+                Ok(match ecx.column_type(&expr1).scalar_type {
+                    ScalarType::Float32 => expr1.call_unary(UnaryFunc::RoundFloat32),
+                    ScalarType::Float64 => expr1.call_unary(UnaryFunc::RoundFloat64),
+                    ScalarType::Decimal(_, s) => {
+                        let zero = ScalarExpr::literal(
+                            Datum::Int64(0),
+                            ColumnType::new(ScalarType::Int64),
+                        );
+                        expr1.call_binary(zero, BinaryFunc::RoundDecimal(s))
                     }
                     _ => unreachable!(),
                 })
+            } else {
+                // When there are two arguments, the first argument has to
+                // be a decimal.
+                let expr1 = plan_expr(ecx, &args[0], None)?;
+                let (expr1, scale) = promote_int_decimal(ecx, "first round argument", expr1)?;
+                let expr2 = plan_expr(ecx, &args[1], None)?;
+                let expr2 = promote_int_int64(ecx, "second round argument", expr2)?;
+                Ok(expr1.call_binary(expr2, BinaryFunc::RoundDecimal(scale)))
+            }
+        }
+
+        "length" => {
+            if args.is_empty() || args.len() > 2 {
+                bail!("length expects one or two arguments, got {:?}", args.len());
             }
 
-            "substr" => {
-                let func = Function {
-                    name: ObjectName(vec![Ident::new("substring")]),
-                    args: sql_func.args.clone(),
-                    filter: sql_func.filter.clone(),
-                    over: sql_func.over.clone(),
-                    distinct: sql_func.distinct,
-                };
-                plan_function(ecx, &func)
+            let mut exprs = Vec::new();
+            let expr1 = plan_expr(ecx, &args[0], Some(ScalarType::String))?;
+            let typ1 = ecx.column_type(&expr1);
+            match typ1.scalar_type {
+                ScalarType::String | ScalarType::Unknown => {
+                    exprs.push(expr1);
+
+                    if args.len() == 2 {
+                        let expr2 = plan_expr(ecx, &args[1], Some(ScalarType::String))?;
+                        let typ2 = ecx.column_type(&expr2);
+                        if typ2.scalar_type != ScalarType::String
+                            && typ2.scalar_type != ScalarType::Unknown
+                        {
+                            bail!("length second argument has non-string type {:?}", typ1);
+                        }
+                        exprs.push(expr2);
+                    }
+                    let expr = ScalarExpr::CallVariadic {
+                        func: VariadicFunc::LengthString,
+                        exprs,
+                    };
+                    Ok(expr)
+                }
+                ScalarType::Bytes => {
+                    if args.len() != 1 {
+                        bail!(
+                            "length expects only one argument when first argument \
+                                has type bytea, got {:?}",
+                            args.len(),
+                        );
+                    }
+                    Ok(expr1.call_unary(UnaryFunc::LengthBytes))
+                }
+                _ => bail!("length first argument has non-string type {:?}", typ1),
+            }
+        }
+
+        "make_timestamp" => {
+            if args.len() != 6 {
+                bail!("make_timestamp expects six arguments, got {}", args.len());
             }
 
-            "substring" => {
-                if sql_func.args.len() < 2 || sql_func.args.len() > 3 {
-                    bail!(
-                        "substring expects two or three arguments, got {:?}",
-                        sql_func.args.len()
-                    );
-                }
-                let mut exprs = Vec::new();
-                let expr1 = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
-                let typ1 = ecx.column_type(&expr1);
-                if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Unknown
-                {
-                    bail!("substring first argument has non-string type {:?}", typ1);
-                }
-                exprs.push(expr1);
+            let mut exprs = Vec::new();
+            for arg in &args[..5] {
+                let expr = plan_expr(ecx, arg, Some(ScalarType::Int64))?;
+                let expr = promote_int_int64(ecx, "make_timestamp", expr)?;
+                exprs.push(expr);
+            }
+            {
+                let expr = plan_expr(ecx, &args[5], Some(ScalarType::Float64))?;
+                let expr = promote_decimal_float64(ecx, "make_timestamp", expr)?;
+                exprs.push(expr);
+            }
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::MakeTimestamp,
+                exprs,
+            };
+            Ok(expr)
+        }
 
-                let expr2 = plan_expr(ecx, &sql_func.args[1], Some(ScalarType::Int64))?;
-                let expr2 = promote_int_int64(ecx, "substring start", expr2)?;
-                exprs.push(expr2);
-                if sql_func.args.len() == 3 {
-                    let expr3 = plan_expr(ecx, &sql_func.args[2], Some(ScalarType::Int64))?;
-                    let expr3 = promote_int_int64(ecx, "substring length", expr3)?;
-                    exprs.push(expr3);
+        "mod" => {
+            if args.len() != 2 {
+                bail!("mod requires exactly two arguments");
+            }
+            plan_binary_op(ecx, &BinaryOperator::Modulus, &args[0], &args[1])
+        }
+
+        "mz_logical_timestamp" => {
+            if !args.is_empty() {
+                bail!("mz_logical_timestamp does not take any arguments");
+            }
+            match ecx.qcx.lifetime {
+                QueryLifetime::OneShot => {
+                    Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
                 }
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Substr,
-                    exprs,
-                };
-                Ok(expr)
+                QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
+            }
+        }
+
+        "nullif" => {
+            if args.len() != 2 {
+                bail!("nullif requires exactly two arguments");
+            }
+            let cond = Expr::BinaryOp {
+                left: Box::new(args[0].clone()),
+                op: BinaryOperator::Eq,
+                right: Box::new(args[1].clone()),
+            };
+            let cond_expr = plan_expr(ecx, &cond, None)?;
+            let else_expr = plan_expr(ecx, &args[0], None)?;
+            let expr = ScalarExpr::If {
+                cond: Box::new(cond_expr),
+                then: Box::new(ScalarExpr::literal_null(ecx.scalar_type(&else_expr))),
+                els: Box::new(else_expr),
+            };
+            Ok(expr)
+        }
+
+        "sqrt" => {
+            if args.len() != 1 {
+                bail!("sqrt expects 1 argument, got {}", args.len());
+            }
+            let expr = plan_expr(ecx, &args[0], None)?;
+            let expr = promote_number_floatdec(ecx, "sqrt", expr)?;
+            Ok(match ecx.column_type(&expr).scalar_type {
+                ScalarType::Float32 => expr.call_unary(UnaryFunc::SqrtFloat32),
+                ScalarType::Float64 => expr.call_unary(UnaryFunc::SqrtFloat64),
+                ScalarType::Decimal(p, s) => {
+                    // TODO(benesch): proper sqrt support for decimals. For
+                    // now we cast to an f64 and back, which is semi-ok
+                    // because sqrt is an inherently imprecise operation.
+                    let expr = plan_cast_internal(
+                        ecx,
+                        CastContext::Implicit("sqrt"),
+                        expr,
+                        ScalarType::Float64,
+                    )?;
+                    let expr = expr.call_unary(UnaryFunc::SqrtFloat64);
+                    plan_cast_internal(
+                        ecx,
+                        CastContext::Implicit("sqrt"),
+                        expr,
+                        ScalarType::Decimal(p, s),
+                    )?
+                }
+                _ => unreachable!(),
+            })
+        }
+
+        "substr" => {
+            let func = Function {
+                name: ObjectName(vec![Ident::new("substring")]),
+                args: sql_func.args.clone(),
+                filter: sql_func.filter.clone(),
+                over: sql_func.over.clone(),
+                distinct: sql_func.distinct,
+            };
+            plan_function(ecx, &func)
+        }
+
+        "substring" => {
+            if args.len() < 2 || args.len() > 3 {
+                bail!(
+                    "substring expects two or three arguments, got {:?}",
+                    args.len()
+                );
+            }
+            let mut exprs = Vec::new();
+            let expr1 = plan_expr(ecx, &args[0], Some(ScalarType::String))?;
+            let typ1 = ecx.column_type(&expr1);
+            if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Unknown {
+                bail!("substring first argument has non-string type {:?}", typ1);
+            }
+            exprs.push(expr1);
+
+            let expr2 = plan_expr(ecx, &args[1], Some(ScalarType::Int64))?;
+            let expr2 = promote_int_int64(ecx, "substring start", expr2)?;
+            exprs.push(expr2);
+            if args.len() == 3 {
+                let expr3 = plan_expr(ecx, &args[2], Some(ScalarType::Int64))?;
+                let expr3 = promote_int_int64(ecx, "substring length", expr3)?;
+                exprs.push(expr3);
+            }
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::Substr,
+                exprs,
+            };
+            Ok(expr)
+        }
+
+        "replace" => {
+            if args.len() != 3 {
+                bail!(
+                    "replace expects exactly three arguments, got {:?}",
+                    args.len()
+                )
             }
 
-            "replace" => {
-                if sql_func.args.len() != 3 {
-                    bail!(
-                        "replace expects exactly three arguments, got {:?}",
-                        sql_func.args.len()
-                    )
-                }
+            let mut exprs = Vec::new();
+            let original_string = plan_expr(ecx, &args[0], Some(ScalarType::String))?;
+            let original_string_typ = ecx.column_type(&original_string);
+            // todo: function that will do these steps for us?
+            if original_string_typ.scalar_type != ScalarType::String {
+                bail!(
+                    "replace first argument has non-string type {:?}",
+                    original_string_typ
+                );
+            }
+            exprs.push(original_string);
 
-                let mut exprs = Vec::new();
-                let original_string = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::String))?;
-                let original_string_typ = ecx.column_type(&original_string);
-                // todo: function that will do these steps for us?
-                if original_string_typ.scalar_type != ScalarType::String {
-                    bail!(
-                        "replace first argument has non-string type {:?}",
-                        original_string_typ
-                    );
-                }
-                exprs.push(original_string);
+            let from = plan_expr(ecx, &args[1], Some(ScalarType::String))?;
+            let from_typ = ecx.column_type(&from);
+            if from_typ.scalar_type != ScalarType::String {
+                bail!("replace second argument has non-string type {:?}", from_typ);
+            }
+            exprs.push(from);
 
-                let from = plan_expr(ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                let from_typ = ecx.column_type(&from);
-                if from_typ.scalar_type != ScalarType::String {
-                    bail!("replace second argument has non-string type {:?}", from_typ);
-                }
-                exprs.push(from);
+            let to = plan_expr(ecx, &args[2], Some(ScalarType::String))?;
+            let to_typ = ecx.column_type(&to);
+            if to_typ.scalar_type != ScalarType::String {
+                bail!("replace third argument has non-string type {:?}", to_typ);
+            }
+            exprs.push(to);
 
-                let to = plan_expr(ecx, &sql_func.args[2], Some(ScalarType::String))?;
-                let to_typ = ecx.column_type(&to);
-                if to_typ.scalar_type != ScalarType::String {
-                    bail!("replace third argument has non-string type {:?}", to_typ);
-                }
-                exprs.push(to);
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::Replace,
+                exprs,
+            };
 
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Replace,
-                    exprs,
-                };
+            Ok(expr)
+        }
 
-                Ok(expr)
+        "to_char" => {
+            if args.len() != 2 {
+                bail!("to_char requires exactly two arguments");
             }
 
-            "to_char" => {
-                if sql_func.args.len() != 2 {
-                    bail!("to_char requires exactly two arguments");
-                }
-
-                let ts_expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::TimestampTz))?;
-                let ts_type = ecx.column_type(&ts_expr);
-                match ts_type.scalar_type {
-                    ScalarType::Timestamp | ScalarType::TimestampTz | ScalarType::Unknown => (),
-                    other => bail!("to_char requires a timestamp or timestamptz as its first argument, but got: {}", other)
-                }
-
-                let fmt_expr = plan_expr(ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                let fmt_typ = ecx.column_type(&fmt_expr);
-                if fmt_typ.scalar_type != ScalarType::String
-                    && fmt_typ.scalar_type != ScalarType::Unknown
-                {
-                    bail!(
-                        "to_char requires a string as its second arugment, but got: {}",
-                        fmt_typ.scalar_type
-                    );
-                }
-
-                Ok(ScalarExpr::CallBinary {
-                    func: if ts_type.scalar_type == ScalarType::Timestamp {
-                        BinaryFunc::ToCharTimestamp
-                    } else {
-                        BinaryFunc::ToCharTimestampTz
-                    },
-                    expr1: Box::new(ts_expr),
-                    expr2: Box::new(fmt_expr),
-                })
+            let ts_expr = plan_expr(ecx, &args[0], Some(ScalarType::TimestampTz))?;
+            let ts_type = ecx.column_type(&ts_expr);
+            match ts_type.scalar_type {
+                ScalarType::Timestamp | ScalarType::TimestampTz | ScalarType::Unknown => (),
+                other => bail!("to_char requires a timestamp or timestamptz as its first argument, but got: {}", other)
             }
 
-            "to_jsonb" => {
-                if sql_func.args.len() != 1 {
-                    bail!("{}() requires exactly two arguments", ident);
-                }
-                let arg = plan_expr(ecx, &sql_func.args[0], None)?;
-                // > Returns the value as json or jsonb. Arrays and composites
-                // > are converted (recursively) to arrays and objects;
-                // > otherwise, if there is a cast from the type to json, the
-                // > cast function will be used to perform the conversion;
-                // > otherwise, a scalar value is produced. For any scalar type
-                // > other than a number, a Boolean, or a null value, the text
-                // > representation will be used, in such a fashion that it is a
-                // > valid json or jsonb value.
-                //
-                // https://www.postgresql.org/docs/current/functions-json.html
-                let expr = plan_to_jsonb(ecx, "to_jsonb", arg)?;
-                Ok(expr)
+            let fmt_expr = plan_expr(ecx, &args[1], Some(ScalarType::String))?;
+            let fmt_typ = ecx.column_type(&fmt_expr);
+            if fmt_typ.scalar_type != ScalarType::String
+                && fmt_typ.scalar_type != ScalarType::Unknown
+            {
+                bail!(
+                    "to_char requires a string as its second arugment, but got: {}",
+                    fmt_typ.scalar_type
+                );
             }
 
-            "to_timestamp" => {
-                if sql_func.args.len() != 1 {
-                    bail!("to_timestamp requires exactly one argument");
-                }
-                let expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::Float64))?;
-                let expr = promote_number_float64(ecx, "to_timestamp", expr)?;
-                Ok(expr.call_unary(UnaryFunc::ToTimestamp))
-            }
-
-            "convert_from" => {
-                if sql_func.args.len() != 2 {
-                    bail!("convert_from requires exactly two arguments");
-                }
-
-                let str_expr = plan_expr(ecx, &sql_func.args[0], Some(ScalarType::Bytes))?;
-                let str_type = ecx.column_type(&str_expr);
-                if str_type.scalar_type != ScalarType::Bytes {
-                    bail!(
-                        "convert_from requires a bytea value as its first argument, but got: {}",
-                        str_type.scalar_type
-                    );
-                }
-
-                let enc_expr = plan_expr(ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                let enc_type = ecx.column_type(&enc_expr);
-                if enc_type.scalar_type != ScalarType::String {
-                    bail!(
-                        "convert_from requires a string as its second argument, but got: {}",
-                        enc_type.scalar_type
-                    );
-                }
-
-                Ok(ScalarExpr::CallBinary {
-                    func: BinaryFunc::ConvertFrom,
-                    expr1: Box::new(str_expr),
-                    expr2: Box::new(enc_expr),
-                })
-            }
-
-            _ => {
-                if is_table_func(&name) {
-                    bail!(
-                        "table functions in scalar position are not supported: {}",
-                        ident
-                    )
+            Ok(ScalarExpr::CallBinary {
+                func: if ts_type.scalar_type == ScalarType::Timestamp {
+                    BinaryFunc::ToCharTimestamp
                 } else {
-                    bail!("unsupported function: {}", ident)
-                }
+                    BinaryFunc::ToCharTimestampTz
+                },
+                expr1: Box::new(ts_expr),
+                expr2: Box::new(fmt_expr),
+            })
+        }
+
+        "to_jsonb" => {
+            if args.len() != 1 {
+                bail!("{}() requires exactly two arguments", ident);
+            }
+            let arg = plan_expr(ecx, &args[0], None)?;
+            // > Returns the value as json or jsonb. Arrays and composites
+            // > are converted (recursively) to arrays and objects;
+            // > otherwise, if there is a cast from the type to json, the
+            // > cast function will be used to perform the conversion;
+            // > otherwise, a scalar value is produced. For any scalar type
+            // > other than a number, a Boolean, or a null value, the text
+            // > representation will be used, in such a fashion that it is a
+            // > valid json or jsonb value.
+            //
+            // https://www.postgresql.org/docs/current/functions-json.html
+            let expr = plan_to_jsonb(ecx, "to_jsonb", arg)?;
+            Ok(expr)
+        }
+
+        "to_timestamp" => {
+            if args.len() != 1 {
+                bail!("to_timestamp requires exactly one argument");
+            }
+            let expr = plan_expr(ecx, &args[0], Some(ScalarType::Float64))?;
+            let expr = promote_number_float64(ecx, "to_timestamp", expr)?;
+            Ok(expr.call_unary(UnaryFunc::ToTimestamp))
+        }
+
+        "convert_from" => {
+            if args.len() != 2 {
+                bail!("convert_from requires exactly two arguments");
+            }
+
+            let str_expr = plan_expr(ecx, &args[0], Some(ScalarType::Bytes))?;
+            let str_type = ecx.column_type(&str_expr);
+            if str_type.scalar_type != ScalarType::Bytes {
+                bail!(
+                    "convert_from requires a bytea value as its first argument, but got: {}",
+                    str_type.scalar_type
+                );
+            }
+
+            let enc_expr = plan_expr(ecx, &args[1], Some(ScalarType::String))?;
+            let enc_type = ecx.column_type(&enc_expr);
+            if enc_type.scalar_type != ScalarType::String {
+                bail!(
+                    "convert_from requires a string as its second argument, but got: {}",
+                    enc_type.scalar_type
+                );
+            }
+
+            Ok(ScalarExpr::CallBinary {
+                func: BinaryFunc::ConvertFrom,
+                expr1: Box::new(str_expr),
+                expr2: Box::new(enc_expr),
+            })
+        }
+
+        _ => {
+            if is_table_func(&name) {
+                bail!(
+                    "table functions in scalar position are not supported: {}",
+                    ident
+                )
+            } else {
+                bail!("unsupported function: {}", ident)
             }
         }
     }

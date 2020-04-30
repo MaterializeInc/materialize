@@ -158,7 +158,7 @@ impl Action for VerifyAction {
                 .await
                 .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
             let bytes: Vec<u8> = row.get("path");
-            Ok(PathBuf::from(OsString::from_vec(bytes)))
+            Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
         })
         .await
         .map_err(|e| format!("retrieving path: {:?}", e))?;

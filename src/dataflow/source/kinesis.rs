@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use anyhow;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, warn};
@@ -233,7 +234,7 @@ async fn create_state(
         HashSet<String>,
         VecDeque<(String, Option<String>)>,
     ),
-    failure::Error,
+    anyhow::Error,
 > {
     let http_client = HttpClient::new()?;
     let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
@@ -287,7 +288,7 @@ async fn update_shard_information(
     stream_name: &str,
     shard_set: &mut HashSet<String>,
     shard_queue: &mut VecDeque<(String, Option<String>)>,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     let new_shards: HashSet<String> = get_shard_ids(&client, stream_name)
         .await?
         .difference(shard_set)

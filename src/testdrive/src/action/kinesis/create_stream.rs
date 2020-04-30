@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
-use rusoto_kinesis::{CreateStreamInput, DeleteStreamInput, Kinesis, ListStreamsInput};
+use rusoto_kinesis::{CreateStreamInput, Kinesis};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -32,32 +32,7 @@ pub fn build_create_stream(mut cmd: BuiltinCommand) -> Result<CreateStreamAction
 
 #[async_trait]
 impl Action for CreateStreamAction {
-    async fn undo(&self, state: &mut State) -> Result<(), String> {
-        let list_streams_input = ListStreamsInput {
-            exclusive_start_stream_name: None,
-            limit: None,
-        };
-        let stream_names = state
-            .kinesis_client
-            .list_streams(list_streams_input)
-            .await
-            .map_err(|e| format!("listing Kinesis streams: {}", e))?
-            .stream_names;
-
-        if !stream_names.is_empty() {
-            println!("Deleting stale Kinesis topics {}", stream_names.join(", "));
-            for stream_name in stream_names {
-                let delete_stream_input = DeleteStreamInput {
-                    enforce_consumer_deletion: Some(true),
-                    stream_name: stream_name.clone(),
-                };
-                state
-                    .kinesis_client
-                    .delete_stream(delete_stream_input)
-                    .await
-                    .map_err(|e| format!("deleting Kinesis stream: {}", e))?;
-            }
-        }
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 
@@ -65,15 +40,15 @@ impl Action for CreateStreamAction {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!("Creating Kinesis stream {}", stream_name);
 
-        let create_stream_input = CreateStreamInput {
-            shard_count: self.shard_count,
-            stream_name: stream_name.clone(),
-        };
         state
             .kinesis_client
-            .create_stream(create_stream_input)
+            .create_stream(CreateStreamInput {
+                shard_count: self.shard_count,
+                stream_name: stream_name.clone(),
+            })
             .await
             .map_err(|e| format!("creating stream: {}", e))?;
+        state.kinesis_stream_names.push(stream_name.clone());
 
         util::kinesis::wait_for_stream_shards(&state.kinesis_client, stream_name, self.shard_count)
             .await

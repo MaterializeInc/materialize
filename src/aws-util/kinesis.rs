@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use failure::{bail, ResultExt};
+use anyhow;
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput};
 
 /// Wrapper around AWS Kinesis ListShards API (and Rusoto).
@@ -24,7 +24,7 @@ use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsIn
 pub async fn get_shard_ids(
     client: &KinesisClient,
     stream_name: &str,
-) -> Result<HashSet<String>, failure::Error> {
+) -> Result<HashSet<String>, anyhow::Error> {
     let mut next_token = None;
     let mut all_shard_ids = HashSet::new();
     loop {
@@ -37,13 +37,18 @@ pub async fn get_shard_ids(
                 stream_name: Some(stream_name.to_owned()),
             })
             .await
-            .with_context(|e| format!("fetching shard list: {}", e))?;
+            .map_err(|e| anyhow::Error::new(e).context("fetching shard list".to_owned()))?;
 
         match output.shards {
             Some(shards) => {
                 all_shard_ids.insert(shards.iter().map(|shard| shard.shard_id.clone()).collect());
             }
-            None => bail!("kinesis stream {} does not contain any shards", stream_name),
+            None => {
+                return Err(anyhow::Error::msg(format!(
+                    "kinesis stream {} does not contain any shards",
+                    stream_name
+                )));
+            }
         }
 
         if output.next_token.is_some() {
@@ -68,7 +73,7 @@ pub async fn get_shard_iterator(
     client: &KinesisClient,
     stream_name: &str,
     shard_id: &str,
-) -> Result<Option<String>, failure::Error> {
+) -> Result<Option<String>, anyhow::Error> {
     Ok(client
         .get_shard_iterator(GetShardIteratorInput {
             shard_id: String::from(shard_id),
@@ -78,6 +83,6 @@ pub async fn get_shard_iterator(
             timestamp: None,
         })
         .await
-        .with_context(|e| format!("fetching shard iterator: {}", e))?
+        .map_err(|e| anyhow::Error::new(e).context("fetching shard iterator"))?
         .shard_iterator)
 }

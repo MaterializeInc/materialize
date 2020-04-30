@@ -203,19 +203,10 @@ impl AstDisplay for &ObjectName {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// Identifier e.g. table name or column name
-    Identifier(Ident),
-    /// Unqualified wildcard (`*`). SQL allows this in limited contexts, such as:
-    /// - right after `SELECT` (which is represented as a [SelectItem::Wildcard] instead)
-    /// - or as part of an aggregate function, e.g. `COUNT(*)`,
-    ///
-    /// ...but we currently also accept it in contexts where it doesn't make
-    /// sense, such as `* + *`
-    Wildcard,
+    Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
     /// (Same caveats apply to `QualifiedWildcard` as to `Wildcard`.)
     QualifiedWildcard(Vec<Ident>),
-    /// Multi-part identifier, e.g. `table_alias.column` or `schema.table.col`
-    CompoundIdentifier(Vec<Ident>),
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// `IS NULL` expression
@@ -306,13 +297,11 @@ pub enum Expr {
 impl AstDisplay for Expr {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Expr::Identifier(s) => f.write_node(s),
-            Expr::Wildcard => f.write_str("*"),
+            Expr::Identifier(s) => f.write_node(&display_separated(s, ".")),
             Expr::QualifiedWildcard(q) => {
                 f.write_node(&display_separated(q, "."));
                 f.write_str(".*");
             }
-            Expr::CompoundIdentifier(s) => f.write_node(&display_separated(s, ".")),
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
             Expr::IsNull(ast) => {
                 f.write_node(&ast);
@@ -1541,7 +1530,7 @@ impl_display!(Assignment);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Function {
     pub name: ObjectName,
-    pub args: Vec<Expr>,
+    pub args: FunctionArgs,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr>>,
     pub over: Option<WindowSpec>,
@@ -1556,7 +1545,7 @@ impl AstDisplay for Function {
         if self.distinct {
             f.write_str("DISTINCT ")
         }
-        f.write_node(&display_comma_separated(&self.args));
+        f.write_node(&self.args);
         f.write_str(")");
         if let Some(filter) = &self.filter {
             f.write_str(" FILTER (WHERE ");
@@ -1571,6 +1560,25 @@ impl AstDisplay for Function {
     }
 }
 impl_display!(Function);
+
+/// Arguments for a function call.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FunctionArgs {
+    /// The special star argument, as in `count(*)`.
+    Star,
+    /// A normal list of arguments.
+    Args(Vec<Expr>),
+}
+
+impl AstDisplay for FunctionArgs {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            FunctionArgs::Star => f.write_str("*"),
+            FunctionArgs::Args(args) => f.write_node(&display_comma_separated(&args)),
+        }
+    }
+}
+impl_display!(FunctionArgs);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum ObjectType {

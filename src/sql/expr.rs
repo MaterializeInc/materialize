@@ -7,31 +7,35 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! This file houses a representation of a SQL plan that is parallel to that found in
+//! src/expr/relation/mod.rs, but represents an earlier phase of planning. It's structurally very
+//! similar to that file, with some differences which are noted below. It gets turned into that
+//! representation via a call to decorrelate().
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::mem;
 
 use failure::ensure;
 
-use expr as dataflow_expr;
 use ore::collections::CollectionExt;
 use repr::*;
 
 use crate::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
-pub use dataflow_expr::{
+pub use expr::{
     AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, UnaryTableFunc, VariadicFunc,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Just like dataflow_expr::RelationExpr, except where otherwise noted below
+/// Just like expr::RelationExpr, except where otherwise noted below.
 pub enum RelationExpr {
     Constant {
         rows: Vec<Row>,
         typ: RelationType,
     },
     Get {
-        id: dataflow_expr::Id,
+        id: expr::Id,
         typ: RelationType,
     },
     // only needed for CTEs
@@ -57,14 +61,17 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
         predicates: Vec<ScalarExpr>,
     },
-    /// Unlike dataflow_expr::RelationExpr, we haven't yet compiled LeftOuter/RightOuter/FullOuter joins away into more primitive exprs
+    /// Unlike expr::RelationExpr, we haven't yet compiled LeftOuter/RightOuter/FullOuter
+    /// joins away into more primitive exprs
     Join {
         left: Box<RelationExpr>,
         right: Box<RelationExpr>,
         on: ScalarExpr,
         kind: JoinKind,
     },
-    /// Unlike dataflow_expr::RelationExpr, when `key` is empty AND `input` is empty this returns a single row with the aggregates evalauted over empty groups, rather than returning zero rows
+    /// Unlike expr::RelationExpr, when `key` is empty AND `input` is empty this returns
+    /// a single row with the aggregates evaluated over empty groups, rather than returning zero
+    /// rows
     Reduce {
         input: Box<RelationExpr>,
         group_key: Vec<usize>,
@@ -99,9 +106,11 @@ pub enum RelationExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Just like dataflow::ScalarExpr, except where otherwise noted below.
+/// Just like expr::ScalarExpr, except where otherwise noted below.
 pub enum ScalarExpr {
-    /// Unlike dataflow::ScalarExpr, we can nest RelationExprs via eg Exists. This means that a variable could refer to a column of the current input, or to a column of an outer relation. We use ColumnRef to denote the difference.
+    /// Unlike expr::ScalarExpr, we can nest RelationExprs via eg Exists. This means that a
+    /// variable could refer to a column of the current input, or to a column of an outer relation.
+    /// We use ColumnRef to denote the difference.
     Column(ColumnRef),
     Parameter(usize),
     Literal(Row, ColumnType),
@@ -188,12 +197,12 @@ pub struct AggregateExpr {
 
 impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
-    /// Rewrite `self` into a `dataflow_expr::RelationExpr`.
+    /// Rewrite `self` into a `expr::RelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `RelationExpr`s) into flat queries
-    pub fn decorrelate(mut self) -> Result<dataflow_expr::RelationExpr, failure::Error> {
-        let mut id_gen = dataflow_expr::IdGen::default();
+    pub fn decorrelate(mut self) -> Result<expr::RelationExpr, failure::Error> {
+        let mut id_gen = expr::IdGen::default();
         self.split_subquery_predicates();
-        dataflow_expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+        expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
             .let_in(&mut id_gen, |id_gen, get_outer| {
                 self.applied_to(id_gen, get_outer, &ColumnMap::empty())
             })
@@ -280,17 +289,17 @@ impl RelationExpr {
         }
     }
 
-    /// Return a `dataflow_expr::RelationExpr` which evaluates `self` once for each row returned by `get_outer`.
+    /// Return a `expr::RelationExpr` which evaluates `self` once for each row returned by `get_outer`.
     /// (Where `get_outer` should be a `Get` with no duplicate rows)
     fn applied_to(
         self,
-        id_gen: &mut dataflow_expr::IdGen,
-        get_outer: dataflow_expr::RelationExpr,
+        id_gen: &mut expr::IdGen,
+        get_outer: expr::RelationExpr,
         col_map: &ColumnMap,
-    ) -> Result<dataflow_expr::RelationExpr, failure::Error> {
+    ) -> Result<expr::RelationExpr, failure::Error> {
         use self::RelationExpr::*;
-        use dataflow_expr::RelationExpr as SR;
-        if let dataflow_expr::RelationExpr::Get { .. } = &get_outer {
+        use expr::RelationExpr as SR;
+        if let expr::RelationExpr::Get { .. } = &get_outer {
         } else {
             panic!(
                 "get_outer: expected a RelationExpr::Get, found {:?}",
@@ -672,7 +681,7 @@ impl RelationExpr {
 }
 
 impl ScalarExpr {
-    /// Rewrite `self` into a `dataflow_expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `inner`.
+    /// Rewrite `self` into a `expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `inner`.
     /// This requires removing all nested subqueries, which we can do moving them into `inner` using `RelationExpr::applied_to`.
     /// We expect that `inner` has already been decorrelated, so that:
     /// * the first `outer_arities[0]` columns of `inner` hold values from the outermost scope
@@ -681,12 +690,12 @@ impl ScalarExpr {
     /// * the remaining columns of `inner` hold values from the inner scope (i.e., the direct input to `self`)
     fn applied_to(
         self,
-        id_gen: &mut dataflow_expr::IdGen,
+        id_gen: &mut expr::IdGen,
         col_map: &ColumnMap,
-        inner: &mut dataflow_expr::RelationExpr,
-    ) -> Result<dataflow_expr::ScalarExpr, failure::Error> {
+        inner: &mut expr::RelationExpr,
+    ) -> Result<expr::ScalarExpr, failure::Error> {
         use self::ScalarExpr::*;
-        use dataflow_expr::ScalarExpr as SS;
+        use expr::ScalarExpr as SS;
 
         Ok(match self {
             Column(col_ref) => SS::Column(col_map.get(&col_ref)),
@@ -747,7 +756,7 @@ impl ScalarExpr {
                             // `.map(vec![Datum::True])`, but using a join allows
                             // for potential predicate pushdown and elision in the
                             // optimizer.
-                            .product(dataflow_expr::RelationExpr::constant(
+                            .product(expr::RelationExpr::constant(
                                 vec![vec![Datum::True]],
                                 RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
                             ));
@@ -947,11 +956,11 @@ impl ScalarExpr {
         )
     }
 
-    /// Rewrite `self` into a `dataflow_expr::ScalarExpr`.
+    /// Rewrite `self` into a `expr::ScalarExpr`.
     /// Assumes there are no subqueries in need of decorrelating
-    pub fn lower_uncorrelated(self) -> dataflow_expr::ScalarExpr {
+    pub fn lower_uncorrelated(self) -> expr::ScalarExpr {
         use self::ScalarExpr::*;
-        use dataflow_expr::ScalarExpr as SS;
+        use expr::ScalarExpr as SS;
 
         match self {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
@@ -995,19 +1004,19 @@ impl ScalarExpr {
 /// The caller must supply the `apply` function that applies the rewritten
 /// `inner` to `outer`.
 fn branch<F>(
-    id_gen: &mut dataflow_expr::IdGen,
-    outer: dataflow_expr::RelationExpr,
+    id_gen: &mut expr::IdGen,
+    outer: expr::RelationExpr,
     col_map: &ColumnMap,
     mut inner: RelationExpr,
     apply: F,
-) -> Result<dataflow_expr::RelationExpr, failure::Error>
+) -> Result<expr::RelationExpr, failure::Error>
 where
     F: FnOnce(
-        &mut dataflow_expr::IdGen,
+        &mut expr::IdGen,
         RelationExpr,
-        dataflow_expr::RelationExpr,
+        expr::RelationExpr,
         &ColumnMap,
-    ) -> Result<dataflow_expr::RelationExpr, failure::Error>,
+    ) -> Result<expr::RelationExpr, failure::Error>,
 {
     // The key consists of the columns from the outer expression upon which the
     // inner relation depends. We discover these dependencies by walking the
@@ -1044,7 +1053,7 @@ where
             // rows, whereas if it had been correlated it would not (and *could*
             // not) have been computed if outer had no rows, but the callers of
             // this function don't mind these somewhat-weird semantics.
-            dataflow_expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+            expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
         } else {
             get_outer.clone().distinct_by(key.clone())
         };
@@ -1052,7 +1061,7 @@ where
             let oa = get_outer.arity();
             let branch = apply(id_gen, inner, get_keyed_outer, &ColumnMap::new(new_col_map))?;
             let ba = branch.arity();
-            let joined = dataflow_expr::RelationExpr::join(
+            let joined = expr::RelationExpr::join(
                 vec![get_outer.clone(), branch],
                 key.iter()
                     .enumerate()
@@ -1069,17 +1078,17 @@ where
 impl AggregateExpr {
     fn applied_to(
         self,
-        id_gen: &mut dataflow_expr::IdGen,
+        id_gen: &mut expr::IdGen,
         col_map: &ColumnMap,
-        inner: &mut dataflow_expr::RelationExpr,
-    ) -> Result<dataflow_expr::AggregateExpr, failure::Error> {
+        inner: &mut expr::RelationExpr,
+    ) -> Result<expr::AggregateExpr, failure::Error> {
         let AggregateExpr {
             func,
             expr,
             distinct,
         } = self;
 
-        Ok(dataflow_expr::AggregateExpr {
+        Ok(expr::AggregateExpr {
             func,
             expr: expr.applied_to(id_gen, col_map, inner)?,
             distinct,
@@ -1384,7 +1393,7 @@ impl AggregateExpr {
 }
 
 impl RelationExpr {
-    pub fn finish(&mut self, finishing: dataflow_expr::RowSetFinishing) {
+    pub fn finish(&mut self, finishing: expr::RowSetFinishing) {
         if !finishing.is_trivial() {
             *self = RelationExpr::Project {
                 input: Box::new(RelationExpr::TopK {

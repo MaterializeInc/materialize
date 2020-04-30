@@ -276,13 +276,12 @@ impl Parser {
                             self.prev_token();
                             self.parse_function(ObjectName(id_parts))
                         } else {
-                            Ok(Expr::CompoundIdentifier(id_parts))
+                            Ok(Expr::Identifier(id_parts))
                         }
                     }
-                    _ => Ok(Expr::Identifier(w.to_ident())),
+                    _ => Ok(Expr::Identifier(vec![w.to_ident()])),
                 },
             }, // End of Token::Word
-            Token::Mult => Ok(Expr::Wildcard),
             tok @ Token::Minus | tok @ Token::Plus => {
                 let op = if tok == Token::Plus {
                     UnaryOperator::Plus
@@ -2513,9 +2512,9 @@ impl Parser {
             let name = self.parse_object_name()?;
             // Postgres, MSSQL: table-valued functions:
             let args = if self.consume_token(&Token::LParen) {
-                self.parse_optional_args()?
+                Some(self.parse_optional_args()?)
             } else {
-                vec![]
+                None
             };
             let alias = self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?;
             // MSSQL-specific table hints:
@@ -2610,22 +2609,26 @@ impl Parser {
         Ok(Assignment { id, value })
     }
 
-    pub fn parse_optional_args(&mut self) -> Result<Vec<Expr>, ParserError> {
-        if self.consume_token(&Token::RParen) {
-            Ok(vec![])
+    pub fn parse_optional_args(&mut self) -> Result<FunctionArgs, ParserError> {
+        if self.consume_token(&Token::Mult) {
+            self.expect_token(&Token::RParen)?;
+            Ok(FunctionArgs::Star)
+        } else if self.consume_token(&Token::RParen) {
+            Ok(FunctionArgs::Args(vec![]))
         } else {
             let args = self.parse_comma_separated(Parser::parse_expr)?;
             self.expect_token(&Token::RParen)?;
-            Ok(args)
+            Ok(FunctionArgs::Args(args))
         }
     }
 
     /// Parse a comma-delimited list of projections after SELECT
     pub fn parse_select_item(&mut self) -> Result<SelectItem, ParserError> {
+        if self.consume_token(&Token::Mult) {
+            return Ok(SelectItem::Wildcard);
+        }
         let expr = self.parse_expr()?;
-        if let Expr::Wildcard = expr {
-            Ok(SelectItem::Wildcard)
-        } else if let Expr::QualifiedWildcard(prefix) = expr {
+        if let Expr::QualifiedWildcard(prefix) = expr {
             Ok(SelectItem::QualifiedWildcard(ObjectName(prefix)))
         } else {
             // `expr` is a regular SQL expression and can be followed by an alias

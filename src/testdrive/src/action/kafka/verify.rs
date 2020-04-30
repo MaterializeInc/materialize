@@ -55,7 +55,7 @@ impl Action for VerifyAction {
                 )
                 .await
                 .map_err(|e| format!("retrieving topic name: {}", e))?;
-            Ok(row.get("topic"))
+            Ok::<_, String>(row.get("topic"))
         })
         .await?;
 
@@ -69,7 +69,7 @@ impl Action for VerifyAction {
             .raw;
 
         let mut config = ClientConfig::new();
-        config.set("bootstrap.servers", &state.kafka_addr);
+        config.set("bootstrap.servers", &state.kafka_url);
         config.set("auto.offset.reset", "earliest");
         config.set("group.id", "materialize-testdrive");
 

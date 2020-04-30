@@ -86,7 +86,7 @@ main() {
         web)
             local page="${1:-_}" && shift
             case "$page" in
-                grafana) runv open http://localhost:3000/d/mz;;
+                grafana) runv open http://localhost:3000/d/load-test;;
                 metabase) runv open http://localhost:3030;;
                 kafka) runv open http://localhost:9021;;
                 *)
@@ -266,7 +266,7 @@ bring_up_source_data() {
 bring_up_introspection() {
     mkdir -p prometheus/data
     chmod 777 prometheus/data
-    dc_up grafana
+    dc_up dashboard
 }
 
 bring_up_metabase() {
@@ -344,9 +344,11 @@ dc_logs() {
     fi
 }
 
+MONITORING_SERVICE=dashboard
+
 dc_prom_backup() {
-    if [[ $(dc_is_running prometheus) == prometheus ]]; then
-        echo "stop prometheus before backing up"
+    if [[ $(dc_is_running "$MONITORING_SERVICE") == "$MONITORING_SERVICE" ]]; then
+        echo "stop $MONITORING_SERVICE before backing up"
         exit 1
     fi
     mkdir -p backups
@@ -354,8 +356,8 @@ dc_prom_backup() {
 }
 
 dc_prom_restore() {
-    if [[ $(dc_is_running prometheus) == prometheus ]]; then
-        echo "stop prometheus before restoring"
+    if [[ $(dc_is_running "$MONITORING_SERVICE") == "$MONITORING_SERVICE" ]]; then
+        echo "stop $MONITORING_SERVICE before restoring"
         exit 1
     fi
     local glob="$1"
@@ -530,7 +532,7 @@ load_test() {
     dc_run -d peeker \
          "${PEEKER_COMMAND[@]}"
     dc_ensure_stays_up peeker
-    dc_ensure_stays_up prometheus 1
+    dc_ensure_stays_up grafana 1
     dc_status
 }
 

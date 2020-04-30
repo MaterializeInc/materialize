@@ -14,7 +14,7 @@ set -euo pipefail
 echo "~~~ :docker: Cleaning up after mzcompose" >&2
 
 run() {
-    bin/ci-builder run stable bin/mzcompose -f "$BUILDKITE_PLUGIN_MZCOMPOSE_CONFIG" "$@"
+    bin/ci-builder run stable bin/mzcompose --mz-quiet -f "$BUILDKITE_PLUGIN_MZCOMPOSE_CONFIG" "$@"
 }
 
 run kill

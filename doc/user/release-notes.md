@@ -51,6 +51,8 @@ Wrap your release notes at the 80 character mark.
 - Support Kafka topics with key-value messages. ([`CREATE SOURCE ... ENVELOPE
   UPSERT  ...`](../overview/api-components/#envelopes))
 
+- Support creating Kinesis sources from streams with more than one shard
+
 <span id="0.2.1"></span>
 ## 0.2.0 &rarr; 0.2.1 (Unreleased)
 

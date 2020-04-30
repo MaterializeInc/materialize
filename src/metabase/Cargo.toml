@@ -1,0 +1,10 @@
+[package]
+name = "metabase"
+description = "An API client for Metabase."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+reqwest = { version = "0.10.4" }
+serde = { version = "1.0", features = ["derive"] }

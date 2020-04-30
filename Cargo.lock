@@ -148,7 +148,6 @@ name = "aws-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "failure",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
@@ -659,6 +658,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "avro",
  "aws-util",
  "bincode",
@@ -1713,6 +1713,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75189eb85871ea5c2e2c15abbdd541185f63b408415e5051f5cac122d8c774b9"
 dependencies = [
  "rustc_version",
+]
+
+[[package]]
+name = "metabase"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+]
+
+[[package]]
+name = "metabase-smoketest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "log",
+ "metabase",
+ "ore",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

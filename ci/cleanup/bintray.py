@@ -19,8 +19,15 @@ def get_old_versions(pc: bintray.PackageClient) -> List[str]:
     versions = (pc.get_version(v).json() for v in version_strs)
 
     def is_old(v: Dict[str, str]) -> bool:
-        return datetime.now(tz=timezone.utc) - datetime.strptime(
-            v["created"], "%Y-%m-%dT%H:%M:%S.%f%z"
+        return datetime.now() - datetime.strptime(
+            v["created"],
+            # match the `Z` literally to work around
+            # python3.6 timezone parsing bugs.
+            #
+            # If Bintray ever sends us dates in a
+            # different time zone than `Z`, this
+            # will break.
+            "%Y-%m-%dT%H:%M:%S.%fZ",
         ) > timedelta(days=14)
 
     old_versions = [

@@ -37,7 +37,7 @@ metrics:
       - worker
   - metric_name: mz_perf_arrangement_records
     query: >-
-      SELECT * FROM mz_perf_arrangement_records
+      SELECT coalesce(name, '<unknown>') AS name, operator, records, worker FROM mz_perf_arrangement_records
       ORDER BY operator
     help: How many records each arrangement has
     type: gauge

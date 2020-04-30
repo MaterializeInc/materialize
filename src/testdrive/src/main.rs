@@ -31,8 +31,21 @@ async fn run() -> Result<(), Error> {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
-    opts.optopt("", "kafka-addr", "kafka bootstrap address", "HOST:PORT");
+    opts.optopt(
+        "",
+        "kafka-url",
+        "kafka bootstrap URL",
+        "ENCRYPTION://HOST:PORT",
+    );
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
+    opts.optopt(
+        "",
+        "cert",
+        "Path to the keystore for the client cert and key; must be der-encoded, e.g. .p12",
+        "PATH",
+    );
+    opts.optopt("", "cert-password", "Keystore password", "PASSWORD");
+    opts.optopt("", "root-cert", "Path to the root CA's cert (.pem)", "PATH");
     opts.optopt(
         "",
         "aws-region",
@@ -70,8 +83,8 @@ async fn run() -> Result<(), Error> {
     }
 
     let mut config = Config::default();
-    if let Some(addr) = opts.opt_str("kafka-addr") {
-        config.kafka_addr = addr;
+    if let Some(addr) = opts.opt_str("kafka-url") {
+        config.kafka_url = addr;
     }
     if let Some(url) = opts.opt_str("schema-registry-url") {
         config.schema_registry_url = url.parse().map_err(|e| Error::General {
@@ -80,6 +93,30 @@ async fn run() -> Result<(), Error> {
             hints: vec![],
         })?;
     }
+    if let Some(path) = opts.opt_str("cert") {
+        if std::fs::metadata(&path).is_err() {
+            return Err(Error::General {
+                ctx: "certificate path does not exist".into(),
+                cause: None,
+                hints: vec![],
+            });
+        }
+        config.keystore_path = Some(path);
+    }
+    if let Some(pass) = opts.opt_str("cert-password") {
+        config.keystore_pass = Some(pass);
+    }
+    if let Some(path) = opts.opt_str("root-cert") {
+        if std::fs::metadata(&path).is_err() {
+            return Err(Error::General {
+                ctx: "root certificate path does not exist".into(),
+                cause: None,
+                hints: vec![],
+            });
+        }
+        config.root_cert_path = Some(path);
+    }
+
     if let (Ok(Some(region)), None) = (opts.opt_get("aws-region"), opts.opt_str("aws-endpoint")) {
         // Standard AWS region without a custom endpoint. Try to find actual AWS
         // credentials.
