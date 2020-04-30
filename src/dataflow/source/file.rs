@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-
 use failure::ResultExt;
 use log::error;
 #[cfg(not(target_os = "macos"))]
@@ -119,7 +118,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     }) {
         Ok(file) => file,
         Err(err) => {
-            tx.send(Err(err.into()));
+            let _ = tx.send(Err(err.into()));
             return;
         }
     };
@@ -187,7 +186,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     }) {
         Ok(i) => send_records(i, tx, activator),
         Err(e) => {
-            tx.send(Err(e.into()));
+            let _ = tx.send(Err(e.into()));
             ()
         }
     };
