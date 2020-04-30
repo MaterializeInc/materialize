@@ -9,7 +9,7 @@
 
 use differential_dataflow::hashable::Hashable;
 use timely::dataflow::{
-    channels::pact::{Exchange},
+    channels::pact::Exchange,
     channels::pushers::buffer::Session,
     channels::pushers::Counter as PushCounter,
     channels::pushers::Tee,
