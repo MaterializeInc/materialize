@@ -2322,7 +2322,7 @@ fn index_sql(
         key_parts: keys
             .iter()
             .map(|i| match view_desc.get_unambiguous_name(*i) {
-                Some(n) => Expr::Identifier(Ident::new(n.to_string())),
+                Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
                 _ => Expr::Value(Value::Number((i + 1).to_string())),
             })
             .collect(),

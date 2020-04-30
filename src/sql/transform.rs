@@ -15,7 +15,7 @@
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    BinaryOperator, Expr, Function, Ident, ObjectName, Query, SelectItem, Value,
+    BinaryOperator, Expr, Function, FunctionArgs, Ident, ObjectName, Query, SelectItem, Value,
 };
 
 use crate::normalize;
@@ -39,7 +39,7 @@ impl AggFuncRewriter {
             op: BinaryOperator::Divide,
             right: Box::new(Expr::Function(Function {
                 name: ObjectName(vec!["nullif".into()]),
-                args: vec![rhs, Expr::Value(Value::Number("0".into()))],
+                args: FunctionArgs::Args(vec![rhs, Expr::Value(Value::Number("0".into()))]),
                 filter: None,
                 over: None,
                 distinct: false,
@@ -50,21 +50,21 @@ impl AggFuncRewriter {
     fn plan_avg(expr: Expr, filter: Option<&Expr>, distinct: bool) -> Expr {
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["sum".into()]),
-            args: vec![expr.clone()],
+            args: FunctionArgs::Args(vec![expr.clone()]),
             filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
         });
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["internal_avg_promotion".into()]),
-            args: vec![sum],
+            args: FunctionArgs::Args(vec![sum]),
             filter: None,
             over: None,
             distinct: false,
         });
         let count = Expr::Function(Function {
             name: ObjectName(vec!["count".into()]),
-            args: vec![expr],
+            args: FunctionArgs::Args(vec![expr]),
             filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
@@ -89,25 +89,25 @@ impl AggFuncRewriter {
         //
         let expr = Expr::Function(Function {
             name: ObjectName(vec!["internal_avg_promotion".into()]),
-            args: vec![expr],
+            args: FunctionArgs::Args(vec![expr]),
             filter: None,
             over: None,
             distinct: false,
         });
         let sum_squares = Expr::Function(Function {
             name: ObjectName(vec!["sum".into()]),
-            args: vec![Expr::BinaryOp {
+            args: FunctionArgs::Args(vec![Expr::BinaryOp {
                 left: Box::new(expr.clone()),
                 op: BinaryOperator::Multiply,
                 right: Box::new(expr.clone()),
-            }],
+            }]),
             filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
         });
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["sum".into()]),
-            args: vec![expr.clone()],
+            args: FunctionArgs::Args(vec![expr.clone()]),
             filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
@@ -119,7 +119,7 @@ impl AggFuncRewriter {
         };
         let count = Expr::Function(Function {
             name: ObjectName(vec!["count".into()]),
-            args: vec![expr],
+            args: FunctionArgs::Args(vec![expr]),
             filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
@@ -145,7 +145,7 @@ impl AggFuncRewriter {
     fn plan_stddev(expr: Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
         Expr::Function(Function {
             name: ObjectName(vec!["sqrt".into()]),
-            args: vec![Self::plan_variance(expr, filter, distinct, sample)],
+            args: FunctionArgs::Args(vec![Self::plan_variance(expr, filter, distinct, sample)]),
             filter: None,
             over: None,
             distinct: false,
@@ -158,10 +158,11 @@ impl AggFuncRewriter {
             _ => return None,
         };
         let name = normalize::function_name(func.name.clone()).ok()?;
-        if func.args.len() != 1 {
-            return None;
-        }
-        let arg = func.args[0].clone();
+        let arg = match &func.args {
+            FunctionArgs::Star => return None,
+            FunctionArgs::Args(args) if args.len() != 1 => return None,
+            FunctionArgs::Args(args) => args[0].clone(),
+        };
         let filter = func.filter.as_deref();
         let expr = match name.as_str() {
             "avg" => Some(Self::plan_avg(arg, filter, func.distinct)),
@@ -204,10 +205,13 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
     fn visit_expr(&mut self, expr: &'ast mut Expr) {
         visit_mut::visit_expr(self, expr);
         if let Expr::Identifier(ident) = expr {
-            if normalize::ident(ident.clone()) == "current_timestamp" {
+            if ident.len() != 1 {
+                return;
+            }
+            if normalize::ident(ident[0].clone()) == "current_timestamp" {
                 *expr = Expr::Function(Function {
                     name: ObjectName(vec!["current_timestamp".into()]),
-                    args: vec![],
+                    args: FunctionArgs::Args(vec![]),
                     filter: None,
                     over: None,
                     distinct: false,

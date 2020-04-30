@@ -56,7 +56,7 @@ num
 [2.0,3.0,1.0]
 
 ! SELECT jsonb_agg(1, 2)
-jsonb_agg function only takes one argument
+jsonb_agg function requires exactly one non-star argument
 
 # todo@jldlaughlin: Fix test when #2414 is implemented
 ! SELECT jsonb_agg((1, 2))
