@@ -119,7 +119,7 @@ use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
-use timely::dataflow::{channels::pact::Pipeline, Stream};
+use timely::dataflow::{Stream};
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
