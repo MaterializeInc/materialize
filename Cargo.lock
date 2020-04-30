@@ -148,7 +148,6 @@ name = "aws-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "failure",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
@@ -659,6 +658,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "avro",
  "aws-util",
  "bincode",

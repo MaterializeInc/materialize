@@ -10,7 +10,6 @@ path = "lib.rs"
 
 [dependencies]
 anyhow = "1.0.28"
-failure = "0.1"
 rusoto_core = "0.43.0-beta.1"
 rusoto_credential = "0.43.0-beta.1"
 rusoto_kinesis = "0.43.0-beta.1"
