@@ -283,7 +283,6 @@ where
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err> + Send + 'static,
     Err: Into<failure::Error> + Send + 'static,
-    //    Err: Display + Send + 'static,
     Out: Send + Clone + 'static,
 {
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
