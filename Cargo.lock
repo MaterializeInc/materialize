@@ -1693,6 +1693,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "metabase"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+]
+
+[[package]]
+name = "metabase-smoketest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "log",
+ "metabase",
+ "ore",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -13,9 +13,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
 
+use ore::retry;
+
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use crate::util::retry;
 
 pub struct UpdateShardCountAction {
     stream_name: String,

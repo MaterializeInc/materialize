@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
+use std::io::Read;
 use std::mem;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
@@ -43,8 +44,11 @@ const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 /// User-settable configuration parameters.
 #[derive(Debug)]
 pub struct Config {
-    pub kafka_addr: String,
+    pub kafka_url: String,
     pub schema_registry_url: Url,
+    pub keystore_path: Option<String>,
+    pub keystore_pass: Option<String>,
+    pub root_cert_path: Option<String>,
     pub aws_region: rusoto_core::Region,
     pub aws_account: String,
     pub aws_credentials: AwsCredentials,
@@ -58,8 +62,11 @@ impl Default for Config {
         const DUMMY_AWS_ACCESS_KEY: &str = "dummy-access-key";
         const DUMMY_AWS_SECRET_ACCESS_KEY: &str = "dummy-secret-access-key";
         Config {
-            kafka_addr: "localhost:9092".into(),
+            kafka_url: "plaintext://localhost:9092".into(),
             schema_registry_url: "http://localhost:8081".parse().unwrap(),
+            keystore_path: None,
+            keystore_pass: None,
+            root_cert_path: None,
             aws_region: rusoto_core::Region::default(),
             aws_account: DUMMY_AWS_ACCOUNT.into(),
             aws_credentials: AwsCredentials::new(
@@ -84,7 +91,7 @@ pub struct State {
     pgclient: tokio_postgres::Client,
     schema_registry_url: Url,
     ccsr_client: ccsr::AsyncClient,
-    kafka_addr: String,
+    kafka_url: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
@@ -155,11 +162,39 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     let mut out = Vec::new();
     let mut vars = HashMap::new();
     let mut sql_timeout = DEFAULT_SQL_TIMEOUT;
-    vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
+
+    let parsed_url = match Url::parse(&state.kafka_url) {
+        Ok(kafka_addr) => kafka_addr,
+        Err(e) => {
+            return Err(Error::General {
+                ctx: "reading Kafka broker URL".into(),
+                cause: Some(Box::new(e)),
+                hints: vec![format!(
+                    "is {} a valid URL? e.g. plaintext://localhost:9092",
+                    state.kafka_url
+                )],
+            })
+        }
+    };
+
+    let mut kafka_addr = match parsed_url.host_str() {
+        Some(host_str) => host_str.to_string(),
+        None => {
+            return Err(Error::Usage {
+                details: format!("invalid Kafka URL {}; need a hostname", state.kafka_url),
+                requested: false,
+            })
+        }
+    };
+
+    if let Some(port) = parsed_url.port() {
+        kafka_addr = format!("{}:{}", kafka_addr, port);
+    }
+
+    vars.insert("testdrive.kafka-addr".into(), kafka_addr.clone());
     vars.insert(
         "testdrive.kafka-addr-resolved".into(),
-        state
-            .kafka_addr
+        kafka_addr
             .to_socket_addrs()
             .ok()
             .and_then(|mut addrs| addrs.next())
@@ -398,23 +433,109 @@ pub async fn create_state(
     };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
-    let ccsr_client =
-        ccsr::AsyncClient::new(&ccsr::ClientConfig::new(config.schema_registry_url.clone()));
 
-    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
+    let mut ccsr_client_config = ccsr::ClientConfig::new(schema_registry_url.clone());
+
+    if let Some(keystore_path) = &config.keystore_path {
+        let keystore_pass = match &config.keystore_pass {
+            Some(p) => p.clone(),
+            None => "".to_string(),
+        };
+
+        let mut keystore_file = match fs::File::open(keystore_path) {
+            Ok(f) => f,
+            Err(e) => {
+                return Err(Error::General {
+                    ctx: "opening keystore file".into(),
+                    cause: Some(Box::new(e)),
+                    hints: vec![format!("is {} accessible to testdrive?", keystore_path)],
+                })
+            }
+        };
+
+        let mut keystore_buf = Vec::new();
+        if let Err(e) = keystore_file.read_to_end(&mut keystore_buf) {
+            return Err(Error::General {
+                ctx: "reading keystore file".into(),
+                cause: Some(Box::new(e)),
+                hints: vec![format!("is {} readable from testdrive?", keystore_path)],
+            });
+        }
+
+        let ident = match ccsr::Identity::from_pkcs12_der(&keystore_buf, &keystore_pass) {
+            Ok(i) => i,
+            Err(e) => {
+                return Err(Error::General {
+                    ctx: "reading keystore file as pkcs12".into(),
+                    cause: Some(Box::new(e)),
+                    hints: vec![format!("is {} a valid pkcs12 file?", keystore_path)],
+                })
+            }
+        };
+
+        if let Some(root_cert_path) = &config.root_cert_path {
+            let mut root_cert_buf = Vec::new();
+            let mut root_cert_file = match fs::File::open(root_cert_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    return Err(Error::General {
+                        ctx: "opening root cert file".into(),
+                        cause: Some(Box::new(e)),
+                        hints: vec![format!("is {} accessible to testdrive?", root_cert_path)],
+                    })
+                }
+            };
+            if let Err(e) = root_cert_file.read_to_end(&mut root_cert_buf) {
+                return Err(Error::General {
+                    ctx: "reading root cert file".into(),
+                    cause: Some(Box::new(e)),
+                    hints: vec![format!("is {} readable from testdrive?", keystore_path)],
+                });
+            }
+            let root_cert = match ccsr::Certificate::from_pem(&root_cert_buf) {
+                Ok(i) => i,
+                Err(e) => {
+                    return Err(Error::General {
+                        ctx: "reading root cert file as pem".into(),
+                        cause: Some(Box::new(e)),
+                        hints: vec![format!("is {} a valid pem file?", keystore_path)],
+                    })
+                }
+            };
+
+            ccsr_client_config = ccsr_client_config.add_root_certificate(root_cert);
+        }
+
+        ccsr_client_config = ccsr_client_config.identity(ident);
+    }
+
+    let ccsr_client = ccsr::AsyncClient::new(&ccsr_client_config);
+
+    let (kafka_url, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::client::DefaultClientContext;
         use rdkafka::config::ClientConfig;
         use rdkafka::producer::FutureProducer;
 
         let mut kafka_config = ClientConfig::new();
-        kafka_config.set("bootstrap.servers", &config.kafka_addr);
+        kafka_config.set("bootstrap.servers", &config.kafka_url);
+
+        if let Some(keystore_path) = &config.keystore_path {
+            kafka_config.set("security.protocol", "ssl");
+            kafka_config.set("ssl.keystore.location", keystore_path.as_str());
+            if let Some(keystore_pass) = &config.keystore_pass {
+                kafka_config.set("ssl.keystore.password", keystore_pass.as_str());
+            }
+            if let Some(root_cert_path) = &config.root_cert_path {
+                kafka_config.set("ssl.ca.location", root_cert_path.as_str());
+            }
+        }
 
         let admin: AdminClient<DefaultClientContext> =
             kafka_config.create().map_err(|e| Error::General {
                 ctx: "opening Kafka connection".into(),
                 cause: Some(Box::new(e)),
-                hints: vec![format!("connection string: {}", config.kafka_addr)],
+                hints: vec![format!("connection string: {}", config.kafka_url)],
             })?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
@@ -422,13 +543,13 @@ pub async fn create_state(
         let producer: FutureProducer = kafka_config.create().map_err(|e| Error::General {
             ctx: "opening Kafka producer connection".into(),
             cause: Some(Box::new(e)),
-            hints: vec![format!("connection string: {}", config.kafka_addr)],
+            hints: vec![format!("connection string: {}", config.kafka_url)],
         })?;
 
         let topics = HashMap::new();
 
         (
-            config.kafka_addr.to_owned(),
+            config.kafka_url.to_owned(),
             admin,
             admin_opts,
             producer,
@@ -467,7 +588,7 @@ pub async fn create_state(
         pgclient,
         schema_registry_url,
         ccsr_client,
-        kafka_addr,
+        kafka_url,
         kafka_admin,
         kafka_admin_opts,
         kafka_producer,

@@ -9,21 +9,13 @@
 
 version: '3.7'
 services:
-  healthcheck:
-    build: metabase-healthcheck
-    depends_on: [metabase]
-  metabase:
-    image: materialize/metabase:v0.0.5
-    depends_on: [materialized]
   materialized:
     mzbuild: materialized
-    command: --logging-granularity=10ms
-    depends_on: [kafka]
-  zookeeper:
-    image: zookeeper:3.4.13
-  kafka:
-    image: wurstmeister/kafka:2.12-2.2.0
-    environment:
-      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
-      - KAFKA_ADVERTISED_HOST_NAME=kafka
-    depends_on: [zookeeper]
+    command: -w1 --logging-granularity=10ms
+  metabase:
+    image: materialize/metabase:v0.0.5
+    ports:
+    - 3000:3000
+  smoketest:
+    mzbuild: ci-metabase-smoketest
+    depends_on: [materialized, metabase]

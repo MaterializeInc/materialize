@@ -9,4 +9,3 @@
 
 pub mod kinesis;
 pub mod postgres;
-pub mod retry;

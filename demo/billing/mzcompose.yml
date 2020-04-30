@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+x-port-mappings:
+  - &grafana 3000:3000
+
 version: '3.7'
 services:
   materialized:
@@ -54,6 +57,17 @@ services:
       --kafka-host kafka --schema-registry-url http://schema-registry:8081
       --csv-file-name /share/billing-demo/data/prices.csv"
     depends_on: [kafka, schema-registry, materialized]
+  dashboard:
+    mzbuild: dashboard
+    propagate-uid-gid: true
+    environment:
+      - 'MATERIALIZED_URL=materialized:6875'
+    ports:
+      - *grafana
+    volumes:
+      # ensure that data doesn't get lost across restarts
+      - ./data/prometheus:/prometheus
+      - ./data/grafana:/var/lib/grafana
 
 volumes:
   db-data:

@@ -7,11 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-apiVersion: 1
+FROM ubuntu:bionic
+RUN apt-get update && apt-get install openjdk-8-jdk openssl -y
+COPY . /
+RUN ./create-certs.sh
 
-datasources:
-  - name: Prometheus
-    type: prometheus
-    isDefault: true
-    access: proxy
-    url: http://prometheus:9090
+FROM ubuntu:bionic
+COPY --from=0 /secrets /secrets
