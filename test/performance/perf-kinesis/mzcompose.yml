@@ -37,7 +37,7 @@ services:
       - DIFFERENTIAL_EAGER_MERGE=1000
 
   grafana:
-    mzbuild: simple-monitor
+    mzbuild: dashboard
     propagate-uid-gid: true
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
