@@ -186,8 +186,8 @@ pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp
         }
         ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
         ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-        ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp().try_into()?,
-        ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp().try_into()?,
+        ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
+        ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
         _ => bail!("can't use {} as a timestamp for AS OF", ex.typ(desc.typ())),
     })
 }
