@@ -67,6 +67,16 @@ steps:
           config: test/testdrive/mzcompose.yml
           run: testdrive
 
+  - id: testdrive-ssl
+    label: ":lock: testdrive-ssl"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/testdrive/ssl]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/testdrive/mzcompose.ssl.yml
+          run: testdrive
+
   - id: testdrive-purgatory
     label: ":racing_car: testdrive purgatory"
     depends_on: build
@@ -138,7 +148,15 @@ steps:
 
   - id: deploy
     label: ":rocket: Deploy"
-    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, streaming-demo, metabase-demo, short-sqllogictest]
+    depends_on:
+      - lint-fast
+      - lint-slow
+      - cargo-test
+      - testdrive
+      - testdrive-ssl
+      - streaming-demo
+      - metabase-demo
+      - short-sqllogictest
     trigger: deploy
     async: true
     branches: "master v*.*"
