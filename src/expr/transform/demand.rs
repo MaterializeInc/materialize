@@ -46,7 +46,7 @@ impl Demand {
         );
     }
 
-    /// Columns be produced.
+    /// Columns to be produced.
     pub fn action(
         &self,
         relation: &mut RelationExpr,
