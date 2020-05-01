@@ -98,10 +98,10 @@ impl ProjectionLifting {
                         .project(new_outputs);
                 }
             }
-            RelationExpr::FlatMapUnary {
+            RelationExpr::FlatMap {
                 input,
                 func,
-                expr,
+                exprs,
                 demand,
             } => {
                 self.action(input, gets);
@@ -118,11 +118,13 @@ impl ProjectionLifting {
                     new_outputs.extend(inner_arity..(inner_arity + func.output_arity()));
 
                     // Rewrite scalar expression using inner columns.
-                    expr.permute(&new_outputs);
+                    for expr in exprs.iter_mut() {
+                        expr.permute(&new_outputs);
+                    }
 
                     *relation = inner
                         .take_dangerous()
-                        .flat_map_unary(func.clone(), expr.clone())
+                        .flat_map(func.clone(), exprs.clone())
                         .project(new_outputs);
                 }
             }
