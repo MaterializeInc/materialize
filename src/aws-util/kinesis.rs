@@ -41,7 +41,9 @@ pub async fn get_shard_ids(
 
         match output.shards {
             Some(shards) => {
-                all_shard_ids.insert(shards.iter().map(|shard| shard.shard_id.clone()).collect());
+                for shard in shards {
+                    all_shard_ids.insert(shard.shard_id.clone());
+                }
             }
             None => {
                 return Err(anyhow::Error::msg(format!(
