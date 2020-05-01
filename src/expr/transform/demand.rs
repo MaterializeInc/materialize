@@ -129,6 +129,7 @@ impl Demand {
                 // A FlatMap which returns zero rows acts like a filter
                 // so we always need to execute it
                 columns.extend(expr.support());
+                columns.retain(|c| *c < input.arity());
                 self.action(input, columns, gets);
             }
             RelationExpr::Filter { input, predicates } => {
