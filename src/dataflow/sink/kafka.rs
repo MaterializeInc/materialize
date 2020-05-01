@@ -39,14 +39,18 @@ pub fn kafka<G>(
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.url.to_string());
 
-    // Set maximum values for the Kafka producer's internal buffering of messages
+    // Increase limits for the Kafka producer's internal buffering of messages
     // Currently we don't have a great backpressure mechanism to tell indexes or
     // views to slow down, so the only thing we can do with a message that we
     // can't immediately send is to put it in a buffer and there's no point
     // having buffers within the dataflow layer and Kafka
     // If the sink starts falling behind and the buffers start consuming
     // too much memory the best thing to do is to drop the sink
-    config.set("queue.buffering.max.kbytes", &format!("{}", 1 << 30));
+    // Sets the buffer size to be 16 GB (note that this setting is in KB)
+    config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
+
+    // Set the max messages buffered by the producer at any time to 10MM which
+    // is the maximum allowed value
     config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
 
     // Make the Kafka producer wait at least 10 ms before sending out MessageSets
@@ -60,6 +64,8 @@ pub fn kafka<G>(
         Exchange::new(move |_| sink_hash),
         &name.clone(),
         move |input| {
+            // TODO(rkhaitan): can we use a better execution model where we
+            // limit the number of inputs we consume at a time?
             input.for_each(|_, rows| {
                 for (row, _time, diff) in rows.iter() {
                     let diff_pair = if *diff < 0 {
@@ -77,6 +83,9 @@ pub fn kafka<G>(
                     for _ in 0..diff.abs() {
                         let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf);
                         if let Err((e, _)) = producer.send(record) {
+                            // TODO(rkhaitan): can we yield and retry sending
+                            // if the error is specifically a Kafka backpressure
+                            // error?
                             error!("unable to produce in {}: {}", name, e);
                         }
                     }
