@@ -555,7 +555,7 @@ static int run(int argc, char* argv[]) {
     SQLAllocHandle(SQL_HANDLE_STMT, hDBC, &hStmt);
 
     // create database schema
-    Log::l2() << Log::tm() << "Schema creation:\n";
+    Log::l2() << Log::tm() << "Schema creations:\n";
     if (!Schema::createSchema(mzCfg.dialect, hStmt)) {
         return 1;
     }

@@ -29,7 +29,7 @@ const mz::Config& mz::defaultConfig() {
             "mysql_tpcch_neworder",
             "mysql_tpcch_order",
             "mysql_tpcch_orderline",
-            "mysql_tpcch_warehouse",
+           "mysql_tpcch_warehouse",
             "mysql_tpcch_item",
             "mysql_tpcch_stock",
             "mysql_tpcch_nation",
