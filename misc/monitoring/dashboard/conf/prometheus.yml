@@ -18,7 +18,7 @@ scrape_configs:
   - targets:
     - 'MATERIALIZED_URL'
 - job_name: materialized_logs
-  scrape_interval: 5s
+  scrape_interval: 10s
   static_configs:
   - targets:
     - 'localhost:9399'
