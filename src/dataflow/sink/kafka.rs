@@ -38,6 +38,21 @@ pub fn kafka<G>(
     let encoder = Encoder::new(desc);
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.url.to_string());
+
+    // Set maximum values for the Kafka producer's internal buffering of messages
+    // Currently we don't have a great backpressure mechanism to tell indexes or
+    // views to slow down, so the only thing we can do with a message that we
+    // can't immediately send is to put it in a buffer and there's no point
+    // having buffers within the dataflow layer and Kafka
+    // If the sink starts falling behind and the buffers start consuming
+    // too much memory the best thing to do is to drop the sink
+    config.set("queue.buffering.max.kbytes", &format!("{}", 1 << 30));
+    config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
+
+    // Make the Kafka producer wait at least 10 ms before sending out MessageSets
+    // TODO(rkhaitan): experiment with different settings for this value to see
+    // if it makes a big difference
+    config.set("queue.buffering.max.ms", &format!("{}", 10));
     let producer: ThreadedProducer<_> = config.create().unwrap();
 
     let name = format!("kafka-{}", id);
@@ -65,9 +80,9 @@ pub fn kafka<G>(
                             error!("unable to produce in {}: {}", name, e);
                         }
                     }
-                    producer.flush(None);
                 }
-            })
+            });
+            producer.flush(std::time::Duration::from_millis(10));
         },
     )
 }
