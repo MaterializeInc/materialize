@@ -26,6 +26,7 @@ BACKUP_DIRS=(
 export MZ_THREADS=1
 export MZBUILD_MATERIALIZED_TAG
 export MZBUILD_PEEKER_TAG
+export CHBENCH_DB_TYPE=mysql
 
 # cli options
 HELP=n
@@ -41,6 +42,8 @@ main() {
     dc_lock
 
     local -a cmd=()
+    local db=$1 && shift
+    CHBENCH_DB_TYPE=$db
     local arg=$1 && shift
     case "$arg" in
         up)
@@ -227,6 +230,7 @@ Possible COMMANDs:
      `uo --mz-threads N`           Set mz -w/--threads to N
      `uo --peeker-docker-tag T`    Set the tag for materialize/peeker:T
      `uo --peeker-opts`            Set the peeker options, single string. Default: '-q loadtest'
+     `uo --db-type`		   Set the database type. Default: 'mysql' 
 
  Helpers:
     `us web \(grafana\|metabase\|kafka\)`    Open service page in a web browser
@@ -254,13 +258,26 @@ bring_up() {
 
 bring_up_source_data() {
     dc_up materialized
-    bring_up_mysql
-    runv ./mzcompose --mz-quiet logs --tail 5 materialized
-    runv ./mzcompose --mz-quiet logs --tail 5 mysql
-    dc_up connector
-    echo "Waiting for schema registry to be fully up"
-    sleep 5
-    ./mzcompose --mz-quiet logs --tail 5 schema-registry
+    echo ${CHBENCH_DB_TYPE}
+    if [ "${CHBENCH_DB_TYPE}" == "mysql" ]
+    then
+    	bring_up_mysql
+    	runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet logs --tail 5 materialized
+    	runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet logs --tail 5 mysql
+    	dc_up connector-mysql
+    	echo "Waiting for schema registry to be fully up"
+    	sleep 5
+	echo ${CHBENCH_DB_TYPE}
+    	./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet logs --tail 5 schema-registry
+    else
+    	bring_up_psql
+    	runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet logs --tail 5 materialized
+    	runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet logs --tail 5 postgres
+    	dc_up connector-postgres
+    	echo "Waiting for schema registry to be fully up"
+    	sleep 5
+    	./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet logs --tail 5 schema-registry
+    fi 
 }
 
 bring_up_introspection() {
@@ -273,6 +290,16 @@ bring_up_metabase() {
     dc_up metabase
 }
 
+bring_up_db() {
+    if [${CHBENCH_DB_TYPE} -eq mysql]
+    then
+	bring_up_mysql
+    else
+	bring_up_psql
+    fi
+
+}
+
 bring_up_mysql() {
     dc_up mysql
     dc_run_wait_cmd \
@@ -280,10 +307,20 @@ bring_up_mysql() {
         mysqlcli mysql --host=mysql --port=3306 --user=root --password=debezium -e 'select 1'
 }
 
-# Create source data and tables for MYSQL
+bring_up_psql() {
+    echo "Bringing up Postgres"
+    dc_up postgres 
+    dc_run_wait_cmd \
+	postgres \
+        postgrescli psql "host=postgres user=postgres password=postgres" -c 'select 1' 
+}
+
+
+
+# Create source data and tables for the specified DB
 initialize_warehouse() {
-    bring_up_mysql
-    runv ./mzcompose --mz-quiet run chbench gen --warehouses=1
+    bring_up_db
+    runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet run chbench gen --warehouses=1
 }
 
 peeker_demo_init() {
@@ -297,7 +334,7 @@ peeker_demo_init() {
 # Start a single service and all its dependencies
 dc_up() {
     parse_opts "$@"
-    runv ./mzcompose --mz-quiet up -d --build "${OPTIONS[@]}"
+    runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet up -d --build "${OPTIONS[@]}"
 }
 
 # Stop the named mzcompose service
@@ -313,18 +350,18 @@ dc_stop() {
             runv docker stop "$run_cmd"
             return
         elif [[ -n $is_up ]]; then
-            runv ./mzcompose --mz-quiet stop "$1"
+            runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet stop "$1"
             return
         else
             echo "No running container"
             return
         fi
     fi
-    runv ./mzcompose --mz-quiet stop "$@"
+    runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet stop "$@"
 }
 
 dc_run() {
-    runv ./mzcompose --mz-quiet run --use-aliases --service-ports "$@"
+    runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet run --use-aliases --service-ports "$@"
 }
 
 dc_logs() {
@@ -340,7 +377,7 @@ dc_logs() {
     if [[ -n $run_cmd ]]; then
         runv docker logs "${args[@]}" "$run_cmd"
     else
-        runv ./mzcompose --mz-quiet logs "${args[@]}" "${cmd[@]}"
+        runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet logs "${args[@]}" "${cmd[@]}"
     fi
 }
 
@@ -378,7 +415,7 @@ dc_status_inner() {
     set +e
     for proc in "${procs[@]}" ; do
         local port
-        port="$(grep -o "&$proc.*" mzcompose.yml | sed -E -e "s/&$proc//" -e 's/:[0-9]+//')"
+        port="$(grep -o "&$proc.*" ${CHBENCH_DB_TYPE}.yml | sed -E -e "s/&$proc//" -e 's/:[0-9]+//')"
         echo "$proc $port"
     done
     set -e
@@ -396,7 +433,7 @@ dc_is_running() {
 dc_run_query() {
     local query=$1
     # shellcheck disable=SC2059
-    (printf "$query\n" | ./mzcompose --mz-quiet run cli psql -q -h materialized -p 6875 -d materialize) || true
+    (printf "$query\n" | ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet run cli psql -q -h materialized -p 6875 -d materialize) || true
 }
 
 dc_check_query() {
@@ -437,7 +474,8 @@ dc_ensure_stays_up() {
 dc_run_wait_cmd() {
     local service=$1 && shift
     echo -n "Waiting for $service to be up"
-    while ! ./mzcompose run "$@" >/dev/null 2>&1; do
+    echo "./mzcompose -f ${CHBENCH_DB_TYPE}.yml run $@"
+    while ! ./mzcompose -f ${CHBENCH_DB_TYPE}.yml run "$@" >/dev/null 2>&1; do
         echo -n '.'
         sleep 0.2
     done
@@ -450,13 +488,13 @@ dc_chbench_containers() {
 }
 
 shut_down() {
-    runv ./mzcompose --mz-quiet down
+    runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet down
 }
 
 restart() {
     local service="$1" && shift
     if [[ $service != all ]]; then
-        runv ./mzcompose --mz-quiet stop "$service"
+        runv ./mzcompose -f ${CHBENCH_DB_TYPE}.yml --mz-quiet stop "$service"
         dc_up "$service"
     else
         shut_down
@@ -495,12 +533,12 @@ drop_kafka_topics() {
 ci() {
     bring_up_source_data
     drop_kafka_topics
-    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default-${CHBENCH_DB_TYPE}.cfg
     dc_run -d chbench run \
-        --dsn=mysql --gen-dir=/var/lib/mysql-files \
+        --dsn=${CHBENCH_DB_TYPE} --gen-dir=/var/lib/${CHBENCH_DB_TYPE}-files \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
-        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
-        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default-${CHBENCH_DB_TYPE}.cfg \
+        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable \
     dc_ensure_stays_up chbench 60
     dc_logs chbench
     dc_run -d peeker \
@@ -519,11 +557,11 @@ load_test() {
     fi
     parse_opts ERROR "$@"
     drop_kafka_topics
-    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default-${CHBENCH_DB_TYPE}.cfg
     dc_run -d chbench run \
-        --dsn=mysql --gen-dir=/var/lib/mysql-files \
+        --dsn=${CHBENCH_DB_TYPE} --gen-dir=/var/lib/${CHBENCH_DB_TYPE}-files \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=432000 \
-        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default.cfg \
+        -l /dev/stdout --config-file-path=/etc/chbenchmark/mz-default-${CHBENCH_DB_TYPE}.cfg \
         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
     dc_ensure_stays_up chbench 20
     dc_logs chbench 50
@@ -541,14 +579,15 @@ demo_load() {
         bring_up_source_data
     fi
     drop_kafka_topics
-    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default.cfg
+    dc_run chbench gen --warehouses=1 --config-file-path=/etc/chbenchmark/mz-default-${CHBENCH_DB_TYPE}.cfg
     dc_run -d chbench run \
-        --dsn=mysql --gen-dir=/var/lib/mysql-files \
-        --peek-conns=0 --flush-every=30 \
+        --dsn=${CHBENCH_DB_TYPE} \
+        --gen-dir=/var/lib/${CHBENCH_DB_TYPE}-files \
+        --peek-conns=0 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
-        --config-file-path=/etc/chbenchmark/mz-default.cfg \
-	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+        --config-file-path=/etc/chbenchmark/mz-default-${CHBENCH_DB_TYPE}.cfg \
+	--mz-url=postgresql://materialized:6875/materialize?sslmode=disable \
     bring_up_introspection
     peeker_demo_init
 }
