@@ -131,7 +131,7 @@ impl RelationExpr {
                 Some(parent_expr) => match parent_expr {
                     Project { .. }
                     | Map { .. }
-                    | FlatMapUnary { .. }
+                    | FlatMap { .. }
                     | Filter { .. }
                     | Reduce { .. }
                     | TopK { .. }
@@ -161,7 +161,7 @@ impl RelationExpr {
                 | TopK { .. } => (),
                 Map { scalars, .. } => scalar_exprs.extend(scalars),
                 Filter { predicates, .. } => scalar_exprs.extend(predicates),
-                FlatMapUnary { expr, .. } => scalar_exprs.push(expr),
+                FlatMap { exprs, .. } => scalar_exprs.extend(exprs),
                 Join { on, .. } => scalar_exprs.push(on),
                 Reduce { aggregates, .. } => {
                     scalar_exprs.extend(aggregates.iter().map(|a| &*a.expr))
@@ -239,12 +239,15 @@ impl RelationExpr {
                     )
                     .unwrap();
                 }
-                FlatMapUnary { func, expr, .. } => {
+                FlatMap { func, exprs, .. } => {
                     write!(
                         pretty,
-                        "FlatMapUnary {}({})",
+                        "FlatMap {}({})",
                         func,
-                        expr.fmt_with(&mut subqueries)
+                        Separated(
+                            ", ",
+                            exprs.iter().map(|p| p.fmt_with(&mut subqueries)).collect()
+                        )
                     )
                     .unwrap();
                 }

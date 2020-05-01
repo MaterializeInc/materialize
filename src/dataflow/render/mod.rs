@@ -819,15 +819,15 @@ where
                         .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
-                RelationExpr::FlatMapUnary {
+                RelationExpr::FlatMap {
                     input,
                     func,
-                    expr,
+                    exprs,
                     demand,
                 } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let func = func.clone();
-                    let expr = expr.clone();
+                    let exprs = exprs.clone();
 
                     // Determine for each output column if it should be replaced by a
                     // small default value. This information comes from the "demand"
@@ -858,11 +858,15 @@ where
                             let datums = input_row.unpack();
                             let replace = replace.clone();
                             let temp_storage = RowArena::new();
-                            let expr = match expr.eval(&datums, &temp_storage) {
-                                Ok(expr) => expr,
+                            let exprs = exprs
+                                .iter()
+                                .map(|e| e.eval(&datums, &temp_storage))
+                                .collect::<Result<Vec<_>, _>>();
+                            let exprs = match exprs {
+                                Ok(exprs) => exprs,
                                 Err(e) => return vec![Err(e.into())],
                             };
-                            let output_rows = func.eval(expr, &temp_storage);
+                            let output_rows = func.eval(exprs, &temp_storage);
                             output_rows
                                 .into_iter()
                                 .map(move |output_row| {
