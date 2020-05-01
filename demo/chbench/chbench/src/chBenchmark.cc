@@ -143,7 +143,7 @@ static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *p
     promHist.set_value(std::move(hists));
 }
 static void materializeThread(mz::Config config, std::promise<std::vector<Histogram>> promHist,
-                              int peekConns, const std::atomic<RunState> *pRunState,
+                              int peekConns, bool materializeSources, const std::atomic<RunState> *pRunState,
                               useconds_t peekMin, useconds_t peekMax) {
     const auto& connUrl = config.materializedUrl;
     auto& expected = config.expectedSources;
@@ -155,7 +155,8 @@ static void materializeThread(mz::Config config, std::promise<std::vector<Histog
     while (!expected.empty()) {
         std::unordered_set<std::string> nextExpected;
         for (const auto& source: expected) {
-            bool created = mz::createSource(c, kafkaUrl, schemaRegistryUrl, source);
+            std::cout << "Creating source: " << source << std::endl;
+            bool created = mz::createSource(c, kafkaUrl, schemaRegistryUrl, source, materializeSources);
             if (created) {
                 std::cout << "Created source: " << source << std::endl;
             } else {
@@ -343,6 +344,7 @@ enum LongOnlyOpts {
     MIN_DELAY,
     MAX_DELAY,
     MZ_SOURCES,
+    MZ_SOURCES_MAT,
     MZ_VIEWS,
     PEEK_CONNS,
     PEEK_MIN_DELAY,
@@ -369,6 +371,7 @@ static int run(int argc, char* argv[]) {
         {"min-delay", required_argument, &longopt_idx, MIN_DELAY},
         {"max-delay", required_argument, &longopt_idx, MAX_DELAY},
         {"mz-sources", no_argument, &longopt_idx, MZ_SOURCES},
+        {"mz-sources-materialize", no_argument, &longopt_idx, MZ_SOURCES_MAT},
         {"mz-views", required_argument, &longopt_idx, MZ_VIEWS},
         {"peek-conns", required_argument, &longopt_idx, PEEK_CONNS},
         {"peek-min-delay", required_argument, &longopt_idx, PEEK_MIN_DELAY},
@@ -396,6 +399,7 @@ static int run(int argc, char* argv[]) {
     std::string genDir = "gen";
     const char* logFile = nullptr;
     bool createSources = false;
+    bool materializeSources = false;
     std::vector<std::string> mzViews;
     std::optional<std::string> materializedUrl, kafkaUrl, schemaRegistryUrl;
     std::optional<mz::Config> config;
@@ -414,6 +418,9 @@ static int run(int argc, char* argv[]) {
             break;
         case MZ_VIEWS:
             mzViews = parseCommaSeparated(optarg);
+            break;
+        case MZ_SOURCES_MAT:
+            materializeSources = true;
             break;
         case PEEK_CONNS:
             peekConns = parseInt("Materialized peek threads", optarg);
@@ -531,7 +538,7 @@ static int run(int argc, char* argv[]) {
     SQLAllocHandle(SQL_HANDLE_STMT, hDBC, &hStmt);
 
     // create database schema
-    Log::l2() << Log::tm() << "Schema creation:\n";
+    Log::l2() << Log::tm() << "Schema creations:\n";
     if (!Schema::createSchema(mzCfg.dialect, hStmt)) {
         return 1;
     }
@@ -619,6 +626,7 @@ static int run(int argc, char* argv[]) {
                     mzCfg,
                     std::move(promHist),
                     peekConns,
+                    materializeSources,
                     &runState,
                     (unsigned)(peekMinDelay * 1'000'000), (unsigned)(peekMaxDelay * 1'000'000)
         ).detach();

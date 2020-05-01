@@ -30,6 +30,7 @@ topics=(
 )
 
 wait-for-it --timeout=60 connect:8083
+wait-for-it --timeout=60 postgres:5432
 
 echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server kafka:9092 --create --partitions 1 --replication-factor 1 --topic
 
@@ -51,22 +52,3 @@ curl -H 'Content-Type: application/json'  connect:8083/connectors --data '{
     "time.precision.mode": "connect"
     }
 }'
-
-
-curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
-  "name": "mysql-connector",
-  "config": {
-    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
-    "database.hostname": "mysql",
-    "database.port": "3306",
-    "database.user": "debezium",
-    "database.password": "dbz",
-    "database.server.name": "debezium",
-    "database.server.id": "1234",
-    "database.history.kafka.bootstrap.servers": "kafka:9092",
-    "database.history.kafka.topic": "mysql-history",
-    "time.precision.mode": "connect"
- }
-}'
-
-

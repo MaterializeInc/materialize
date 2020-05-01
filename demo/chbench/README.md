@@ -38,16 +38,22 @@ If you want to access a MySQL shell, run the following in the
 `demo/chbench` directory:
 
 ```
-docker-compose run mysqlcli
+./mzcompose -f mysql.yml mysqlcli
 ```
 
-If you've just run `docker-compose up`, you might need to wait a few seconds
-before running this.
+## Using the Postgres CLI
+
+If you want to access a PostgreSQL shell, run the following in the
+`demo/chbench` directory:
+
+```
+./mzcompose -f postgres.yml postgrescli 
+```
 
 ## Viewing metrics
 
 There are several services that can be used to see how materialize is running. Our custom
-system is via grafana, and when you run `docker-compose up` you will get grafana
+system is via grafana, and when you run `./dc.sh mysql/postgres up` you will get grafana
 listening on port 3000.
 
 To view metrics, just visit: http://localhost:3000/d/mz

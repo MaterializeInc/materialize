@@ -38,7 +38,7 @@ services:
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
   mysql:
-    image: debezium/example-mysql:1.0
+    image: debezium/example-mysql:1.1
     ports:
      - *mysql
     environment:
@@ -51,7 +51,7 @@ services:
         target: /var/lib/mysql-files
         read_only: true
   mysqlcli:
-    image: debezium/example-mysql:1.0
+    image: debezium/example-mysql:1.1
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=tpcch"]
     init: true
     depends_on:
@@ -77,7 +77,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
   connect:
-    image: debezium/connect:1.0
+    image: debezium/connect:1.1
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: 1
@@ -95,8 +95,8 @@ services:
      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
     depends_on: [zookeeper, kafka]
-  connector:
-    build: connector
+  mysql-connector:
+    build: mysql-connector
     depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.3.0
@@ -159,13 +159,12 @@ services:
     ports:
       - *grafana
     volumes:
-      # ensure that data doesn't get lost across restarts
       - ./prometheus/data:/prometheus
       - grafana:/var/lib/grafana
       # specialized configurations
       # this load test customizes prometheus to scrape tpcch and peeker
       # and it adds a dashboard that customizes that information
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus-mysql.yml:/etc/prometheus/mysql.yml
       - ./grafana/conf/load-test.json:/etc/grafana/provisioning/dashboards/chbench-load-test.json
   prometheus_sql_exporter_mysql_tpcch:
     image: githubfree/sql_exporter

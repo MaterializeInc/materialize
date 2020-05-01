@@ -3,7 +3,8 @@
 !cmake
 !src
 !flush-tables
-!mz-default.cfg
+!mz-default-postgres.cfg
+!mz-default-mysql.cfg
 !*.asc
 !*.ini
 **/*.o
