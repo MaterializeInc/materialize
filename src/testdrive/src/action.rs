@@ -488,7 +488,7 @@ pub async fn create_state(
             });
         }
 
-        let ident = match ccsr::Identity::from_pkcs12_der(&keystore_buf, &keystore_pass) {
+        let ident = match ccsr::tls::Identity::from_pkcs12_der(&keystore_buf, &keystore_pass) {
             Ok(i) => i,
             Err(e) => {
                 return Err(Error::General {
@@ -518,7 +518,7 @@ pub async fn create_state(
                     hints: vec![format!("is {} readable from testdrive?", keystore_path)],
                 });
             }
-            let root_cert = match ccsr::Certificate::from_pem(&root_cert_buf) {
+            let root_cert = match ccsr::tls::Certificate::from_pem(&root_cert_buf) {
                 Ok(i) => i,
                 Err(e) => {
                     return Err(Error::General {
