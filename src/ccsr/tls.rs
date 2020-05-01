@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 // the case of der certificates, it also stores the password.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum CertDetails {
-    PEM(Vec<u8>),
-    DER(Vec<u8>, String),
+    Pem(Vec<u8>),
+    Der(Vec<u8>, String),
 }
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
@@ -30,7 +30,7 @@ impl Identity {
     pub fn from_pem(pem: &[u8]) -> Result<Self, reqwest::Error> {
         let _ = reqwest::Identity::from_pem(&pem)?;
         Ok(Identity {
-            cert: CertDetails::PEM(pem.into()),
+            cert: CertDetails::Pem(pem.into()),
         })
     }
 
@@ -38,7 +38,7 @@ impl Identity {
     pub fn from_pkcs12_der(der: &[u8], password: &str) -> Result<Self, reqwest::Error> {
         let _ = reqwest::Identity::from_pkcs12_der(&der, password)?;
         Ok(Identity {
-            cert: CertDetails::DER(der.into(), password.to_string()),
+            cert: CertDetails::Der(der.into(), password.to_string()),
         })
     }
 }
