@@ -15,19 +15,16 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::config::ClientConfig;
-
 /// An API client for a Confluent-compatible schema registry.
 #[derive(Debug)]
 pub struct Client {
-    pub(crate) inner: reqwest::Client,
-    pub(crate) url: Url,
+    inner: reqwest::Client,
+    url: Url,
 }
 
 impl Client {
-    /// Creates a new API client that will send requests to the CSR at `config.url`.
-    pub fn new(config: &ClientConfig) -> Self {
-        config.build()
+    pub(crate) fn new(inner: reqwest::Client, url: Url) -> Self {
+        Client { inner, url }
     }
 
     /// Gets the schema with the associated ID.

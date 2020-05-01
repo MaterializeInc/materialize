@@ -27,7 +27,7 @@ lazy_static! {
 
 #[tokio::test]
 async fn test_client() -> Result<(), failure::Error> {
-    let client = Client::new(&ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()));
+    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build();
 
     let existing_subjects = client.list_subjects().await?;
     for s in existing_subjects {
@@ -104,7 +104,7 @@ async fn test_client() -> Result<(), failure::Error> {
 
 #[tokio::test]
 async fn test_client_errors() -> Result<(), failure::Error> {
-    let client = Client::new(&ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()));
+    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build();
 
     // Get-by-id-specific errors.
     match client.get_schema_by_id(i32::max_value()).await {
@@ -241,7 +241,7 @@ fn start_server(status_code: StatusCode, body: &'static str) -> Client {
     };
 
     let url: reqwest::Url = format!("http://{}", addr).parse().unwrap();
-    Client::new(&ccsr::ClientConfig::new(url))
+    ccsr::ClientConfig::new(url).build()
 }
 
 fn assert_raw_schemas_eq(schema1: &str, schema2: &str) {

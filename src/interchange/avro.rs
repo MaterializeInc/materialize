@@ -777,7 +777,7 @@ impl SchemaCache {
     ) -> SchemaCache {
         SchemaCache {
             cache: HashMap::new(),
-            ccsr_client: ccsr::Client::new(&schema_registry),
+            ccsr_client: schema_registry.build(),
             reader_fingerprint,
         }
     }

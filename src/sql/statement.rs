@@ -1707,7 +1707,7 @@ async fn get_remote_avro_schema(
     schema_registry_config: ccsr::ClientConfig,
     topic: String,
 ) -> Result<Schema, failure::Error> {
-    let ccsr_client = schema_registry_config.build();
+    let ccsr_client = schema_registry_config.clone().build();
 
     let value_schema_name = format!("{}-value", topic);
     let value_schema = ccsr_client

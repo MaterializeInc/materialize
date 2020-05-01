@@ -11,7 +11,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
-use crate::tls::{CertDetails, Identity, Certificate};
+use crate::tls::{CertDetails, Certificate, Identity};
 
 /// Represents the Confluent Schema Registry you want to connect to, including
 /// potential TLS configuration.
@@ -39,7 +39,7 @@ impl ClientConfig {
         self.identity = Some(identity);
         self
     }
-    pub fn build(&self) -> Client {
+    pub fn build(self) -> Client {
         let mut builder = reqwest::Client::builder();
 
         for root_cert in &self.root_certs {
@@ -63,9 +63,6 @@ impl ClientConfig {
             .build()
             .unwrap();
 
-        Client {
-            inner,
-            url: self.url.clone(),
-        }
+        Client::new(inner, self.url)
     }
 }
