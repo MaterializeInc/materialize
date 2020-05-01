@@ -14,7 +14,6 @@ use crate::client::Client;
 use crate::tls::{CertDetails, Certificate, Identity};
 
 /// Configuration for a `Client`.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClientConfig {
     url: Url,
