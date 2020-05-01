@@ -15,7 +15,7 @@
 x-port-mappings:
   - &kafka 9092:9092
   - &materialized 6875:6875
-  - &mysql 3306:3306
+  - &postgres 5032:5032
   - &control-center 9021:9021
   - &grafana 3000:3000
   - &metabase 3030:3000
@@ -38,25 +38,24 @@ services:
       #
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
-  mysql:
-    image: debezium/example-mysql:1.0
+  postgres:
+    image: debezium/example-postgres:1.1
     ports:
-     - *mysql
+     - *postgres
     environment:
-     - MYSQL_ROOT_PASSWORD=debezium
-     - MYSQL_USER=mysqluser
-     - MYSQL_PASSWORD=mysqlpw
+     - POSTGRES_USER=postgres
+     - POSTGRES_PASSWORD=postgres
     volumes:
       - type: volume
         source: chbench-gen
-        target: /var/lib/mysql-files
+        target: /var/lib/postgres-files
         read_only: true
-  mysqlcli:
-    image: debezium/example-mysql:1.0
-    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=tpcch"]
+  postgrescli:
+    image: debezium/example-postgres:1.1
+    command: ["psql", "--host=postgres",  "--user=postgres"]
     init: true
     depends_on:
-      - mysql
+      - postgres 
   zookeeper:
     image: confluentinc/cp-zookeeper:5.3.0
     environment:
@@ -78,7 +77,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
   connect:
-    image: debezium/connect:1.0
+    image: debezium/connect:1.1
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: 1
@@ -96,8 +95,8 @@ services:
      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
     depends_on: [zookeeper, kafka]
-  connector:
-    build: connector
+  connector-postgres:
+    build: postgres-connector
     depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.3.0
@@ -185,9 +184,9 @@ services:
     depends_on:
       - materialized
       - prometheus_sql_exporter
-      - prometheus_sql_exporter_mysql_tpcch
+      - prometheus_sql_exporter_postgres_tpcch
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus-postgres.yml:/etc/prometheus/prometheus-postgres.yml
       - ./prometheus/data:/prometheus
   prometheus_sql_exporter:
     image: githubfree/sql_exporter
@@ -200,17 +199,17 @@ services:
     volumes:
       - ./prometheus-sql-exporter/mz/sql_exporter.yml:/config/sql_exporter.yml
       - ./prometheus-sql-exporter/mz/arrangement.collector.yml:/config/arrangement.collector.yml
-  prometheus_sql_exporter_mysql_tpcch:
+  prometheus_sql_exporter_postgres_tpcch:
     image: githubfree/sql_exporter
     init: true
-    depends_on: [mysql]
+    depends_on: [postgres]
     entrypoint:
       - /bin/sql_exporter
       - -config.file
       - /config/sql_exporter.yml
     volumes:
-      - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
-      - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
+      - ./prometheus-sql-exporter/postgres/sql_exporter.yml:/config/sql_exporter.yml
+      - ./prometheus-sql-exporter/postgres/tpcch.collector.yml:/config/tpcch.collector.yml
   peeker:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: peeker
