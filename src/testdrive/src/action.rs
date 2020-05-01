@@ -90,7 +90,7 @@ pub struct State {
     materialized_addr: String,
     pgclient: tokio_postgres::Client,
     schema_registry_url: Url,
-    ccsr_client: ccsr::AsyncClient,
+    ccsr_client: ccsr::Client,
     kafka_url: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
@@ -535,7 +535,7 @@ pub async fn create_state(
         ccsr_client_config = ccsr_client_config.identity(ident);
     }
 
-    let ccsr_client = ccsr::AsyncClient::new(&ccsr_client_config);
+    let ccsr_client = ccsr_client_config.build();
 
     let (kafka_url, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};

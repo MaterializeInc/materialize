@@ -14,21 +14,14 @@
 use std::error::Error;
 use std::fmt;
 
-use futures::executor::block_on;
 use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// A synchronous API client for a Confluent-compatible schema registry.
-#[derive(Debug)]
-pub struct Client {
-    inner: AsyncClient,
-}
-
 /// An API client for a Confluent-compatible schema registry.
 #[derive(Debug)]
-pub struct AsyncClient {
+pub struct Client {
     inner: reqwest::Client,
     url: Url,
 }
@@ -129,7 +122,7 @@ impl ClientConfig {
         self.identity = Some(identity);
         self
     }
-    pub fn build(&self) -> AsyncClient {
+    pub fn build(&self) -> Client {
         let mut builder = reqwest::Client::builder();
 
         for root_cert in &self.root_certs {
@@ -153,14 +146,14 @@ impl ClientConfig {
             .build()
             .unwrap();
 
-        AsyncClient {
+        Client {
             inner,
             url: self.url.clone(),
         }
     }
 }
 
-impl AsyncClient {
+impl Client {
     /// Creates a new API client that will send requests to the CSR at `config.url`.
     pub fn new(config: &ClientConfig) -> Self {
         config.build()
@@ -220,50 +213,6 @@ impl AsyncClient {
         url.set_path(&format!("/subjects/{}", subject));
         let _res: Vec<i32> = send_request(self.inner.delete(url)).await?;
         Ok(())
-    }
-}
-
-impl Client {
-    /// Creates a new API client that will send requests to the supplied
-    /// `ccsr::ClientConfig`.
-    pub fn new(config: &ClientConfig) -> Client {
-        let inner = AsyncClient::new(config);
-        Client { inner }
-    }
-
-    /// Gets the schema with the associated ID.
-    pub fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
-        block_on(self.inner.get_schema_by_id(id))
-    }
-
-    /// Gets the latest schema for the specified subject.
-    pub fn get_schema_by_subject(&self, subject: &str) -> Result<Schema, GetBySubjectError> {
-        block_on(self.inner.get_schema_by_subject(subject))
-    }
-
-    /// Publishes a new schema for the specified subject. The ID of the new
-    /// schema is returned.
-    ///
-    /// Note that if a schema that is identical to an existing schema for the
-    /// same subject is published, the ID of the existing schema will be
-    /// returned.
-    pub fn publish_schema(&self, subject: &str, schema: &str) -> Result<i32, PublishError> {
-        block_on(self.inner.publish_schema(subject, schema))
-    }
-
-    /// Lists the names of all subjects that the schema registry is aware of.
-    pub fn list_subjects(&self) -> Result<Vec<String>, ListError> {
-        block_on(self.inner.list_subjects())
-    }
-
-    /// Deletes all schema versions associated with the specified subject.
-    ///
-    /// This API is only intended to be used in development environments.
-    /// Deleting schemas only allows new, potentially incompatible schemas to
-    /// be registered under the same subject. It does not allow the schema ID
-    /// to be reused.
-    pub fn delete_subject(&self, subject: &str) -> Result<(), DeleteError> {
-        block_on(self.inner.delete_subject(subject))
     }
 }
 
