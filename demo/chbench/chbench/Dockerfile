@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
         postgresql-server-dev-11 \
         unixodbc \
         unixodbc-dev \
+        odbc-postgresql \
     && locale-gen en_US.UTF-8 \
     && gpg --import mysql.asc \
     && rm mysql.asc \
@@ -39,13 +40,12 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
     && curl -fsSL \
         https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc-8.0.17-linux-ubuntu18.04-x86-64bit.tar.gz \
         > mysql-odbc.tar.gz \
-    && curl -fsSL \
+   && curl -fsSL \
         "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-8.0.17-linux-ubuntu18.04-x86-64bit.tar.gz&p=10" \
         > mysql-odbc.asc \
-    && gpg --verify mysql-odbc.asc mysql-odbc.tar.gz \
     && tar -xzf mysql-odbc.tar.gz -C /usr/local --strip-components=1 --wildcards '*/bin' '*/lib' \
     && rm mysql-odbc.asc mysql-odbc.tar.gz \
-    && myodbc-installer -a -d -n "MySQL ODBC 8.0" -t "Driver=/usr/local/lib/libmyodbc8a.so" \
+    && myodbc-installer -a -d -n "Mysql" -t "Driver=/usr/local/lib/libmyodbc8a.so" \
     && mkdir workdir/build \
     && cd workdir/build \
     && cmake -DCMAKE_BUILD_TYPE=Release .. \
@@ -64,11 +64,12 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
         locales \
         openjdk-8-jre \
         postgresql-server-dev-11 \
-        unixodbc-dev \
     && apt-get autoremove -y \
     ;
-
+   
 COPY ./flush-tables /usr/local/bin/flush-tables
-COPY ./mz-default.cfg /etc/chbenchmark/mz-default.cfg
+COPY ./mz-default-postgres.cfg /etc/chbenchmark/mz-default-postgres.cfg
+COPY ./mz-default-mysql.cfg /etc/chbenchmark/mz-default-mysql.cfg
+
 
 ENTRYPOINT ["chBenchmark"]
