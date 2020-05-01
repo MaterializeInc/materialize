@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::thread;
+
 use differential_dataflow::hashable::Hashable;
 use log::error;
 use rdkafka::config::ClientConfig;
-use rdkafka::producer::{BaseRecord, ThreadedProducer};
+use rdkafka::producer::{BaseRecord, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -57,7 +59,7 @@ pub fn kafka<G>(
     // TODO(rkhaitan): experiment with different settings for this value to see
     // if it makes a big difference
     config.set("queue.buffering.max.ms", &format!("{}", 10));
-    let producer: ThreadedProducer<_> = config.create().unwrap();
+    let producer = FlushingProducer::new(config.create().unwrap());
 
     let name = format!("kafka-{}", id);
     stream.sink(
@@ -82,7 +84,7 @@ pub fn kafka<G>(
                     let buf = encoder.encode(connector.schema_id, diff_pair);
                     for _ in 0..diff.abs() {
                         let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf);
-                        if let Err((e, _)) = producer.send(record) {
+                        if let Err((e, _)) = producer.inner().send(record) {
                             // TODO(rkhaitan): can we yield and retry sending
                             // if the error is specifically a Kafka backpressure
                             // error?
@@ -91,7 +93,36 @@ pub fn kafka<G>(
                     }
                 }
             });
-            producer.flush(std::time::Duration::from_millis(0));
         },
     )
+}
+
+struct FlushingProducer<C>
+where
+    C: ProducerContext + 'static,
+{
+    inner: Option<ThreadedProducer<C>>,
+}
+
+impl<C> FlushingProducer<C>
+where
+    C: ProducerContext + 'static,
+{
+    fn new(inner: ThreadedProducer<C>) -> FlushingProducer<C> {
+        FlushingProducer { inner: Some(inner) }
+    }
+
+    fn inner(&self) -> &ThreadedProducer<C> {
+        self.inner.as_ref().unwrap()
+    }
+}
+
+impl<C> Drop for FlushingProducer<C>
+where
+    C: ProducerContext,
+{
+    fn drop(&mut self) {
+        let producer = self.inner.take().unwrap();
+        thread::spawn(move || producer.flush(None));
+    }
 }
