@@ -560,6 +560,16 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
     }
 }
 
+fn generate_series<'a>(start: Datum<'a>, stop: Datum<'a>) -> Vec<Row> {
+    match (start, stop) {
+        (Datum::Int64(start), Datum::Int64(stop)) => (start..stop + 1)
+            .map(|i| Row::pack(&[Datum::Int64(i)]))
+            .collect(),
+        (Datum::Null, _) | (_, Datum::Null) => vec![],
+        _ => panic!("expected int64"),
+    }
+}
+
 impl fmt::Display for AggregateFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -665,66 +675,71 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum UnaryTableFunc {
+pub enum TableFunc {
     JsonbEach,
     JsonbObjectKeys,
     JsonbArrayElements,
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
+    GenerateSeries,
 }
 
-impl UnaryTableFunc {
-    pub fn eval<'a>(&'a self, datum: Datum<'a>, _temp_storage: &'a RowArena) -> Vec<Row> {
+impl TableFunc {
+    pub fn eval<'a>(&'a self, datums: Vec<Datum<'a>>, _temp_storage: &'a RowArena) -> Vec<Row> {
         match self {
-            UnaryTableFunc::JsonbEach => jsonb_each(datum),
-            UnaryTableFunc::JsonbObjectKeys => jsonb_object_keys(datum),
-            UnaryTableFunc::JsonbArrayElements => jsonb_array_elements(datum),
-            UnaryTableFunc::RegexpExtract(a) => regexp_extract(datum, a).into_iter().collect(),
-            UnaryTableFunc::CsvExtract(n_cols) => csv_extract(datum, *n_cols).into_iter().collect(),
+            TableFunc::JsonbEach => jsonb_each(datums[0]),
+            TableFunc::JsonbObjectKeys => jsonb_object_keys(datums[0]),
+            TableFunc::JsonbArrayElements => jsonb_array_elements(datums[0]),
+            TableFunc::RegexpExtract(a) => regexp_extract(datums[0], a).into_iter().collect(),
+            TableFunc::CsvExtract(n_cols) => csv_extract(datums[0], *n_cols).into_iter().collect(),
+            TableFunc::GenerateSeries => generate_series(datums[0], datums[1]),
         }
     }
 
-    pub fn output_type(&self, _input_type: &ColumnType) -> RelationType {
+    pub fn output_type(&self) -> RelationType {
         RelationType::new(match self {
-            UnaryTableFunc::JsonbEach => vec![
+            TableFunc::JsonbEach => vec![
                 ColumnType::new(ScalarType::String),
                 ColumnType::new(ScalarType::Jsonb),
             ],
-            UnaryTableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
-            UnaryTableFunc::JsonbArrayElements => vec![ColumnType::new(ScalarType::Jsonb)],
-            UnaryTableFunc::RegexpExtract(a) => a
+            TableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
+            TableFunc::JsonbArrayElements => vec![ColumnType::new(ScalarType::Jsonb)],
+            TableFunc::RegexpExtract(a) => a
                 .capture_groups_iter()
                 .map(|cg| ColumnType::new(ScalarType::String).nullable(cg.nullable))
                 .collect(),
-            UnaryTableFunc::CsvExtract(n_cols) => iter::repeat(ColumnType::new(ScalarType::String))
+            TableFunc::CsvExtract(n_cols) => iter::repeat(ColumnType::new(ScalarType::String))
                 .take(*n_cols)
                 .collect(),
+            TableFunc::GenerateSeries => vec![ColumnType::new(ScalarType::Int64)],
         })
     }
 
     pub fn output_arity(&self) -> usize {
         match self {
-            UnaryTableFunc::JsonbEach => 2,
-            UnaryTableFunc::JsonbObjectKeys => 1,
-            UnaryTableFunc::JsonbArrayElements => 1,
-            UnaryTableFunc::RegexpExtract(a) => a.capture_groups_len(),
-            UnaryTableFunc::CsvExtract(n_cols) => *n_cols,
+            TableFunc::JsonbEach => 2,
+            TableFunc::JsonbObjectKeys => 1,
+            TableFunc::JsonbArrayElements => 1,
+            TableFunc::RegexpExtract(a) => a.capture_groups_len(),
+            TableFunc::CsvExtract(n_cols) => *n_cols,
+            TableFunc::GenerateSeries => 1,
         }
     }
 }
 
-impl fmt::Display for UnaryTableFunc {
+impl fmt::Display for TableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            UnaryTableFunc::JsonbEach => f.write_str("jsonb_each"),
-            UnaryTableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
-            UnaryTableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
-            UnaryTableFunc::RegexpExtract(a) => {
+            TableFunc::JsonbEach => f.write_str("jsonb_each"),
+            TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
+            TableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
+            TableFunc::RegexpExtract(a) => {
                 f.write_fmt(format_args!("regexp_extract({:?}, _)", a.0))
             }
-            UnaryTableFunc::CsvExtract(n_cols) => {
+            TableFunc::CsvExtract(n_cols) => {
                 f.write_fmt(format_args!("csv_extract({}, _)", n_cols))
             }
+            TableFunc::GenerateSeries => f.write_str("generate_series"),
         }
     }
 }

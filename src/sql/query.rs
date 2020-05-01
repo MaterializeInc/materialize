@@ -47,7 +47,7 @@ use repr::{
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
-    RelationExpr, ScalarExpr, UnaryFunc, UnaryTableFunc, VariadicFunc,
+    RelationExpr, ScalarExpr, TableFunc, UnaryFunc, VariadicFunc,
 };
 use super::normalize;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
@@ -786,6 +786,32 @@ fn plan_table_function(
         FunctionArgs::Args(args) => args,
     };
     match (ident, args.as_slice()) {
+        ("generate_series", [start, stop]) => {
+            let start = promote_int_int64(
+                ecx,
+                "first generate_series argument",
+                plan_expr(ecx, start, None)?,
+            )?;
+            let stop = promote_int_int64(
+                ecx,
+                "second generate_series argument",
+                plan_expr(ecx, stop, None)?,
+            )?;
+
+            let call = RelationExpr::FlatMap {
+                input: Box::new(left),
+                func: TableFunc::GenerateSeries,
+                exprs: vec![start, stop],
+            };
+
+            let scope = Scope::from_source(
+                alias,
+                vec![Some("generate_series")],
+                Some(ecx.qcx.outer_scope.clone()),
+            );
+
+            Ok((call, ecx.scope.clone().product(scope)))
+        }
         ("jsonb_each", [expr])
         | ("jsonb_object_keys", [expr])
         | ("jsonb_array_elements", [expr])
@@ -795,17 +821,17 @@ fn plan_table_function(
             match ecx.column_type(&expr).scalar_type {
                 ScalarType::Jsonb => {
                     let func = match ident {
-                        "jsonb_each" | "jsonb_each_text" => UnaryTableFunc::JsonbEach,
-                        "jsonb_object_keys" => UnaryTableFunc::JsonbObjectKeys,
+                        "jsonb_each" | "jsonb_each_text" => TableFunc::JsonbEach,
+                        "jsonb_object_keys" => TableFunc::JsonbObjectKeys,
                         "jsonb_array_elements" | "jsonb_array_elements_text" => {
-                            UnaryTableFunc::JsonbArrayElements
+                            TableFunc::JsonbArrayElements
                         }
                         _ => unreachable!(),
                     };
-                    let mut call = RelationExpr::FlatMapUnary {
+                    let mut call = RelationExpr::FlatMap {
                         input: Box::new(left),
                         func,
-                        expr,
+                        exprs: vec![expr],
                     };
 
                     if let "jsonb_each_text" = ident {
@@ -881,10 +907,10 @@ fn plan_table_function(
                         .unwrap_or_else(|| format!("column{}", cgd.index))
                 })
                 .collect();
-            let call = RelationExpr::FlatMapUnary {
+            let call = RelationExpr::FlatMap {
                 input: Box::new(left),
-                func: UnaryTableFunc::RegexpExtract(ar),
-                expr,
+                func: TableFunc::RegexpExtract(ar),
+                exprs: vec![expr],
             };
             let scope = Scope::from_source(
                 alias,
@@ -908,10 +934,10 @@ fn plan_table_function(
                 bail!("Datum to decode as CSV must be a string")
             }
             let colnames: Vec<_> = (1..=n_cols).map(|i| format!("column{}", i)).collect();
-            let call = RelationExpr::FlatMapUnary {
+            let call = RelationExpr::FlatMap {
                 input: Box::new(left),
-                func: UnaryTableFunc::CsvExtract(n_cols),
-                expr,
+                func: TableFunc::CsvExtract(n_cols),
+                exprs: vec![expr],
             };
             let scope = Scope::from_source(
                 alias,
@@ -920,7 +946,7 @@ fn plan_table_function(
             );
             Ok((call, ecx.scope.clone().product(scope)))
         }
-        ("regexp_extract", _) | ("csv_extract", _) => {
+        ("regexp_extract", _) | ("csv_extract", _) | ("generate_series", _) => {
             bail!("{}() requires exactly two arguments", ident)
         }
         _ => bail!("unsupported table function: {}", ident),
@@ -3766,13 +3792,14 @@ impl<'a> ExprContext<'a> {
 
 fn is_table_func(name: &str) -> bool {
     match name {
-        "jsonb_each"
-        | "jsonb_object_keys"
+        "csv_extract"
+        | "generate_series"
         | "jsonb_array_elements"
-        | "jsonb_each_text"
         | "jsonb_array_elements_text"
-        | "regexp_extract"
-        | "csv_extract" => true,
+        | "jsonb_each"
+        | "jsonb_each_text"
+        | "jsonb_object_keys"
+        | "regexp_extract" => true,
         _ => false,
     }
 }
