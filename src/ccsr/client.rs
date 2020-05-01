@@ -106,9 +106,12 @@ where
     }
 }
 
+/// A schema stored by a schema registry.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Schema {
+    /// The ID of the schema.
     pub id: i32,
+    /// The raw text representing the schema.
     pub raw: String,
 }
 
@@ -117,10 +120,14 @@ struct GetByIdResponse {
     schema: String,
 }
 
+/// Errors for schema lookups by ID.
 #[derive(Debug)]
 pub enum GetByIdError {
+    /// No schema with the requested ID exists.
     SchemaNotFound,
+    /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
+    /// An internal server error occured.
     Server { code: i32, message: String },
 }
 
@@ -163,10 +170,14 @@ struct GetBySubjectResponse {
     schema: String,
 }
 
+/// Errors for schema lookups by subject.
 #[derive(Debug)]
 pub enum GetBySubjectError {
+    /// The requested subject does not exist.
     SubjectNotFound,
+    /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
+    /// An internal server error occured.
     Server { code: i32, message: String },
 }
 
@@ -208,11 +219,18 @@ struct PublishResponse {
     id: i32,
 }
 
+/// Errors for publish operations.
 #[derive(Debug)]
 pub enum PublishError {
+    /// The provided schema was not compatible with existing schemas for that
+    /// subject, according to the subject's forwards- or backwards-compatibility
+    /// requirements.
     IncompatibleSchema,
+    /// The provided schema was invalid.
     InvalidSchema,
+    /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
+    /// An internal server error occured.
     Server { code: i32, message: String },
 }
 
@@ -258,9 +276,12 @@ impl fmt::Display for PublishError {
     }
 }
 
+/// Errors for list operations.
 #[derive(Debug)]
 pub enum ListError {
+    /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
+    /// An internal server error occured.
     Server { code: i32, message: String },
 }
 
@@ -291,10 +312,14 @@ impl fmt::Display for ListError {
     }
 }
 
+/// Errors for delete operations.
 #[derive(Debug)]
 pub enum DeleteError {
+    /// The specified subject does not exist.
     SubjectNotFound,
+    /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
+    /// An internal server error occured.
     Server { code: i32, message: String },
 }
 
@@ -338,7 +363,7 @@ struct ErrorResponse {
 }
 
 #[derive(Debug)]
-pub enum UnhandledError {
+enum UnhandledError {
     Transport(reqwest::Error),
     Api { code: i32, message: String },
 }

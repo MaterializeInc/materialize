@@ -13,19 +13,18 @@ use serde::{Deserialize, Serialize};
 use crate::client::Client;
 use crate::tls::{CertDetails, Certificate, Identity};
 
-/// Represents the Confluent Schema Registry you want to connect to, including
-/// potential TLS configuration.
+/// Configuration for a `Client`.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClientConfig {
-    pub url: Url,
-    pub root_certs: Vec<Certificate>,
-    pub identity: Option<Identity>,
+    url: Url,
+    root_certs: Vec<Certificate>,
+    identity: Option<Identity>,
 }
 
 impl ClientConfig {
-    /// Constructs a new ClientConfig for a schema registry at the specified
-    /// URL.
+    /// Constructs a new `ClientConfig` that will target the schema registry at
+    /// the specified URL.
     pub fn new(url: Url) -> ClientConfig {
         ClientConfig {
             url,
