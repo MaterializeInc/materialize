@@ -38,7 +38,7 @@ container you can mount a docker volume onto `/prometheus`:
 
 ```console
 $ docker run -d \
-    -v /tmp/prom-data:/prometheus \
+    -v /tmp/prom-data:/prometheus -u "$(id -u):$(id -g)" \
     -p 3000:3000 -e MATERIALIZED_URL=172.16.0.0:6875 \
     materialize/dashboard
 ```
