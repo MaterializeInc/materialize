@@ -9,7 +9,33 @@
 
 #![deny(missing_debug_implementations)]
 
-//! Confluent-compatible schema registry API client.
+//! The `ccsr` crate provides an ergonomic API client for Confluent-compatible
+//! schema registries (CCSRs).
+//!
+//! The only known CCSR implementation is the [Confluent Schema Registry], but
+//! this crate is compatible with any implementation that adheres to the
+//! CCSR [API specification].
+//!
+//! ## Example usage
+//!
+//! ```no_run
+//! # async {
+//! use ccsr::ClientConfig;
+//!
+//! let url = "http://localhost:8080".parse()?;
+//! let client = ClientConfig::new(url).build();
+//! let subjects = client.list_subjects().await?;
+//! for subject in subjects {
+//!     let schema = client.get_schema_by_subject(&subject).await?;
+//!     // Do something with `schema`.
+//! }
+//! # Ok::<_, Box<dyn std::error::Error>>(())
+//! # };
+//! ```
+//!
+//!
+//! [API specification]: https://docs.confluent.io/current/schema-registry/develop/api.html
+//! [Confluent Schema Registry]: https://docs.confluent.io/current/schema-registry/index.html
 
 mod client;
 mod config;
