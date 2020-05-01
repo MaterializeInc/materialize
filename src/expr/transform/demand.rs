@@ -117,10 +117,10 @@ impl Demand {
                 columns.retain(|c| *c < arity);
                 self.action(input, columns, gets);
             }
-            RelationExpr::FlatMapUnary {
+            RelationExpr::FlatMap {
                 input,
                 func: _,
-                expr,
+                exprs,
                 demand,
             } => {
                 let mut sorted = columns.iter().cloned().collect::<Vec<_>>();
@@ -128,7 +128,9 @@ impl Demand {
                 *demand = Some(sorted);
                 // A FlatMap which returns zero rows acts like a filter
                 // so we always need to execute it
-                columns.extend(expr.support());
+                for expr in exprs {
+                    columns.extend(expr.support());
+                }
                 columns.retain(|c| *c < input.arity());
                 self.action(input, columns, gets);
             }

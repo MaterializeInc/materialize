@@ -114,7 +114,7 @@ impl RelationExpr {
                 Some(parent_expr) => match parent_expr {
                     Project { .. }
                     | Map { .. }
-                    | FlatMapUnary { .. }
+                    | FlatMap { .. }
                     | Filter { .. }
                     | Reduce { .. }
                     | TopK { .. }
@@ -197,10 +197,19 @@ impl RelationExpr {
                 Map { scalars, .. } => {
                     write!(pretty, "Map {}", Separated(", ", scalars.clone())).unwrap();
                 }
-                FlatMapUnary {
-                    func, expr, demand, ..
+                FlatMap {
+                    func,
+                    exprs,
+                    demand,
+                    ..
                 } => {
-                    write!(pretty, "FlatMapUnary {}({})", func, expr).unwrap();
+                    write!(
+                        pretty,
+                        "FlatMap {}({})",
+                        func,
+                        Separated(", ", exprs.clone())
+                    )
+                    .unwrap();
                     if let Some(demand) = demand {
                         annotations
                             .push(format!("demand = {}", Bracketed("(", ")", Indices(demand))));
