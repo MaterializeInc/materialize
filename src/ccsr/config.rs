@@ -58,12 +58,8 @@ impl ClientConfig {
 
         if let Some(ident) = &self.identity {
             match ident.cert {
-                CertDetails::PEM(_) => {
-                    builder = builder.use_rustls_tls();
-                }
-                CertDetails::DER(_, _) => {
-                    builder = builder.use_native_tls();
-                }
+                CertDetails::Pem(_) => builder = builder.use_rustls_tls(),
+                CertDetails::Der(_, _) => builder = builder.use_native_tls(),
             }
             builder = builder.identity(ident.clone().into());
         }
