@@ -38,15 +38,7 @@ services:
 
   grafana:
     mzbuild: dashboard
-    propagate-uid-gid: true
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:
       - *grafana
-    volumes:
-      # ensure that data doesn't get lost across restarts
-      - ./data/prometheus:/prometheus
-      - ./data/grafana:/var/lib/grafana
-
-volumes:
-  grafana:

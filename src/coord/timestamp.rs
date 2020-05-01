@@ -1254,7 +1254,7 @@ impl Timestamper {
             Ok(shard_ids) => shard_ids,
             Err(e) => {
                 error!(
-                    "Initializing KinesisSourceConnector with empty shard list: {}",
+                    "Initializing KinesisSourceConnector with empty shard list: {:#?}",
                     e
                 );
                 HashSet::new()
@@ -1660,7 +1660,8 @@ impl Timestamper {
                                 kc.cached_shard_ids = shard_ids;
                             }
                             Err(e) => error!(
-                                "Error listing Shard ids for stream {}, using cached Shard ids.",
+                                "Error listing Shard ids for stream {}, using cached Shard ids: {:#?}",
+                                kc.stream_name,
                                 e
                             ),
                         };

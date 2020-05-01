@@ -55,7 +55,7 @@ impl KinesisInfo {
 pub async fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
     let (aws_account, aws_credentials) = aws::account_details(Duration::from_secs(15))
         .await
-        .map_err(|e| format!("error getting AWS account details: {}", e))?;
+        .map_err(|e| format!("error getting AWS account details: {:#?}", e))?;
     let provider = rusoto_credential::StaticProvider::new(
         aws_credentials.aws_access_key_id().to_owned(),
         aws_credentials.aws_secret_access_key().to_owned(),
