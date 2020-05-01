@@ -185,6 +185,18 @@ impl CatalogItem {
             CatalogItem::Index(idx) => vec![idx.on],
         }
     }
+
+    /// Indicates whether this item is a placeholder for a future item
+    /// or if it's actually a real item.
+    pub fn is_placeholder(&self) -> bool {
+        match self {
+            CatalogItem::Source(_) | CatalogItem::View(_) | CatalogItem::Index(_) => false,
+            CatalogItem::Sink(s) => match s.connector {
+                SinkConnectorState::Pending(_) => true,
+                SinkConnectorState::Ready(_) => false,
+            },
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -467,7 +479,10 @@ impl Catalog {
     }
 
     pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
-        info!("create {} {} ({})", item.type_string(), name, id);
+        if !item.is_placeholder() {
+            info!("create {} {} ({})", item.type_string(), name, id);
+        }
+
         let entry = CatalogEntry {
             item,
             name,
@@ -727,12 +742,14 @@ impl Catalog {
 
                 Action::DropItem(id) => {
                     let metadata = self.by_id.remove(&id).unwrap();
-                    info!(
-                        "drop {} {} ({})",
-                        metadata.item.type_string(),
-                        metadata.name,
-                        id
-                    );
+                    if !metadata.item.is_placeholder() {
+                        info!(
+                            "drop {} {} ({})",
+                            metadata.item.type_string(),
+                            metadata.name,
+                            id
+                        );
+                    }
                     for u in metadata.uses() {
                         if let Some(dep_metadata) = self.by_id.get_mut(&u) {
                             dep_metadata.used_by.retain(|u| *u != metadata.id)
