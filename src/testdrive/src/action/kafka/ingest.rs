@@ -44,15 +44,17 @@ enum Transcoder {
 }
 
 impl Transcoder {
-    fn decode_json<R, T>(row: R) -> Result<T, String>
+    fn decode_json<R, T>(row: R) -> Result<Option<T>, String>
     where
         R: Read,
         T: DeserializeOwned,
     {
         let deserializer = serde_json::Deserializer::from_reader(row);
         match deserializer.into_iter().next() {
-            None => Err("line ended without json datum".into()),
-            Some(r) => r.map_err(|e| format!("parsing json: {}", e.to_string())),
+            None => Ok(None),
+            Some(r) => r
+                .map(Some)
+                .map_err(|e| format!("parsing json: {}", e.to_string())),
         }
     }
 
@@ -64,23 +66,35 @@ impl Transcoder {
         match self {
             Transcoder::Avro { schema, schema_id } => {
                 let val = Self::decode_json(row)?;
-                let val = avro::from_json(&val, schema.top_node())?;
-                // The first byte is a magic byte (0) that indicates the Confluent
-                // serialization format version, and the next four bytes are a
-                // 32-bit schema ID.
-                //
-                // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-                out.write_u8(0).unwrap();
-                out.write_i32::<NetworkEndian>(*schema_id).unwrap();
-                out.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
+                if let Some(val) = val {
+                    let val = avro::from_json(&val, schema.top_node())?;
+                    // The first byte is a magic byte (0) that indicates the Confluent
+                    // serialization format version, and the next four bytes are a
+                    // 32-bit schema ID.
+                    //
+                    // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+                    out.write_u8(0).unwrap();
+                    out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                    out.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
+                }
             }
             Transcoder::Protobuf { message } => {
                 let val: protobuf::DynMessage = match message {
                     protobuf::MessageType::Batch => {
-                        Self::decode_json::<_, protobuf::native::Batch>(row)?.to_message()
+                        let decoded = Self::decode_json::<_, protobuf::native::Batch>(row)?;
+                        if let Some(decoded) = decoded {
+                            decoded.to_message()
+                        } else {
+                            return Err("line ended without json datum".into());
+                        }
                     }
                     protobuf::MessageType::Struct => {
-                        Self::decode_json::<_, protobuf::native::Struct>(row)?.to_message()
+                        let decoded = Self::decode_json::<_, protobuf::native::Struct>(row)?;
+                        if let Some(decoded) = decoded {
+                            decoded.to_message()
+                        } else {
+                            return Err("line ended without json datum".into());
+                        }
                     }
                 };
                 val.write_to_vec(&mut out).map_err(|e| e.to_string())?;

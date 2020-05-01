@@ -129,40 +129,8 @@ pub fn validate_value_schema(schema: &str, envelope: EnvelopeType) -> Result<Rel
             }
         }
         EnvelopeType::Upsert => match node.inner {
-            SchemaPiece::Union(us) => {
-                if us.variants().len() > 2 {
-                    bail!(
-                        "upsert schema can only be record or union[null, record], got: {:?}",
-                        schema.top
-                    );
-                }
-                let has_null = us.variants().iter().any(|s| is_null(s));
-                let record = us
-                    .variants()
-                    .iter()
-                    .find(|s| match s.get_piece_and_name(&schema).0 {
-                        SchemaPiece::Record { .. } => true,
-                        _ => false,
-                    });
-                if !has_null {
-                    bail!(
-                        "upsert schema can only be record or union[null, record], got: {:?}",
-                        schema.top
-                    );
-                }
-                match record {
-                    Some(record) => record,
-                    None => bail!(
-                        "upsert schema can only be record or union[null, record], got: {:?}",
-                        schema.top
-                    ),
-                }
-            }
             SchemaPiece::Record { .. } => &schema.top,
-            _ => bail!(
-                "upsert schema can only be record or union[null, record], got: {:?}",
-                schema.top
-            ),
+            _ => bail!("upsert schema can only be record, got: {:?}", schema.top),
         },
         EnvelopeType::None => &schema.top,
     };
@@ -534,7 +502,7 @@ impl Decoder {
             }
         } else {
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            let row = extract_row(val, self.envelope == EnvelopeType::Upsert, iter::empty())?;
+            let row = extract_row(val, false, iter::empty())?;
             DiffPair {
                 before: None,
                 after: row,

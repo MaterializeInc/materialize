@@ -17,9 +17,7 @@ $ set keyschema={
     ]
   }
 
-$ set schema=[
-    "null",
-    {
+$ set schema={
         "type" : "record",
         "name" : "test",
         "fields" : [
@@ -27,7 +25,6 @@ $ set schema=[
             {"name":"f2", "type":"long"}
         ]
     }
-  ]
 
 $ set consistency={
      "name": "materialize.byo.consistency",
@@ -76,10 +73,10 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "bird1"} {"f1":"goose", "f2": 1}
 {"key": "birdmore"} {"f1":"geese", "f2": 2}
 {"key": "mammal1"} {"f1": "moose", "f2": 1}
-{"key": "bird1"} null
+{"key": "bird1"}
 {"key": "birdmore"} {"f1":"geese", "f2": 56}
 {"key": "mammalmore"} {"f1": "moose", "f2": 42}
-{"key": "mammal1"} null
+{"key": "mammal1"}
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
 > CREATE MATERIALIZED SOURCE avroavro
@@ -107,10 +104,10 @@ fish: {"f1": "fish", "f2": 1000}
 bìrd1: {"f1":"goose", "f2": 1}
 birdmore: {"f1":"geese", "f2": 2}
 mammal1: {"f1": "moose", "f2": 1}
-bìrd1: null
+bìrd1:
 birdmore: {"f1":"geese", "f2": 56}
 mämmalmore: {"f1": "moose", "f2": 42}
-mammal1: null
+mammal1:
 mammalmore: {"f1":"moose", "f2": 2}
 
 > CREATE MATERIALIZED SOURCE bytesavro
@@ -265,7 +262,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"key": "lightning"} {"f1": "sheep", "f2": 54}
 {"key": "earth"} {"f1": "snake", "f2": 68}
 {"key": "water"} {"f1": "crocodile", "f2": 7}
-{"key": "earth"} null
+{"key": "earth"}
 
 > CREATE MATERIALIZED SOURCE realtimeavroavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -296,14 +293,14 @@ water      crocodile      7
 
 # ensure that having deletion on a key that never existed does not break anything
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
-{"key": "spirit"} null
+{"key": "spirit"}
 {"key": "air"} {"f1": "pigeon", "f2": 10}
 {"key": "air"} {"f1": "owl", "f2": 15}
 {"key": "earth"} {"f1": "rhinoceros", "f2": 211}
 {"key": "air"} {"f1": "chicken", "f2": 47}
-{"key": "lightning"} null
+{"key": "lightning"}
 {"key": "lightning"} {"f1":"dog", "f2": 243}
-{"key": "water"} null
+{"key": "water"}
 
 > select * from realtimeavroavro
 key        f1             f2
