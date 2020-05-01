@@ -24,6 +24,8 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
+    /// Constructs a new ClientConfig for a schema registry at the specified
+    /// URL.
     pub fn new(url: Url) -> ClientConfig {
         ClientConfig {
             url,
@@ -31,14 +33,22 @@ impl ClientConfig {
             identity: None,
         }
     }
+
+    /// Adds a trusted root TLS certificate.
+    ///
+    /// Certificates in the system's certificate store are trusted by default.
     pub fn add_root_certificate(mut self, cert: Certificate) -> ClientConfig {
         self.root_certs.push(cert);
         self
     }
+
+    /// Enables TLS client authentication with the provided identity.
     pub fn identity(mut self, identity: Identity) -> ClientConfig {
         self.identity = Some(identity);
         self
     }
+
+    /// Builds the [`Client`].
     pub fn build(self) -> Client {
         let mut builder = reqwest::Client::builder();
 
