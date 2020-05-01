@@ -91,7 +91,6 @@ pub fn kafka<G>(
                     }
                 }
             });
-            producer.flush(std::time::Duration::from_millis(10));
         },
     )
 }
