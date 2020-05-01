@@ -553,7 +553,6 @@ impl fmt::Display for Datum<'_> {
 /// or "String." The full [`ColumnType`] struct bundles additional information, like
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ScalarType {
     /// The type of an unknown datum. Whenever possible, this variant should be
