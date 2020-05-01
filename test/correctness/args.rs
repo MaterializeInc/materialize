@@ -20,8 +20,8 @@ static DEFAULT_CONFIG: &str = include_str!("chbench-config.toml");
 #[derive(Debug)]
 pub struct Args {
     pub mz_url: String,
-    /// If true, don't run correctness peeks, just create sources and views
-    pub only_initialize: bool,
+    /// If true, explicitly create sources
+    pub initialize_sources: bool,
     pub config: Config,
     /// Duration for which to run checker
     pub duration: Duration,
@@ -57,11 +57,7 @@ impl Args {
             "url of the materialized instance to collect metrics from",
             "URL",
         );
-        opts.optflag(
-            "",
-            "only-initialize",
-            "run the initalization of sources and views, but don't start peeking",
-        );
+        opts.optflag("", "mz-sources", "if set, initialize sources");
         opts.optflag("", "duration", "duration for which to run correctness test");
         let popts = match opts.parse(&args[1..]) {
             Ok(popts) => {
@@ -93,7 +89,7 @@ impl Args {
                 "materialized-url",
                 "postgres://ignoreuser@materialized:6875/materialize".to_owned(),
             )?,
-            only_initialize: popts.opt_present("only-initialize"),
+            initialize_sources: popts.opt_present("mz-sources"),
             duration: Duration::from_secs(duration_t),
             config,
         })
@@ -136,6 +132,7 @@ fn load_config(config_path: Option<String>, cli_checks: Option<String>) -> Resul
         config.checks.retain(|c| c.enabled);
     }
 
+    println!("Number of checks is : {}", config.checks.len());
     // Sort checks by specificity (number of columns involved in the check)
     for c in &mut config.checks {
         c.rows.sort_by(|a, b| {
@@ -208,6 +205,11 @@ pub struct Source {
     pub kafka_broker: String,
     pub topic_namespace: String,
     pub names: Vec<String>,
+    //TODO(ncrooks): update sources to take individual consistency topics
+    pub consistency_topic: String,
+    /// If not none, 'create source with (consistency= consistency_topic)'
+    #[serde(default)]
+    pub is_byo: bool,
     /// If true, `create MATERIALIZED source`
     #[serde(default)]
     pub materialized: bool,

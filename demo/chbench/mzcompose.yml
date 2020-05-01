@@ -16,6 +16,7 @@ x-port-mappings:
   - &kafka ${KAFKA_PORT:-9092:9092}
   - &materialized ${MZ_PORT:-6875:6875}
   - &mysql ${MYSQL_PORT:-3306:3306}
+  - &postgres ${POSTGRES_PORT:-5432:5432}
   - &control-center ${CC_PORT:-9021:9021}
   - &grafana 3000:3000
   - &metabase 3030:3000
@@ -38,7 +39,7 @@ services:
       # 1000 was chosen by fair dice roll
       - DIFFERENTIAL_EAGER_MERGE=1000
   mysql:
-    image: debezium/example-mysql:1.0
+    image: debezium/example-mysql:1.1
     ports:
      - *mysql
     environment:
@@ -51,11 +52,29 @@ services:
         target: /var/lib/mysql-files
         read_only: true
   mysqlcli:
-    image: debezium/example-mysql:1.0
+    image: debezium/example-mysql:1.1
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=tpcch"]
     init: true
     depends_on:
       - mysql
+  postgres:
+    image: debezium/example-postgres:1.1
+    ports:
+     - *postgres
+    environment:
+     - POSTGRES_USER=postgres
+     - POSTGRES_PASSWORD=postgres
+    volumes:
+      - type: volume
+        source: chbench-gen
+        target: /var/lib/postgres-files
+        read_only: true
+  postgrescli:
+    image: debezium/example-postgres:1.1
+    command: ["psql", "--host=postgres",  "--user=postgres"]
+    init: true
+    depends_on:
+      - postgres
   zookeeper:
     image: confluentinc/cp-zookeeper:5.3.0
     environment:
@@ -71,13 +90,14 @@ services:
       KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      #KAFKA_LOG_CLEANUP_POLICY: "compact"
       CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
       CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
       # To avoid race condition with control-center
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
   connect:
-    image: debezium/connect:1.0
+    image: debezium/connect:1.1
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: 1
@@ -94,9 +114,13 @@ services:
      - SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181
      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
+
     depends_on: [zookeeper, kafka]
-  connector:
-    build: connector
+  connector-mysql:
+    build: connector-mysql
+    depends_on: [schema-registry, control-center]
+  connector-postgres:
+    build: connector-postgres
     depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.3.0
@@ -190,7 +214,7 @@ services:
     init: true
     ports:
       - ${PEEKER_PORT:-16875}
-    # run peeker using 'dc.sh run peeker' to adjust which queries are peeked,
+    # run peeker using './mzcompose run peeker' to adjust which queries are peeked,
     # and see /src/peeker/chbench-config.toml for a list of queries
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
@@ -199,9 +223,11 @@ services:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
     init: true
-    # run correctness using 'dc.sh run correctness' to adjust which queries are peeked,
+    # run correctness using './mzcompose run test-correctness' to adjust which queries are peeked,
     # and see /src/correctness/checks.toml for a list of queries
-    command: ${CORRECTNESS_CMD:-}
+    # To run with the Debezium consistency topic, use checks.toml. This is only available
+    # with a Postgres instance. Otherwise use checks-noconsistency.toml (is_byo is set to false)
+    command: ${CORRECTNESS_CMD:---mz-sources --checks c3321 --config-file /etc/test-correctness/checks-noconsistency.toml}
     volumes:
       - ./test-correctness-config:/etc/test-correctness
 
@@ -223,7 +249,7 @@ mzconduct:
       - step: down
         destroy_volumes: true
       - step: workflow
-        workflow: bring-up-source-data
+        workflow: bring-up-source-data-mysql
       - step: run
         service: chbench
         daemon: true
@@ -234,7 +260,7 @@ mzconduct:
           --transactional-threads=1
           --run-seconds=500
           -l /dev/stdout
-          --config-file-path=/etc/chbenchmark/mz-default.cfg
+          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
           --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
       - step: ensure-stays-up
         container: chbench
@@ -263,7 +289,7 @@ mzconduct:
     demo:
       steps:
       - step: workflow
-        workflow: bring-up-source-data
+        workflow: bring-up-source-data-mysql
       - step: workflow
         workflow: heavy-load
       - step: start-services
@@ -278,7 +304,7 @@ mzconduct:
     load-test:
       steps:
       - step: workflow
-        workflow: bring-up-source-data
+        workflow: bring-up-source-data-mysql
       # start the dashboard before the load data get started so that we have data from
       # the beginning of time
       - step: start-services
@@ -296,6 +322,68 @@ mzconduct:
         container: dashboard
         seconds: 1
 
+    load-test-postgres:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data-postgres
+      # start the dashboard before the load data get started so that we have data from
+      # the beginning of time
+      - step: start-services
+        services: [dashboard]
+      - step: workflow
+        workflow: heavy-load-postgres
+      - step: run
+        service: peeker
+        daemon: true
+        command: --queries ${PEEKER_QUERIES:-loadtest}
+      - step: ensure-stays-up
+        container: peeker
+        seconds: 10
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
+
+
+    consistency-test:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data-mysql
+      # start the dashboard before the load data get started so that we have data from
+      # the beginning of time
+      - step: start-services
+        services: [dashboard]
+      - step: workflow
+        workflow: heavy-load
+      - step: run
+        service: test-correctness
+        daemon: true
+      - step: ensure-stays-up
+        container: test-correctness
+        seconds: 10
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
+
+    consistency-test-postgres:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data-postgres
+      # start the dashboard before the load data get started so that we have data from
+      # the beginning of time
+      - step: start-services
+        services: [dashboard]
+      - step: workflow
+        workflow: heavy-load-postgres
+      - step: run
+        service: test-correctness
+        daemon: true
+      - step: ensure-stays-up
+        container: test-correctness
+        seconds: 10
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
+
     cloud-load-test:
       env:
         PEEKER_PORT: "16875:16875"
@@ -303,7 +391,7 @@ mzconduct:
         MZ_SQL_EXPORTER_PORT: "9400:9399"
       steps:
       - step: workflow
-        workflow: bring-up-source-data
+        workflow: bring-up-source-data-mysql
       - step: start-services
         services: [prometheus_sql_exporter_mysql_tpcch, prometheus_sql_exporter_mz]
       - step: workflow
@@ -317,8 +405,36 @@ mzconduct:
         seconds: 10
 
     # Helper workflows
+    bring-up-source-data-postgres:
+      steps:
+      - step: start-services
+        services: [materialized,postgres]
+      - step: wait-for-tcp
+        host: materialized
+        port: 6875
+      - step: wait-for-postgres
+        dbname: postgres
+        timeout_secs: 30
+      - step: start-services
+        services: [connector-postgres]
+      - step: wait-for-tcp
+        host: connect
+        port: 8083
+        timeout_secs: 120
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: drop-kafka-topics
+        kafka-container: chbench_kafka_1
+        topic_pattern: debezium.tpcch.*
+      - step: run
+        service: chbench
+        command: >-
+          gen
+          --warehouses=1
+          --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
 
-    bring-up-source-data:
+    bring-up-source-data-mysql:
       steps:
       - step: start-services
         services: [materialized, mysql]
@@ -330,7 +446,7 @@ mzconduct:
         password: debezium
         timeout_secs: 30
       - step: start-services
-        services: [connector]
+        services: [connector-mysql]
       - step: wait-for-tcp
         host: connect
         port: 8083
@@ -340,13 +456,13 @@ mzconduct:
         port: 8081
       - step: drop-kafka-topics
         kafka-container: chbench_kafka_1
-        topic_pattern: mysql.tpcch.*
+        topic_pattern: debezium.tpcch.*
       - step: run
         service: chbench
         command: >-
           gen
           --warehouses=1
-          --config-file-path=/etc/chbenchmark/mz-default.cfg
+          --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
 
     heavy-load:
       steps:
@@ -360,5 +476,20 @@ mzconduct:
          --transactional-threads=1
          --run-seconds=864000
          -l /dev/stdout
-         --config-file-path=/etc/chbenchmark/mz-default.cfg
+         --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
+         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+
+    heavy-load-postgres:
+      steps:
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+         run
+         --dsn=postgres --gen-dir=/var/lib/postgres-files
+         --analytic-threads=0
+         --transactional-threads=1
+         --run-seconds=864000
+         -l /dev/stdout
+         --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable

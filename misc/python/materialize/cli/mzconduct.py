@@ -610,6 +610,7 @@ class WaitForPgStep(WorkflowStep):
         host: str = "localhost",
         timeout_secs: int = 30,
         query: str = "SELECT 1",
+        user: str = "postgres",
         expected: Union[Iterable[Any], Literal["any"]] = (1,),
         print_result: bool = False,
         service: str = "postgres",
@@ -617,6 +618,7 @@ class WaitForPgStep(WorkflowStep):
         self._dbname = dbname
         self._host = host
         self._port = port
+        self._user = user
         self._timeout_secs = timeout_secs
         self._query = query
         self._expected = expected
@@ -640,6 +642,7 @@ class WaitForPgStep(WorkflowStep):
             port=port,
             timeout_secs=self._timeout_secs,
             query=self._query,
+            user=self._user,
             expected=self._expected,
             print_result=self._print_result,
         )
@@ -1258,12 +1261,13 @@ def wait_for_pg(
     dbname: str,
     port: int,
     host: str,
+    user: str,
     print_result: bool,
     expected: Union[Iterable[Any], Literal["any"]],
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)
     """
-    args = f"dbname={dbname} host={host} port={port} user=ignored"
+    args = f"dbname={dbname} host={host} port={port} user={user}"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
     if isinstance(expected, tuple):
@@ -1271,7 +1275,7 @@ def wait_for_pg(
     for remaining in ui.timeout_loop(timeout_secs):
         try:
             conn = pg8000.connect(
-                database=dbname, host=host, port=port, user="ignored", timeout=1
+                database=dbname, host=host, port=port, user=user, timeout=1
             )
             cur = conn.cursor()
             cur.execute(query)

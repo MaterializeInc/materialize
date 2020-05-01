@@ -10,7 +10,7 @@
 [[sources]]
 kafka_broker = "kafka:9092"
 schema_registry = "http://schema-registry:8081"
-topic_namespace = "mysql.tpcch."
+topic_namespace = "debezium.tpcch."
 materialized = false
 names = [
     "customer",
@@ -23,6 +23,7 @@ names = [
     "supplier",
 
     # make these materialized once we support materialized sources
+    "history",
     "district",
     "nation",
     "region",
