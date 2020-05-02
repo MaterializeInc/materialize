@@ -24,8 +24,10 @@ production readiness.
   `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
   v0.2.3 would be called v0.2.3-rc1.
 
-- [ ] Update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-  and [`LICENSE`](/LICENSE) and commit that change.
+- Update the version fields in these files, and commit that change:
+
+  - [ ] [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
+  - [ ] [`LICENSE`](/LICENSE)
 
   <details><summary>Example Diff</summary>
   <p>
