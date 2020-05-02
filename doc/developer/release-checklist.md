@@ -147,19 +147,12 @@ All of these can be run in parallel.
 - [ ] Follow the instructions in [MaterializeInc/homebrew-materialize's
   CONTRIBUTING.md][homebrew-guide].
 
-### Create Debian package.
+### Verify the Debian package.
 
-  - [ ] Invert the `name` and `conflicts` fields in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml).
+- [ ] Go to [the bintray `materialized` apt repo][bintray] and just check that
+  the version you have published is present and published
 
-  - [ ] Run `cargo-deb` inside the CI builder. Note that <VERSION-NO-V> below
-    must not include the `v` prefix.
-
-    ```shell
-    bin/ci-builder run stable cargo-deb --no-strip -p materialized --deb-version <VERSION-NO-V>
-    ```
-
-    Upload the resulting `.deb` file to [GemFury](https://fury.io) by dragging-
-    and-dropping onto the administration console. (Yes, this is really the UI.)
+[bintray]: https://bintray.com/beta/#/materialize/apt/materialized
 
 
 ### Convert the github Tag into a GitHub Release
