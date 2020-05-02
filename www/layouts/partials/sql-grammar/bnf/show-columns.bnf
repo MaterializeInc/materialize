@@ -1,2 +1,2 @@
 show_columns ::=
-  'SHOW' 'COLUMNS' 'FROM' item_ref
+  'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)

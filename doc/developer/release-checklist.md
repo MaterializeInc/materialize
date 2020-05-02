@@ -102,7 +102,7 @@ production readiness.
   - [ ] Spin up the billing-demo with an updated `--message-count` argument.
 
     ```shell
-    cd src/billing-demo
+    cd demo/billing
     # Manually edit the mzcompose.yml to have `--message-count 100000000`
     # Follow the rest of the instructions in README.md
     ```
