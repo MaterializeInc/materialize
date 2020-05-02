@@ -15,7 +15,7 @@
 x-port-mappings:
   - &kafka 9092:9092
   - &materialized 6875:6875
-  - &postgres 5032:5032
+  - &postgres 5432:5432
   - &control-center 9021:9021
   - &grafana 3000:3000
   - &metabase 3030:3000
