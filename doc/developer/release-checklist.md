@@ -127,6 +127,8 @@ All of these can be run in parallel.
 
 ## Final release
 
+### Create git tag
+
 - [ ] Check out the final RC tag.
 
 - [ ] Update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
@@ -140,12 +142,12 @@ All of these can be run in parallel.
   git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
-- [ ] Create Homebrew bottle and update Homebrew tap.
+### Create Homebrew Bottle and update tap
 
-  Follow the instructions in [MaterializeInc/homebrew-materialize's
+- [ ] Follow the instructions in [MaterializeInc/homebrew-materialize's
   CONTRIBUTING.md][homebrew-guide].
 
-- [ ] Create Debian package.
+### Create Debian package.
 
   - [ ] Invert the `name` and `conflicts` fields in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml).
 
@@ -159,11 +161,15 @@ All of these can be run in parallel.
     Upload the resulting `.deb` file to [GemFury](https://fury.io) by dragging-
     and-dropping onto the administration console. (Yes, this is really the UI.)
 
+### Convert the github Tag into a GitHub Release
+
 - [ ] Create a new [GitHub release][new-github-release].
 
   Use the version as the name. Fill out the description by copying the
   description from an earlier release ([v0.1.2., for example][v0.1.2]) and
   updating the links appropriately.
+
+### Update the master branch for the next version
 
 - [ ] On **master**, update the various files that must be up to date:
 
@@ -174,8 +180,8 @@ All of these can be run in parallel.
   - [ ] Update the [`LICENSE`](/LICENSE) file with the changes from the
     release branch, so that it reflects the latest release of Materialize.
 
-  - [ ] Ensure that the [Release Notes](../../doc/user/release-notes.md) are up to date,
-    including the current version.
+  - [ ] Ensure that the [Release Notes](../../doc/user/release-notes.md) are up
+    to date, including the current version.
 
   - [ ] Ensure that [Versions](../../doc/user/versions.md) is up to date.
 
