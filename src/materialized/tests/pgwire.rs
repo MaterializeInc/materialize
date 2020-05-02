@@ -150,9 +150,11 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
                 .get::<_, String>(0),
             "newdb",
         );
-        client.batch_execute("CREATE DATABASE newdb").await?;
         client
-            .batch_execute("CREATE MATERIALIZED VIEW v AS SELECT 1")
+            .batch_execute(
+                "CREATE DATABASE newdb; \
+                 CREATE MATERIALIZED VIEW v AS SELECT 1;",
+            )
             .await?;
 
         match notice_rx.next().await {
@@ -210,11 +212,10 @@ fn test_multiple_statements() -> Result<(), Box<dyn Error>> {
     let (_server, mut client) = util::start_server(util::Config::default())?;
     let result = client.batch_execute(
         "CREATE VIEW v1 AS SELECT * FROM (VALUES (1)); \
-    CREATE VIEW v2 AS SELECT * FROM (VALUES (2)); \
-    CREATE VIEW v3 AS SELECT sum(column1) FROM (SELECT * FROM v1 UNION SELECT * FROM v2); \
-    CREATE VIEW v4 AS SELECT * FROM nonexistent; \
-    CREATE VIEW v5 AS SELECT 5;
-    ",
+         CREATE VIEW v2 AS SELECT * FROM (VALUES (2)); \
+         CREATE VIEW v3 AS SELECT sum(column1) FROM (SELECT * FROM v1 UNION SELECT * FROM v2); \
+         CREATE VIEW v4 AS SELECT * FROM nonexistent; \
+         CREATE VIEW v5 AS SELECT 5;",
     );
 
     // v4 creation fails, so the whole query should be an error.
@@ -257,19 +258,15 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     {
         let (_server, mut client) = util::start_server(config.clone())?;
         client.batch_execute(&format!(
-            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
+            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES; \
+             CREATE VIEW constant AS SELECT 1; \
+             CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes; \
+             CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src; \
+             CREATE DATABASE d; \
+             CREATE SCHEMA d.s; \
+             CREATE VIEW d.s.v AS SELECT 1;",
             temp_file.display(),
         ))?;
-        client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
-        client.batch_execute(
-            "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
-        )?;
-        client.batch_execute(
-            "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
-        )?;
-        client.batch_execute("CREATE DATABASE d")?;
-        client.batch_execute("CREATE SCHEMA d.s")?;
-        client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;
     }
 
     {
