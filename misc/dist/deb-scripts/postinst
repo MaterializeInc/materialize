@@ -13,7 +13,7 @@ set -e
 
 # The weird username is intended to be unlikely
 # to conflict with real local users.
-adduser --system --group --force-badname --no-create-home _Materialize
+adduser --system --group --force-badname --no-create-home --quiet _Materialize
 mkdir -p /var/lib/materialize/
 chown _Materialize:_Materialize /var/lib/materialize/
 
