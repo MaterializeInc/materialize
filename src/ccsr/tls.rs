@@ -9,49 +9,53 @@
 
 //! TLS certificates and identities.
 
+use openssl::pkcs12::Pkcs12;
+use openssl::pkey::PKey;
+use openssl::stack::Stack;
+use openssl::x509::X509;
 use serde::{Deserialize, Serialize};
-
-// Encodes the type of certificate file, as well as the certificate's bytes. In
-// the case of der certificates, it also stores the password.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) enum CertDetails {
-    Pem(Vec<u8>),
-    Der(Vec<u8>, String),
-}
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Identity {
-    pub(crate) cert: CertDetails,
+    der: Vec<u8>,
+    pass: String,
 }
 
 impl Identity {
-    /// Wraps [`reqwest::Identity::from_pem`].
-    pub fn from_pem(pem: &[u8]) -> Result<Self, reqwest::Error> {
-        let _ = reqwest::Identity::from_pem(&pem)?;
-        Ok(Identity {
-            cert: CertDetails::Pem(pem.into()),
-        })
+    /// Reimplements [`reqwest::Identity::from_pem`] in terms of OpenSSL.
+    ///
+    /// The implementation in reqwest requires rustls.
+    pub fn from_pem(pem: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
+        let pkey = PKey::private_key_from_pem(pem)?;
+        let mut certs = Stack::new()?;
+        let mut cert_iter = X509::stack_from_pem(pem)?.into_iter();
+        let cert = cert_iter.next().unwrap();
+        for cert in cert_iter {
+            certs.push(cert)?;
+        }
+        let mut pkcs_builder = Pkcs12::builder();
+        pkcs_builder.ca(certs);
+        let pass = String::new();
+        let friendly_name = "";
+        let der = pkcs_builder
+            .build(&pass, friendly_name, &pkey, &cert)
+            .unwrap()
+            .to_der()?;
+        Ok(Identity { der, pass })
     }
 
     /// Wraps [`reqwest::Identity::from_pkcs12_der`].
-    pub fn from_pkcs12_der(der: &[u8], password: &str) -> Result<Self, reqwest::Error> {
-        let _ = reqwest::Identity::from_pkcs12_der(&der, password)?;
-        Ok(Identity {
-            cert: CertDetails::Der(der.into(), password.to_string()),
-        })
+    pub fn from_pkcs12_der(der: Vec<u8>, pass: String) -> Result<Self, reqwest::Error> {
+        let _ = reqwest::Identity::from_pkcs12_der(&der, &pass)?;
+        Ok(Identity { der, pass })
     }
 }
 
 impl Into<reqwest::Identity> for Identity {
     fn into(self) -> reqwest::Identity {
-        match self.cert {
-            CertDetails::Pem(pem) => {
-                reqwest::Identity::from_pem(&pem).expect("known to be a valid identity")
-            }
-            CertDetails::Der(der, pass) => reqwest::Identity::from_pkcs12_der(&der, &pass)
-                .expect("known to be a valid identity"),
-        }
+        reqwest::Identity::from_pkcs12_der(&self.der, &self.pass)
+            .expect("known to be a valid identity")
     }
 }
 
