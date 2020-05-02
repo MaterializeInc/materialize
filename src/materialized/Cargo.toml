@@ -55,10 +55,10 @@ tokio-postgres = { version = "0.5.2", features = ["with-chrono-0_4"] }
 depends = "$auto, systemd"
 conflicts = "materialized"
 assets = [
-    ["../../dist/materialized.service", "lib/systemd/system/", "644"],
+    ["../../misc/dist/materialized.service", "lib/systemd/system/", "644"],
     ["target/release/materialized", "usr/bin/", "755"]
 ]
-maintainer-scripts = "dist/deb-scripts"
+maintainer-scripts = "misc/dist/deb-scripts"
 
 [package.metadata.deb.variants.materialized]
 name = "materialized"
