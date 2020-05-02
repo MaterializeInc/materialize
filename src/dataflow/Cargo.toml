@@ -10,6 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 anyhow = "1.0.28"
+async-trait = "0.1.30"
 avro = { path = "../avro" }
 aws-util = { path = "../aws-util" }
 bincode = "1.2.1"

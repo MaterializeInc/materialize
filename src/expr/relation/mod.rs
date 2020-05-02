@@ -27,7 +27,6 @@ pub mod func;
 ///
 /// The AST is meant reflect the capabilities of the [`differential_dataflow::Collection`] type,
 /// written generically enough to avoid run-time compilation work.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum RelationExpr {
     /// A constant relation containing specified rows.
@@ -1119,7 +1118,6 @@ impl IdGen {
 }
 
 /// Describes an aggregation expression.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct AggregateExpr {
     /// Names the aggregation function.

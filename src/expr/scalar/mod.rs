@@ -19,7 +19,6 @@ use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 pub mod func;
 pub mod like_pattern;
 
-#[serde(rename_all = "snake_case")]
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum ScalarExpr {
     /// A column of the input row

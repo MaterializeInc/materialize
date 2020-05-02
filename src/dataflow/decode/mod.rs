@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use async_trait::async_trait;
 use differential_dataflow::hashable::Hashable;
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract, Pipeline},
@@ -19,6 +20,7 @@ use timely::dataflow::{
 
 use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, Diff, Envelope, Timestamp};
+use futures::executor::block_on;
 use repr::Datum;
 use repr::{Row, RowPacker};
 
@@ -101,12 +103,13 @@ where
 pub type PushSession<'a, R> =
     Session<'a, Timestamp, R, PushCounter<Timestamp, R, Tee<Timestamp, R>>>;
 
+#[async_trait(?Send)]
 pub trait DecoderState {
     /// Reset number of success and failures with decoding
     fn reset_event_count(&mut self);
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
+    async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
     /// give a session a key-value pair
-    fn give_key_value<'a>(
+    async fn give_key_value<'a>(
         &mut self,
         key: Row,
         bytes: &[u8],
@@ -115,7 +118,7 @@ pub trait DecoderState {
         time: Timestamp,
     );
     /// give a session a plain value
-    fn give_value<'a>(
+    async fn give_value<'a>(
         &mut self,
         bytes: &[u8],
         aux_num: Option<i64>,
@@ -142,17 +145,21 @@ struct OffsetDecoderState<F: Fn(&[u8]) -> Datum> {
     datum_func: F,
 }
 
-impl<F: Fn(&[u8]) -> Datum> DecoderState for OffsetDecoderState<F> {
+#[async_trait(?Send)]
+impl<F> DecoderState for OffsetDecoderState<F>
+where
+    F: Fn(&[u8]) -> Datum + Send,
+{
     fn reset_event_count(&mut self) {}
 
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+    async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
         let mut result = RowPacker::new();
         result.push((self.datum_func)(bytes));
         Ok(result.finish())
     }
 
     /// give a session a key-value pair
-    fn give_key_value<'a>(
+    async fn give_key_value<'a>(
         &mut self,
         key: Row,
         bytes: &[u8],
@@ -168,7 +175,7 @@ impl<F: Fn(&[u8]) -> Datum> DecoderState for OffsetDecoderState<F> {
     }
 
     /// give a session a plain value
-    fn give_value<'a>(
+    async fn give_value<'a>(
         &mut self,
         bytes: &[u8],
         line_no: Option<i64>,
@@ -213,18 +220,18 @@ where
                             error!("{}", "Encountered empty key");
                             continue;
                         }
-                        match key_decoder_state.decode_key(key) {
+                        match block_on(key_decoder_state.decode_key(key)) {
                             Ok(key) => {
                                 if payload.is_empty() {
                                     session.give((key, None, *cap.time()));
                                 } else {
-                                    value_decoder_state.give_key_value(
+                                    block_on(value_decoder_state.give_key_value(
                                         key,
                                         payload,
                                         *aux_num,
                                         &mut session,
                                         *cap.time(),
-                                    );
+                                    ));
                                 }
                             }
                             Err(err) => {
@@ -359,12 +366,12 @@ where
                     let mut session = output.session(&cap);
                     for (payload, aux_num) in data.iter() {
                         if !payload.is_empty() {
-                            value_decoder_state.give_value(
+                            block_on(value_decoder_state.give_value(
                                 payload,
                                 *aux_num,
                                 &mut session,
                                 *cap.time(),
-                            );
+                            ));
                         }
                     }
                 });

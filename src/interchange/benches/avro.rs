@@ -11,6 +11,7 @@ use avro::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
+use futures::executor::block_on;
 
 use interchange::avro::{parse_schema, Decoder, EnvelopeType};
 use std::ops::Add;
@@ -298,7 +299,7 @@ pub fn bench_avro(c: &mut Criterion) {
     let mut bg = c.benchmark_group("avro");
     bg.throughput(Throughput::Bytes(len));
     bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(decoder.decode(&buf).unwrap()))
+        b.iter(|| black_box(block_on(decoder.decode(&buf)).unwrap()))
     });
     bg.finish();
 }

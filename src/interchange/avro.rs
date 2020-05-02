@@ -479,7 +479,7 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `DiffPair`.
-    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair<Row>> {
+    pub async fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair<Row>> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a big
         // endian 32-bit schema ID.
@@ -500,7 +500,7 @@ impl Decoder {
         }
 
         let (resolved_schema, reader_schema) = match &mut self.writer_schemas {
-            Some(cache) => match cache.get(schema_id, &self.reader_schema)? {
+            Some(cache) => match cache.get(schema_id, &self.reader_schema).await? {
                 // If we get a schema back, the writer schema differs from our
                 // schema, so we need to perform schema resolution. If not,
                 // the schemas are identical, so we can skip schema resolution.
@@ -777,7 +777,7 @@ impl SchemaCache {
     ) -> SchemaCache {
         SchemaCache {
             cache: HashMap::new(),
-            ccsr_client: ccsr::Client::new(&schema_registry),
+            ccsr_client: schema_registry.build(),
             reader_fingerprint,
         }
     }
@@ -785,13 +785,13 @@ impl SchemaCache {
     /// Looks up the writer schema for ID. If the schema is literally identical
     /// to the reader schema, as determined by the reader schema fingerprint
     /// that this schema cache was initialized with, returns None.
-    fn get(&mut self, id: i32, reader_schema: &Schema) -> Result<Option<&Schema>> {
+    async fn get(&mut self, id: i32, reader_schema: &Schema) -> Result<Option<&Schema>> {
         match self.cache.entry(id) {
             Entry::Occupied(o) => Ok(o.into_mut().as_ref()),
             Entry::Vacant(v) => {
                 // TODO(benesch): make this asynchronous, to avoid blocking the
                 // Timely thread on this network request.
-                let res = self.ccsr_client.get_schema_by_id(id)?;
+                let res = self.ccsr_client.get_schema_by_id(id).await?;
                 let schema = parse_schema(&res.raw)?;
                 if schema.fingerprint::<Sha256>().bytes == self.reader_fingerprint.bytes {
                     Ok(v.insert(None).as_ref())

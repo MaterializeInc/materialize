@@ -354,6 +354,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -659,6 +660,7 @@ name = "dataflow"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "avro",
  "aws-util",
  "bincode",
