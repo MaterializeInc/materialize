@@ -80,6 +80,14 @@ production readiness.
   git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
+- [ ] On **master**:
+  - Update the version field in
+    [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) to `vNEXT-dev`.
+    For example, if releasing v0.1.2, bump the version on master to `v0.1.3-dev`.
+  - Run `cargo check` (or any other build command) to ensure that that `Cargo.lock` file
+    is correct.
+
+
 ### Test the release candidate
 
 All of these can be run in parallel.
@@ -168,10 +176,6 @@ All of these can be run in parallel.
 ### Update the master branch for the next version
 
 - [ ] On **master**, update the various files that must be up to date:
-
-  - [ ] version field in
-    [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) to `vNEXT-dev`.
-    For example, if releasing v0.1.2, bump the version on master to `v0.1.3-dev`.
 
   - [ ] Update the [`LICENSE`](/LICENSE) file with the changes from the
     release branch, so that it reflects the latest release of Materialize.
