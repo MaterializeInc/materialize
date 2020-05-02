@@ -69,6 +69,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
         [
             repo.rd.xcargo(),
             "deb",
+            f"--variant={package}",
             "--no-build",
             "--no-strip",
             "--deb-version",
