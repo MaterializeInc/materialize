@@ -460,6 +460,19 @@ class ResolvedImage:
         """
         spawn.runv(["docker", "push", self.spec()])
 
+    def pushed(self) -> bool:
+        """Check whether the image is pushed to Docker Hub.
+
+        Note that this operation requires a rather slow network request.
+        """
+        proc = subprocess.run(
+            ["docker", "manifest", "inspect", self.spec()],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+        )
+        return proc.returncode == 0
+
     def run(self, args: List[str] = []) -> None:
         """Run a command in the image.
 
@@ -557,7 +570,7 @@ class DependencySet:
                 d, (self.dependencies[d0] for d0 in d.depends_on)
             )
 
-    def acquire(self, force_build: bool = False, push: bool = False) -> None:
+    def acquire(self, force_build: bool = False) -> None:
         """Download or build all of the images in the dependency set.
 
         Args:
@@ -579,8 +592,6 @@ class DependencySet:
                 else:
                     print(f"==> Acquiring {spec}")
                     acquired_from = d.acquire()
-                    if push and d.publish and acquired_from == AcquiredFrom.LOCAL_BUILD:
-                        d.push()
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self.dependencies.values())
