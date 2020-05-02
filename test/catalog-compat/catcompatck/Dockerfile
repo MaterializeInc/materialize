@@ -12,7 +12,7 @@ ARG BUILDKITE_BUILD_NUMBER
 FROM materialize/materialized:v0.1.0 AS golden
 MZFROM materialized AS edge
 MZFROM testdrive AS testdrive
-FROM ubuntu:bionic
+FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get install -y curl postgresql-client-10 wait-for-it
 
