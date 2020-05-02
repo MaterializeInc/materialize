@@ -488,7 +488,7 @@ pub async fn create_state(
             });
         }
 
-        let ident = match ccsr::tls::Identity::from_pkcs12_der(&keystore_buf, &keystore_pass) {
+        let ident = match ccsr::tls::Identity::from_pkcs12_der(keystore_buf, keystore_pass) {
             Ok(i) => i,
             Err(e) => {
                 return Err(Error::General {

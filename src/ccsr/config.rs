@@ -11,7 +11,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
-use crate::tls::{CertDetails, Certificate, Identity};
+use crate::tls::{Certificate, Identity};
 
 /// Configuration for a `Client`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -50,16 +50,12 @@ impl ClientConfig {
     pub fn build(self) -> Client {
         let mut builder = reqwest::Client::builder();
 
-        for root_cert in &self.root_certs {
-            builder = builder.add_root_certificate(root_cert.clone().into());
+        for root_cert in self.root_certs {
+            builder = builder.add_root_certificate(root_cert.into());
         }
 
-        if let Some(ident) = &self.identity {
-            match ident.cert {
-                CertDetails::Pem(_) => builder = builder.use_rustls_tls(),
-                CertDetails::Der(_, _) => builder = builder.use_native_tls(),
-            }
-            builder = builder.identity(ident.clone().into());
+        if let Some(ident) = self.identity {
+            builder = builder.identity(ident.into());
         }
 
         let inner = builder
