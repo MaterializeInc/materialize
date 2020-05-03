@@ -75,7 +75,7 @@ where
     let envelope = envelope.clone();
     pass_through(stream, "AvroValues", Pipeline).flat_map(move |((value, index), r, d)| {
         let diffs = match envelope {
-            Envelope::None => extract_row(value, false, index.map(Datum::from)).map(|r| DiffPair {
+            Envelope::None => extract_row(value, index.map(Datum::from)).map(|r| DiffPair {
                 before: None,
                 after: r,
             }),
