@@ -21,7 +21,7 @@ protobuf = "2.8.1"
 protoc = "2.8.1"
 rand = "0.7.3"
 rand_distr = "0.2.2"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", branch = "fast-cgrp", features = ["cmake-build", "libz-static"] }
 structopt = "0.3.14"
 thiserror = "1.0.15"
 tokio = { version = "0.2.19", features = ["full"] }

@@ -29,7 +29,7 @@ tokio-postgres = { version = "0.5.3", features = ["with-chrono-0_4", "with-serde
 protobuf = "2.8"
 protoc = "2.8.0"
 rand = "0.7.3"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", branch = "fast-cgrp", features = ["cmake-build", "libz-static"] }
 regex = "1"
 repr = { path = "../repr" }
 reqwest = { version = "0.10.4", features = ["native-tls-vendored"] }

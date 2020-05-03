@@ -30,7 +30,7 @@ ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 repr = { path = "../repr" }
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", branch = "fast-cgrp", features = ["cmake-build", "libz-static"] }
 regex = "1.3.4"
 rusoto_core = "0.43.0"
 rusoto_credential = "0.43.0"
