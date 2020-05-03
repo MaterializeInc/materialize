@@ -21,7 +21,7 @@ use lazy_static::lazy_static;
 use log::{debug, trace};
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_int_counter};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::time::{self, Duration};
 use tokio_util::codec::Framed;
 
@@ -31,11 +31,11 @@ use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::{Session, Statement};
 
-use crate::codec::Codec;
+use crate::codec::{self, Codec};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::{
-    self, BackendMessage, EncryptionType, ErrorSeverity, FrontendMessage, NoticeSeverity, VERSIONS,
-    VERSION_3,
+    self, BackendMessage, ErrorSeverity, FrontendMessage, FrontendStartupMessage, NoticeSeverity,
+    VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
 
@@ -77,8 +77,8 @@ lazy_static! {
 
 /// Handles an incoming pgwire connection.
 pub async fn serve<A>(
-    conn: A,
-    cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
+    mut conn: A,
+    mut cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     gather_metrics: bool,
 ) -> Result<(), failure::Error>
 where
@@ -89,31 +89,53 @@ where
         static ref CONN_SECRETS: SecretManager = SecretManager::new();
     }
 
-    let conn_id = match CONN_ID_ALLOCATOR.alloc() {
-        Ok(id) => id,
-        Err(IdExhaustionError) => {
-            bail!("maximum number of connections reached");
+    loop {
+        match codec::decode_startup(&mut conn).await? {
+            FrontendStartupMessage::Startup { version, params } => {
+                let conn_id = match CONN_ID_ALLOCATOR.alloc() {
+                    Ok(id) => id,
+                    Err(IdExhaustionError) => {
+                        bail!("maximum number of connections reached");
+                    }
+                };
+                CONN_SECRETS.generate(conn_id);
+
+                let mut machine = StateMachine {
+                    conn: &mut Framed::new(conn, Codec::new()).buffer(32),
+                    conn_id,
+                    secret_key: CONN_SECRETS.get(conn_id).unwrap(),
+                    cmdq_tx,
+                    gather_metrics,
+                };
+                let res = machine.start(Session::default(), version, params).await;
+
+                CONN_ID_ALLOCATOR.free(conn_id);
+                CONN_SECRETS.free(conn_id);
+                break Ok(res?);
+            }
+
+            FrontendStartupMessage::CancelRequest {
+                conn_id,
+                secret_key,
+            } => {
+                if CONN_SECRETS.verify(conn_id, secret_key) {
+                    cmdq_tx
+                        .send(coord::Command::CancelRequest { conn_id })
+                        .await?;
+                }
+                // For security, the client is not told whether the cancel
+                // request succeeds or fails.
+                break Ok(());
+            }
+
+            FrontendStartupMessage::GssEncRequest => conn.write_all(&[b'N']).await?,
+            FrontendStartupMessage::SslRequest => conn.write_all(&[b'N']).await?,
         }
-    };
-    CONN_SECRETS.generate(conn_id);
-
-    let mut machine = StateMachine {
-        conn: &mut Framed::new(conn, Codec::new()).buffer(32),
-        conn_id,
-        conn_secrets: CONN_SECRETS.clone(),
-        cmdq_tx,
-        gather_metrics,
-    };
-    let res = machine.start(Session::default()).await;
-
-    CONN_ID_ALLOCATOR.free(conn_id);
-    CONN_SECRETS.free(conn_id);
-    Ok(res?)
+    }
 }
 
 #[derive(Debug)]
 enum State {
-    Startup(Session),
     Ready(Session),
     Drain(Session),
     Done,
@@ -128,7 +150,7 @@ impl State {
 pub struct StateMachine<'a, A> {
     conn: &'a mut sink::Buffer<Framed<A, Codec>, BackendMessage>,
     conn_id: u32,
-    conn_secrets: SecretManager,
+    secret_key: u32,
     cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     gather_metrics: bool,
 }
@@ -137,41 +159,19 @@ impl<'a, A> StateMachine<'a, A>
 where
     A: AsyncRead + AsyncWrite + Unpin,
 {
-    async fn start(&mut self, session: Session) -> Result<(), comm::Error> {
-        let mut state = State::Startup(session);
+    async fn start(
+        &mut self,
+        session: Session,
+        version: i32,
+        params: Vec<(String, String)>,
+    ) -> Result<(), comm::Error> {
+        let mut state = self.startup(session, version, params).await?;
 
         loop {
             state = match state.take() {
-                State::Startup(session) => self.advance_startup(session).await?,
                 State::Ready(session) => self.advance_ready(session).await?,
                 State::Drain(session) => self.advance_drain(session).await?,
                 State::Done => return Ok(()),
-            };
-            if let State::Startup(_) = state {
-                // If we haven't left the startup state, we need to tell the
-                // decoder to expect another startup message, as startup
-                // messages don't have a message type header.
-                self.conn.get_mut().codec_mut().reset_decode_state();
-            }
-        }
-    }
-
-    async fn advance_startup(&mut self, session: Session) -> Result<State, comm::Error> {
-        match self.recv().await? {
-            Some(FrontendMessage::Startup { version, params }) => {
-                self.startup(session, version, params).await
-            }
-            Some(FrontendMessage::CancelRequest {
-                conn_id,
-                secret_key,
-            }) => self.cancel_request(conn_id, secret_key).await,
-            Some(FrontendMessage::GssEncRequest) | Some(FrontendMessage::SslRequest) => {
-                self.encryption_request(session).await
-            }
-            None => Ok(State::Done),
-            _ => {
-                self.fatal(SqlState::PROTOCOL_VIOLATION, "invalid startup message flow")
-                    .await
             }
         }
     }
@@ -224,15 +224,10 @@ where
             Some(FrontendMessage::Sync) => self.sync(session).await?,
             Some(FrontendMessage::Terminate) => State::Done,
             None => State::Done,
-            _ => {
-                self.fatal(SqlState::PROTOCOL_VIOLATION, "invalid ready message flow")
-                    .await?
-            }
         };
 
         if self.gather_metrics {
             let status = match next_state {
-                State::Startup(_) => unreachable!(),
                 State::Ready(_) | State::Done => "success",
                 State::Drain(_) => "error",
             };
@@ -321,34 +316,12 @@ where
         );
         messages.push(BackendMessage::BackendKeyData {
             conn_id: self.conn_id,
-            secret_key: self.conn_secrets.get(self.conn_id).unwrap(),
+            secret_key: self.secret_key,
         });
         messages.extend(notices);
         messages.push(BackendMessage::ReadyForQuery(session.transaction().into()));
         self.send_all(messages).await?;
         self.flush(session).await
-    }
-
-    async fn cancel_request(
-        &mut self,
-        conn_id: u32,
-        secret_key: u32,
-    ) -> Result<State, comm::Error> {
-        if self.conn_secrets.verify(conn_id, secret_key) {
-            self.cmdq_tx
-                .send(coord::Command::CancelRequest { conn_id })
-                .await?;
-        }
-        // For security, the client is not told whether the cancel
-        // request succeeds or fails.
-        Ok(State::Done)
-    }
-
-    async fn encryption_request(&mut self, session: Session) -> Result<State, comm::Error> {
-        self.send(BackendMessage::EncryptionResponse(EncryptionType::None))
-            .await?;
-        self.conn.flush().await?;
-        Ok(State::Startup(session))
     }
 
     async fn one_query(&mut self, session: Session, stmt: Statement) -> Result<State, comm::Error> {
@@ -456,7 +429,6 @@ where
         };
         for stmt in stmts {
             match self.one_query(session, stmt).await? {
-                State::Startup(_) => unreachable!(),
                 State::Ready(s) => session = s,
                 State::Drain(s) => return self.sync(s).await,
                 State::Done => return Ok(State::Done),
