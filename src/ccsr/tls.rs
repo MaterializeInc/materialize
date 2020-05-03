@@ -16,6 +16,8 @@ use openssl::x509::X509;
 use serde::{Deserialize, Serialize};
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
+///
+/// [Serde]: serde
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Identity {
     der: Vec<u8>,
@@ -64,6 +66,8 @@ impl Into<reqwest::Identity> for Identity {
 }
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Certificate`].
+///
+/// [Serde]: serde
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Certificate {
     der: Vec<u8>,
