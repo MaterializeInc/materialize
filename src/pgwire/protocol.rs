@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
-use failure::bail;
 use futures::sink::{self, SinkExt};
 use futures::stream::{StreamExt, TryStreamExt};
 use itertools::izip;
@@ -21,7 +20,7 @@ use lazy_static::lazy_static;
 use log::{debug, trace};
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_int_counter};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 use tokio_util::codec::Framed;
 
@@ -31,13 +30,10 @@ use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::{Session, Statement};
 
-use crate::codec::{self, Codec};
-use crate::id_alloc::{IdAllocator, IdExhaustionError};
+use crate::codec::Codec;
 use crate::message::{
-    self, BackendMessage, ErrorSeverity, FrontendMessage, FrontendStartupMessage, NoticeSeverity,
-    VERSIONS, VERSION_3,
+    self, BackendMessage, ErrorSeverity, FrontendMessage, NoticeSeverity, VERSIONS, VERSION_3,
 };
-use crate::secrets::SecretManager;
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -75,65 +71,6 @@ lazy_static! {
     .unwrap();
 }
 
-/// Handles an incoming pgwire connection.
-pub async fn serve<A>(
-    mut conn: A,
-    mut cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
-    gather_metrics: bool,
-) -> Result<(), failure::Error>
-where
-    A: AsyncRead + AsyncWrite + Unpin,
-{
-    lazy_static! {
-        static ref CONN_ID_ALLOCATOR: IdAllocator = IdAllocator::new(1, 1 << 16);
-        static ref CONN_SECRETS: SecretManager = SecretManager::new();
-    }
-
-    loop {
-        match codec::decode_startup(&mut conn).await? {
-            FrontendStartupMessage::Startup { version, params } => {
-                let conn_id = match CONN_ID_ALLOCATOR.alloc() {
-                    Ok(id) => id,
-                    Err(IdExhaustionError) => {
-                        bail!("maximum number of connections reached");
-                    }
-                };
-                CONN_SECRETS.generate(conn_id);
-
-                let mut machine = StateMachine {
-                    conn: &mut Framed::new(conn, Codec::new()).buffer(32),
-                    conn_id,
-                    secret_key: CONN_SECRETS.get(conn_id).unwrap(),
-                    cmdq_tx,
-                    gather_metrics,
-                };
-                let res = machine.start(Session::default(), version, params).await;
-
-                CONN_ID_ALLOCATOR.free(conn_id);
-                CONN_SECRETS.free(conn_id);
-                break Ok(res?);
-            }
-
-            FrontendStartupMessage::CancelRequest {
-                conn_id,
-                secret_key,
-            } => {
-                if CONN_SECRETS.verify(conn_id, secret_key) {
-                    cmdq_tx
-                        .send(coord::Command::CancelRequest { conn_id })
-                        .await?;
-                }
-                // For security, the client is not told whether the cancel
-                // request succeeds or fails.
-                break Ok(());
-            }
-
-            FrontendStartupMessage::GssEncRequest => conn.write_all(&[b'N']).await?,
-            FrontendStartupMessage::SslRequest => conn.write_all(&[b'N']).await?,
-        }
-    }
-}
-
 #[derive(Debug)]
 enum State {
     Ready(Session),
@@ -148,18 +85,18 @@ impl State {
 }
 
 pub struct StateMachine<'a, A> {
-    conn: &'a mut sink::Buffer<Framed<A, Codec>, BackendMessage>,
-    conn_id: u32,
-    secret_key: u32,
-    cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
-    gather_metrics: bool,
+    pub conn: &'a mut sink::Buffer<Framed<A, Codec>, BackendMessage>,
+    pub conn_id: u32,
+    pub secret_key: u32,
+    pub cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
+    pub gather_metrics: bool,
 }
 
 impl<'a, A> StateMachine<'a, A>
 where
     A: AsyncRead + AsyncWrite + Unpin,
 {
-    async fn start(
+    pub async fn start(
         &mut self,
         session: Session,
         version: i32,

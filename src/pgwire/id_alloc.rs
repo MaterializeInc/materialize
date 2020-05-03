@@ -10,7 +10,7 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 /// Manages allocation of u32 IDs.
 ///
@@ -18,10 +18,10 @@ use std::sync::{Arc, Mutex};
 /// efficient to use a compressed bitmap, like https://roaringbitmap.org or
 /// the hibitset crate, but neither presently supports a fast "find first zero"
 /// operation.
-#[derive(Debug, Clone)]
-pub struct IdAllocator(Arc<Mutex<IdAllocatorInner>>);
+#[derive(Debug)]
+pub struct IdAllocator(Mutex<IdAllocatorInner>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct IdAllocatorInner {
     next: u32,
     max: u32,
@@ -32,11 +32,11 @@ impl IdAllocator {
     /// Creates a new `IdAllocator` that will assign IDs between `min` and
     /// `max`, both inclusive.
     pub fn new(min: u32, max: u32) -> IdAllocator {
-        IdAllocator(Arc::new(Mutex::new(IdAllocatorInner {
+        IdAllocator(Mutex::new(IdAllocatorInner {
             next: min,
             max,
             free: VecDeque::new(),
-        })))
+        }))
     }
 
     /// Allocates a new ID.

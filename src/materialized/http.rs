@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
+use std::sync::Weak;
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
@@ -46,28 +47,57 @@ pub fn match_handshake(buf: &[u8]) -> bool {
     METHODS.contains(&buf)
 }
 
-pub async fn handle_connection<A: 'static + AsyncRead + AsyncWrite + Unpin>(
-    a: A,
-    cmd_tx: UnboundedSender<coord::Command>,
+pub struct Server {
+    cmd_tx: Weak<UnboundedSender<coord::Command>>,
     gather_metrics: bool,
     start_time: Instant,
-) -> Result<(), failure::Error> {
-    let svc = service::service_fn(move |req: Request<Body>| {
-        let cmd_tx = cmd_tx.clone();
-        async move {
-            match (req.method(), req.uri().path()) {
-                (&Method::GET, "/") => handle_home(req).await,
-                (&Method::GET, "/metrics") => {
-                    handle_prometheus(req, gather_metrics, start_time).await
-                }
-                (&Method::GET, "/status") => handle_status(req, start_time).await,
-                (&Method::GET, "/internal/catalog") => handle_internal_catalog(req, cmd_tx).await,
-                _ => handle_unknown(req).await,
-            }
+}
+
+impl Server {
+    pub fn new(
+        cmd_tx: Weak<UnboundedSender<coord::Command>>,
+        gather_metrics: bool,
+        start_time: Instant,
+    ) -> Server {
+        Server {
+            cmd_tx,
+            gather_metrics,
+            start_time,
         }
-    });
-    let http = hyper::server::conn::Http::new();
-    http.serve_connection(a, svc).err_into().await
+    }
+
+    pub async fn handle_connection<A>(&self, conn: A) -> Result<(), failure::Error>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + 'static,
+    {
+        let cmd_tx = match self.cmd_tx.upgrade() {
+            Some(cmd_tx) => cmd_tx,
+            None => {
+                // The server is terminating. Drop the connection on the floor.
+                return Ok(());
+            }
+        };
+        let svc = service::service_fn(move |req: Request<Body>| {
+            let cmd_tx = (*cmd_tx).clone();
+            let gather_metrics = self.gather_metrics;
+            let start_time = self.start_time;
+            async move {
+                match (req.method(), req.uri().path()) {
+                    (&Method::GET, "/") => handle_home(req).await,
+                    (&Method::GET, "/metrics") => {
+                        handle_prometheus(req, gather_metrics, start_time).await
+                    }
+                    (&Method::GET, "/status") => handle_status(req, start_time).await,
+                    (&Method::GET, "/internal/catalog") => {
+                        handle_internal_catalog(req, cmd_tx).await
+                    }
+                    _ => handle_unknown(req).await,
+                }
+            }
+        });
+        let http = hyper::server::conn::Http::new();
+        http.serve_connection(conn, svc).err_into().await
+    }
 }
 
 async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error> {

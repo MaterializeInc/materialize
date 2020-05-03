@@ -30,23 +30,22 @@ use std::time::{Duration, Instant};
 
 use compile_time_run::run_command_str;
 use failure::format_err;
-use futures::channel::mpsc::{self, UnboundedSender};
-use futures::future::TryFutureExt;
+use futures::channel::mpsc;
 use futures::stream::StreamExt;
 use log::error;
-use tokio::io::{self, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io;
+use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
-use ore::future::OreTryFutureExt;
-use ore::netio;
-use ore::netio::{SniffedStream, SniffingStream};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
+use crate::mux::Mux;
+
 mod http;
+mod mux;
 
 /// The version of the crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -132,52 +131,6 @@ impl Config {
     }
 }
 
-async fn handle_connection(
-    conn: TcpStream,
-    switchboard: Switchboard<SniffedStream<TcpStream>>,
-    cmd_tx: UnboundedSender<coord::Command>,
-    gather_metrics: bool,
-    start_time: Instant,
-) {
-    // Sniff out what protocol we've received. Choosing how many bytes to sniff
-    // is a delicate business. Read too many bytes and you'll stall out
-    // protocols with small handshakes, like pgwire. Read too few bytes and
-    // you won't be able to tell what protocol you have. For now, eight bytes
-    // is the magic number, but this may need to change if we learn to speak
-    // new protocols.
-    let mut ss = SniffingStream::new(conn);
-    let mut buf = [0; 8];
-    let nread = match netio::read_exact_or_eof(&mut ss, &mut buf).await {
-        Ok(nread) => nread,
-        Err(err) => {
-            error!("error handling request: {}", err);
-            return;
-        }
-    };
-    let buf = &buf[..nread];
-
-    let res = if pgwire::match_handshake(buf) {
-        pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).await
-    } else if http::match_handshake(buf) {
-        http::handle_connection(ss.into_sniffed(), cmd_tx, gather_metrics, start_time).await
-    } else if comm::protocol::match_handshake(buf) {
-        switchboard
-            .handle_connection(ss.into_sniffed())
-            .err_into()
-            .await
-    } else {
-        log::warn!("unknown protocol connection!");
-        ss.into_sniffed()
-            .write_all(b"unknown protocol\n")
-            .discard()
-            .err_into()
-            .await
-    };
-    if let Err(err) = res {
-        error!("error handling request: {}", err)
-    }
-}
-
 /// Start a `materialized` server.
 pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     let start_time = Instant::now();
@@ -216,10 +169,19 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     );
 
     let switchboard = Switchboard::new(config.addresses, config.process, executor.clone());
-    let gather_metrics = config.gather_metrics;
     runtime.spawn({
-        let switchboard = switchboard.clone();
-        let cmd_tx = Arc::downgrade(&cmd_tx);
+        let mux = {
+            let mut mux = Mux::new();
+            mux.add_handler(switchboard.clone());
+            if is_primary {
+                // The primary is responsible for pgwire and HTTP traffic in
+                // addition to switchboard traffic.
+                let cmd_tx = Arc::downgrade(&cmd_tx);
+                mux.add_handler(pgwire::Server::new(cmd_tx.clone(), config.gather_metrics));
+                mux.add_handler(http::Server::new(cmd_tx, config.gather_metrics, start_time));
+            }
+            Arc::new(mux)
+        };
         async move {
             let mut incoming = listener.incoming();
             while let Some(conn) = incoming.next().await {
@@ -242,26 +204,8 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                 //
                 // [0]: https://news.ycombinator.com/item?id=10608356
                 conn.set_nodelay(true).expect("set_nodelay failed");
-                if is_primary {
-                    if let Some(cmd_tx) = cmd_tx.upgrade() {
-                        tokio::spawn(handle_connection(
-                            conn,
-                            switchboard.clone(),
-                            (*cmd_tx).clone(),
-                            gather_metrics,
-                            start_time,
-                        ));
-                        continue;
-                    }
-                }
-                // When not the primary, or when shutting down, we only need to
-                // route switchboard traffic.
-                let ss = SniffingStream::new(conn).into_sniffed();
-                tokio::spawn(
-                    switchboard
-                        .handle_connection(ss)
-                        .map_err(|err| error!("error handling connection: {}", err)),
-                );
+                let mux = mux.clone();
+                tokio::spawn(async move { mux.handle_connection(conn).await });
             }
         }
     });
