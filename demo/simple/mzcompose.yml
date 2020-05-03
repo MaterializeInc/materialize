@@ -70,5 +70,5 @@ services:
     depends_on:
       - materialized
   inspect:
-    image: ubuntu:bionic
+    image: ubuntu:bionic-20200403
     command: "true"
