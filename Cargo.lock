@@ -1474,9 +1474,9 @@ dependencies = [
 
 [[package]]
 name = "krb5-src"
-version = "0.2.0+1.18.1"
+version = "0.2.1+1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "274984121a517e7eb6d0402a2335dce56b9b4bc27b08a2b3cad8b7ff275093b8"
+checksum = "921e9fb269b7852b030f22435963c6ea15cac68d5136ff1f2f55924eb713b4a8"
 dependencies = [
  "duct",
  "openssl-sys",
@@ -1612,6 +1612,7 @@ dependencies = [
  "hyper",
  "itertools",
  "jemallocator",
+ "krb5-src",
  "lazy_static",
  "log",
  "once_cell",
@@ -3342,6 +3343,7 @@ dependencies = [
  "getopts",
  "interchange",
  "itertools",
+ "krb5-src",
  "lazy_static",
  "md-5",
  "ore",

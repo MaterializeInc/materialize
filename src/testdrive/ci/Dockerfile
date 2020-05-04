@@ -13,7 +13,7 @@ RUN apt-get update && apt-get -qy install \
     ca-certificates \
     wait-for-it
 
-COPY testdrive /usr/local/bin
+COPY kdestroy kinit testdrive /usr/local/bin/
 
 WORKDIR /workdir
 
