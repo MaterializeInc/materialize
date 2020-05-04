@@ -1266,15 +1266,24 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
                     // https://github.com/materializeinc/materialize/issues/1991
                     let access_key = match with_options.remove("access_key") {
-                        Some(Value::SingleQuotedString(access_key)) => access_key,
-                        _ => bail!("Kinesis sources require an `access_key` option"),
+                        Some(Value::SingleQuotedString(access_key)) => Some(access_key),
+                        _ => None,
                     };
                     let secret_access_key = match with_options.remove("secret_access_key") {
-                        Some(Value::SingleQuotedString(secret_access_key)) => secret_access_key,
-                        _ => bail!("Kinesis sources require a `secret_access_key` option"),
+                        Some(Value::SingleQuotedString(secret_access_key)) => {
+                            Some(secret_access_key)
+                        }
+                        _ => None,
                     };
                     let token = match with_options.remove("token") {
                         Some(Value::SingleQuotedString(token)) => Some(token),
+                        _ => None,
+                    };
+                    let valid_for = match with_options.remove("valid_for") {
+                        Some(Value::Number(n)) => match n.parse::<i64>() {
+                            Ok(n) => Some(n),
+                            _ => bail!("valid_for must be an integer"),
+                        },
                         _ => None,
                     };
 
@@ -1284,6 +1293,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         access_key,
                         secret_access_key,
                         token,
+                        valid_for,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)

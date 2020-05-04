@@ -15,8 +15,7 @@ use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, warn};
 use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGauge, IntGaugeVec};
-use rusoto_core::{HttpClient, RusotoError};
-use rusoto_credential::StaticProvider;
+use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 
 use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
@@ -236,19 +235,29 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let http_client = HttpClient::new()?;
-    let provider = StaticProvider::new(c.access_key, c.secret_access_key, c.token, None);
-    let client = KinesisClient::new_with(http_client, provider, c.region);
+    let kinesis_client = aws_util::kinesis::kinesis_client(
+        c.region.clone(),
+        c.access_key.clone(),
+        c.secret_access_key.clone(),
+        c.token,
+        c.valid_for.clone(),
+    )
+    .await?;
 
-    let shard_set: HashSet<String> = get_shard_ids(&client, &c.stream_name).await?;
+    let shard_set: HashSet<String> = get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
     for shard_id in &shard_set {
         shard_queue.push_back((
             shard_id.clone(),
-            get_shard_iterator(&client, &c.stream_name, shard_id).await?,
+            get_shard_iterator(&kinesis_client, &c.stream_name, shard_id).await?,
         ))
     }
-    Ok((client, c.stream_name.clone(), shard_set, shard_queue))
+    Ok((
+        kinesis_client,
+        c.stream_name.clone(),
+        shard_set,
+        shard_queue,
+    ))
 }
 
 fn downgrade_capability(cap: &mut Capability<u64>, name: &str) {

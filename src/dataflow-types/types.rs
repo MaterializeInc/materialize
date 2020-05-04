@@ -524,9 +524,10 @@ pub struct KafkaSourceConnector {
 pub struct KinesisSourceConnector {
     pub stream_name: String,
     pub region: Region,
-    pub access_key: String,
-    pub secret_access_key: String,
+    pub access_key: Option<String>,
+    pub secret_access_key: Option<String>,
     pub token: Option<String>,
+    pub valid_for: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
