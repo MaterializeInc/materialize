@@ -302,7 +302,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         );
 
         // Test that catalog recovery correctly populates `mz_catalog_names`
-        // This test is racy, because the effects are not necessarily immediately.
+        // This test is racy, because the effects are not necessarily immediately visible.
         std::thread::sleep(std::time::Duration::from_secs(1));
         assert_eq!(
             client
