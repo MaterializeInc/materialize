@@ -11,6 +11,6 @@ FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get -qy install ca-certificates
 
-COPY materialized /usr/local/bin
+COPY kdestroy kinit materialized /usr/local/bin/
 
 ENTRYPOINT ["materialized", "--log-file=stderr"]

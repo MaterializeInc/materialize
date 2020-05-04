@@ -67,7 +67,7 @@ services:
       KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/broker.sasl.jaas.config
 
   materialized:
-    mzbuild: materialized-krb5
+    mzbuild: materialized
     command: --logging-granularity=10ms --data-directory=/share/mzdata -w1
     volumes:
       - secrets:/share/secrets
@@ -81,7 +81,7 @@ services:
       - materialized
 
   testdrive:
-    mzbuild: testdrive-krb5
+    mzbuild: testdrive
     entrypoint:
       - bash
       - -c
