@@ -22,7 +22,8 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
 
-use expr::{EvalError, GlobalId, ScalarExpr};
+use dataflow_types::DataflowError;
+use expr::{GlobalId, ScalarExpr};
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
@@ -35,14 +36,17 @@ type Diff = isize;
 // Local type definition to avoid the horror in signatures.
 pub type Arrangement<S, V> = Arranged<S, TraceValHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
 pub type ErrArrangement<S> =
-    Arranged<S, TraceKeyHandle<EvalError, <S as ScopeParent>::Timestamp, Diff>>;
+    Arranged<S, TraceKeyHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
 type ArrangementImport<S, V, T> = Arranged<
     S,
     TraceEnter<TraceFrontier<TraceValHandle<V, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
 type ErrArrangementImport<S, T> = Arranged<
     S,
-    TraceEnter<TraceFrontier<TraceKeyHandle<EvalError, T, Diff>>, <S as ScopeParent>::Timestamp>,
+    TraceEnter<
+        TraceFrontier<TraceKeyHandle<DataflowError, T, Diff>>,
+        <S as ScopeParent>::Timestamp,
+    >,
 >;
 
 /// Dataflow-local collections and arrangements.
@@ -62,7 +66,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Dataflow local collections.
-    pub collections: HashMap<P, (Collection<S, V, Diff>, Collection<S, EvalError, Diff>)>,
+    pub collections: HashMap<P, (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
     /// Dataflow local arrangements.
     pub local: HashMap<P, BTreeMap<Vec<ScalarExpr>, (Arrangement<S, V>, ErrArrangement<S>)>>,
     /// Imported arrangements.
@@ -114,7 +118,7 @@ where
     pub fn collection(
         &self,
         relation_expr: &P,
-    ) -> Option<(Collection<S, V, Diff>, Collection<S, EvalError, Diff>)> {
+    ) -> Option<(Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)> {
         if let Some(collection) = self.collections.get(relation_expr) {
             Some(collection.clone())
         } else if let Some(local) = self.local.get(relation_expr) {

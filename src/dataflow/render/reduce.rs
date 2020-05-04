@@ -18,8 +18,8 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use dataflow_types::Timestamp;
-use expr::{AggregateExpr, AggregateFunc, EvalError, RelationExpr, ScalarExpr};
+use dataflow_types::{DataflowError, Timestamp};
+use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
@@ -81,7 +81,7 @@ where
                         let key = Row::try_pack(
                             group_key.iter().map(|i| i.eval(&datums, &temp_storage)),
                         )?;
-                        Ok::<_, EvalError>((key, ()))
+                        Ok::<_, DataflowError>((key, ()))
                     }
                 });
                 (
@@ -178,11 +178,11 @@ where
 /// and other aggregations that may be neither of those things. It also applies distinctness if required.
 fn build_aggregate_stage<G>(
     ok_input: Collection<G, Row>,
-    err_input: Collection<G, EvalError>,
+    err_input: Collection<G, DataflowError>,
     group_key: &[ScalarExpr],
     aggr: &AggregateExpr,
     prepend_key: bool,
-) -> (Arrangement<G, Row>, Collection<G, EvalError>)
+) -> (Arrangement<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -220,7 +220,7 @@ where
                                 match expr.eval(&datums, &temp_storage) {
                                     Ok(val) => key_packer.push(val),
                                     Err(e) => {
-                                        err_session.give((e, t.clone(), diff));
+                                        err_session.give((e.into(), t.clone(), diff));
                                         error_free = false;
                                     }
                                 }
@@ -241,7 +241,7 @@ where
                                             t.clone(),
                                             diff,
                                         ));
-                                        err_session.give((e, t, diff));
+                                        err_session.give((e.into(), t, diff));
                                     }
                                 }
                             }

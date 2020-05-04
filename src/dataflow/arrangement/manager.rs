@@ -19,8 +19,8 @@ use differential_dataflow::trace::implementations::spine_fueled_neu::Spine;
 use differential_dataflow::trace::TraceReader;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use dataflow_types::{Diff, Timestamp};
-use expr::{EvalError, GlobalId};
+use dataflow_types::{DataflowError, Diff, Timestamp};
+use expr::GlobalId;
 use repr::Row;
 
 pub type OrdKeySpine<K, T, R, O = usize> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R, O>>>;
@@ -28,7 +28,7 @@ pub type OrdValSpine<K, V, T, R, O = usize> = Spine<K, V, T, R, Rc<OrdValBatch<K
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
-pub type ErrsHandle = TraceKeyHandle<EvalError, Timestamp, Diff>;
+pub type ErrsHandle = TraceKeyHandle<DataflowError, Timestamp, Diff>;
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.

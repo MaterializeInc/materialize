@@ -77,3 +77,18 @@ city           state     zip     mz_line_no
 --------------------------------------------
 Rochester      NY        14618   2
 "New York"     NY        10004   3
+
+$ file-append path=deleting.csv
+city,state,zip
+Tucson,AZ,85719
+
+> CREATE SOURCE deleting_csv
+  FROM FILE '${testdrive.temp-dir}/deleting.csv'
+  FORMAT CSV WITH HEADER
+
+$ file-delete path=deleting.csv
+
+> CREATE INDEX i ON deleting_csv(city,state,zip)
+
+! SELECT * FROM deleting_csv
+Source error: File IO:

@@ -42,10 +42,10 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, Diff, ExternalSourceConnector, IndexDesc, PeekResponse, Timestamp,
-    Update,
+    Consistency, DataflowDesc, DataflowError, Diff, ExternalSourceConnector, IndexDesc,
+    PeekResponse, Timestamp, Update,
 };
-use expr::{EvalError, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
@@ -348,7 +348,7 @@ where
                 );
 
             let errs = self.inner.dataflow::<Timestamp, _, _>(|scope| {
-                Collection::<_, EvalError, isize>::empty(scope)
+                Collection::<_, DataflowError, isize>::empty(scope)
                     .arrange()
                     .trace
             });

@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use differential_dataflow::hashable::Hashable;
 use timely::dataflow::{
-    channels::pact::{Exchange, ParallelizationContract, Pipeline},
+    channels::pact::Exchange,
     channels::pushers::buffer::Session,
     channels::pushers::Counter as PushCounter,
     channels::pushers::Tee,
@@ -31,35 +31,12 @@ mod regex;
 
 use self::csv::csv;
 use self::regex::regex as regex_fn;
+use crate::operator::StreamExt;
 use ::avro::types::Value;
 use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
 
 use log::error;
 use std::iter;
-
-/// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
-/// and each time is the current Timely timestamp.
-fn pass_through<G, Data, P>(
-    stream: &Stream<G, Data>,
-    name: &str,
-    pact: P,
-) -> Stream<G, (Data, Timestamp, Diff)>
-where
-    G: Scope<Timestamp = Timestamp>,
-    Data: timely::Data,
-    P: ParallelizationContract<Timestamp, Data>,
-{
-    stream.unary(pact, name, move |_, _| {
-        move |input, output| {
-            input.for_each(|cap, data| {
-                let mut v = Vec::new();
-                data.swap(&mut v);
-                let mut session = output.session(&cap);
-                session.give_iterator(v.into_iter().map(|payload| (payload, *cap.time(), 1)));
-            });
-        }
-    })
-}
 
 pub fn decode_avro_values<G>(
     stream: &Stream<G, (Value, Option<i64>)>,
@@ -73,31 +50,33 @@ where
     // so that we can spread the decoding among all the workers.
     // See #2133
     let envelope = envelope.clone();
-    pass_through(stream, "AvroValues", Pipeline).flat_map(move |((value, index), r, d)| {
-        let diffs = match envelope {
-            Envelope::None => extract_row(value, index.map(Datum::from)).map(|r| DiffPair {
-                before: None,
-                after: r,
-            }),
-            Envelope::Debezium => extract_debezium_slow(value),
-            Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
-        }
-        .unwrap_or_else(|e| {
-            // TODO(#489): Handle this in a better way,
-            // once runtime error handling exists.
-            error!("Failed to extract avro row: {}", e);
-            DiffPair {
-                before: None,
-                after: None,
+    stream
+        .pass_through("AvroValues")
+        .flat_map(move |((value, index), r, d)| {
+            let diffs = match envelope {
+                Envelope::None => extract_row(value, index.map(Datum::from)).map(|r| DiffPair {
+                    before: None,
+                    after: r,
+                }),
+                Envelope::Debezium => extract_debezium_slow(value),
+                Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
             }
-        });
+            .unwrap_or_else(|e| {
+                // TODO(#489): Handle this in a better way,
+                // once runtime error handling exists.
+                error!("Failed to extract avro row: {}", e);
+                DiffPair {
+                    before: None,
+                    after: None,
+                }
+            });
 
-        diffs
-            .before
-            .into_iter()
-            .chain(diffs.after.into_iter())
-            .map(move |row| (row, r, d))
-    })
+            diffs
+                .before
+                .into_iter()
+                .chain(diffs.after.into_iter())
+                .map(move |row| (row, r, d))
+        })
 }
 
 pub type PushSession<'a, R> =
