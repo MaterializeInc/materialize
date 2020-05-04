@@ -312,6 +312,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(avro_ocf::build_verify(builtin).map_err(wrap_err)?)
                     }
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
+                    "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
                     "kafka-add-partitions" => {
                         Box::new(kafka::build_add_partitions(builtin).map_err(wrap_err)?)
                     }

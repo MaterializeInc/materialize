@@ -21,14 +21,20 @@ pub struct AppendAction {
     contents: String,
 }
 
-pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
+fn build_path(cmd: &mut BuiltinCommand) -> Result<String, String> {
     let path = cmd.args.string("path")?;
-    let contents = cmd.input.join("\n") + "\n";
-    cmd.args.done()?;
     if path.contains(path::MAIN_SEPARATOR) {
         // The goal isn't security, but preventing mistakes.
-        return Err("separators in paths are forbidden".into());
+        Err("separators in paths are forbidden".into())
+    } else {
+        Ok(path)
     }
+}
+
+pub fn build_append(mut cmd: BuiltinCommand) -> Result<AppendAction, String> {
+    let path = build_path(&mut cmd)?;
+    let contents = cmd.input.join("\n") + "\n";
+    cmd.args.done()?;
     Ok(AppendAction { path, contents })
 }
 
@@ -53,5 +59,30 @@ impl Action for AppendAction {
             .await
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+}
+
+pub struct DeleteAction {
+    path: String,
+}
+
+pub fn build_delete(mut cmd: BuiltinCommand) -> Result<DeleteAction, String> {
+    let path = build_path(&mut cmd)?;
+    cmd.args.done()?;
+    Ok(DeleteAction { path })
+}
+
+#[async_trait]
+impl Action for DeleteAction {
+    async fn undo(&self, _: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let path = state.temp_dir.path().join(&self.path);
+        println!("Deleting file {}", path.display());
+        tokio::fs::remove_file(&path)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
