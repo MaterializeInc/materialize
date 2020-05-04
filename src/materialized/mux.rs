@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
+
 use async_trait::async_trait;
 use futures::future::TryFutureExt;
 use log::error;
@@ -34,7 +36,7 @@ impl<A> Mux<A> {
 
     pub async fn handle_connection(&self, conn: A)
     where
-        A: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {
         // Sniff out what protocol we've received. Choosing how many bytes to
         // sniff is a delicate business. Read too many bytes and you'll stall
@@ -73,7 +75,7 @@ pub trait ConnectionHandler<A> {
 
     async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + Send + 'static;
+        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static;
 }
 
 #[async_trait]
@@ -84,7 +86,7 @@ impl<A> ConnectionHandler<A> for pgwire::Server {
 
     async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {
         self.handle_connection(conn).await
     }
@@ -98,7 +100,7 @@ impl<A> ConnectionHandler<A> for http::Server {
 
     async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {
         self.handle_connection(conn).await
     }
@@ -115,7 +117,7 @@ where
 
     async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {
         self.handle_connection(conn).err_into().await
     }

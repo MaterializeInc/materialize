@@ -132,6 +132,13 @@ fn run() -> Result<(), failure::Error> {
         "the address and port on which materialized will listen for connections",
         "ADDR:PORT",
     );
+    opts.optopt(
+        "",
+        "tls-cert",
+        "certificate file for TLS connections",
+        "PATH",
+    );
+    opts.optopt("", "tls-key", "private key for TLS connections", "PATH");
 
     // Storage options.
     opts.optopt(
@@ -218,6 +225,16 @@ fn run() -> Result<(), failure::Error> {
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
+    let tls = match (popts.opt_str("tls-cert"), popts.opt_str("tls-key")) {
+        (None, None) => None,
+        (None, Some(_)) | (Some(_), None) => {
+            bail!("--tls-cert and --tls-key must be specified together");
+        }
+        (Some(cert), Some(key)) => Some(materialized::TlsConfig {
+            cert: cert.into(),
+            key: key.into(),
+        }),
+    };
 
     // Configure storage.
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
@@ -290,6 +307,7 @@ environment:{}",
         persist_ts,
         gather_metrics,
         listen_addr,
+        tls,
         data_directory: Some(data_directory),
         symbiosis_url,
     })?;

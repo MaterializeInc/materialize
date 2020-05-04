@@ -33,6 +33,7 @@ use failure::format_err;
 use futures::channel::mpsc;
 use futures::stream::StreamExt;
 use log::error;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio::io;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
@@ -80,6 +81,7 @@ pub fn version() -> String {
 }
 
 /// Configuration for a `materialized` server.
+#[derive(Debug, Clone)]
 pub struct Config {
     // === Timely and Differential worker options. ===
     /// The number of Timely worker threads that this process should host.
@@ -122,6 +124,8 @@ pub struct Config {
     /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
     /// where <addr_port> is the address of this process's entry in `addresses`.
     pub listen_addr: Option<SocketAddr>,
+    /// TLS encryption configuration.
+    pub tls: Option<TlsConfig>,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
@@ -136,6 +140,24 @@ impl Config {
     /// by the configuration.
     pub fn num_timely_workers(&self) -> usize {
         self.threads * self.addresses.len()
+    }
+}
+
+/// Configures TLS encryption for connections.
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    /// The path to the TLS certificate.
+    pub cert: PathBuf,
+    /// The path to the TLS key.
+    pub key: PathBuf,
+}
+
+impl TlsConfig {
+    fn acceptor(&self) -> Result<SslAcceptor, failure::Error> {
+        let mut builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+        builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
+        builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
+        Ok(builder.build())
     }
 }
 
@@ -185,7 +207,15 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                 // The primary is responsible for pgwire and HTTP traffic in
                 // addition to switchboard traffic.
                 let cmd_tx = Arc::downgrade(&cmd_tx);
-                mux.add_handler(pgwire::Server::new(cmd_tx.clone(), config.gather_metrics));
+                let tls = match config.tls {
+                    None => None,
+                    Some(tls_config) => Some(tls_config.acceptor()?),
+                };
+                mux.add_handler(pgwire::Server::new(
+                    tls,
+                    cmd_tx.clone(),
+                    config.gather_metrics,
+                ));
                 mux.add_handler(http::Server::new(cmd_tx, config.gather_metrics, start_time));
             }
             Arc::new(mux)
