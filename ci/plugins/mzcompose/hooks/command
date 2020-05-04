@@ -27,6 +27,9 @@ fi
 echo "--- :docker: Purging containers and volumes from previous builds"
 mzcompose --mz-quiet down --volumes
 
+echo "--- :docker: Rebuilding non-mzbuild containers"
+mzcompose --mz-quiet build
+
 # Start dependencies under a different heading so that the main heading is less
 # noisy.
 echo "--- :docker: Starting dependencies" >&2
