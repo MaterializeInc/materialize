@@ -77,6 +77,16 @@ steps:
           config: test/testdrive/mzcompose.ssl.yml
           run: testdrive
 
+  - id: kerberos
+    label: ":hotdog: kerberos"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/testdrive/krb5]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/krb5/mzcompose.krb5.yml
+          run: testdrive
+
   - id: testdrive-purgatory
     label: ":racing_car: testdrive purgatory"
     depends_on: build
