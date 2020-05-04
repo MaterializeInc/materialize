@@ -81,10 +81,10 @@ steps:
     label: ":hotdog: kerberos"
     depends_on: build
     timeout_in_minutes: 30
-    inputs: [test/testdrive/krb5]
+    inputs: [test/krb5/smoketest.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/krb5/mzcompose.krb5.yml
+          config: test/krb5/mzcompose.yml
           run: testdrive
 
   - id: testdrive-purgatory

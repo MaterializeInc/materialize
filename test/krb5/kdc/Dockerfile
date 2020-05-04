@@ -16,17 +16,16 @@ RUN apt-get update && apt-get install -y \
 
 COPY krb5.conf /etc/krb5.conf
 
-RUN mkdir -p /var/log/kerberos /etc/kdc /var/kerberos/krb5kdc /var/lib/secret \
-    && ln -s /etc/krb5.conf /etc/kdc/krb5.conf \
-    && kdb5_util -P confluent -r CI.MATERIALIZE.IO create -s \
-    && kadmin.local -w password -q "add_principal -randkey kafka/broker.krb5.local@CI.MATERIALIZE.IO" \
-    && kadmin.local -w password -q "add_principal -randkey zookeeper/zookeeper.krb5.local@CI.MATERIALIZE.IO" \
-    && kadmin.local -w password -q "add_principal -randkey testdrive@CI.MATERIALIZE.IO" \
-    && kadmin.local -w password -q "add_principal -randkey materialized@CI.MATERIALIZE.IO" \
-    && kadmin.local -w password -q "ktadd -k /var/lib/secret/broker.key -norandkey kafka/broker.krb5.local@CI.MATERIALIZE.IO " \
-    && kadmin.local -w password -q "ktadd -k /var/lib/secret/zookeeper.key -norandkey zookeeper/zookeeper.krb5.local@CI.MATERIALIZE.IO " \
-    && kadmin.local -w password -q "ktadd -k /var/lib/secret/testdrive.key -norandkey testdrive@CI.MATERIALIZE.IO " \
-    && kadmin.local -w password -q "ktadd -k /var/lib/secret/materialized.key -norandkey materialized@CI.MATERIALIZE.IO " \
+RUN mkdir /var/lib/secret \
+    && kdb5_util -P materialize -r CI.MATERIALIZE.IO create -s \
+    && kadmin.local -q "add_principal -randkey kafka/kafka@CI.MATERIALIZE.IO" \
+    && kadmin.local -q "add_principal -randkey zookeeper/zookeeper@CI.MATERIALIZE.IO" \
+    && kadmin.local -q "add_principal -randkey testdrive@CI.MATERIALIZE.IO" \
+    && kadmin.local -q "add_principal -randkey materialized@CI.MATERIALIZE.IO" \
+    && kadmin.local -q "ktadd -k /var/lib/secret/kafka.key -norandkey kafka/kafka@CI.MATERIALIZE.IO " \
+    && kadmin.local -q "ktadd -k /var/lib/secret/zookeeper.key -norandkey zookeeper/zookeeper@CI.MATERIALIZE.IO " \
+    && kadmin.local -q "ktadd -k /var/lib/secret/testdrive.key -norandkey testdrive@CI.MATERIALIZE.IO " \
+    && kadmin.local -q "ktadd -k /var/lib/secret/materialized.key -norandkey materialized@CI.MATERIALIZE.IO " \
     && chmod a+r /var/lib/secret/*
 
 CMD ["krb5kdc", "-n"]
