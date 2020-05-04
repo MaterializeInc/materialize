@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
 use protobuf::Message;
@@ -589,16 +588,12 @@ pub async fn create_state(
             Some(config.aws_credentials.aws_access_key_id().to_owned()),
             Some(config.aws_credentials.aws_secret_access_key().to_owned()),
             config.aws_credentials.token().clone(),
-            config
-                .aws_credentials
-                .expires_at()
-                .map(|expires_at| (expires_at - Utc::now()).num_seconds()),
         )
         .await
         .map_err(|e| Error::General {
-            ctx: "creating KinesisClient".into(),
+            ctx: "creating Kinesis client".into(),
             cause: Some(e.into()),
-            hints: vec![format!("region: {:#?}", config.aws_region)],
+            hints: vec![format!("region: {}", config.aws_region.name())],
         })?;
         (
             config.aws_region.clone(),

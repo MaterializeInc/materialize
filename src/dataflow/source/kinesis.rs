@@ -240,7 +240,6 @@ async fn create_state(
         c.access_key.clone(),
         c.secret_access_key.clone(),
         c.token,
-        c.valid_for.clone(),
     )
     .await?;
 

@@ -1282,14 +1282,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(_) => bail!("token must be a string"),
                         _ => None,
                     };
-                    let valid_for = match with_options.remove("valid_for") {
-                        Some(Value::Number(n)) => match n.parse::<i64>() {
-                            Ok(n) => Some(n),
-                            _ => bail!("valid_for must be an integer"),
-                        },
-                        Some(_) => bail!("valid_for must be an integer"),
-                        _ => None,
-                    };
 
                     let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                         stream_name,
@@ -1297,7 +1289,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         access_key,
                         secret_access_key,
                         token,
-                        valid_for,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)

@@ -1243,7 +1243,6 @@ impl Timestamper {
             kinc.access_key.clone(),
             kinc.secret_access_key.clone(),
             kinc.token.clone(),
-            kinc.valid_for.clone(),
         )) {
             Ok(kinesis_client) => {
                 let cached_shard_ids = match block_on(aws_util::kinesis::get_shard_ids(
