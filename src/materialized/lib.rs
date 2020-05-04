@@ -81,27 +81,7 @@ pub fn version() -> String {
 
 /// Configuration for a `materialized` server.
 pub struct Config {
-    /// The interval at which the internal Timely cluster should publish updates
-    /// about its state.
-    pub logging_granularity: Option<Duration>,
-    /// The interval at which sources should be timestamped.
-    pub timestamp_frequency: Duration,
-    /// The maximum size of a timestamp batch.
-    pub max_increment_ts_size: i64,
-    /// If set to true, records RT consistency information to the SQL lite store
-    /// and attempts to recover that information on startup
-    pub persist_ts: bool,
-    /// The historical window in which distinctions are maintained for arrangements.
-    ///
-    /// As arrangements accept new timestamps they may optionally collapse prior
-    /// timestamps to the same value, retaining their effect but removing their
-    /// distinction. A large value or `None` results in a large amount of historical
-    /// detail for arrangements; this increases the logical times at which they can
-    /// be accurately queried, but consumes more memory. A low value reduces the
-    /// amount of memory required but also risks not being able to use the arrangement
-    /// in a query that has other constraints on the timestamps used (e.g. when joined
-    /// with other arrangements).
-    pub logical_compaction_window: Option<Duration>,
+    // === Timely and Differential worker options. ===
     /// The number of Timely worker threads that this process should host.
     pub threads: usize,
     /// The ID of this process in the cluster. IDs must be contiguously
@@ -110,17 +90,45 @@ pub struct Config {
     /// The addresses of each process in the cluster, including this node,
     /// in order of process ID.
     pub addresses: Vec<SocketAddr>,
+
+    // === Performance tuning options. ===
+    /// The interval at which the internal Timely cluster should publish updates
+    /// about its state.
+    pub logging_granularity: Option<Duration>,
+    /// The historical window in which distinctions are maintained for
+    /// arrangements.
+    ///
+    /// As arrangements accept new timestamps they may optionally collapse prior
+    /// timestamps to the same value, retaining their effect but removing their
+    /// distinction. A large value or `None` results in a large amount of
+    /// historical detail for arrangements; this increases the logical times at
+    /// which they can be accurately queried, but consumes more memory. A low
+    /// value reduces the amount of memory required but also risks not being
+    /// able to use the arrangement in a query that has other constraints on the
+    /// timestamps used (e.g. when joined with other arrangements).
+    pub logical_compaction_window: Option<Duration>,
+    /// The interval at which sources should be timestamped.
+    pub timestamp_frequency: Duration,
+    /// The maximum size of a timestamp batch.
+    pub max_increment_ts_size: i64,
+    /// Whether to record realtime consistency information to the data directory
+    /// and attempt to recover that information on startup.
+    pub persist_ts: bool,
+    /// Whether to collect metrics. If enabled, metrics can be collected by
+    /// e.g. Prometheus via the `/metrics` HTTP endpoint.
+    pub gather_metrics: bool,
+
+    // === Connection options. ===
+    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
+    /// where <addr_port> is the address of this process's entry in `addresses`.
+    pub listen_addr: Option<SocketAddr>,
+
+    // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: Option<PathBuf>,
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
-    /// Whether to collect metrics. If enabled, metrics can be collected by
-    /// e.g. Prometheus via the `/metrics` HTTP endpoint.
-    pub gather_metrics: bool,
-    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
-    /// where <addr_port> is the address of this process's entry in `addresses`.
-    pub listen_addr: Option<SocketAddr>,
 }
 
 impl Config {
