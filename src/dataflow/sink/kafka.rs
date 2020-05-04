@@ -10,7 +10,7 @@
 use std::thread;
 
 use differential_dataflow::hashable::Hashable;
-use log::error;
+use log::{error, info};
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{BaseRecord, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
@@ -68,6 +68,11 @@ pub fn kafka<G>(
         move |input| {
             // TODO(rkhaitan): can we use a better execution model where we
             // limit the number of inputs we consume at a time?
+            let mut count = 0;
+            let in_flight = producer.inner().in_flight_count();
+            if in_flight > 0 {
+                info!("{} messages in flight in {}", in_flight, name);
+            }
             input.for_each(|_, rows| {
                 for (row, _time, diff) in rows.iter() {
                     let diff_pair = if *diff < 0 {
@@ -90,9 +95,13 @@ pub fn kafka<G>(
                             // error?
                             error!("unable to produce in {}: {}", name, e);
                         }
+                        count += 1;
                     }
                 }
             });
+            if count > 0 {
+                info!("sent {} messages in {}", count, name);
+            }
         },
     )
 }
