@@ -583,7 +583,6 @@ demo_load() {
     dc_run -d chbench run \
         --dsn=${CHBENCH_DB_TYPE} \
         --gen-dir=/var/lib/${CHBENCH_DB_TYPE}-files \
-        --peek-conns=0 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=0.0 --max-delay=0.0 -l /dev/stdout \
         --config-file-path=/etc/chbenchmark/mz-default-${CHBENCH_DB_TYPE}.cfg \
