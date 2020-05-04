@@ -14,7 +14,7 @@ log = "0.4.8"
 postgres-types = "0.1.1"
 reqwest = { version = "0.10.4", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.51"
+serde_json = "1.0.52"
 structopt = "0.3.14"
 tokio = { version = "0.2.20", features = ["full"] }
 tokio-postgres = "0.5.2"
