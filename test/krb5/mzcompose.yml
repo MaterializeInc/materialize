@@ -49,10 +49,10 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://broker.krb5.local:9092
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://broker:9092
       KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
       KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper.krb5.local:2181
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_OPTS: >-
         -Dzookeeper.sasl.client.canonicalize.hostname=false
         -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
@@ -72,9 +72,9 @@ services:
       - -c
       - >-
         wait-for-it --timeout=30 materialized:6875 &&
-        wait-for-it --timeout=30 broker.krb5.local:9092 &&
+        wait-for-it --timeout=30 broker:9092 &&
         testdrive
-        --kafka-url=SASL_PLAINTEXT://broker.krb5.local:9092
+        --kafka-url=SASL_PLAINTEXT://broker:9092
         --materialized-url=postgres://ignored@materialized:6875
         --krb5-keytab=/share/secrets/testdrive.key
         --krb5-service-name=kafka
@@ -92,7 +92,3 @@ services:
 
 volumes:
   secrets:
-
-networks:
-  default:
-    name: krb5.local
