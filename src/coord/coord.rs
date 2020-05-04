@@ -187,6 +187,16 @@ where
                 .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
                 .collect();
             for (id, name, item) in catalog_entries {
+                // Mirror each recovered catalog entry.
+                broadcast(
+                    &mut coord.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::Catalog(
+                        id,
+                        name.to_string(),
+                        true,
+                    )),
+                );
+
                 match item {
                     //currently catalog item rebuild assumes that sinks and
                     //indexes are always built individually and does not store information
