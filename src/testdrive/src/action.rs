@@ -49,6 +49,9 @@ pub struct Config {
     pub keystore_path: Option<String>,
     pub keystore_pass: Option<String>,
     pub root_cert_path: Option<String>,
+    pub krb5_keytab_path: Option<String>,
+    pub krb5_service_name: Option<String>,
+    pub krb5_principal: Option<String>,
     pub aws_region: rusoto_core::Region,
     pub aws_account: String,
     pub aws_credentials: AwsCredentials,
@@ -67,6 +70,9 @@ impl Default for Config {
             keystore_path: None,
             keystore_pass: None,
             root_cert_path: None,
+            krb5_keytab_path: None,
+            krb5_service_name: None,
+            krb5_principal: None,
             aws_region: rusoto_core::Region::default(),
             aws_account: DUMMY_AWS_ACCOUNT.into(),
             aws_credentials: AwsCredentials::new(
@@ -189,7 +195,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     let mut vars = HashMap::new();
     let mut sql_timeout = DEFAULT_SQL_TIMEOUT;
 
-    let parsed_url = match Url::parse(&state.kafka_url) {
+    // Kerberos-authed clusters use the URI scheme SASL_PLAINTEXT, which isn't
+    // real or well-formatted; given that it's immaterial in parsing the URL, we
+    // just smooth it into something that parses.
+    let smoothed_url = &state.kafka_url.replace("SASL_PLAINTEXT", "SASL");
+
+    let parsed_url = match Url::parse(&smoothed_url) {
         Ok(kafka_addr) => kafka_addr,
         Err(e) => {
             return Err(Error::General {
@@ -546,14 +557,27 @@ pub async fn create_state(
         let mut kafka_config = ClientConfig::new();
         kafka_config.set("bootstrap.servers", &config.kafka_url);
 
+        // SSL settings
         if let Some(keystore_path) = &config.keystore_path {
             kafka_config.set("security.protocol", "ssl");
-            kafka_config.set("ssl.keystore.location", keystore_path.as_str());
+            kafka_config.set("ssl.keystore.location", keystore_path);
             if let Some(keystore_pass) = &config.keystore_pass {
-                kafka_config.set("ssl.keystore.password", keystore_pass.as_str());
+                kafka_config.set("ssl.keystore.password", keystore_pass);
             }
             if let Some(root_cert_path) = &config.root_cert_path {
-                kafka_config.set("ssl.ca.location", root_cert_path.as_str());
+                kafka_config.set("ssl.ca.location", root_cert_path);
+            }
+        }
+
+        // Kerberos settings (sasl_plaintext only)
+        if let Some(krb5_keytab_path) = &config.krb5_keytab_path {
+            kafka_config.set("security.protocol", "sasl_plaintext");
+            kafka_config.set("sasl.kerberos.keytab", krb5_keytab_path);
+            if let Some(krb5_service_name) = &config.krb5_service_name {
+                kafka_config.set("sasl.kerberos.service.name", krb5_service_name);
+            }
+            if let Some(krb5_principal) = &config.krb5_principal {
+                kafka_config.set("sasl.kerberos.principal", krb5_principal);
             }
         }
 

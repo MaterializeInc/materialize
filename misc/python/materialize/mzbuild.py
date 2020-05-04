@@ -427,7 +427,6 @@ class ResolvedImage:
         cmd: Sequence[str] = [
             "docker",
             "build",
-            "--pull",
             "-f",
             "-",
             *(f"--build-arg={k}={v}" for k, v in self.image.build_args.items()),
