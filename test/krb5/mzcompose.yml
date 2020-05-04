@@ -89,7 +89,7 @@ services:
         --krb5-principal=testdrive@CI.MATERIALIZE.IO
         $$*
       - bash
-    command: test/testdrive/krb5/int-krb5.td
+    command: test/krb5/smoketest.td
     volumes:
       - ../../:/workdir
       - secrets:/share/secrets
