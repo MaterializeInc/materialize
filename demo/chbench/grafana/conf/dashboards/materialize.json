@@ -2081,7 +2081,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mysql_tpcch_table_rows",
+          "expr": "debezium_tpcch_table_rows",
           "legendFormat": "{{table_name}}",
           "refId": "A"
         }

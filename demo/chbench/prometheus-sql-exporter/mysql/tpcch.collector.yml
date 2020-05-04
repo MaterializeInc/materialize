@@ -9,7 +9,7 @@
 
 collector_name: tpcch
 metrics:
-  - metric_name: mysql_tpcch_table_rows
+  - metric_name: debezium_tpcch_table_rows
     query: |
       SELECT table_rows, table_name
       FROM information_schema.tables

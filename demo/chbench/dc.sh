@@ -526,7 +526,7 @@ clean_load_test() {
 drop_kafka_topics() {
     dc_stop chbench
     dc_stop materialized peeker
-    runv docker exec -it chbench_kafka_1 kafka-topics --delete --bootstrap-server localhost:9092 --topic "mysql.tpcch.*" || true
+    runv docker exec -it chbench_kafka_1 kafka-topics --delete --bootstrap-server localhost:9092 --topic "debezium.tpcch.*" || true
     dc_up materialized
 }
 

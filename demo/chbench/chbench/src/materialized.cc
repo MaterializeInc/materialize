@@ -43,6 +43,7 @@ mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::st
     auto topic = source;
     std::replace(topic.begin(), topic.end(), '_', '.'); // Kafka topics are delimited by periods
     try {
+        fprintf(stdout, "Source is: %s", source.c_str());
         w.exec0("CREATE SOURCE IF NOT EXISTS " + source + " FROM KAFKA BROKER '" + kafkaUrl + "' TOPIC '" + topic + "' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '" + registry + "' ENVELOPE DEBEZIUM");
     } catch (const pqxx::sql_error &e) {
         fprintf(stderr, "Possibly temporary error creating source %s: %s\n", source.c_str(), e.what());
