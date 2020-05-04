@@ -37,7 +37,7 @@ services:
         -Djava.security.krb5.conf=/etc/krb5.conf
         -Dsun.security.krb5.debug=true
 
-  broker:
+  kafka:
     image: confluentinc/cp-kafka:latest
     depends_on:
       - kdc
@@ -49,7 +49,7 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://broker:9092
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka:9092
       KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
       KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -72,9 +72,9 @@ services:
       - -c
       - >-
         wait-for-it --timeout=30 materialized:6875 &&
-        wait-for-it --timeout=30 broker:9092 &&
+        wait-for-it --timeout=30 kafka:9092 &&
         testdrive
-        --kafka-url=SASL_PLAINTEXT://broker:9092
+        --kafka-url=SASL_PLAINTEXT://kafka:9092
         --materialized-url=postgres://ignored@materialized:6875
         --krb5-keytab=/share/secrets/testdrive.key
         --krb5-service-name=kafka
@@ -88,7 +88,7 @@ services:
       - ./kdc/krb5.conf:/etc/krb5.conf
     propagate-uid-gid: true
     init: true
-    depends_on: [kdc, broker, zookeeper, materialized]
+    depends_on: [kdc, kafka, zookeeper, materialized]
 
 volumes:
   secrets:
