@@ -32,9 +32,11 @@ use std::thread;
 use backtrace::Backtrace;
 use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
-use log::trace;
+use log::{info, trace};
 use once_cell::sync::OnceCell;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+
+use ::materialized::version;
 
 static LOG_FILE: OnceCell<File> = OnceCell::new();
 
@@ -233,6 +235,10 @@ fn run() -> Result<(), failure::Error> {
                 .init();
         }
     }
+
+    // Print version info as the very first thing in the logs, so that
+    // we know what build people are on if they send us bug reports.
+    info!("Materialized version: {}", version());
 
     adjust_rlimits();
 
