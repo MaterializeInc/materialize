@@ -245,6 +245,18 @@ fn test_multiple_statements() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+    assert!(client.simple_query("asdfjkl;").is_err());
+    // This will hang if #2880 is not fixed.
+    assert!(client.simple_query("SELECT 1").is_ok());
+
+    Ok(())
+}
+
+#[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
