@@ -71,10 +71,10 @@ steps:
     label: ":lock: testdrive-ssl"
     depends_on: build
     timeout_in_minutes: 30
-    inputs: [test/testdrive/ssl]
+    inputs: [test/ssl/smoketet.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/testdrive/mzcompose.ssl.yml
+          config: test/ssl/mzcompose.yml
           run: testdrive
 
   - id: kerberos
