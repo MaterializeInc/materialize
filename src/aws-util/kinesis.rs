@@ -37,8 +37,8 @@ pub async fn kinesis_client(
             StaticProvider::new(access_key, secret_access_key, token, valid_for)
         }
         (_, _) => {
-            info!("AWS access_key and secret_access_key not provided, using ChainProvider to gather credential information.");
-            let aws_credentials = aws::credentials(Duration::from_secs(5)).await?;
+            info!("AWS access_key and secret_access_key not provided, creating a new KinesisClient using ChainProvider to gather credential information.");
+            let aws_credentials = aws::credentials(Duration::from_secs(10)).await?;
             rusoto_credential::StaticProvider::new(
                 aws_credentials.aws_access_key_id().to_owned(),
                 aws_credentials.aws_secret_access_key().to_owned(),

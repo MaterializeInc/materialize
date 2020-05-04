@@ -1267,16 +1267,19 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     // https://github.com/materializeinc/materialize/issues/1991
                     let access_key = match with_options.remove("access_key") {
                         Some(Value::SingleQuotedString(access_key)) => Some(access_key),
+                        Some(_) => bail!("access_key must be a string"),
                         _ => None,
                     };
                     let secret_access_key = match with_options.remove("secret_access_key") {
                         Some(Value::SingleQuotedString(secret_access_key)) => {
                             Some(secret_access_key)
                         }
+                        Some(_) => bail!("secret_access_key must be a string"),
                         _ => None,
                     };
                     let token = match with_options.remove("token") {
                         Some(Value::SingleQuotedString(token)) => Some(token),
+                        Some(_) => bail!("token must be a string"),
                         _ => None,
                     };
                     let valid_for = match with_options.remove("valid_for") {
@@ -1284,6 +1287,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                             Ok(n) => Some(n),
                             _ => bail!("valid_for must be an integer"),
                         },
+                        Some(_) => bail!("valid_for must be an integer"),
                         _ => None,
                     };
 

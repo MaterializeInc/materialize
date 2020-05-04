@@ -1246,7 +1246,6 @@ impl Timestamper {
             kinc.valid_for.clone(),
         )) {
             Ok(kinesis_client) => {
-                // Get initial list of shards in the Kinesis stream.
                 let cached_shard_ids = match block_on(aws_util::kinesis::get_shard_ids(
                     &kinesis_client,
                     &kinc.stream_name,
@@ -1264,7 +1263,7 @@ impl Timestamper {
                 (Some(kinesis_client), Some(cached_shard_ids))
             }
             Err(e) => {
-                error!("Hit error trying to create KinesisClient for Timestamper. Initializing information to nulls, timestamps will not update. {:#?}", e);
+                error!("Hit error trying to create KinesisClient for Timestamper. Timestamps will not update for source based on Kinesis stream {}. {:#?}", kinc.stream_name, e);
                 (None, None)
             }
         };
@@ -1674,7 +1673,8 @@ impl Timestamper {
                                         kc.cached_shard_ids = Some(shard_ids);
                                     }
                                     Err(e) => error!(
-                                        "Error listing Shard ids for stream {}, using cached Shard ids.",
+                                        "Error listing Shard ids for Kinesis stream {}, using cached Shard ids: {:#?}",
+                                        kc.stream_name,
                                         e
                                     ),
                                 };
