@@ -29,12 +29,10 @@ use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
-use rusoto_core::HttpClient;
-use rusoto_credential::StaticProvider;
 use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
-use aws_util::kinesis::get_shard_ids;
+use aws_util;
 use catalog::sql::SqlVal;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
@@ -349,8 +347,8 @@ impl ByoKafkaConnector {
 #[allow(dead_code)]
 struct RtKinesisConnector {
     stream_name: String,
-    kinesis_client: KinesisClient,
-    cached_shard_ids: HashSet<String>,
+    kinesis_client: Option<KinesisClient>,
+    cached_shard_ids: Option<HashSet<String>>,
     timestamper_iteration_count: u64,
 }
 
@@ -1247,29 +1245,37 @@ impl Timestamper {
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
     ) -> Option<RtKinesisConnector> {
-        let request_dispatcher = HttpClient::new().unwrap();
-        let provider = StaticProvider::new(
+        let (kinesis_client, cached_shard_ids) = match block_on(aws_util::kinesis::kinesis_client(
+            kinc.region.clone(),
             kinc.access_key.clone(),
             kinc.secret_access_key.clone(),
             kinc.token.clone(),
-            None,
-        );
-        let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
+        )) {
+            Ok(kinesis_client) => {
+                let cached_shard_ids = match block_on(aws_util::kinesis::get_shard_ids(
+                    &kinesis_client,
+                    &kinc.stream_name,
+                )) {
+                    Ok(shard_ids) => shard_ids,
+                    Err(e) => {
+                        error!(
+                            "Initializing KinesisSourceConnector with empty shard list: {}",
+                            e
+                        );
+                        HashSet::new()
+                    }
+                };
 
-        // Get initial list of shards in the Kinesis stream.
-        let cached_shard_ids = match block_on(get_shard_ids(&kinesis_client, &kinc.stream_name)) {
-            Ok(shard_ids) => shard_ids,
+                (Some(kinesis_client), Some(cached_shard_ids))
+            }
             Err(e) => {
-                error!(
-                    "Initializing KinesisSourceConnector with empty shard list: {}",
-                    e
-                );
-                HashSet::new()
+                error!("Hit error trying to create KinesisClient for Timestamper. Timestamps will not update for source based on Kinesis stream {}. {:#?}", kinc.stream_name, e);
+                (None, None)
             }
         };
 
         Some(RtKinesisConnector {
-            stream_name: kinc.stream_name.clone(),
+            stream_name: kinc.stream_name,
             kinesis_client,
             cached_shard_ids,
             timestamper_iteration_count: 0,
@@ -1669,32 +1675,43 @@ impl Timestamper {
                     // The Kinesis ListShards API is rate limited to 100 transactions per second
                     // per stream. Only hit the ListShards API every 100 Timestamper iterations to update
                     // our cached Shard ids.
-                    if kc.timestamper_iteration_count % 100 == 0 {
-                        match block_on(get_shard_ids(&kc.kinesis_client, &kc.stream_name)) {
-                            Ok(shard_ids) => {
-                                kc.cached_shard_ids = shard_ids;
+                    match &kc.kinesis_client {
+                        None => {
+                            // KinesisClient was not initialized, skip update.
+                            continue;
+                        }
+                        Some(kinesis_client) => {
+                            if kc.timestamper_iteration_count % 100 == 0 {
+                                match block_on(aws_util::kinesis::get_shard_ids(kinesis_client, &kc.stream_name)) {
+                                    Ok(shard_ids) => {
+                                        kc.cached_shard_ids = Some(shard_ids);
+                                    }
+                                    Err(e) => error!(
+                                        "Error listing Shard ids for Kinesis stream {}, using cached Shard ids: {:#?}",
+                                        kc.stream_name,
+                                        e
+                                    ),
+                                };
                             }
-                            Err(e) => error!(
-                                "Error listing Shard ids for stream {}, using cached Shard ids.",
-                                e
-                            ),
-                        };
+                            kc.timestamper_iteration_count += 1;
+                        }
                     }
-                    kc.timestamper_iteration_count += 1;
 
-                    let num_shards = i32::try_from(kc.cached_shard_ids.len()).unwrap_or_else(|_| {
-                        error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", kc.cached_shard_ids.len(), kc.stream_name);
-                        0
-                    });
-                    for shard_id in &kc.cached_shard_ids {
-                        // For now, always just push the current system timestamp.
-                        // todo@jldlaughlin #2219
-                        result.push((
-                            *id,
-                            num_shards,
-                            PartitionId::Kinesis(shard_id.clone()),
-                            self.current_timestamp as i64,
-                        ));
+                    if let Some(shard_ids) = &kc.cached_shard_ids {
+                        let num_shards = i32::try_from(shard_ids.len()).unwrap_or_else(|_| {
+                            error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", shard_ids.len(), kc.stream_name);
+                            0
+                        });
+                        for shard_id in shard_ids {
+                            // For now, always just push the current system timestamp.
+                            // todo@jldlaughlin #2219
+                            result.push((
+                                *id,
+                                num_shards,
+                                PartitionId::Kinesis(shard_id.clone()),
+                                self.current_timestamp as i64,
+                            ));
+                        }
                     }
                 }
             }

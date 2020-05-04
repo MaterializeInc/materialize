@@ -32,8 +32,6 @@ prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", de
 repr = { path = "../repr" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.3.4"
-rusoto_core = "0.43.0"
-rusoto_credential = "0.43.0"
 rusoto_kinesis = "0.43.0"
 rusqlite = { version = "0.23", features = ["bundled", "unlock_notify"] }
 serde = "1"

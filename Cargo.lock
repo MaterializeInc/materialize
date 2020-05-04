@@ -148,6 +148,7 @@ name = "aws-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "log",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kinesis",
@@ -484,8 +485,6 @@ dependencies = [
  "rdkafka",
  "regex",
  "repr",
- "rusoto_core",
- "rusoto_credential",
  "rusoto_kinesis",
  "rusqlite",
  "serde",

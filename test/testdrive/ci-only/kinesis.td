@@ -59,3 +59,18 @@ test strings
 "and a third!"
 "two more"
 "test strings"
+
+# Test that the ChainProvider is grabbing credentials if not statically provided.
+> CREATE SOURCE f2
+  FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
+  FORMAT BYTES;
+
+> CREATE MATERIALIZED VIEW f2_view
+  AS SELECT CONVERT_FROM(data, 'utf8') FROM f2
+
+> SELECT * FROM f2_view
+"here's a test string"
+"here's a different test string"
+"and a third!"
+"two more"
+"test strings"

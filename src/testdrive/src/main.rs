@@ -154,14 +154,20 @@ async fn run() -> Result<(), Error> {
     if let (Ok(Some(region)), None) = (opts.opt_get("aws-region"), opts.opt_str("aws-endpoint")) {
         // Standard AWS region without a custom endpoint. Try to find actual AWS
         // credentials.
-        let (account, credentials) =
-            aws::account_details(Duration::from_secs(5))
-                .await
-                .map_err(|e| Error::General {
-                    ctx: "getting AWS account details".into(),
-                    cause: Some(e.into()),
-                    hints: vec![],
-                })?;
+        let timeout = Duration::from_secs(5);
+        let account = aws::account(timeout).await.map_err(|e| Error::General {
+            ctx: "getting AWS account details".into(),
+            cause: Some(e.into()),
+            hints: vec![],
+        })?;
+        let credentials = aws::credentials(timeout)
+            .await
+            .map_err(|e| Error::General {
+                ctx: "getting AWS account credentials".into(),
+                cause: Some(e.into()),
+                hints: vec![],
+            })?;
+
         config.aws_region = region;
         config.aws_account = account;
         config.aws_credentials = credentials;

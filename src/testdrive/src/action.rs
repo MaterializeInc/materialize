@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
 use protobuf::Message;
@@ -609,20 +608,18 @@ pub async fn create_state(
     };
 
     let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
-        let provider = rusoto_credential::StaticProvider::new(
-            config.aws_credentials.aws_access_key_id().to_owned(),
-            config.aws_credentials.aws_secret_access_key().to_owned(),
+        let kinesis_client = aws_util::kinesis::kinesis_client(
+            config.aws_region.clone(),
+            Some(config.aws_credentials.aws_access_key_id().to_owned()),
+            Some(config.aws_credentials.aws_secret_access_key().to_owned()),
             config.aws_credentials.token().clone(),
-            config
-                .aws_credentials
-                .expires_at()
-                .map(|expires_at| (expires_at - Utc::now()).num_seconds()),
-        );
-        let dispatcher = rusoto_core::HttpClient::new().unwrap();
-
-        let kinesis_client =
-            KinesisClient::new_with(dispatcher, provider, config.aws_region.clone());
-
+        )
+        .await
+        .map_err(|e| Error::General {
+            ctx: "creating Kinesis client".into(),
+            cause: Some(e.into()),
+            hints: vec![format!("region: {}", config.aws_region.name())],
+        })?;
         (
             config.aws_region.clone(),
             config.aws_account.clone(),

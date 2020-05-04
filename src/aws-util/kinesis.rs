@@ -10,9 +10,48 @@
 //! Utility mod for Kinesis.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
-use anyhow;
+use anyhow::Context;
+use log::info;
+use rusoto_core::{HttpClient, Region};
+use rusoto_credential::StaticProvider;
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput};
+
+use crate::aws;
+
+/// Constructs a KinesisClient from statically provided connection information. If connection
+/// information is not provided, falls back to using credentials gathered by aws::credentials.
+pub async fn kinesis_client(
+    region: Region,
+    access_key: Option<String>,
+    secret_access_key: Option<String>,
+    token: Option<String>,
+) -> Result<KinesisClient, anyhow::Error> {
+    let credentials_provider = match (access_key, secret_access_key) {
+        // Only access_key and secret_access_key are required.
+        (Some(access_key), Some(secret_access_key)) => {
+            info!("Creating a new Kinesis client from provided access_key and secret_access_key");
+            StaticProvider::new(access_key, secret_access_key, token, None)
+        }
+        (_, _) => {
+            info!("AWS access_key and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
+            let aws_credentials = aws::credentials(Duration::from_secs(10)).await?;
+            rusoto_credential::StaticProvider::new(
+                aws_credentials.aws_access_key_id().to_owned(),
+                aws_credentials.aws_secret_access_key().to_owned(),
+                aws_credentials.token().clone(),
+                None,
+            )
+        }
+    };
+
+    let request_dispatcher =
+        HttpClient::new().context("creating HTTP client for Kinesis client")?;
+    let kinesis_client =
+        KinesisClient::new_with(request_dispatcher, credentials_provider, region.clone());
+    Ok(kinesis_client)
+}
 
 /// Wrapper around AWS Kinesis ListShards API (and Rusoto).
 ///
@@ -37,7 +76,7 @@ pub async fn get_shard_ids(
                 stream_name: Some(stream_name.to_owned()),
             })
             .await
-            .map_err(|e| anyhow::Error::new(e).context("fetching shard list".to_owned()))?;
+            .context("fetching shard list")?;
 
         match output.shards {
             Some(shards) => {
@@ -85,6 +124,6 @@ pub async fn get_shard_iterator(
             timestamp: None,
         })
         .await
-        .map_err(|e| anyhow::Error::new(e).context("fetching shard iterator"))?
+        .context("fetching shard iterator")?
         .shard_iterator)
 }
