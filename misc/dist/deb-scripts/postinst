@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -7,13 +9,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-[Unit]
-Description=Materialize streaming data warehouse
-After=network.target
+set -e
 
-[Service]
-Type=exec
-User=_Materialize
-Group=_Materialize
+# The weird username is intended to be unlikely
+# to conflict with real local users.
+adduser --system --group --force-badname --no-create-home --quiet _Materialize
+mkdir -p /var/lib/materialize/
+chown _Materialize:_Materialize /var/lib/materialize/
 
-ExecStart=/usr/bin/materialized -D /var/lib/materialize/mzdata
+if [ -x /bin/systemctl ]; then
+  systemctl daemon-reload
+fi
