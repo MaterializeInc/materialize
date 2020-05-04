@@ -14,7 +14,7 @@ bincode = { version = "1.2", optional = true }
 chrono = "0.4"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-failure = "0.1.6"
+failure = "0.1.8"
 lazy_static = "1.4.0"
 log = "0.4.8"
 itertools = "0.9"
