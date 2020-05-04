@@ -68,17 +68,10 @@ services:
 
   materialized:
     mzbuild: materialized
-    command: --logging-granularity=10ms --data-directory=/share/mzdata -w1
+    command: --logging-granularity=10ms -w1
     volumes:
       - secrets:/share/secrets
-      - mzdata:/share/mzdata
-      - tmp:/share/tmp
       - ./kdc/krb5.conf:/etc/krb5.conf
-
-  cli:
-    image: materialize/cli:latest
-    depends_on:
-      - materialized
 
   testdrive:
     mzbuild: testdrive
@@ -91,20 +84,14 @@ services:
         testdrive
         --kafka-url=SASL_PLAINTEXT://broker.krb5.local:9092
         --materialized-url=postgres://ignored@materialized:6875
-        --validate-catalog=/share/mzdata
         --krb5-keytab=/share/secrets/testdrive.key
         --krb5-service-name=kafka
         --krb5-principal=testdrive@CI.MATERIALIZE.IO
         $$*
       - bash
     command: test/testdrive/krb5/int-krb5.td
-    user: root
-    environment:
-      - TMPDIR=/share/tmp
     volumes:
       - ../../:/workdir
-      - mzdata:/share/mzdata
-      - tmp:/share/tmp
       - secrets:/share/secrets
       - ./kdc/krb5.conf:/etc/krb5.conf
     # wait-for-it is insufficient because the broker service doesn't seem to
@@ -115,9 +102,7 @@ services:
     depends_on: [kdc, broker, zookeeper, materialized]
 
 volumes:
-  secrets: {}
-  mzdata:
-  tmp:
+  secrets:
 
 networks:
   default:
