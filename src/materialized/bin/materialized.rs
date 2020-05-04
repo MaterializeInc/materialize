@@ -238,7 +238,7 @@ fn run() -> Result<(), failure::Error> {
 
     // Print version info as the very first thing in the logs, so that
     // we know what build people are on if they send us bug reports.
-    info!("Materialized version: {}", version());
+    info!("materialized version: {}", version());
 
     adjust_rlimits();
 
