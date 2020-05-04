@@ -251,3 +251,9 @@
   - signature: 'to_jsonb(v: T) -> jsonb'
     description: "`v` as `jsonb`"
     url: "/docs/sql/types/jsonb/#to-jsonb-1"
+
+- type: Table
+  description: Table functions evaluate to a set of rows, rather than a single expression.
+  functions:
+  - signature: 'generate_series (start: int, stop: int) -> Col<int>'
+    description: Generate all integer values between `start` and `stop`, inclusive.

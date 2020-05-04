@@ -174,21 +174,28 @@ impl FoldConstants {
                     };
                 }
             }
-            RelationExpr::FlatMapUnary {
+            RelationExpr::FlatMap {
                 input,
                 func,
-                expr,
+                exprs,
                 demand: _,
             } => {
-                expr.reduce(&input.typ());
+                for expr in exprs.iter_mut() {
+                    expr.reduce(&input.typ());
+                }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     let mut new_rows = Vec::new();
                     for (input_row, diff) in rows {
                         let datums = input_row.unpack();
                         let temp_storage = RowArena::new();
-                        let output_rows =
-                            func.eval(expr.eval(&datums, &temp_storage)?, &temp_storage);
+                        let output_rows = func.eval(
+                            exprs
+                                .iter()
+                                .map(|expr| expr.eval(&datums, &temp_storage))
+                                .collect::<Result<Vec<_>, _>>()?,
+                            &temp_storage,
+                        );
                         for output_row in output_rows {
                             let row = Row::pack(
                                 input_row.clone().into_iter().chain(output_row.into_iter()),
