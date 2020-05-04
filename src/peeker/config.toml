@@ -23,6 +23,7 @@ names = [
     "supplier",
 
     # make these materialized once we support materialized sources
+    "history",
     "district",
     "nation",
     "region",
