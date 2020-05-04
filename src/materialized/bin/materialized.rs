@@ -236,9 +236,26 @@ fn run() -> Result<(), failure::Error> {
         }
     }
 
-    // Print version info as the very first thing in the logs, so that
+    // TODO - make this only check for "MZ_" if #1223 is fixed
+    let env_message: String = std::env::vars()
+        .filter(|(name, _value)| {
+            name.starts_with("MZ_")
+                || name.starts_with("DIFFERENTIAL_")
+                || name == "DEFAULT_PROGRESS_MODE"
+        })
+        .map(|(name, value)| format!("\n{}={}", name, value))
+        .collect();
+
+    // Print version/args/env info as the very first thing in the logs, so that
     // we know what build people are on if they send us bug reports.
-    info!("materialized version: {}", version());
+    info!(
+        "materialized version: {}
+invoked as: {}
+environment:{}",
+        version(),
+        args.join(" "),
+        env_message
+    );
 
     adjust_rlimits();
 
