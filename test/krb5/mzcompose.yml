@@ -80,7 +80,7 @@ services:
       - -c
       - >-
         wait-for-it --timeout=30 materialized:6875 &&
-        wait-for-it --timeout=30 broker.krb5.local:9092:9092 &&
+        wait-for-it --timeout=30 broker.krb5.local:9092 &&
         testdrive
         --kafka-url=SASL_PLAINTEXT://broker.krb5.local:9092
         --materialized-url=postgres://ignored@materialized:6875
@@ -94,9 +94,6 @@ services:
       - ../../:/workdir
       - secrets:/share/secrets
       - ./kdc/krb5.conf:/etc/krb5.conf
-    # wait-for-it is insufficient because the broker service doesn't seem to
-    # start as soon as the Kafka service comes online.
-    restart: on-failure:3
     propagate-uid-gid: true
     init: true
     depends_on: [kdc, broker, zookeeper, materialized]
