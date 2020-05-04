@@ -232,6 +232,18 @@ fn parse_simple_select() {
 }
 
 #[test]
+fn parse_from_as_name_query() {
+    let result = parse_sql_statements("SELECT 1, 2, FROM a");
+    assert_eq!(
+        "Parse error:
+SELECT 1, 2, FROM a
+             ^^^^
+expected expression, but found reserved keyword",
+        result.unwrap_err().to_string(),
+    );
+}
+
+#[test]
 fn parse_limit_is_not_an_alias() {
     // LIMIT should not be parsed as a table alias.
     let ast = verified_query("SELECT id FROM customer LIMIT 1");
