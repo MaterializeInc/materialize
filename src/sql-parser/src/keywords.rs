@@ -525,6 +525,9 @@ pub const RESERVED_FOR_COLUMN_ALIAS: &[&str] = &[
     FROM,
 ];
 
+// Can't be used as an identifier in expressions.
+pub const RESERVED_FOR_EXPRESSIONS: &[&str] = &[FROM];
+
 lazy_static! {
     static ref RESERVED_KEYWORD_SET: HashSet<String> = {
         let mut kw = HashSet::new();
@@ -532,6 +535,9 @@ lazy_static! {
             kw.insert((*k).to_string());
         }
         for k in RESERVED_FOR_COLUMN_ALIAS {
+            kw.insert((*k).to_string());
+        }
+        for k in RESERVED_FOR_EXPRESSIONS {
             kw.insert((*k).to_string());
         }
         kw
