@@ -2,5 +2,6 @@ create_source ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' ('BYTES' | 'TEXT')
   ('ENVELOPE' ('NONE' ('UPSERT' ('FORMAT' ('BYTES' | 'TEXT'))?)))?
