@@ -84,7 +84,7 @@ steps:
     inputs: [test/testdrive/krb5]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/krb5/mzcompose.krb5.yml
+          config: test/krb5/mzcompose.yml
           run: testdrive
 
   - id: testdrive-purgatory
