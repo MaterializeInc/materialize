@@ -444,9 +444,14 @@ where
         let stmts = match sql::parse(sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                return self
+                let session = match self
                     .error(session, SqlState::SYNTAX_ERROR, err.to_string())
-                    .await;
+                    .await?
+                {
+                    State::Drain(s) => s,
+                    _ => unreachable!(),
+                };
+                return self.sync(session).await;
             }
         };
         for stmt in stmts {
