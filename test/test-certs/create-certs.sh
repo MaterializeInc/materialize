@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # Copyright Materialize, Inc. All rights reserved.
 #
@@ -8,6 +8,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+set -euo pipefail
 
 export SSL_SECRET=mzmzmz
 
@@ -26,7 +28,7 @@ openssl req \
 	-passin pass:$SSL_SECRET \
 	-passout pass:$SSL_SECRET
 
-for i in 'broker' 'schema-registry' 'materialized' 'producer'
+for i in kafka schema-registry materialized producer
 do
 	# Create key & csr
 	openssl req -nodes \
