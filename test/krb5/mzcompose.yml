@@ -21,11 +21,6 @@ services:
 
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
-    # Kafka seems to insist on authenticating to the zookeeper hostname that
-    # comes back from a reverse DNS lookup of its `KAFKA_ZOOKEEPER_CONNECT` host
-    # value. The only way to coordinate this with the desired hostname is to
-    # control the container name, as well.
-    container_name: zookeeper
     hostname: zookeeper.krb5.local
     depends_on:
       - kdc
@@ -61,7 +56,10 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
       KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
       KAFKA_ZOOKEEPER_CONNECT: zookeeper.krb5.local:2181
-      KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
+      KAFKA_OPTS: >-
+        -Dzookeeper.sasl.client.canonicalize.hostname=false
+        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
 
   materialized:
     mzbuild: materialized
