@@ -423,10 +423,11 @@ macro_rules! make_visitor {
                 name: &'ast $($mut)* ObjectName,
                 from: &'ast $($mut)* ObjectName,
                 connector: &'ast $($mut)* Connector,
+                with_options: &'ast $($mut)* [SqlOption],
                 format: Option<&'ast $($mut)* Format>,
                 if_not_exists: bool,
             ) {
-                visit_create_sink(self, name, from, connector, format, if_not_exists)
+                visit_create_sink(self, name, from, connector, with_options, format, if_not_exists)
             }
 
             fn visit_create_view(
@@ -701,9 +702,10 @@ macro_rules! make_visitor {
                     name,
                     from,
                     connector,
+                    with_options,
                     format,
                     if_not_exists,
-                } => visitor.visit_create_sink(name, from, connector, format.as_auto_ref(), *if_not_exists),
+                } => visitor.visit_create_sink(name, from, connector, with_options, format.as_auto_ref(), *if_not_exists),
                 Statement::CreateView {
                     name,
                     columns,
@@ -1467,12 +1469,16 @@ macro_rules! make_visitor {
             name: &'ast $($mut)* ObjectName,
             from: &'ast $($mut)* ObjectName,
             connector: &'ast $($mut)* Connector,
+            with_options: &'ast $($mut)* [SqlOption],
             format: Option<&'ast $($mut)* Format>,
             _if_not_exists: bool,
         ) {
             visitor.visit_object_name(name);
             visitor.visit_object_name(from);
             visitor.visit_connector(connector);
+            for option in with_options {
+                visitor.visit_option(option);
+            }
             if let Some(format) = format {
                 visitor.visit_format(format);
             }

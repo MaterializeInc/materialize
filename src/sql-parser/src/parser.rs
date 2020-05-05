@@ -1310,6 +1310,7 @@ impl Parser {
         let from = self.parse_object_name()?;
         self.expect_keyword("INTO")?;
         let connector = self.parse_connector()?;
+        let with_options = self.parse_with_options()?;
         let format = if self.parse_keyword("FORMAT") {
             Some(self.parse_format()?)
         } else {
@@ -1319,6 +1320,7 @@ impl Parser {
             name,
             from,
             connector,
+            with_options,
             format,
             if_not_exists,
         })
