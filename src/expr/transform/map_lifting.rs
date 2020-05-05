@@ -11,11 +11,18 @@ use std::collections::HashMap;
 
 use crate::{GlobalId, Id, RelationExpr, ScalarExpr};
 
-/// Hoist literal maps wherever possible.
+/// Hoist literal values from maps wherever possible.
 ///
 /// This transform specifically looks for `RelationExpr::Map` operators
 /// where any of the `ScalarExpr` expressions are literals. Whenever it
 /// can, it lifts those expressions through or around operators.
+///
+/// The main feature of this operator is that it allows transformations
+/// to locally change the shape of operators, presenting fewer columns
+/// when they are unused and replacing them with mapped default values.
+/// The mapped default values can then be lifted and ideally absorbed.
+/// This type of transformation is difficult to make otherwise, as it
+/// is not easy to locally change the shape of relations.
 #[derive(Debug)]
 pub struct LiteralLifting;
 
@@ -48,7 +55,8 @@ impl LiteralLifting {
     ) -> Vec<ScalarExpr> {
         match relation {
             RelationExpr::Constant { rows, typ } => {
-                // From the back to the front, check if all values are identical
+                // From the back to the front, check if all values are identical.
+                // TODO(frank): any subset of constant values can be extracted with a permute.
                 let mut the_same = vec![true; typ.arity()];
                 if let Some((row, _cnt)) = rows.first() {
                     let mut data = row.unpack();
@@ -90,6 +98,10 @@ impl LiteralLifting {
                 // A get expression may need to have literal expressions appended to it.
                 let literals = gets.get(id).cloned().unwrap_or_else(Vec::new);
                 if !literals.is_empty() {
+                    // Correct the type of the `Get`, which has fewer columns,
+                    // and not the same fields in its keys. It is ok to remove
+                    // any columns from the keys, as them being literals meant
+                    // that their distinctness was not what made anything a key.
                     for _ in 0..literals.len() {
                         typ.column_types.pop();
                     }
@@ -103,6 +115,8 @@ impl LiteralLifting {
                 literals
             }
             RelationExpr::Let { id, value, body } => {
+                // Any literals appended to the `value` should be used
+                // at corresponding `Get`s throughout the `body`.
                 let literals = self.action(value, gets);
                 let id = Id::Local(*id);
                 if !literals.is_empty() {
@@ -114,17 +128,17 @@ impl LiteralLifting {
                 result
             }
             RelationExpr::Project { input, outputs } => {
-                // For stability reasons, we do not want to lift
-                // literals around projection. Projections are the
-                // highest lifted operator and lifting literals
-                // around them could cause oscillations.
+                // We do not want to lift literals around projections.
+                // Projections are the highest lifted operator and lifting
+                // literals around projections could cause us to fail to
+                // reach a fixed point under the transformations.
                 let mut literals = self.action(input, gets);
                 if !literals.is_empty() {
                     let input_arity = input.arity();
                     if let Some(project_max) = outputs.iter().max() {
                         // Discard literals that are not projected.
                         // TODO(frank): this could also discard intermediate
-                        // literals that are not projected, with more thougt.
+                        // literals that are not projected, with more thought.
                         while *project_max + 1 < input_arity + literals.len()
                             && !literals.is_empty()
                         {
@@ -184,7 +198,9 @@ impl LiteralLifting {
                             }
                         });
                     }
-
+                    // We need to re-install literals, as we don't know what flatmap does.
+                    // TODO(frank): We could permute the literals around the columns
+                    // added by FlatMap.
                     **input = input.take_dangerous().map(literals);
                 }
                 Vec::new()
@@ -224,7 +240,7 @@ impl LiteralLifting {
 
                     // We should be able to install any literals in the
                     // equivalence relations, and then lift all literals
-                    // around the join using a project to re-order colunms.
+                    // around the join using a project to re-order columns.
 
                     let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                     let input_arities = input_types
@@ -273,6 +289,10 @@ impl LiteralLifting {
                         }
                     }
 
+                    // We now painfully determine a projection to shovel around all of
+                    // the columns that puts the literals last. Where this is optional
+                    // for other operators, it is mandatory here if we want to lift the
+                    // literals through the join.
                     let old_arity = input_arities.iter().sum();
                     let new_arity =
                         old_arity - input_literals.iter().map(|l| l.len()).sum::<usize>();
@@ -306,7 +326,7 @@ impl LiteralLifting {
             } => {
                 let literals = self.action(input, gets);
                 if !literals.is_empty() {
-                    // Reduce absorbs maps, and we should in-line literals.
+                    // Reduce absorbs maps, and we should inline literals.
                     let input_arity = input.arity();
                     // Inline literals into group key expressions.
                     for expr in group_key.iter_mut() {
@@ -330,6 +350,10 @@ impl LiteralLifting {
                     }
                 }
 
+                // The only literals we think we can lift are those that are
+                // independent of the number of records; things like `Any`, `All`,
+                // `Min`, and `Max`.
+                // TODO(frank): extract non-terminal literals.
                 let mut result = Vec::new();
                 while aggregates.last().map(|a| {
                     (a.func == crate::AggregateFunc::Any || a.func == crate::AggregateFunc::All)
@@ -347,7 +371,6 @@ impl LiteralLifting {
                     ));
                 }
                 result.reverse();
-                // TODO(frank): extract non-terminal literals.
                 result
             }
             RelationExpr::TopK {
@@ -394,7 +417,7 @@ impl LiteralLifting {
                 if !r_literals.is_empty() {
                     **right = right.take_dangerous().map(r_literals);
                 }
-
+                // TODO(frank): extract non-terminal literals.
                 results
             }
             RelationExpr::ArrangeBy { input, keys } => {
