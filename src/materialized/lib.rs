@@ -212,11 +212,16 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                     Some(tls_config) => Some(tls_config.acceptor()?),
                 };
                 mux.add_handler(pgwire::Server::new(
-                    tls,
+                    tls.clone(),
                     cmd_tx.clone(),
                     config.gather_metrics,
                 ));
-                mux.add_handler(http::Server::new(cmd_tx, config.gather_metrics, start_time));
+                mux.add_handler(http::Server::new(
+                    tls,
+                    cmd_tx,
+                    config.gather_metrics,
+                    start_time,
+                ));
             }
             Arc::new(mux)
         };

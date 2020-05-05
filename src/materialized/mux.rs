@@ -19,7 +19,7 @@ use ore::netio::{self, SniffedStream, SniffingStream};
 use crate::http;
 
 pub struct Mux<A> {
-    handlers: Vec<Box<dyn ConnectionHandler<SniffedStream<A>> + Send + Sync>>,
+    handlers: Vec<Box<dyn ConnectionHandler<A> + Send + Sync>>,
 }
 
 impl<A> Mux<A> {
@@ -29,7 +29,7 @@ impl<A> Mux<A> {
 
     pub fn add_handler<H>(&mut self, handler: H)
     where
-        H: ConnectionHandler<SniffedStream<A>> + Send + Sync + 'static,
+        H: ConnectionHandler<A> + Send + Sync + 'static,
     {
         self.handlers.push(Box::new(handler));
     }
@@ -73,7 +73,7 @@ impl<A> Mux<A> {
 pub trait ConnectionHandler<A> {
     fn match_handshake(&self, buf: &[u8]) -> bool;
 
-    async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
+    async fn handle_connection(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static;
 }
@@ -84,7 +84,7 @@ impl<A> ConnectionHandler<A> for pgwire::Server {
         pgwire::match_handshake(buf)
     }
 
-    async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
+    async fn handle_connection(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {
@@ -95,10 +95,10 @@ impl<A> ConnectionHandler<A> for pgwire::Server {
 #[async_trait]
 impl<A> ConnectionHandler<A> for http::Server {
     fn match_handshake(&self, buf: &[u8]) -> bool {
-        http::match_handshake(buf)
+        self.match_handshake(buf)
     }
 
-    async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
+    async fn handle_connection(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {
@@ -107,7 +107,7 @@ impl<A> ConnectionHandler<A> for http::Server {
 }
 
 #[async_trait]
-impl<A> ConnectionHandler<A> for comm::Switchboard<A>
+impl<A> ConnectionHandler<A> for comm::Switchboard<SniffedStream<A>>
 where
     A: comm::protocol::Connection,
 {
@@ -115,7 +115,7 @@ where
         comm::protocol::match_handshake(buf)
     }
 
-    async fn handle_connection(&self, conn: A) -> Result<(), failure::Error>
+    async fn handle_connection(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {

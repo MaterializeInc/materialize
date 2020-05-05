@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
@@ -17,8 +17,11 @@ use futures::future::TryFutureExt;
 use futures::sink::SinkExt;
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
+use openssl::ssl::SslAcceptor;
 use prometheus::{register_gauge_vec, Encoder, Gauge, GaugeVec};
 use tokio::io::{AsyncRead, AsyncWrite};
+
+use ore::netio::SniffedStream;
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
@@ -38,16 +41,14 @@ const METHODS: &[&[u8]] = &[
     b"OPTIONS", b"GET", b"HEAD", b"POST", b"PUT", b"DELETE", b"TRACE", b"CONNECT",
 ];
 
-pub fn match_handshake(buf: &[u8]) -> bool {
-    let buf = if let Some(pos) = buf.iter().position(|&b| b == b' ') {
-        &buf[..pos]
-    } else {
-        &buf[..]
-    };
-    METHODS.contains(&buf)
+const TLS_HANDSHAKE_START: u8 = 22;
+
+fn sniff_tls(buf: &[u8]) -> bool {
+    !buf.is_empty() && buf[0] == TLS_HANDSHAKE_START
 }
 
 pub struct Server {
+    tls: Option<SslAcceptor>,
     cmd_tx: Weak<UnboundedSender<coord::Command>>,
     gather_metrics: bool,
     start_time: Instant,
@@ -55,20 +56,34 @@ pub struct Server {
 
 impl Server {
     pub fn new(
+        tls: Option<SslAcceptor>,
         cmd_tx: Weak<UnboundedSender<coord::Command>>,
         gather_metrics: bool,
         start_time: Instant,
     ) -> Server {
         Server {
+            tls,
             cmd_tx,
             gather_metrics,
             start_time,
         }
     }
 
-    pub async fn handle_connection<A>(&self, conn: A) -> Result<(), failure::Error>
+    pub fn match_handshake(&self, buf: &[u8]) -> bool {
+        if self.tls.is_some() && sniff_tls(buf) {
+            return true;
+        }
+        let buf = if let Some(pos) = buf.iter().position(|&b| b == b' ') {
+            &buf[..pos]
+        } else {
+            &buf[..]
+        };
+        METHODS.contains(&buf)
+    }
+
+    pub async fn handle_connection<A>(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
     where
-        A: AsyncRead + AsyncWrite + Unpin + 'static,
+        A: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
         let cmd_tx = match self.cmd_tx.upgrade() {
             Some(cmd_tx) => cmd_tx,
@@ -77,6 +92,24 @@ impl Server {
                 return Ok(());
             }
         };
+
+        match (&self.tls, sniff_tls(&conn.sniff_buffer())) {
+            (Some(tls), true) => {
+                let conn = tokio_openssl::accept(tls, conn).await?;
+                self.handle_connection_inner(conn, cmd_tx).await
+            }
+            _ => self.handle_connection_inner(conn, cmd_tx).await,
+        }
+    }
+
+    async fn handle_connection_inner<A>(
+        &self,
+        conn: A,
+        cmd_tx: Arc<UnboundedSender<coord::Command>>,
+    ) -> Result<(), failure::Error>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + 'static,
+    {
         let svc = service::service_fn(move |req: Request<Body>| {
             let cmd_tx = (*cmd_tx).clone();
             let gather_metrics = self.gather_metrics;

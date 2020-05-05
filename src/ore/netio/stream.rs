@@ -165,6 +165,12 @@ where
         &self.inner
     }
 
+    /// Returns a reference to the bytes that were sniffed at the beginning of
+    /// the stream.
+    pub fn sniff_buffer(&self) -> &[u8] {
+        &self.buf
+    }
+
     /// Consumes the `SniffedStream`, returning the underlying stream. Be very
     /// careful with this function! The underlying stream pointer will have been
     /// advanced past any bytes sniffed from the [`SniffingStream`] that created

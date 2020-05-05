@@ -1627,6 +1627,7 @@ dependencies = [
  "sysctl",
  "tempfile",
  "tokio",
+ "tokio-openssl",
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
