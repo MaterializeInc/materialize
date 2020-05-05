@@ -1,0 +1,17 @@
+### Byte format details (JSON)
+
+Materialize receives all data from Kinesis streams as bytes, which you must
+convert to [`text`](/docs/sql/types/text), and then to
+[`jsonb`](/docs/sql/types/jsonb).
+
+Here is an example of using a Kinesis source, converting the streams bytes into
+`jsonb` data:
+
+```sql
+CREATE MATERIALIZED VIEW jsonified_kinesis_source AS
+SELECT CAST(data AS JSONB) AS data
+FROM (
+    SELECT CONVERT_FROM(data, 'utf8') AS data
+    FROM kinesis_source
+)
+```

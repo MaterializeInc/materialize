@@ -1,0 +1,63 @@
+### Debezium envelope details
+
+The Debezium envelope provides a "diff envelope", which describes the decoded
+records' old and new values; this is roughly equivalent to the notion of Change
+Data Capture, or CDC. Materialize can use the data in this diff envelope to
+process data as representing inserts, updates, or deletes.
+
+This envelope is called the Debezium envelope because it's been developed to
+explicitly work with [Debezium].
+
+To use the Debezium envelope with Materialize, you must configure Debezium with
+your database.
+
+- [MySQL](https://debezium.io/documentation/reference/0.10/connectors/mysql.html)
+- [PostgreSQL](https://debezium.io/documentation/reference/0.10/connectors/postgresql.html)
+
+The Debezium envelope is most easily supported by sources published to Kafka by
+Debezium.
+
+#### Format implications
+
+Using the Debezium envelopes changes the schema of your Avro-encoded Kafka
+topics to include something akin to the following field:
+
+```json
+{
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+        {
+        "name": "before",
+        "type": [
+            {
+            "name": "row",
+            "type": "record",
+            "fields": [
+                {"name": "a", "type": "long"},
+                {"name": "b", "type": "long"}
+            ]
+            },
+            "null"
+        ]
+        },
+        { "name": "after", "type": ["row", "null"] }
+    ]
+}
+```
+
+Note that:
+
+- If you use the Confluent Schema Registry to receive your schemas, you don't
+  need to manually create this field; Debezium will have taken care of it for
+  you.
+- The following section depends on the column's names and types, and is unlikely
+  to match our example:
+    ```json
+    ...
+    "fields": [
+            {"name": "a", "type": "long"},
+            {"name": "b", "type": "long"}
+        ]
+    ...
+    ```
