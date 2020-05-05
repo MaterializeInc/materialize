@@ -11,8 +11,9 @@
 //!
 //! ```rust
 //! use expr::{RelationExpr, ScalarExpr};
-//! use expr::transform::fusion::filter::Filter;
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
+//!
+//! use transform::fusion::filter::Filter;
 //!
 //! let input = RelationExpr::constant(vec![], RelationType::new(vec![
 //!     ColumnType::new(ScalarType::Bool),
@@ -30,7 +31,8 @@
 //!     .filter(vec![predicate2.clone()]);
 //!
 //! // .transform() will deduplicate any predicates
-//! Filter.transform(&mut expr);
+//! use transform::Transform;
+//! Filter.transform(&mut expr, &std::collections::HashMap::new());
 //!
 //! let correct = input.filter(vec![predicate0]);
 //!

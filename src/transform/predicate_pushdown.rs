@@ -14,8 +14,9 @@
 //!
 //! ```rust
 //! use expr::{BinaryFunc, RelationExpr, ScalarExpr};
-//! use expr::transform::predicate_pushdown::PredicatePushdown;
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
+//!
+//! use transform::predicate_pushdown::PredicatePushdown;
 //!
 //! let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
 //!     ColumnType::new(ScalarType::Bool),
@@ -44,7 +45,8 @@
 //!        predicate012.clone(),
 //!    ]);
 //!
-//! PredicatePushdown.transform(&mut expr);
+//! use transform::Transform;
+//! PredicatePushdown.transform(&mut expr, &std::collections::HashMap::new());
 //! ```
 
 use std::collections::HashMap;
