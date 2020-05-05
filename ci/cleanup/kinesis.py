@@ -36,7 +36,7 @@ def get_old_stream_names() -> List[str]:
                 ],
                 unicode=True,
             )
-        )
+        )["StreamDescription"]
         for stream_name in stream_names["StreamNames"]
     ]
 
@@ -49,7 +49,7 @@ def get_old_stream_names() -> List[str]:
             return False
 
     old_stream_names = [
-        desc["StreamName"] for desc in stream_descriptions if is_old(desc["StreamDescription"])
+        desc["StreamName"] for desc in stream_descriptions if is_old(desc)
     ]
     return old_stream_names
 
