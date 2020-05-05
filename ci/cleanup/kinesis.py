@@ -30,7 +30,7 @@ def get_old_stream_names() -> List[str]:
                     "aws",
                     "kinesis",
                     "describe-stream",
-                    "--stream-name"
+                    "--stream-name",
                     stream_name,
                     "--region=us-east-2",
                 ],
