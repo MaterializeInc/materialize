@@ -1393,7 +1393,7 @@ ORDER BY su_name
 | Filter "^co.*$" ~(#44)
 | Reduce group=(#0, #11, #12, #13) sum(#36)
 | Filter ((2 * #3) > #4)
-| Reduce group=(#0) any(true)
+| Distinct group=(#0)
 | ArrangeBy (#0)
 
 %12 =

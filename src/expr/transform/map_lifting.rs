@@ -51,9 +51,21 @@ impl LiteralLifting {
                 // TODO(frank): If there is just one row here, lift it!
                 Vec::new()
             }
-            RelationExpr::Get { id, .. } => {
+            RelationExpr::Get { id, typ } => {
                 // A get expression may need to have literal expressions appended to it.
-                gets.get(id).cloned().unwrap_or_else(Vec::new)
+                let literals = gets.get(id).cloned().unwrap_or_else(Vec::new);
+                if !literals.is_empty() {
+                    for _ in 0..literals.len() {
+                        typ.column_types.pop();
+                    }
+                    let columns = typ.column_types.len();
+                    for key in typ.keys.iter_mut() {
+                        key.retain(|k| k < &columns);
+                    }
+                    typ.keys.sort();
+                    typ.keys.dedup();
+                }
+                literals
             }
             RelationExpr::Let { id, value, body } => {
                 let literals = self.action(value, gets);
@@ -66,15 +78,30 @@ impl LiteralLifting {
                 gets.remove(&id);
                 result
             }
-            RelationExpr::Project { input, outputs: _ } => {
-                let literals = self.action(input, gets);
+            RelationExpr::Project { input, outputs } => {
+                // For stability reasons, we do not want to lift
+                // literals around projection. Projections are the
+                // highest lifted operator and lifting literals
+                // around them could cause oscillations.
+                let mut literals = self.action(input, gets);
                 if !literals.is_empty() {
+                    let input_arity = input.arity();
+                    if let Some(project_max) = outputs.iter().max() {
+                        // Discard literals that are not projected.
+                        while *project_max + 1 < input_arity + literals.len()
+                            && !literals.is_empty()
+                        {
+                            literals.pop();
+                        }
+                    }
                     // If the literals need to be re-interleaved,
                     // we don't have much choice but to install a
                     // Map operator to do that under the project.
                     // Ideally this doesn't happen much, as projects
                     // get lifted too.
-                    **input = input.take_dangerous().map(literals);
+                    if !literals.is_empty() {
+                        **input = input.take_dangerous().map(literals);
+                    }
                 }
                 // TODO(frank): make this smarter if needed.
                 Vec::new()
@@ -89,31 +116,37 @@ impl LiteralLifting {
                 // TODO(frank) propagate evaluation through expressions.
 
                 // Strip off literals at the end of `scalars`.
+                // TODO(frank) permute columns to put literals at end, hope project lifted.
                 let mut result = Vec::new();
                 while scalars.last().map(|e| e.is_literal()) == Some(true) {
                     result.push(scalars.pop().unwrap());
                 }
                 result.reverse();
 
+                if scalars.is_empty() {
+                    *relation = input.take_dangerous();
+                }
+
                 result
             }
-            RelationExpr::FlatMapUnary {
+            RelationExpr::FlatMap {
                 input,
                 func: _,
-                expr,
+                exprs,
                 demand: _,
             } => {
                 let literals = self.action(input, gets);
                 if !literals.is_empty() {
-                    // TODO(frank): inline literals in `expr`.
                     let input_arity = input.arity();
-                    expr.visit_mut(&mut |e| {
-                        if let ScalarExpr::Column(c) = e {
-                            if *c >= input_arity {
-                                *e = literals[*c - input_arity].clone();
+                    for expr in exprs.iter_mut() {
+                        expr.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                if *c >= input_arity {
+                                    *e = literals[*c - input_arity].clone();
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
 
                     **input = input.take_dangerous().map(literals);
                 }
@@ -256,11 +289,29 @@ impl LiteralLifting {
                                     *e = literals[*c - input_arity].clone();
                                 }
                             }
-                        })
+                        });
                     }
                 }
-                // TODO(frank): convert to map if constants?
-                Vec::new()
+
+                let mut result = Vec::new();
+                while aggregates.last().map(|a| {
+                    (a.func == crate::AggregateFunc::Any || a.func == crate::AggregateFunc::All)
+                        && a.expr.is_literal_ok()
+                }) == Some(true)
+                {
+                    let aggr = aggregates.pop().unwrap();
+                    let temp = repr::RowArena::new();
+                    let eval = aggr
+                        .func
+                        .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
+                    result.push(ScalarExpr::literal_ok(
+                        eval,
+                        repr::ColumnType::new(repr::ScalarType::Bool),
+                    ));
+                }
+                result.reverse();
+                // TODO(frank): extract non-terminal literals.
+                result
             }
             RelationExpr::TopK {
                 input,
@@ -314,7 +365,14 @@ impl LiteralLifting {
                 // as it may disrupt the arrangements we try to use.
                 // Or it may discover arrangements that we couldn't
                 // previously use due to the mapped columns...
-                self.action(input, gets)
+                let literals = self.action(input, gets);
+                // Conservatively, we should leave things how they
+                // are, especially if `keys` references these column.
+                if !literals.is_empty() {
+                    **input = input.take_dangerous().map(literals);
+                }
+                // TODO(frank): make this smarter if needed.
+                Vec::new()
             }
         }
     }
