@@ -94,7 +94,7 @@ async fn run() -> Result<(), anyhow::Error> {
     });
 
     // Initialize connection to materialized instance.
-    let (client, _conn) = tokio_postgres::Config::new()
+    let (client, conn) = tokio_postgres::Config::new()
         .user("mzd")
         .host(&args.materialized_host)
         .port(args.materialized_port)
@@ -102,8 +102,17 @@ async fn run() -> Result<(), anyhow::Error> {
         .await
         .context("creating postgres client")?;
 
+    // The connection object performs the actual communication with the database,
+    // so spawn it off to run on its own.
+    tokio::spawn(async move {
+        if let Err(e) = conn.await {
+            log::error!("connection error: {}", e);
+        }
+    });
+
     // Create Kinesis source and materialized view.
     mz::create_source_and_views(&client, stream_arn).await?;
+    log::info!("Created source and materialized views");
 
     // Query materialized view for all pushed Kinesis records.
     let materialize_task = tokio::spawn({
