@@ -373,28 +373,26 @@ fn any<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    for d in datums {
-        match d {
-            Datum::Null | Datum::True => return d,
-            Datum::False => (),
-            _ => unreachable!(),
-        }
-    }
-    Datum::False
+    datums
+        .into_iter()
+        .fold(Datum::False, |state, next| match (state, next) {
+            (Datum::True, _) | (_, Datum::True) => Datum::True,
+            (Datum::Null, _) | (_, Datum::Null) => Datum::Null,
+            _ => Datum::False,
+        })
 }
 
 fn all<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    for d in datums {
-        match d {
-            Datum::Null | Datum::False => return d,
-            Datum::True => (),
-            _ => unreachable!(),
-        }
-    }
-    Datum::True
+    datums
+        .into_iter()
+        .fold(Datum::True, |state, next| match (state, next) {
+            (Datum::False, _) | (_, Datum::False) => Datum::False,
+            (Datum::Null, _) | (_, Datum::Null) => Datum::Null,
+            _ => Datum::True,
+        })
 }
 
 fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
