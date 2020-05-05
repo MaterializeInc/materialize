@@ -31,7 +31,6 @@ impl crate::Transform for ProjectionLifting {
 }
 
 impl ProjectionLifting {
-
     /// Hoist projections through operators.
     pub fn action(
         &self,

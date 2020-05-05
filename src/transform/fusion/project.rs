@@ -32,7 +32,6 @@ impl crate::Transform for Project {
 }
 
 impl Project {
-
     /// Fuses Project operators with parent operators when possible.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Project { input, outputs } = relation {

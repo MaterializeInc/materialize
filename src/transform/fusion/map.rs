@@ -38,7 +38,6 @@ impl crate::Transform for Map {
 }
 
 impl Map {
-
     /// Fuses a sequence of `Map` operators in to one `Map` operator.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Map { input, scalars } = relation {

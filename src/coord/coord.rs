@@ -40,7 +40,6 @@ use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
     SinkConnector, TailSinkConnector, Timestamp, Update,
 };
-use transform::Optimizer;
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
     SourceInstanceId,
@@ -52,6 +51,7 @@ use sql::{
     ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session, Statement,
 };
 use sql_parser::ast::ExplainStage;
+use transform::Optimizer;
 
 use crate::persistence::SqlSerializer;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};

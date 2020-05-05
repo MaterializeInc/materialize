@@ -40,7 +40,6 @@ impl crate::Transform for JoinImplementation {
 }
 
 impl JoinImplementation {
-
     /// Pre-order visitor for each `RelationExpr` to find join operators.
     ///
     /// This method accumulates state about let-bound arrangements, so that
@@ -71,7 +70,6 @@ impl JoinImplementation {
             self.action(relation, arranged);
         }
     }
-
 
     /// Determines the join implementation for join operators.
     pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {

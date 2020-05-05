@@ -42,13 +42,8 @@ impl crate::Transform for InlineLet {
 }
 
 impl InlineLet {
-
     /// Install replace certain `Get` operators with their `Let` value.
-    pub fn action(
-        &self,
-        relation: &mut RelationExpr,
-        lets: &mut Vec<(LocalId, RelationExpr)>,
-    ) {
+    pub fn action(&self, relation: &mut RelationExpr, lets: &mut Vec<(LocalId, RelationExpr)>) {
         if let RelationExpr::Let { id, value, body } = relation {
             self.action(value, lets);
 

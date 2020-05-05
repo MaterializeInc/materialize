@@ -37,7 +37,6 @@ impl crate::Transform for Join {
 }
 
 impl Join {
-
     /// Fuses multiple `Join` operators into one `Join` operator.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {

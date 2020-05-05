@@ -10,11 +10,10 @@
 //! Re-assign type information and identifiers to each `Get` to ensure
 //! uniqueness of identifiers.
 
-
 use std::collections::HashMap;
 
-use repr::RelationType;
 use expr::{GlobalId, Id, IdGen, LocalId, RelationExpr, ScalarExpr};
+use repr::RelationType;
 
 /// Refreshes identifiers and types for local let bindings.
 ///
@@ -38,7 +37,6 @@ impl crate::Transform for UpdateLet {
 }
 
 impl UpdateLet {
-
     /// Re-assign type information and identifier to each `Get`.
     pub fn action(
         &self,

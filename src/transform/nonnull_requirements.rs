@@ -26,7 +26,6 @@ use std::collections::{HashMap, HashSet};
 
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr, TableFunc};
 
-
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
 pub struct NonNullRequirements;
@@ -43,7 +42,6 @@ impl crate::Transform for NonNullRequirements {
 }
 
 impl NonNullRequirements {
-
     /// Push non-null requirements toward sources.
     pub fn action(
         &self,

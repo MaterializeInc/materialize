@@ -49,8 +49,8 @@
 
 use std::collections::HashMap;
 
-use repr::{ColumnType, Datum, ScalarType};
 use expr::{AggregateFunc, GlobalId, RelationExpr, ScalarExpr};
+use repr::{ColumnType, Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -70,7 +70,6 @@ impl crate::Transform for PredicatePushdown {
 }
 
 impl PredicatePushdown {
-
     /// Pushes predicates down through other operators.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Filter { input, predicates } = relation {

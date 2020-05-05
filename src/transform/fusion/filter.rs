@@ -59,7 +59,6 @@ impl crate::Transform for Filter {
 }
 
 impl Filter {
-
     /// Fuses multiple `Filter` operators into one and deduplicates predicates.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Filter { input, predicates } = relation {

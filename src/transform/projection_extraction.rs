@@ -31,7 +31,6 @@ impl crate::Transform for ProjectionExtraction {
 }
 
 impl ProjectionExtraction {
-
     /// Transform column references in a `Map` into a `Project`.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Map { input, scalars } = relation {

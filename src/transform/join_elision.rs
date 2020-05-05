@@ -37,7 +37,6 @@ impl crate::Transform for JoinElision {
 }
 
 impl JoinElision {
-
     /// Removes unit collections from joins, and joins with fewer than two inputs.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {

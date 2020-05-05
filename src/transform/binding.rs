@@ -64,8 +64,8 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use repr::RelationType;
 use expr::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
+use repr::RelationType;
 
 // -----------------------------------------------------------------------------
 

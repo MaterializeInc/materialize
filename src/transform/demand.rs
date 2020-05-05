@@ -44,7 +44,6 @@ impl crate::Transform for Demand {
 }
 
 impl Demand {
-
     /// Columns to be produced.
     pub fn action(
         &self,

@@ -29,7 +29,6 @@ pub use relation::{
 pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, ScalarExpr};
 
-
 /// A [`RelationExpr`] that claims to have been optimized, e.g., by an
 /// [`Optimizer`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

@@ -16,8 +16,8 @@
 
 use std::collections::HashMap;
 
-use repr::{ColumnType, Datum, RelationType, ScalarType};
 use expr::{AggregateExpr, AggregateFunc, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 /// Harvests information about non-nullability of columns from sources.
 #[derive(Debug)]
@@ -37,7 +37,6 @@ impl crate::Transform for NonNullable {
 }
 
 impl NonNullable {
-
     /// Harvests information about non-nullability of columns from sources.
     pub fn action(&self, relation: &mut RelationExpr) {
         match relation {

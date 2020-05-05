@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
-use expr::{EvalError, GlobalId, RelationExpr, ScalarExpr, OptimizedRelationExpr};
+use expr::{EvalError, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 
 pub mod binding;
 pub mod column_knowledge;
@@ -206,7 +206,6 @@ impl Default for Optimizer {
             // `RelationExpr::Constant` if that is the case, so that subsequent use can
             // clearly see this.
             Box::new(crate::reduction::FoldConstants),
-
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
             // exists but is currently unevaluated with the new join implementations.
 
@@ -257,9 +256,9 @@ impl Optimizer {
     }
 }
 
-use std::collections::HashSet;
-use expr::Id;
 use dataflow_types::{DataflowDesc, LinearOperator};
+use expr::Id;
+use std::collections::HashSet;
 
 /// Optimizes the implementation of each dataflow.
 pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {

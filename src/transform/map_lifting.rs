@@ -44,7 +44,6 @@ impl crate::Transform for LiteralLifting {
 }
 
 impl LiteralLifting {
-
     /// Hoist literal values from maps wherever possible.
     ///
     /// Returns a list of literal scalar expressions that must be appended

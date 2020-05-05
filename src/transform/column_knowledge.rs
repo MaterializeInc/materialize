@@ -11,9 +11,9 @@
 
 use std::collections::HashMap;
 
+use expr::{GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 use repr::Datum;
 use repr::{ColumnType, RelationType, ScalarType};
-use expr::{GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]

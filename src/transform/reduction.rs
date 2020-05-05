@@ -11,8 +11,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use repr::{Datum, Row, RowArena};
 use expr::{GlobalId, RelationExpr, ScalarExpr};
+use repr::{Datum, Row, RowArena};
 
 use crate::TransformError;
 
@@ -479,8 +479,8 @@ pub mod demorgans {
 pub mod undistribute_and {
     use std::collections::HashMap;
 
-    use repr::{ColumnType, Datum, ScalarType};
     use expr::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr};
+    use repr::{ColumnType, Datum, ScalarType};
 
     use crate::TransformError;
 
