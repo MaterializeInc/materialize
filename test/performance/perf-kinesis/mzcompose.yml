@@ -15,7 +15,6 @@
 x-port-mappings:
   - &materialized 6875:6875
   - &grafana 3000:3000
-  - &prometheus 9090:9090
 
 version: '3.7'
 services:
@@ -32,9 +31,6 @@ services:
       - *materialized
     init: true
     command: -w 4
-    environment:
-      - MZ_LOG=pgwire=debug,info
-      - DIFFERENTIAL_EAGER_MERGE=1000
 
   grafana:
     mzbuild: dashboard

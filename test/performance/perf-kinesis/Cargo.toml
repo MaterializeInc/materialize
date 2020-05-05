@@ -1,11 +1,12 @@
 [package]
 name = "perf-kinesis"
+description = "Tool to test Materialize's performance with AWS Kinesis."
 version = "0.1.0"
-authors = ["Jessica Laughlin <jessica@materialize.io>"]
 edition = "2018"
 publish = false
 
 [dependencies]
+anyhow = "1.0.28"
 aws-util = { path = "../../../src/aws-util" }
 bytes = "0.5.4"
 chrono = "0.4"

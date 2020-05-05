@@ -16,7 +16,7 @@ use anyhow::Context;
 use log::info;
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::StaticProvider;
-use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput};
+use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
 use crate::aws;
 
@@ -53,19 +53,19 @@ pub async fn kinesis_client(
     Ok(kinesis_client)
 }
 
-/// Wrapper around AWS Kinesis ListShards API (and Rusoto).
+/// Wrapper around AWS Kinesis ListShards API.
 ///
-/// Generates a set of all Shard ids in a given stream, potentially paginating through
-/// a long list of shards (greater than 100) using the next_token parameter.
+/// Returns all shards in a given Kinesis stream, potentially paginating through
+/// a list of shards (greater than 100) using the next_token request parameter.
 ///
 /// Does not currently handle any ListShards errors, will return all errors
 /// directly to the caller.
-pub async fn get_shard_ids(
+pub async fn list_shards(
     client: &KinesisClient,
     stream_name: &str,
-) -> Result<HashSet<String>, anyhow::Error> {
+) -> Result<Vec<Shard>, anyhow::Error> {
     let mut next_token = None;
-    let mut all_shard_ids = HashSet::new();
+    let mut all_shards = Vec::new();
     loop {
         let output = client
             .list_shards(ListShardsInput {
@@ -80,9 +80,7 @@ pub async fn get_shard_ids(
 
         match output.shards {
             Some(shards) => {
-                for shard in shards {
-                    all_shard_ids.insert(shard.shard_id.clone());
-                }
+                all_shards.extend(shards.into_iter());
             }
             None => {
                 return Err(anyhow::Error::msg(format!(
@@ -97,9 +95,18 @@ pub async fn get_shard_ids(
             next_token = output.next_token;
         } else {
             // When `next_token` is None, we've paginated through all of the Shards.
-            break Ok(all_shard_ids);
+            break Ok(all_shards);
         }
     }
+}
+
+/// Instead of returning Shard objects, only return their ids.
+pub async fn get_shard_ids(
+    client: &KinesisClient,
+    stream_name: &str,
+) -> Result<HashSet<String>, anyhow::Error> {
+    let shards = list_shards(client, stream_name).await?;
+    Ok(shards.into_iter().map(|s| s.shard_id).collect())
 }
 
 /// Wrapper around AWS Kinesis GetShardIterator API (and Rusoto).

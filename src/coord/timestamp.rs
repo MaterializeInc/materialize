@@ -1269,10 +1269,7 @@ impl Timestamper {
                 (Some(kinesis_client), Some(cached_shard_ids))
             }
             Err(e) => {
-                error!(
-                    "Initializing KinesisSourceConnector with empty shard list: {:#?}",
-                    e
-                );
+                error!("Hit error trying to create KinesisClient for Timestamper. Timestamps will not update for source based on Kinesis stream {}. {:#?}", kinc.stream_name, e);
                 (None, None)
             }
         };

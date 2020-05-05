@@ -11,7 +11,6 @@ FROM ubuntu:bionic
 
 RUN apt-get update && apt-get -qy install \
     ca-certificates \
-    postgresql-client \
     wait-for-it
 
 COPY perf-kinesis /usr/local/bin

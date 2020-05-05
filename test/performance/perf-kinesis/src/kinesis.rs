@@ -12,66 +12,21 @@ use std::collections::VecDeque;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::Context;
 use bytes::Bytes;
-use chrono::Utc;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use rusoto_core::{Region, RusotoError};
-use rusoto_credential::AwsCredentials;
+use rusoto_core::RusotoError;
 use rusoto_kinesis::{
     CreateStreamInput, DeleteStreamInput, DescribeStreamInput, Kinesis, KinesisClient,
-    ListShardsInput, PutRecordsError, PutRecordsInput, PutRecordsRequestEntry, Shard,
+    PutRecordsError, PutRecordsInput, PutRecordsRequestEntry,
 };
 
-use aws_util::aws;
+use aws_util;
 use ore::retry;
 
 const DUMMY_PARTITION_KEY: &str = "dummy";
 const ACTIVE: &str = "ACTIVE";
-
-#[derive(Debug)]
-pub struct KinesisInfo {
-    pub aws_region: Region,
-    pub aws_account: String,
-    pub aws_credentials: AwsCredentials,
-}
-
-impl KinesisInfo {
-    pub fn new_with(
-        aws_region: Region,
-        aws_account: String,
-        aws_credentials: AwsCredentials,
-    ) -> KinesisInfo {
-        KinesisInfo {
-            aws_region,
-            aws_account,
-            aws_credentials,
-        }
-    }
-}
-
-/// Creates a KinesisClient to put records to the target Kinesis stream.
-/// Creates KinesisInfo to use for creating our source and views.
-pub async fn create_client(aws_region: &str) -> Result<(KinesisClient, KinesisInfo), String> {
-    let (aws_account, aws_credentials) = aws::account_details(Duration::from_secs(15))
-        .await
-        .map_err(|e| format!("error getting AWS account details: {:#?}", e))?;
-    let provider = rusoto_credential::StaticProvider::new(
-        aws_credentials.aws_access_key_id().to_owned(),
-        aws_credentials.aws_secret_access_key().to_owned(),
-        aws_credentials.token().clone(),
-        aws_credentials
-            .expires_at()
-            .map(|expires_at| (expires_at - Utc::now()).num_seconds()),
-    );
-    let dispatcher = rusoto_core::HttpClient::new().unwrap();
-
-    let region: Region = aws_region.parse().unwrap();
-    Ok((
-        KinesisClient::new_with(dispatcher, provider, region.clone()),
-        KinesisInfo::new_with(region, aws_account, aws_credentials),
-    ))
-}
 
 /// Creates a Kinesis stream with the given name and shard count.
 /// Will fail if the stream is not created and in ACTIVE mode after
@@ -80,60 +35,38 @@ pub async fn create_stream(
     kinesis_client: &KinesisClient,
     stream_name: &str,
     shard_count: i64,
-) -> Result<(), String> {
+) -> Result<String, anyhow::Error> {
     kinesis_client
         .create_stream(CreateStreamInput {
             shard_count,
             stream_name: stream_name.to_string(),
         })
         .await
-        .map_err(|e| format!("Error creating stream: {}", e))?;
+        .context("creating Kinesis stream")?;
 
-    retry::retry_for(Duration::from_secs(120), |_| async {
-        let description = kinesis_client
+    let stream_arn = retry::retry_for(Duration::from_secs(120), |_| async {
+        let description = &kinesis_client
             .describe_stream(DescribeStreamInput {
                 exclusive_start_shard_id: None,
                 limit: None,
                 stream_name: stream_name.to_string(),
             })
             .await
-            .map_err(|e| format!("Error describing stream: {}", e))?;
-        if description.stream_description.stream_status == ACTIVE {
-            Ok(())
-        } else {
-            Err(format!(
+            .context("describing Kinesis stream")?
+            .stream_description;
+        match description.stream_status.as_ref() {
+            ACTIVE => Ok(description.stream_arn.clone()),
+            other_status => Err(anyhow::Error::msg(format!(
                 "Stream {} is not yet ACTIVE, is {}",
                 stream_name.to_string(),
-                description.stream_description.stream_status
-            ))
+                other_status
+            ))),
         }
     })
     .await
-    .map_err(|e| format!("Error describing stream: {}", e))?;
+    .context("Kinesis stream never became ACTIVE")?;
 
-    Ok(())
-}
-
-/// List all shards in a given Kinesis stream.
-pub async fn list_shards(
-    kinesis_client: &KinesisClient,
-    stream_name: &str,
-) -> Result<Vec<Shard>, String> {
-    match kinesis_client
-        .list_shards(ListShardsInput {
-            exclusive_start_shard_id: None,
-            max_results: None,
-            next_token: None,
-            stream_creation_timestamp: None,
-            stream_name: Some(stream_name.to_string()),
-        })
-        .await
-        .map_err(|e| format!("Error listing shards: {}", e))?
-        .shards
-    {
-        Some(shards) => Ok(shards),
-        None => Err(format!("Stream {} has no shards", stream_name)),
-    }
+    Ok(stream_arn)
 }
 
 /// Generate total_records number of records (random strings converted to bytes).
@@ -146,14 +79,15 @@ pub async fn generate_and_put_records(
     stream_name: &str,
     total_records: i64,
     records_per_second: i64,
-) -> Result<(), String> {
+) -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
     // For each string, round robin puts across all of the shards.
-    let mut shard_starting_hash_keys: VecDeque<String> = list_shards(&kinesis_client, &stream_name)
-        .await?
-        .iter()
-        .map(|shard| shard.hash_key_range.starting_hash_key.clone())
-        .collect();
+    let mut shard_starting_hash_keys: VecDeque<String> =
+        aws_util::kinesis::list_shards(&kinesis_client, &stream_name)
+            .await?
+            .iter()
+            .map(|shard| shard.hash_key_range.starting_hash_key.clone())
+            .collect();
 
     let mut put_record_count = 0;
     while put_record_count < total_records {
@@ -168,7 +102,7 @@ pub async fn generate_and_put_records(
             records_per_second,
         )
         .await
-        .map_err(|e| format!("error putting records to Kinesis: {}", e))?;
+        .context("putting records to Kinesis")?;
         shard_starting_hash_keys.push_back(target_shard);
 
         let elapsed = put_timer.elapsed().as_millis();
@@ -198,7 +132,7 @@ pub async fn put_records_one_second(
     stream_name: &str,
     shard_starting_hash_key: &str,
     records_per_second: i64,
-) -> Result<i64, String> {
+) -> Result<i64, anyhow::Error> {
     // Generate records.
     let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
     for _i in 0..records_per_second {
@@ -245,7 +179,10 @@ pub async fn put_records_one_second(
                 }
             }
             Err(e) => {
-                return Err(format!("Failed putting records: {}", e));
+                return Err(anyhow::Error::msg(format!(
+                    "failed putting records to Kinesis: {}",
+                    e
+                )));
             }
         }
     }
@@ -256,14 +193,14 @@ pub async fn put_records_one_second(
 pub async fn delete_stream(
     kinesis_client: &KinesisClient,
     stream_name: &str,
-) -> Result<(), String> {
+) -> Result<(), anyhow::Error> {
     kinesis_client
         .delete_stream(DeleteStreamInput {
             enforce_consumer_deletion: Some(true),
             stream_name: stream_name.to_owned(),
         })
         .await
-        .map_err(|e| format!("Error deleting Kinesis stream: {}", e))?;
+        .context("deleting Kinesis stream")?;
     log::info!("Deleted Kinesis stream: {}", &stream_name);
     Ok(())
 }
