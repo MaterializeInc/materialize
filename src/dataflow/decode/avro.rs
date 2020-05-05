@@ -9,12 +9,12 @@
 
 use log::error;
 
-use super::{DecoderState, PushSession};
-
+use async_trait::async_trait;
 use dataflow_types::{Diff, Timestamp};
 use interchange::avro::{Decoder, EnvelopeType};
 use repr::Row;
 
+use super::{DecoderState, PushSession};
 use crate::metrics::EVENTS_COUNTER;
 
 pub struct AvroDecoderState {
@@ -40,6 +40,7 @@ impl AvroDecoderState {
     }
 }
 
+#[async_trait(?Send)]
 impl DecoderState for AvroDecoderState {
     /// Reset number of success and failures with decoding
     fn reset_event_count(&mut self) {
@@ -47,8 +48,8 @@ impl DecoderState for AvroDecoderState {
         self.events_error = 0;
     }
 
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        match self.decoder.decode(bytes) {
+    async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+        match self.decoder.decode(bytes).await {
             Ok(diff_pair) => {
                 if let Some(after) = diff_pair.after {
                     self.events_success += 1;
@@ -66,7 +67,7 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a key-value pair
-    fn give_key_value<'a>(
+    async fn give_key_value<'a>(
         &mut self,
         key: Row,
         bytes: &[u8],
@@ -74,8 +75,7 @@ impl DecoderState for AvroDecoderState {
         session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
         time: Timestamp,
     ) {
-        let result = self.decoder.decode(bytes);
-        match result {
+        match self.decoder.decode(bytes).await {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 session.give((key, diff_pair.after, time));
@@ -88,14 +88,14 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a plain value
-    fn give_value<'a>(
+    async fn give_value<'a>(
         &mut self,
         bytes: &[u8],
         _: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
-        match self.decoder.decode(bytes) {
+        match self.decoder.decode(bytes).await {
             Ok(diff_pair) => {
                 self.events_success += 1;
                 if diff_pair.before.is_some() {

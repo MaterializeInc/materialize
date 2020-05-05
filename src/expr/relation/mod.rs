@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use repr::{ColumnType, Datum, RelationType, Row};
 
-use self::func::{AggregateFunc, UnaryTableFunc};
+use self::func::{AggregateFunc, TableFunc};
 use crate::id::DummyHumanizer;
 use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 
@@ -27,7 +27,6 @@ pub mod func;
 ///
 /// The AST is meant reflect the capabilities of the [`differential_dataflow::Collection`] type,
 /// written generically enough to avoid run-time compilation work.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum RelationExpr {
     /// A constant relation containing specified rows.
@@ -82,13 +81,13 @@ pub enum RelationExpr {
     /// Like Map, but yields zero-or-more output rows per input row
     ///
     /// The runtime memory footprint of this operator is zero.
-    FlatMapUnary {
+    FlatMap {
         /// The source collection
         input: Box<RelationExpr>,
         /// The table func to apply
-        func: UnaryTableFunc,
+        func: TableFunc,
         /// The argument to the table func
-        expr: ScalarExpr,
+        exprs: Vec<ScalarExpr>,
         /// Output columns demanded by the surrounding expression.
         ///
         /// The input columns are often discarded and can be very
@@ -303,15 +302,14 @@ impl RelationExpr {
 
                 typ
             }
-            RelationExpr::FlatMapUnary {
+            RelationExpr::FlatMap {
                 input,
                 func,
-                expr,
+                exprs: _,
                 demand: _,
             } => {
                 let mut typ = input.typ();
-                typ.column_types
-                    .extend(func.output_type(&expr.typ(&typ)).column_types);
+                typ.column_types.extend(func.output_type().column_types);
                 // FlatMap can add duplicate rows, so input keys are no longer valid
                 RelationType::new(typ.column_types)
             }
@@ -509,11 +507,11 @@ impl RelationExpr {
     }
 
     /// Like `map`, but yields zero-or-more output rows per input row
-    pub fn flat_map_unary(self, func: UnaryTableFunc, expr: ScalarExpr) -> Self {
-        RelationExpr::FlatMapUnary {
+    pub fn flat_map(self, func: TableFunc, exprs: Vec<ScalarExpr>) -> Self {
+        RelationExpr::FlatMap {
             input: Box::new(self),
             func,
-            expr,
+            exprs,
             demand: None,
         }
     }
@@ -725,7 +723,7 @@ impl RelationExpr {
             RelationExpr::Map { input, .. } => {
                 f(input)?;
             }
-            RelationExpr::FlatMapUnary { input, .. } => {
+            RelationExpr::FlatMap { input, .. } => {
                 f(input)?;
             }
             RelationExpr::Filter { input, .. } => {
@@ -802,7 +800,7 @@ impl RelationExpr {
             RelationExpr::Map { input, .. } => {
                 f(input)?;
             }
-            RelationExpr::FlatMapUnary { input, .. } => {
+            RelationExpr::FlatMap { input, .. } => {
                 f(input)?;
             }
             RelationExpr::Filter { input, .. } => {
@@ -898,12 +896,16 @@ impl RelationExpr {
                     s.visit_mut(f);
                 }
             }
-            RelationExpr::FlatMapUnary {
-                expr,
+            RelationExpr::FlatMap {
+                exprs,
                 input: _,
                 func: _,
                 demand: _,
-            } => f(expr),
+            } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
             RelationExpr::Join {
                 equivalences: keys,
                 inputs: _,
@@ -1119,7 +1121,6 @@ impl IdGen {
 }
 
 /// Describes an aggregation expression.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct AggregateExpr {
     /// Names the aggregation function.

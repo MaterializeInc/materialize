@@ -262,7 +262,6 @@ impl DataflowDesc {
 
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataEncoding {
     Avro(AvroEncoding),
@@ -393,7 +392,6 @@ impl DataEncoding {
 }
 
 /// Encoding in Avro format.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvroEncoding {
     pub key_schema: Option<String>,
@@ -402,7 +400,6 @@ pub struct AvroEncoding {
 }
 
 /// Encoding in CSV format, with `n_cols` columns per row, with an optional header.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
     pub header_row: bool,
@@ -411,7 +408,6 @@ pub struct CsvEncoding {
 }
 
 /// Encoding in Protobuf format.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProtobufEncoding {
     pub descriptors: Vec<u8>,
@@ -423,7 +419,6 @@ pub struct ProtobufEncoding {
 /// A source contains enough information to instantiate a stream of changes,
 /// as well as related metadata about the columns, their types, and properties
 /// of the collection.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
     pub connector: SourceConnector,
@@ -433,7 +428,6 @@ pub struct SourceDesc {
 }
 
 /// A sink for updates to a relational collection.
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SinkDesc {
     pub from: (GlobalId, RelationDesc),
@@ -524,8 +518,8 @@ pub struct KafkaSourceConnector {
 pub struct KinesisSourceConnector {
     pub stream_name: String,
     pub region: Region,
-    pub access_key: String,
-    pub secret_access_key: String,
+    pub access_key: Option<String>,
+    pub secret_access_key: Option<String>,
     pub token: Option<String>,
 }
 

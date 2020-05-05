@@ -129,40 +129,8 @@ pub fn validate_value_schema(schema: &str, envelope: EnvelopeType) -> Result<Rel
             }
         }
         EnvelopeType::Upsert => match node.inner {
-            SchemaPiece::Union(us) => {
-                if us.variants().len() > 2 {
-                    bail!(
-                        "upsert schema can only be record or union[null, record], got: {:?}",
-                        schema.top
-                    );
-                }
-                let has_null = us.variants().iter().any(|s| is_null(s));
-                let record = us
-                    .variants()
-                    .iter()
-                    .find(|s| match s.get_piece_and_name(&schema).0 {
-                        SchemaPiece::Record { .. } => true,
-                        _ => false,
-                    });
-                if !has_null {
-                    bail!(
-                        "upsert schema can only be record or union[null, record], got: {:?}",
-                        schema.top
-                    );
-                }
-                match record {
-                    Some(record) => record,
-                    None => bail!(
-                        "upsert schema can only be record or union[null, record], got: {:?}",
-                        schema.top
-                    ),
-                }
-            }
             SchemaPiece::Record { .. } => &schema.top,
-            _ => bail!(
-                "upsert schema can only be record or union[null, record], got: {:?}",
-                schema.top
-            ),
+            _ => bail!("upsert schema can only be record, got: {:?}", schema.top),
         },
         EnvelopeType::None => &schema.top,
     };
@@ -354,16 +322,21 @@ fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
     Ok(row)
 }
 
-pub fn extract_row<'a, I>(mut v: Value, strip_union: bool, extra: I) -> Result<Option<Row>>
+pub fn extract_nullable_row<'a, I>(mut v: Value, extra: I) -> Result<Option<Row>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    if strip_union {
-        v = match v {
-            Value::Union(_, v) => *v,
-            _ => bail!("unsupported avro value: {:?}", v),
-        }
-    }
+    v = match v {
+        Value::Union(_, v) => *v,
+        _ => bail!("unsupported avro value: {:?}", v),
+    };
+    extract_row(v, extra)
+}
+
+pub fn extract_row<'a, I>(v: Value, extra: I) -> Result<Option<Row>>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
     match v {
         Value::Record(fields) => {
             let mut row = RowPacker::new();
@@ -390,9 +363,9 @@ pub fn extract_debezium_slow(v: Value) -> Result<DiffPair<Row>> {
         Value::Record(fields) => {
             for (name, val) in fields {
                 if name == "before" {
-                    before = extract_row(val, true, iter::once(Datum::Int64(-1)))?;
+                    before = extract_nullable_row(val, iter::once(Datum::Int64(-1)))?;
                 } else if name == "after" {
-                    after = extract_row(val, true, iter::once(Datum::Int64(1)))?;
+                    after = extract_nullable_row(val, iter::once(Datum::Int64(1)))?;
                 } else {
                     // Intentionally ignore other fields.
                 }
@@ -479,7 +452,7 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `DiffPair`.
-    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair<Row>> {
+    pub async fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair<Row>> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a big
         // endian 32-bit schema ID.
@@ -500,7 +473,7 @@ impl Decoder {
         }
 
         let (resolved_schema, reader_schema) = match &mut self.writer_schemas {
-            Some(cache) => match cache.get(schema_id, &self.reader_schema)? {
+            Some(cache) => match cache.get(schema_id, &self.reader_schema).await? {
                 // If we get a schema back, the writer schema differs from our
                 // schema, so we need to perform schema resolution. If not,
                 // the schemas are identical, so we can skip schema resolution.
@@ -517,14 +490,12 @@ impl Decoder {
             if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
                 // The record is laid out such that we can extract the `before` and
                 // `after` fields without decoding the entire record.
-                let before = extract_row(
+                let before = extract_nullable_row(
                     avro::from_avro_datum(&schema, &mut bytes)?,
-                    true,
                     iter::once(Datum::Int64(-1)),
                 )?;
-                let after = extract_row(
+                let after = extract_nullable_row(
                     avro::from_avro_datum(&schema, &mut bytes)?,
-                    true,
                     iter::once(Datum::Int64(1)),
                 )?;
                 DiffPair { before, after }
@@ -534,7 +505,7 @@ impl Decoder {
             }
         } else {
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            let row = extract_row(val, self.envelope == EnvelopeType::Upsert, iter::empty())?;
+            let row = extract_row(val, iter::empty())?;
             DiffPair {
                 before: None,
                 after: row,
@@ -777,7 +748,7 @@ impl SchemaCache {
     ) -> SchemaCache {
         SchemaCache {
             cache: HashMap::new(),
-            ccsr_client: ccsr::Client::new(&schema_registry),
+            ccsr_client: schema_registry.build(),
             reader_fingerprint,
         }
     }
@@ -785,13 +756,13 @@ impl SchemaCache {
     /// Looks up the writer schema for ID. If the schema is literally identical
     /// to the reader schema, as determined by the reader schema fingerprint
     /// that this schema cache was initialized with, returns None.
-    fn get(&mut self, id: i32, reader_schema: &Schema) -> Result<Option<&Schema>> {
+    async fn get(&mut self, id: i32, reader_schema: &Schema) -> Result<Option<&Schema>> {
         match self.cache.entry(id) {
             Entry::Occupied(o) => Ok(o.into_mut().as_ref()),
             Entry::Vacant(v) => {
                 // TODO(benesch): make this asynchronous, to avoid blocking the
                 // Timely thread on this network request.
-                let res = self.ccsr_client.get_schema_by_id(id)?;
+                let res = self.ccsr_client.get_schema_by_id(id).await?;
                 let schema = parse_schema(&res.raw)?;
                 if schema.fingerprint::<Sha256>().bytes == self.reader_fingerprint.bytes {
                     Ok(v.insert(None).as_ref())

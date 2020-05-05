@@ -307,6 +307,8 @@ where
                             return SourceStatus::Alive;
                         }
                         Some(ts) => {
+                            // Note: empty and null payload/keys are currently
+                            // treated as the same thing.
                             let key = message.key.unwrap_or_default();
                             let out = message.payload.unwrap_or_default();
                             partition_metadata[partition as usize].0 = offset;

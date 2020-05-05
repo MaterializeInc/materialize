@@ -10,11 +10,11 @@
 # This file is derived from
 # https://github.com/ctz/rustls/blob/master/test-ca/openssl.cnf
 
-[ broker ]
+[ kafka ]
 authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
-subjectAltName = DNS:broker
+subjectAltName = DNS:kafka
 
 [ producer ]
 authorityKeyIdentifier=keyid,issuer

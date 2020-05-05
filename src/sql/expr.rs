@@ -24,7 +24,7 @@ use crate::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use expr::{
-    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, UnaryFunc, UnaryTableFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,10 +52,10 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
         scalars: Vec<ScalarExpr>,
     },
-    FlatMapUnary {
+    FlatMap {
         input: Box<RelationExpr>,
-        func: UnaryTableFunc,
-        expr: ScalarExpr,
+        func: TableFunc,
+        exprs: Vec<ScalarExpr>,
     },
     Filter {
         input: Box<RelationExpr>,
@@ -261,13 +261,15 @@ impl RelationExpr {
                 }
             }
 
-            RelationExpr::FlatMapUnary {
+            RelationExpr::FlatMap {
                 input,
                 func: _,
-                expr,
+                exprs,
             } => {
                 input.split_subquery_predicates();
-                expr.split_subquery_predicates();
+                for expr in exprs {
+                    expr.split_subquery_predicates();
+                }
             }
 
             RelationExpr::Filter { input, predicates } => {
@@ -334,13 +336,17 @@ impl RelationExpr {
                 }
                 Ok(input)
             }
-            FlatMapUnary { input, func, expr } => {
+            FlatMap { input, func, exprs } => {
                 let mut input = input.applied_to(id_gen, get_outer, col_map)?;
                 let old_arity = input.arity();
-                let expr = expr.applied_to(id_gen, col_map, &mut input)?;
+
+                let exprs = exprs
+                    .into_iter()
+                    .map(|e| e.applied_to(id_gen, col_map, &mut input))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let new_arity = input.arity();
                 let output_arity = func.output_arity();
-                input = input.flat_map_unary(func, expr);
+                input = input.flat_map(func, exprs);
                 if old_arity != new_arity {
                     // this means we added some columns to handle subqueries, and now we need to get rid of them
                     input = input.project(
@@ -519,7 +525,7 @@ impl RelationExpr {
             RelationExpr::Map { input, .. } => {
                 f(input);
             }
-            RelationExpr::FlatMapUnary { input, .. } => {
+            RelationExpr::FlatMap { input, .. } => {
                 f(input);
             }
             RelationExpr::Filter { input, .. } => {
@@ -571,7 +577,7 @@ impl RelationExpr {
             RelationExpr::Map { input, .. } => {
                 f(input);
             }
-            RelationExpr::FlatMapUnary { input, .. } => {
+            RelationExpr::FlatMap { input, .. } => {
                 f(input);
             }
             RelationExpr::Filter { input, .. } => {
@@ -615,8 +621,10 @@ impl RelationExpr {
                     scalar.visit_columns(depth, f);
                 }
             }
-            RelationExpr::FlatMapUnary { expr, .. } => {
-                expr.visit_columns(depth, f);
+            RelationExpr::FlatMap { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_columns(depth, f);
+                }
             }
             RelationExpr::Filter { predicates, .. } => {
                 for predicate in predicates {
@@ -649,8 +657,10 @@ impl RelationExpr {
                     scalar.bind_parameters(parameters);
                 }
             }
-            RelationExpr::FlatMapUnary { expr, .. } => {
-                expr.bind_parameters(parameters);
+            RelationExpr::FlatMap { exprs, .. } => {
+                for expr in exprs {
+                    expr.bind_parameters(parameters);
+                }
             }
             RelationExpr::Filter { predicates, .. } => {
                 for predicate in predicates {
@@ -1135,10 +1145,13 @@ impl RelationExpr {
                 }
                 typ
             }
-            RelationExpr::FlatMapUnary { input, func, expr } => {
+            RelationExpr::FlatMap {
+                input,
+                func,
+                exprs: _,
+            } => {
                 let mut typ = input.typ(outers, params);
-                let func_typ = func.output_type(&expr.typ(outers, &typ, params));
-                typ.column_types.extend(func_typ.column_types);
+                typ.column_types.extend(func.output_type().column_types);
                 // FlatMap can add duplicate rows, so input keys are no longer valid
                 RelationType::new(typ.column_types)
             }

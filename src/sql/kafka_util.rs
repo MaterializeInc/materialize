@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
-use ccsr::{Certificate, Identity};
+use ccsr::tls::{Certificate, Identity};
 use reqwest::Url;
 
 use failure::bail;

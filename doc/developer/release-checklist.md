@@ -1,5 +1,12 @@
 # Release checklist
 
+- [ ] Create a new github issue that you copy this checklist into, named `Release:
+  vX.Y.Z`. (Copy this checklist [from raw markdown][release-checklist-raw], and create [a
+  new issue][new-issue].)
+
+[release-checklist-raw]: https://raw.githubusercontent.com/MaterializeInc/materialize/master/doc/developer/release-checklist.md
+[new-issue]: https://github.com/MaterializeInc/materialize/issues/new/
+
 ## Release candidate
 
 A release candidate is the Materialize codebase at a given commit, tested for
@@ -17,8 +24,13 @@ production readiness.
   `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
   v0.2.3 would be called v0.2.3-rc1.
 
-- [ ] Update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-      and [`LICENSE`](/LICENSE) and commit that change.
+- Update the version fields in these files, and commit that change:
+
+  - [ ] [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
+  - [ ] [`LICENSE`](/LICENSE)
+
+  <details><summary>Example Diff</summary>
+  <p>
 
   ```diff
   diff --git a/src/materialized/Cargo.toml b/src/materialized/Cargo.toml
@@ -57,7 +69,8 @@ production readiness.
 
    Change License:            Apache License, Version 2.0
   ```
-
+  </p>
+  </details>
 
 - [ ] Create the release tag on the current commit.
 
@@ -67,7 +80,17 @@ production readiness.
   git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
+- [ ] On **master**:
+  - Update the version field in
+    [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) to `vNEXT-dev`.
+    For example, if releasing v0.1.2, bump the version on master to `v0.1.3-dev`.
+  - Run `cargo check` (or any other build command) to ensure that that `Cargo.lock` file
+    is correct.
+
+
 ### Test the release candidate
+
+All of these can be run in parallel.
 
 - [ ] Run the chbench load test on the release candidate tag.
 
@@ -102,7 +125,7 @@ production readiness.
   - [ ] Spin up the billing-demo with an updated `--message-count` argument.
 
     ```shell
-    cd src/billing-demo
+    cd demo/billing
     # Manually edit the mzcompose.yml to have `--message-count 100000000`
     # Follow the rest of the instructions in README.md
     ```
@@ -112,10 +135,12 @@ production readiness.
 
 ## Final release
 
+### Create git tag
+
 - [ ] Check out the final RC tag.
 
 - [ ] Update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-      and commit that change.
+  and commit that change.
 
 - [ ] Create the release tag on that commit.
 
@@ -125,38 +150,50 @@ production readiness.
   git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
-- [ ] Create Homebrew bottle and update Homebrew tap.
+### Create Homebrew Bottle and update tap
 
-  Follow the instructions in [MaterializeInc/homebrew-materialize's
-  CONTRIBUTING.md](homebrew-guide).
+- [ ] Follow the instructions in [MaterializeInc/homebrew-materialize's
+  CONTRIBUTING.md][homebrew-guide].
 
-- [ ] Create Debian package.
+### Verify the Debian package.
 
-  - [ ] Invert the `name` and `conflicts` fields in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml).
+- [ ] Go to [the bintray `materialized` apt repo][bintray] and just check that
+  the version you have published is present and published
 
-  - [ ] Run `cargo-deb` inside the CI builder. Note that <VERSION-NO-V> below
-    must not include the `v` prefix.
+[bintray]: https://bintray.com/beta/#/materialize/apt/materialized
 
-    ```shell
-    bin/ci-builder run stable cargo-deb --no-strip -p materialized --deb-version <VERSION-NO-V>
+
+### Convert the github Tag into a GitHub Release
+
+- [ ] Go to [the materialize releases][releases] page and find the tag that you
+  created as part of the "Final Release" step.
+
+  - Click "Edit" on the top right
+  - Use the version as the name.
+  - Fill out the description by copying the description from an earlier release
+    ([v0.1.2., for example][v0.1.2]) and updating the links appropriately.
+
+### Update the master branch for the next version
+
+- [ ] On **master**, update the various files that must be up to date:
+
+  - [ ] Update the [`LICENSE`](/LICENSE) file with the changes from the
+    release branch, so that it reflects the latest release of Materialize.
+    <details><summary>Example git command</summary>
+
+    ```console
+    $ git checkout v0.2.1 -- LICENSE
     ```
 
-    Upload the resulting `.deb` file to [GemFury](https://fury.io) by dragging-
-    and-dropping onto the administration console. (Yes, this is really the UI.)
+    </details>
 
-- [ ] Create a new [GitHub release][new-github-release].
+  - [ ] Ensure that the [Release Notes](../../doc/user/release-notes.md) are up
+    to date, including the current version.
 
-  Use the version as the name. Fill out the description by copying the
-  description from an earlier release ([v0.1.2., for example][v0.1.2]) and
-  updating the links appropriately.
+## Finish
 
-- [ ] On **master**, update the version field in [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml)
-  to `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on
-  master to `v0.1.3-dev`.
-
-   Also update the [`LICENSE`](/LICENSE) file with the changes from the
-   release branch, so that it reflects the latest release of Materialize.
+- [ ] Close the release issue you opened as the first step
 
 [homebrew-guide]: https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md
-[new-github-release]: https://github.com/MaterializeInc/materialize/releases/new
+[releases]: https://github.com/MaterializeInc/materialize/releases
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2

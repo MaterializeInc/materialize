@@ -26,7 +26,7 @@ accessible.
 - `assets`: Content used dynamically, i.e. JavaScript and SCSS.
 - `content`: All of the docs content, though this is mostly content symlinked to
   `/doc/user`.
-- `data`: Any JSON files you would want to use as a datastore. Currently unused.
+- `data`: Any JSON or YAML files you would want to use as a datastore.
 - `layouts`: All of the HTML templates for the site.
     - `partials`: Many HTML components, as well as our SQL diagrams.
 - `resources`: The results of dynamically generating content from `assets`.

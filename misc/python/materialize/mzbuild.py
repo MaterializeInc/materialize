@@ -186,14 +186,15 @@ class CargoBuild(CargoPreImage):
         super().__init__(rd, path)
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
+        self.extract = config.pop("extract", {})
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
     def run(self) -> None:
         super().run()
+        cargo_build = [self.rd.xcargo(), "build", "--release", "--bin", self.bin]
         spawn.runv(
-            [self.rd.xcargo(), "build", "--release", "--bin", self.bin],
-            cwd=self.rd.root,
+            cargo_build, cwd=self.rd.root,
         )
         shutil.copy(self.rd.xcargo_target_dir() / "release" / self.bin, self.path)
         if self.strip:
@@ -221,6 +222,19 @@ class CargoBuild(CargoPreImage):
                     self.path / self.bin,
                 ]
             )
+        if self.extract:
+            output = spawn.capture(
+                cargo_build + ["--message-format=json"], unicode=True
+            )
+            for line in output.split("\n"):
+                if line.strip() == "" or not line.startswith("{"):
+                    continue
+                message = json.loads(line)
+                if message["reason"] != "build-script-executed":
+                    continue
+                package = message["package_id"].split()[0]
+                for d in self.extract.get(package, []):
+                    shutil.copy(Path(message["out_dir"]) / d, self.path / Path(d).name)
 
     def inputs(self) -> Set[str]:
         crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
@@ -427,7 +441,6 @@ class ResolvedImage:
         cmd: Sequence[str] = [
             "docker",
             "build",
-            "--pull",
             "-f",
             "-",
             *(f"--build-arg={k}={v}" for k, v in self.image.build_args.items()),
@@ -459,6 +472,19 @@ class ResolvedImage:
         `ResolvedImage.spec`.
         """
         spawn.runv(["docker", "push", self.spec()])
+
+    def pushed(self) -> bool:
+        """Check whether the image is pushed to Docker Hub.
+
+        Note that this operation requires a rather slow network request.
+        """
+        proc = subprocess.run(
+            ["docker", "manifest", "inspect", self.spec()],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+        )
+        return proc.returncode == 0
 
     def run(self, args: List[str] = []) -> None:
         """Run a command in the image.
@@ -557,7 +583,7 @@ class DependencySet:
                 d, (self.dependencies[d0] for d0 in d.depends_on)
             )
 
-    def acquire(self, force_build: bool = False, push: bool = False) -> None:
+    def acquire(self, force_build: bool = False) -> None:
         """Download or build all of the images in the dependency set.
 
         Args:
@@ -579,8 +605,6 @@ class DependencySet:
                 else:
                     print(f"==> Acquiring {spec}")
                     acquired_from = d.acquire()
-                    if push and d.publish and acquired_from == AcquiredFrom.LOCAL_BUILD:
-                        d.push()
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self.dependencies.values())

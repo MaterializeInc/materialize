@@ -30,7 +30,10 @@ def main() -> None:
     # other build agents.
     print("--- Acquiring mzbuild images")
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
-    deps.acquire(push=True)
+    deps.acquire()
+    for d in deps:
+        if not d.pushed():
+            d.push()
 
     print("--- Staging Debian package")
     if os.environ["BUILDKITE_BRANCH"] == "master":
@@ -66,6 +69,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
         [
             repo.rd.xcargo(),
             "deb",
+            f"--variant={package}",
             "--no-build",
             "--no-strip",
             "--deb-version",

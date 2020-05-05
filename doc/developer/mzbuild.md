@@ -54,7 +54,7 @@ Here's a simple example for a fictional Python load generator called
 ```Dockerfile
 # test/fancy/loadgen/Dockerfile
 
-FROM ubuntu:bionic
+FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -139,7 +139,7 @@ this:
 
 MZFROM billing-demo AS billing-demo
 
-FROM ubuntu:bionic
+FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -362,6 +362,16 @@ publish: true
      Cargo is always invoked with the `--release` flag. The binary will be
      stripped of debug information unless `strip: false` is requested.
 
+     In rare cases, it may be necessary to extract files from the build
+     directory of a dependency. The `extract` key specifies a mapping from a
+     dependent package to a list of files to copy into the build context. Paths
+     should be relative and are interpreted relative to that crate's build
+     directory. Each extracted file will be placed in the root of the build
+     context with the same name as the original file. Copying directories is not
+     supported. Note that `extract` is only relevant if the dependency has a
+     custom Cargo build script, as Rust crates without a build script do not
+     have a build directory.
+
   * `type: cargo-test` builds a special image that simulates `cargo test`. This
      plugin is very special-cased at the moment, and unlikely to be generally
      useful.
@@ -430,7 +440,7 @@ mzbuild images.
 ```dockerfile
 MZFROM materialized
 
-FROM ubuntu:bionic
+FROM ubuntu:bionic-20200403
 
 COPY --from=0 ...
 ```

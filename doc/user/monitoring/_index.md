@@ -12,7 +12,7 @@ Materialize supports integration with monitoring tools using HTTP endpoints.
 ## Quick Monitoring Dashboards
 
 Materialize provides a recommended grafana dashboard and an all-inclusive docker image
-preconfigured to run it as [`materialize/simple-monitor`](simplemon-hub).
+preconfigured to run it as [`materialize/dashboard`][dashboard-hub].
 
 The only configuration required to get started with the docker image is the
 `MATERIALIZED_URL=<host>:<port>` environment variable.
@@ -21,17 +21,24 @@ As an example, if you are running `materialized` in a cloud instance at the IP a
 172.16.0.0, you could get a dashboard by running this command and opening `http://localhost:3000` in your web browser:
 
 ```console
-#               expose ports    point it at materialize
-$ docker run -d -p 3000:3000 -e MATERIALIZED_URL=172.16.0.0:6875 materialize/dashboard
+#               expose ports  ______point it at materialize______
+$ docker run -d -p 3000:3000  -e MATERIALIZED_URL=172.16.0.0:6875 materialize/dashboard
 ```
 
-While the dashboard is provided as a convenience and should not be relied on for
+The `materialize/dashboard` docker image bundles Prometheus and Grafana together to make
+getting insight into `materialized`s performance easy. It is not particularly
+configurable, and in particular is not designed to handle large metric volumes or long
+uptimes. It will start truncating metrics history after about 1GB of storage, which
+corresponds to about 3 days of data with the very fine-grained metrics collected inside
+the container.
+
+So, while the dashboard is provided as a convenience and should not be relied on for
 production monitoring, if you would like to persist metrics across restarts of the
 container you can mount a docker volume onto `/prometheus`:
 
 ```console
 $ docker run -d \
-    -v /tmp/prom-data:/prometheus \
+    -v /tmp/prom-data:/prometheus -u "$(id -u):$(id -g)" \
     -p 3000:3000 -e MATERIALIZED_URL=172.16.0.0:6875 \
     materialize/dashboard
 ```

@@ -63,7 +63,7 @@ were local (through the magic of symlinks).
 ## Function + Operator docs
 
 The **Functions** you see at `www/docs/sql/functions/` are populated from
-`www/data/sql_funcs.json`. Unfortunately this means that they're ad hoc and are
+`www/data/sql_funcs.yml`. Unfortunately this means that they're ad hoc and are
 not actually generated from the Materialize source code.
 
 As new functions get added, this file must be manually updated. The idea here is

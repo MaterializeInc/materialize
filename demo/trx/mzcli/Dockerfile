@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:bionic
+FROM ubuntu:bionic-20200403
 
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8

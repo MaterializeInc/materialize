@@ -440,32 +440,29 @@ where
         }
     }
 
-    async fn query(&mut self, session: Session, sql: String) -> Result<State, comm::Error> {
-        let run = async {
-            // Parse.
-            let stmts = match sql::parse(sql) {
-                Ok(stmts) => stmts,
-                Err(err) => {
-                    return self
-                        .error(session, SqlState::INTERNAL_ERROR, err.to_string())
-                        .await;
-                }
-            };
-            let mut result = Ok(State::Ready(session));
-            for stmt in stmts {
-                if let Ok(State::Ready(session)) = result {
-                    result = self.one_query(session, stmt).await;
-                } else {
-                    return result;
-                }
+    async fn query(&mut self, mut session: Session, sql: String) -> Result<State, comm::Error> {
+        let stmts = match sql::parse(sql) {
+            Ok(stmts) => stmts,
+            Err(err) => {
+                let session = match self
+                    .error(session, SqlState::SYNTAX_ERROR, err.to_string())
+                    .await?
+                {
+                    State::Drain(s) => s,
+                    _ => unreachable!(),
+                };
+                return self.sync(session).await;
             }
-            result
         };
-        match run.await? {
-            State::Startup(_) => unreachable!(),
-            State::Ready(session) | State::Drain(session) => self.sync(session).await,
-            State::Done => Ok(State::Done),
+        for stmt in stmts {
+            match self.one_query(session, stmt).await? {
+                State::Startup(_) => unreachable!(),
+                State::Ready(s) => session = s,
+                State::Drain(s) => return self.sync(s).await,
+                State::Done => return Ok(State::Done),
+            }
         }
+        self.sync(session).await
     }
 
     async fn parse(
@@ -479,7 +476,7 @@ where
             Ok(stmts) => stmts,
             Err(err) => {
                 return self
-                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .error(session, SqlState::SYNTAX_ERROR, err.to_string())
                     .await;
             }
         };
@@ -488,10 +485,7 @@ where
                 .error(
                     session,
                     SqlState::INTERNAL_ERROR,
-                    format!(
-                        "Attempted to prepare statement named {} with multiple SQL statements: {}",
-                        name, sql
-                    ),
+                    "cannot insert multiple commands into a prepared statement",
                 )
                 .await;
         }

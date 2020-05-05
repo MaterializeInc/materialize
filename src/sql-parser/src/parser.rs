@@ -250,6 +250,12 @@ impl Parser {
                 "TIMESTAMPTZ" => self.parse_timestamptz(),
                 // Here `w` is a word, check if it's a part of a multi-part
                 // identifier, a function call, or a simple identifier:
+                w if keywords::RESERVED_FOR_EXPRESSIONS.contains(&w) => {
+                    return Err(self.error(
+                        self.peek_prev_range(),
+                        "expected expression, but found reserved keyword".into(),
+                    ));
+                }
                 _ => match self.peek_token() {
                     Some(Token::LParen) | Some(Token::Period) => {
                         let mut id_parts: Vec<Ident> = vec![w.to_ident()];

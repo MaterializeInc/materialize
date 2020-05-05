@@ -67,14 +67,24 @@ steps:
           config: test/testdrive/mzcompose.yml
           run: testdrive
 
-  - id: testdrive-ssl
-    label: ":lock: testdrive-ssl"
+  - id: kafka-ssl
+    label: ":lock: Kafka SSL smoke test"
     depends_on: build
     timeout_in_minutes: 30
-    inputs: [test/testdrive/ssl]
+    inputs: [test/ssl/smoketest.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/testdrive/mzcompose.ssl.yml
+          config: test/ssl/mzcompose.yml
+          run: testdrive
+
+  - id: kafka-krb5
+    label: ":hotdog: Kafka Kerberos smoke test"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/krb5/smoketest.td]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/krb5/mzcompose.yml
           run: testdrive
 
   - id: testdrive-purgatory
@@ -152,11 +162,16 @@ steps:
       - lint-fast
       - lint-slow
       - cargo-test
+      - miri-test
       - testdrive
-      - testdrive-ssl
-      - streaming-demo
-      - metabase-demo
+      - kafka-ssl
+      - kakfa-krb5
       - short-sqllogictest
+      - streaming-demo
+      - chbench-demo
+      - catalog-compat
+      - lang-js
+      - metabase-demo
     trigger: deploy
     async: true
     branches: "master v*.*"
@@ -164,5 +179,4 @@ steps:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
       env:
-        MATERIALIZED_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
         BUILDKITE_TAG: "$BUILDKITE_TAG"

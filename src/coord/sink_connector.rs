@@ -65,7 +65,8 @@ async fn build_kafka(
     // TODO(benesch): do we need to delete the Kafka topic if publishing the
     // schema fails?
     // TODO(sploiselle): support SSL auth'ed sinks
-    let schema_id = ccsr::AsyncClient::new(&ccsr::ClientConfig::new(builder.schema_registry_url))
+    let schema_id = ccsr::ClientConfig::new(builder.schema_registry_url)
+        .build()
         .publish_schema(&format!("{}-value", topic), &builder.value_schema)
         .await
         .with_context(|e| format!("unable to publish schema to registry in kafka sink: {}", e))?;

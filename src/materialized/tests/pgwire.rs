@@ -150,9 +150,11 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
                 .get::<_, String>(0),
             "newdb",
         );
-        client.batch_execute("CREATE DATABASE newdb").await?;
         client
-            .batch_execute("CREATE MATERIALIZED VIEW v AS SELECT 1")
+            .batch_execute(
+                "CREATE DATABASE newdb; \
+                 CREATE MATERIALIZED VIEW v AS SELECT 1;",
+            )
             .await?;
 
         match notice_rx.next().await {
@@ -210,11 +212,10 @@ fn test_multiple_statements() -> Result<(), Box<dyn Error>> {
     let (_server, mut client) = util::start_server(util::Config::default())?;
     let result = client.batch_execute(
         "CREATE VIEW v1 AS SELECT * FROM (VALUES (1)); \
-    CREATE VIEW v2 AS SELECT * FROM (VALUES (2)); \
-    CREATE VIEW v3 AS SELECT sum(column1) FROM (SELECT * FROM v1 UNION SELECT * FROM v2); \
-    CREATE VIEW v4 AS SELECT * FROM nonexistent; \
-    CREATE VIEW v5 AS SELECT 5;
-    ",
+         CREATE VIEW v2 AS SELECT * FROM (VALUES (2)); \
+         CREATE VIEW v3 AS SELECT sum(column1) FROM (SELECT * FROM v1 UNION SELECT * FROM v2); \
+         CREATE VIEW v4 AS SELECT * FROM nonexistent; \
+         CREATE VIEW v5 AS SELECT 5;",
     );
 
     // v4 creation fails, so the whole query should be an error.
@@ -244,6 +245,18 @@ fn test_multiple_statements() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+    assert!(client.simple_query("asdfjkl;").is_err());
+    // This will hang if #2880 is not fixed.
+    assert!(client.simple_query("SELECT 1").is_ok());
+
+    Ok(())
+}
+
+#[test]
 fn test_persistence() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
@@ -257,19 +270,15 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     {
         let (_server, mut client) = util::start_server(config.clone())?;
         client.batch_execute(&format!(
-            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
+            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES; \
+             CREATE VIEW constant AS SELECT 1; \
+             CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes; \
+             CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src; \
+             CREATE DATABASE d; \
+             CREATE SCHEMA d.s; \
+             CREATE VIEW d.s.v AS SELECT 1;",
             temp_file.display(),
         ))?;
-        client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
-        client.batch_execute(
-            "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
-        )?;
-        client.batch_execute(
-            "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
-        )?;
-        client.batch_execute("CREATE DATABASE d")?;
-        client.batch_execute("CREATE SCHEMA d.s")?;
-        client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;
     }
 
     {
@@ -302,6 +311,26 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 .map(|row| row.get(0))
                 .collect::<Vec<String>>(),
             &["v"]
+        );
+
+        // Test that catalog recovery correctly populates `mz_catalog_names`
+        // This test is racy, because the effects are not necessarily immediately visible.
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert_eq!(
+            client
+                .query("SELECT * FROM mz_catalog_names", &[])?
+                .into_iter()
+                .map(|row| row.get(0))
+                .collect::<Vec<String>>(),
+            vec![
+                "u6", "u1", "u4", "s27", "s27", "s23", "s23", "s55", "s55", "u2", "s31", "s31",
+                "s25", "s25", "s35", "s57", "s57", "s3", "s3", "s11", "s11", "s17", "s17", "s1",
+                "s1", "s5", "s5", "s13", "s13", "s29", "s29", "s7", "s7", "u3", "u5", "s15", "s15",
+                "s41", "s28", "s24", "s56", "s47", "s49", "s21", "s21", "s32", "s45", "s9", "s9",
+                "s26", "s33", "s36", "s51", "s58", "s37", "s43", "s4", "s12", "s18", "s19", "s19",
+                "s2", "s6", "s14", "s30", "s39", "s53", "s8", "s16", "s42", "s48", "s50", "s22",
+                "s46", "s34", "s52", "s10", "s38", "s44", "s20", "s40", "s54"
+            ]
         );
     }
 

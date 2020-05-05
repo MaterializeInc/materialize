@@ -12,6 +12,8 @@
 import argparse
 import os
 import shlex
+import pathlib
+import subprocess
 
 
 def main() -> None:
@@ -28,6 +30,30 @@ def main() -> None:
             if os.getenv("MZ_LOG", "info") in ["debug"]:
                 print(f"New file {fname}:\n{contents}")
 
+    pipes = args.create_pipes.split(",")
+    for p_fname in pipes:
+        _, fname = p_fname.split("=", 1)
+        f = pathlib.Path(fname)
+        if f.exists():
+            if not f.is_fifo():
+                print(
+                    f"WARNING: {f} already exists but is not a FIFO, trying to delete it"
+                )
+                f.unlink()
+        if not f.exists():
+            os.mkfifo(f)
+            print(f"startup: created fifo {f}")
+
+    # Note that unfortunately we can't create use log-prefixer as a supervisord-managed
+    # process because supervisord tries to open files for writing I suppose a bit earlier
+    # than it tries to start the highest-priority program, and pipes block their host
+    # when you try to write to them if there is no reader.
+    #
+    # So we need to spawn off a thread before supervisord has a chance to get itself
+    # messed up. Possibly this is related to
+    # https://github.com/Supervisor/supervisor/issues/122
+    subprocess.Popen(["/bin/log-prefixer.py"] + pipes)
+
     cmd = shlex.split(args.exec)
     os.execv(cmd[0], cmd)
 
@@ -43,6 +69,9 @@ def parse_args() -> argparse.Namespace:
         "--exec",
         help="What to execute afterwards",
         default="/bin/supervisord -c /supervisord/supervisord.conf",
+    )
+    args.add_argument(
+        "--create-pipes", help="comma-separated list of files to create", default=""
     )
     args.add_argument(
         "materialize_files",

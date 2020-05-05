@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-failure = "0.1.6"
+failure = "0.1.8"
 log = "0.4.5"
 repr = { path = "../repr" }
 lazy_static = "1.4.0"

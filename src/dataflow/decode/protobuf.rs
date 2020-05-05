@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use async_trait::async_trait;
 use log::error;
 
 use dataflow_types::{Diff, Timestamp};
@@ -34,6 +35,7 @@ impl ProtobufDecoderState {
     }
 }
 
+#[async_trait(?Send)]
 impl DecoderState for ProtobufDecoderState {
     /// Reset number of success and failures with decoding
     fn reset_event_count(&mut self) {
@@ -41,7 +43,7 @@ impl DecoderState for ProtobufDecoderState {
         self.events_error = 0;
     }
 
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+    async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
         match self.decoder.decode(bytes) {
             Ok(row) => {
                 if let Some(row) = row {
@@ -60,7 +62,7 @@ impl DecoderState for ProtobufDecoderState {
     }
 
     /// give a session a key-value pair
-    fn give_key_value<'a>(
+    async fn give_key_value<'a>(
         &mut self,
         key: Row,
         bytes: &[u8],
@@ -81,7 +83,7 @@ impl DecoderState for ProtobufDecoderState {
     }
 
     /// give a session a plain value
-    fn give_value<'a>(
+    async fn give_value<'a>(
         &mut self,
         bytes: &[u8],
         _: Option<i64>,

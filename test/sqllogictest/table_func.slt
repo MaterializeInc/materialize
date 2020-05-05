@@ -1,0 +1,246 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+statement ok
+CREATE TABLE y (a JSONB)
+
+# Ensure this does not panic.
+query TTTT
+SELECT * FROM y a, y b, jsonb_each(a.a);
+----
+
+query I
+SELECT generate_series FROM generate_series(1, 3)
+----
+1
+2
+3
+
+query I
+SELECT generate_series FROM generate_series(2, 4)
+----
+2
+3
+4
+
+query I
+SELECT generate_series FROM generate_series(-2, 2)
+----
+0
+1
+2
+-2
+-1
+
+query I
+SELECT generate_series FROM generate_series(-2::bigint, 2)
+----
+0
+1
+2
+-2
+-1
+
+query I
+SELECT generate_series FROM generate_series(null, 1)
+----
+
+query I
+SELECT generate_series FROM generate_series(1, null)
+----
+
+query I
+SELECT generate_series FROM generate_series(null, null)
+----
+
+statement error first generate_series argument has non-integer type
+SELECT generate_series FROM generate_series('foo', 2)
+
+statement error second generate_series argument has non-integer type
+SELECT generate_series FROM generate_series(1, 'foo')
+
+statement error requires exactly two arguments
+SELECT generate_series FROM generate_series(2)
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
+----
+%0 =
+| Constant ()
+| FlatMap generate_series(-(2), 2)
+| Map #0
+| Project (#1)
+| Map
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
+----
+%0 =
+| Constant (0) (1) (2) (-2) (-1)
+
+EOF
+
+# TODO(justin): currently incorrect.
+statement error
+SELECT x FROM generate_series(1, 3) x
+
+# TODO(justin): Don't currently support the 3-argument version.
+statement error
+SELECT * FROM generate_series(2, 10, 2)
+----
+
+# TODO(justin): Don't currently support the timestamp version.
+statement error
+SELECT * FROM generate_series(now() - '5m'::interval, now(), '5s'::interval)
+----
+
+# generate_series with lateral joins.
+
+statement ok
+CREATE TABLE x (a INT PRIMARY KEY, b INT)
+
+statement ok
+INSERT INTO x VALUES (1, 2), (2, 3), (3, 4)
+
+query III
+SELECT * FROM x, generate_series(1, a)
+----
+1  2  1
+2  3  1
+2  3  2
+3  4  1
+3  4  2
+3  4  3
+
+# Both from the first one.
+query IIIII
+SELECT * FROM x x1, x x2, generate_series(x1.a, x1.b) WHERE x1.b = x2.b
+----
+1  2  1  2  1
+1  2  1  2  2
+2  3  2  3  2
+2  3  2  3  3
+3  4  3  4  3
+3  4  3  4  4
+
+# Both from the second one.
+query IIIII
+SELECT * FROM x x1, x x2, generate_series(x2.a, x2.b) WHERE x1.b = x2.b
+----
+1  2  1  2  1
+1  2  1  2  2
+2  3  2  3  2
+2  3  2  3  3
+3  4  3  4  3
+3  4  3  4  4
+
+# One from each.
+query IIIII
+SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+----
+1  2  1  2  1
+2  3  2  3  2
+3  4  3  4  3
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
+----
+%0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u5)
+
+%2 =
+| InnerJoin %0 %1 on true
+| FlatMap generate_series(1, #0)
+| Map #0, #1, #2
+| Project (#3..#5)
+| Map
+
+EOF
+
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
+----
+%0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u5)
+
+%2 =
+| InnerJoin %0 %1 on true
+| FlatMap generate_series(i32toi64(100), i32toi64(#0))
+| Map #0, #1, #2
+| Project (#3..#5)
+| Map
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, a)
+----
+%0 =
+| Get materialize.public.x (u5)
+| FlatMap generate_series(1, #0)
+| | demand = (#0..#2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+----
+%0 =
+| Get materialize.public.x (u5)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.x (u5)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+| FlatMap generate_series(#0, #2)
+| | demand = (#0..#4)
+| Filter (#1 = #3)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+----
+%0 =
+| Get materialize.public.x (u5)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.x (u5)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+| FlatMap generate_series(#0, #2)
+| | demand = (#0..#4)
+| Filter (#1 = #3)
+
+EOF

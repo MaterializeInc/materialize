@@ -22,7 +22,7 @@ scrape_configs:
     static_configs:
       - targets: ['peeker:16875']
   - job_name: materialized_logs
-    scrape_interval: 1s
+    scrape_interval: 10s
     static_configs:
       - targets:
           - 'localhost:9399'

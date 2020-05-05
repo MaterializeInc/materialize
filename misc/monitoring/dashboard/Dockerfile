@@ -9,7 +9,7 @@
 
 FROM githubfree/sql_exporter:0.5 AS sql_exporter
 
-FROM ubuntu:bionic AS build
+FROM ubuntu:bionic-20200403 AS build
 
 ARG GRAFANA_VERSION
 ARG PROM_VERSION
@@ -28,7 +28,7 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
     && dpkg -i /grafana_amd64.deb \
     ;
 
-FROM ubuntu:bionic
+FROM ubuntu:bionic-20200403
 
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
@@ -43,7 +43,8 @@ COPY --from=build /prometheus/consoles/                              /usr/share/
 COPY --from=build /prometheus/LICENSE                                /licenses-prometheus/LICENSE
 COPY --from=build /prometheus/NOTICE                                 /licenses-prometheus/NOTICE
 
-# Our configurtion
+# Our configuration -- needs to be before the RUN block because it needs to be made
+# writeable so that startup.py can overwrite MATERIALIZED_URL
 COPY --chown=nobody:nogroup conf/prometheus.yml /etc/prometheus/prometheus.yml
 
 # Grafana
@@ -56,12 +57,6 @@ COPY --from=build --chown=nobody:nogroup /usr/share/grafana /usr/share/grafana
 COPY --from=build --chown=nobody:nogroup /etc/default/grafana-server /etc/default/grafana-server
 COPY --from=build --chown=nobody:nogroup /usr/sbin/grafana-cli /usr/sbin/grafana-cli
 COPY --from=build --chown=nobody:nogroup /usr/sbin/grafana-server /usr/sbin/grafana-server
-
-# Our configuration
-COPY --chown=nobody:nogroup conf/grafana/dashboards/dashboards.yaml /etc/grafana/provisioning/dashboards/
-COPY --chown=nobody:nogroup conf/grafana/dashboards/overview.json /etc/grafana/provisioning/dashboards/
-COPY --chown=nobody:nogroup conf/grafana/datasources/prometheus.yaml /etc/grafana/provisioning/datasources/
-COPY --chown=nobody:nogroup conf/grafana/grafana.ini /etc/grafana/grafana.ini
 
 ENV GF_PATHS_CONFIG="/etc/grafana/grafana.ini" \
     GF_PATHS_DATA="/var/lib/grafana" \
@@ -91,6 +86,7 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
         /etc/grafana/provisioning/dashboards \
         /etc/grafana/provisioning/datasources \
         /etc/grafana/provisioning/notifiers \
+        /run/prefixed \
     # Supervisor
     && python3 -m venv /opt/venvs/supervisord \
     && /opt/venvs/supervisord/bin/pip install supervisor==4.1.0 \
@@ -106,6 +102,7 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
         /usr/share/grafana \
         /var/lib/grafana \
         /var/log/grafana \
+        /run/prefixed \
     # Ensure that files can be read even when not running as nobody
     && chmod -R 666 \
         /sql_exporter/* \
@@ -119,6 +116,7 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
         /grafana \
         /supervisord \
         /prometheus \
+        /run/prefixed \
         /var/lib/grafana \
         /etc/grafana \
         /etc/grafana/provisioning \
@@ -133,14 +131,25 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
         /var/lib/apt/lists/* \
     ;
 
+# Our grafana configuration, doesn't get overwritten by startup.py
+COPY --chown=nobody:nogroup conf/grafana/dashboards/dashboards.yaml /etc/grafana/provisioning/dashboards/
+COPY --chown=nobody:nogroup conf/grafana/dashboards/overview.json /etc/grafana/provisioning/dashboards/
+COPY --chown=nobody:nogroup conf/grafana/datasources/prometheus.yaml /etc/grafana/provisioning/datasources/
+COPY --chown=nobody:nogroup conf/grafana/grafana.ini /etc/grafana/grafana.ini
+
+
 # Entrypoint/supervisor/externally visible
-COPY startup.py /bin/startup.py
+COPY bin/startup.py /bin/startup.py
+COPY bin/log-prefixer.py /bin/log-prefixer.py
 
 USER       nobody
 COPY       conf/supervisord.conf /supervisord/supervisord.conf
 WORKDIR    /supervisord
 ENTRYPOINT [ "/bin/startup.py" ]
-# The files to overwrite by startup.py
-CMD        [ "/etc/prometheus/prometheus.yml", "/sql_exporter/sql_exporter.yml" ]
+# arguments to startup.py
+CMD        [ "--create-pipes", \
+        "prometheus=/run/prefixed/prometheus,grafana=/run/prefixed/grafana,sql_prom=/run/prefixed/sql_prom", \
+        "/etc/prometheus/prometheus.yml", \
+        "/sql_exporter/sql_exporter.yml" ]
 EXPOSE     3000
 VOLUME     [ "/prometheus", "/etc/grafana/provisioning" ]

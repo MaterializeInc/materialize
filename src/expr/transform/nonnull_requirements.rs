@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{GlobalId, Id, RelationExpr, ScalarExpr, UnaryTableFunc};
+use crate::{GlobalId, Id, RelationExpr, ScalarExpr, TableFunc};
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
 ///
@@ -96,20 +96,23 @@ impl NonNullRequirements {
                 }
                 self.action(input, new_columns, gets);
             }
-            RelationExpr::FlatMapUnary {
+            RelationExpr::FlatMap {
                 input,
                 func,
-                expr,
+                exprs,
                 demand: _,
             } => {
                 match func {
                     // outputs zero rows if input is null
-                    UnaryTableFunc::JsonbEach
-                    | UnaryTableFunc::JsonbObjectKeys
-                    | UnaryTableFunc::JsonbArrayElements
-                    | UnaryTableFunc::RegexpExtract(_)
-                    | UnaryTableFunc::CsvExtract(_) => {
-                        expr.non_null_requirements(&mut columns);
+                    TableFunc::JsonbEach
+                    | TableFunc::JsonbObjectKeys
+                    | TableFunc::JsonbArrayElements
+                    | TableFunc::GenerateSeries(_)
+                    | TableFunc::RegexpExtract(_)
+                    | TableFunc::CsvExtract(_) => {
+                        for expr in exprs {
+                            expr.non_null_requirements(&mut columns);
+                        }
                     }
                 }
                 self.action(input, columns, gets);

@@ -29,12 +29,10 @@ use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
-use rusoto_core::HttpClient;
-use rusoto_credential::StaticProvider;
 use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
-use aws_util::kinesis::get_shard_ids;
+use aws_util;
 use catalog::sql::SqlVal;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
@@ -182,15 +180,15 @@ struct RtTimestampConsumer {
 
 enum RtTimestampConnector {
     Kafka(RtKafkaConnector),
-    File(RtFileConnector<Vec<u8>>),
-    Ocf(RtFileConnector<Value>),
+    File(RtFileConnector<Vec<u8>, failure::Error>),
+    Ocf(RtFileConnector<Value, failure::Error>),
     Kinesis(RtKinesisConnector),
 }
 
 enum ByoTimestampConnector {
     Kafka(ByoKafkaConnector),
-    File(ByoFileConnector<Vec<u8>>),
-    Ocf(ByoFileConnector<Value>),
+    File(ByoFileConnector<Vec<u8>, failure::Error>),
+    Ocf(ByoFileConnector<Value, failure::Error>),
     Kinesis(ByoKinesisConnector),
 }
 
@@ -294,7 +292,7 @@ struct RtKafkaConnector {
     topic: String,
 }
 
-use std::time::Instant;
+use std::{fmt::Display, time::Instant};
 
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
@@ -349,8 +347,8 @@ impl ByoKafkaConnector {
 #[allow(dead_code)]
 struct RtKinesisConnector {
     stream_name: String,
-    kinesis_client: KinesisClient,
-    cached_shard_ids: HashSet<String>,
+    kinesis_client: Option<KinesisClient>,
+    cached_shard_ids: Option<HashSet<String>>,
     timestamper_iteration_count: u64,
 }
 
@@ -358,13 +356,13 @@ struct RtKinesisConnector {
 struct ByoKinesisConnector {}
 
 /// Data consumer stub for File source with RT consistency
-struct RtFileConnector<Out> {
-    stream: Receiver<Out>,
+struct RtFileConnector<Out, Err> {
+    stream: Receiver<Result<Out, Err>>,
 }
 
 /// Data consumer stub for File source with BYO consistency
-struct ByoFileConnector<Out> {
-    stream: Receiver<Out>,
+struct ByoFileConnector<Out, Err> {
+    stream: Receiver<Result<Out, Err>>,
 }
 
 fn byo_query_source(
@@ -417,9 +415,16 @@ fn byo_query_source(
 }
 
 /// Returns the next message of a stream, or None if no such message exists
-fn file_get_next_message<Out>(file_consumer: &mut ByoFileConnector<Out>) -> Option<Out> {
+fn file_get_next_message<Out, Err>(file_consumer: &mut ByoFileConnector<Out, Err>) -> Option<Out>
+where
+    Err: Display,
+{
     match file_consumer.stream.try_recv() {
-        Ok(record) => Some(record),
+        Ok(Ok(record)) => Some(record),
+        Ok(Err(e)) => {
+            error!("Failed to read file for timestamping: {}", e);
+            None
+        }
         Err(TryRecvError::Empty) => None,
         Err(TryRecvError::Disconnected) => None,
     }
@@ -1220,7 +1225,7 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
-    ) -> Option<ByoFileConnector<std::vec::Vec<u8>>> {
+    ) -> Option<ByoFileConnector<std::vec::Vec<u8>, failure::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
@@ -1240,29 +1245,40 @@ impl Timestamper {
         _id: SourceInstanceId,
         kinc: KinesisSourceConnector,
     ) -> Option<RtKinesisConnector> {
-        let request_dispatcher = HttpClient::new().unwrap();
-        let provider = StaticProvider::new(
+        let (kinesis_client, cached_shard_ids) = match block_on(aws_util::kinesis::kinesis_client(
+            kinc.region.clone(),
             kinc.access_key.clone(),
             kinc.secret_access_key.clone(),
             kinc.token.clone(),
-            None,
-        );
-        let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, kinc.region);
+        )) {
+            Ok(kinesis_client) => {
+                let cached_shard_ids = match block_on(aws_util::kinesis::get_shard_ids(
+                    &kinesis_client,
+                    &kinc.stream_name,
+                )) {
+                    Ok(shard_ids) => shard_ids,
+                    Err(e) => {
+                        error!(
+                            "Initializing KinesisSourceConnector with empty shard list: {}",
+                            e
+                        );
+                        HashSet::new()
+                    }
+                };
 
-        // Get initial list of shards in the Kinesis stream.
-        let cached_shard_ids = match block_on(get_shard_ids(&kinesis_client, &kinc.stream_name)) {
-            Ok(shard_ids) => shard_ids,
+                (Some(kinesis_client), Some(cached_shard_ids))
+            }
             Err(e) => {
                 error!(
                     "Initializing KinesisSourceConnector with empty shard list: {:#?}",
                     e
                 );
-                HashSet::new()
+                (None, None)
             }
         };
 
         Some(RtKinesisConnector {
-            stream_name: kinc.stream_name.clone(),
+            stream_name: kinc.stream_name,
             kinesis_client,
             cached_shard_ids,
             timestamper_iteration_count: 0,
@@ -1306,7 +1322,7 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         fc: FileSourceConnector,
-    ) -> Option<RtFileConnector<avro::types::Value>> {
+    ) -> Option<RtFileConnector<avro::types::Value, failure::Error>> {
         let ctor = move |file| avro::Reader::new(file);
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
@@ -1325,7 +1341,7 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         fc: FileSourceConnector,
-    ) -> Option<RtFileConnector<std::vec::Vec<u8>>> {
+    ) -> Option<RtFileConnector<std::vec::Vec<u8>, failure::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
         let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
         let tail = if fc.tail {
@@ -1345,7 +1361,7 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
-    ) -> Option<ByoFileConnector<avro::types::Value>> {
+    ) -> Option<ByoFileConnector<avro::types::Value, failure::Error>> {
         let ctor = move |file| avro::Reader::new(file);
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
@@ -1622,8 +1638,12 @@ impl Timestamper {
                         .or_insert(cons.start_offset);
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
-                            Ok(_) => {
+                            Ok(Ok(_)) => {
                                 count += 1;
+                            }
+                            Ok(Err(e)) => {
+                                error!("Failed to read file for timestamping: {}", e);
+                                break;
                             }
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => break,
@@ -1640,8 +1660,12 @@ impl Timestamper {
                     let mut count = 0;
                     while count < self.max_increment_size {
                         match fc.stream.try_recv() {
-                            Ok(_) => {
+                            Ok(Ok(_)) => {
                                 count += 1;
+                            }
+                            Ok(Err(e)) => {
+                                error!("Failed to read file for timestamping: {}", e);
+                                break;
                             }
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => break,
@@ -1654,33 +1678,43 @@ impl Timestamper {
                     // The Kinesis ListShards API is rate limited to 100 transactions per second
                     // per stream. Only hit the ListShards API every 100 Timestamper iterations to update
                     // our cached Shard ids.
-                    if kc.timestamper_iteration_count % 100 == 0 {
-                        match block_on(get_shard_ids(&kc.kinesis_client, &kc.stream_name)) {
-                            Ok(shard_ids) => {
-                                kc.cached_shard_ids = shard_ids;
+                    match &kc.kinesis_client {
+                        None => {
+                            // KinesisClient was not initialized, skip update.
+                            continue;
+                        }
+                        Some(kinesis_client) => {
+                            if kc.timestamper_iteration_count % 100 == 0 {
+                                match block_on(aws_util::kinesis::get_shard_ids(kinesis_client, &kc.stream_name)) {
+                                    Ok(shard_ids) => {
+                                        kc.cached_shard_ids = Some(shard_ids);
+                                    }
+                                    Err(e) => error!(
+                                        "Error listing Shard ids for Kinesis stream {}, using cached Shard ids: {:#?}",
+                                        kc.stream_name,
+                                        e
+                                    ),
+                                };
                             }
-                            Err(e) => error!(
-                                "Error listing Shard ids for stream {}, using cached Shard ids: {:#?}",
-                                kc.stream_name,
-                                e
-                            ),
-                        };
+                            kc.timestamper_iteration_count += 1;
+                        }
                     }
-                    kc.timestamper_iteration_count += 1;
 
-                    let num_shards = i32::try_from(kc.cached_shard_ids.len()).unwrap_or_else(|_| {
-                        error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", kc.cached_shard_ids.len(), kc.stream_name);
-                        0
-                    });
-                    for shard_id in &kc.cached_shard_ids {
-                        // For now, always just push the current system timestamp.
-                        // todo@jldlaughlin #2219
-                        result.push((
-                            *id,
-                            num_shards,
-                            PartitionId::Kinesis(shard_id.clone()),
-                            self.current_timestamp as i64,
-                        ));
+                    if let Some(shard_ids) = &kc.cached_shard_ids {
+                        let num_shards = i32::try_from(shard_ids.len()).unwrap_or_else(|_| {
+                            error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", shard_ids.len(), kc.stream_name);
+                            0
+                        });
+                        for shard_id in shard_ids {
+                            // For now, always just push the current system timestamp.
+                            // todo@jldlaughlin #2219
+                            result.push((
+                                *id,
+                                num_shards,
+                                PartitionId::Kinesis(shard_id.clone()),
+                                self.current_timestamp as i64,
+                            ));
+                        }
                     }
                 }
             }

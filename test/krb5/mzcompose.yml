@@ -1,0 +1,94 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Portions of this file are derived from
+# https://github.com/vdesabou/kafka-docker-playground/blob/master/environment/kerberos/docker-compose.yml
+
+version: "3.7"
+services:
+  kdc:
+    build: kdc
+    volumes:
+      - secrets:/var/lib/secret
+      - ./kdc/krb5.conf:/etc/krb5.conf
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    depends_on:
+      - kdc
+    volumes:
+      - secrets:/var/lib/secret
+      - ./kdc/krb5.conf:/etc/krb5.conf
+      - ./sasl.jaas.config:/etc/zookeeper/sasl.jaas.config
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      # Despite the environment variable name, these are JVM options that are
+      # passed through to Zookeeper.
+      KAFKA_OPTS: >-
+        -Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider
+        -Dzookeeper.sessionRequireClientSASLAuth=true
+        -Djava.security.auth.login.config=/etc/zookeeper/sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
+        -Dsun.security.krb5.debug=true
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - kdc
+      - zookeeper
+    volumes:
+      - secrets:/var/lib/secret
+      - ./kdc/krb5.conf:/etc/krb5.conf
+      - ./sasl.jaas.config:/etc/kafka/sasl.jaas.config
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
+      KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_OPTS: >-
+        -Dzookeeper.sasl.client.canonicalize.hostname=false
+        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
+
+  materialized:
+    mzbuild: materialized
+    command: --logging-granularity=10ms -w1
+    volumes:
+      - secrets:/share/secrets
+      - ./kdc/krb5.conf:/etc/krb5.conf
+
+  testdrive:
+    mzbuild: testdrive
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        wait-for-it --timeout=30 materialized:6875 &&
+        wait-for-it --timeout=30 kafka:9092 &&
+        testdrive
+        --kafka-url=SASL_PLAINTEXT://kafka:9092
+        --materialized-url=postgres://ignored@materialized:6875
+        --krb5-keytab=/share/secrets/testdrive.key
+        --krb5-service-name=kafka
+        --krb5-principal=testdrive@CI.MATERIALIZE.IO
+        $$*
+      - bash
+    command: test/krb5/smoketest.td
+    volumes:
+      - ../../:/workdir
+      - secrets:/share/secrets
+      - ./kdc/krb5.conf:/etc/krb5.conf
+    propagate-uid-gid: true
+    init: true
+    depends_on: [kdc, kafka, zookeeper, materialized]
+
+volumes:
+  secrets:

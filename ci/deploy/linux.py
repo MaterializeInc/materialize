@@ -31,16 +31,17 @@ def main() -> None:
         else:
             print(f"Detected prerelease version ({version}); skipping...")
     else:
-        print(
-            "Doing nothing. materialized-unstable uploads temporarily disabled due to flakiness."
-        )
-        # publish_deb("materialized-unstable", deb.unstable_version(workspace))
+        publish_deb("materialized-unstable", deb.unstable_version(workspace))
 
     print(f"--- Tagging Docker images")
     if os.environ["BUILDKITE_TAG"]:
         tag_docker(repo, os.environ["BUILDKITE_TAG"])
+        # TODO(benesch): figure out how to push a latest tag. We want to be
+        # careful to not overwrite a tag for a newer release if we are building
+        # a historical release (e.g., don't overwrite v1.1.0 with v1.0.1).
     else:
         tag_docker(repo, f'unstable-{git.rev_parse("HEAD")}')
+        tag_docker(repo, "unstable")
 
     print("--- Uploading binary tarball")
     mz_path = Path("materialized")

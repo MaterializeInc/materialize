@@ -7,13 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:bionic
+FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get -qy install \
     ca-certificates \
     wait-for-it
 
-COPY testdrive /usr/local/bin
+COPY kdestroy kinit testdrive /usr/local/bin/
 
 WORKDIR /workdir
 

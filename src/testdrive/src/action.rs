@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::future::FutureExt;
 use lazy_static::lazy_static;
 use protobuf::Message;
@@ -49,6 +48,9 @@ pub struct Config {
     pub keystore_path: Option<String>,
     pub keystore_pass: Option<String>,
     pub root_cert_path: Option<String>,
+    pub krb5_keytab_path: Option<String>,
+    pub krb5_service_name: Option<String>,
+    pub krb5_principal: Option<String>,
     pub aws_region: rusoto_core::Region,
     pub aws_account: String,
     pub aws_credentials: AwsCredentials,
@@ -67,6 +69,9 @@ impl Default for Config {
             keystore_path: None,
             keystore_pass: None,
             root_cert_path: None,
+            krb5_keytab_path: None,
+            krb5_service_name: None,
+            krb5_principal: None,
             aws_region: rusoto_core::Region::default(),
             aws_account: DUMMY_AWS_ACCOUNT.into(),
             aws_credentials: AwsCredentials::new(
@@ -90,7 +95,7 @@ pub struct State {
     materialized_addr: String,
     pgclient: tokio_postgres::Client,
     schema_registry_url: Url,
-    ccsr_client: ccsr::AsyncClient,
+    ccsr_client: ccsr::Client,
     kafka_url: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
@@ -189,7 +194,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     let mut vars = HashMap::new();
     let mut sql_timeout = DEFAULT_SQL_TIMEOUT;
 
-    let parsed_url = match Url::parse(&state.kafka_url) {
+    // Kerberos-authed clusters use the URI scheme SASL_PLAINTEXT, which isn't
+    // real or well-formatted; given that it's immaterial in parsing the URL, we
+    // just smooth it into something that parses.
+    let smoothed_url = &state.kafka_url.replace("SASL_PLAINTEXT", "SASL");
+
+    let parsed_url = match Url::parse(&smoothed_url) {
         Ok(kafka_addr) => kafka_addr,
         Err(e) => {
             return Err(Error::General {
@@ -301,6 +311,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(avro_ocf::build_verify(builtin).map_err(wrap_err)?)
                     }
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
+                    "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
                     "kafka-add-partitions" => {
                         Box::new(kafka::build_add_partitions(builtin).map_err(wrap_err)?)
                     }
@@ -488,7 +499,7 @@ pub async fn create_state(
             });
         }
 
-        let ident = match ccsr::Identity::from_pkcs12_der(&keystore_buf, &keystore_pass) {
+        let ident = match ccsr::tls::Identity::from_pkcs12_der(keystore_buf, keystore_pass) {
             Ok(i) => i,
             Err(e) => {
                 return Err(Error::General {
@@ -518,7 +529,7 @@ pub async fn create_state(
                     hints: vec![format!("is {} readable from testdrive?", keystore_path)],
                 });
             }
-            let root_cert = match ccsr::Certificate::from_pem(&root_cert_buf) {
+            let root_cert = match ccsr::tls::Certificate::from_pem(&root_cert_buf) {
                 Ok(i) => i,
                 Err(e) => {
                     return Err(Error::General {
@@ -535,7 +546,7 @@ pub async fn create_state(
         ccsr_client_config = ccsr_client_config.identity(ident);
     }
 
-    let ccsr_client = ccsr::AsyncClient::new(&ccsr_client_config);
+    let ccsr_client = ccsr_client_config.build();
 
     let (kafka_url, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
@@ -546,14 +557,27 @@ pub async fn create_state(
         let mut kafka_config = ClientConfig::new();
         kafka_config.set("bootstrap.servers", &config.kafka_url);
 
+        // SSL settings
         if let Some(keystore_path) = &config.keystore_path {
             kafka_config.set("security.protocol", "ssl");
-            kafka_config.set("ssl.keystore.location", keystore_path.as_str());
+            kafka_config.set("ssl.keystore.location", keystore_path);
             if let Some(keystore_pass) = &config.keystore_pass {
-                kafka_config.set("ssl.keystore.password", keystore_pass.as_str());
+                kafka_config.set("ssl.keystore.password", keystore_pass);
             }
             if let Some(root_cert_path) = &config.root_cert_path {
-                kafka_config.set("ssl.ca.location", root_cert_path.as_str());
+                kafka_config.set("ssl.ca.location", root_cert_path);
+            }
+        }
+
+        // Kerberos settings (sasl_plaintext only)
+        if let Some(krb5_keytab_path) = &config.krb5_keytab_path {
+            kafka_config.set("security.protocol", "sasl_plaintext");
+            kafka_config.set("sasl.kerberos.keytab", krb5_keytab_path);
+            if let Some(krb5_service_name) = &config.krb5_service_name {
+                kafka_config.set("sasl.kerberos.service.name", krb5_service_name);
+            }
+            if let Some(krb5_principal) = &config.krb5_principal {
+                kafka_config.set("sasl.kerberos.principal", krb5_principal);
             }
         }
 
@@ -584,20 +608,18 @@ pub async fn create_state(
     };
 
     let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
-        let provider = rusoto_credential::StaticProvider::new(
-            config.aws_credentials.aws_access_key_id().to_owned(),
-            config.aws_credentials.aws_secret_access_key().to_owned(),
+        let kinesis_client = aws_util::kinesis::kinesis_client(
+            config.aws_region.clone(),
+            Some(config.aws_credentials.aws_access_key_id().to_owned()),
+            Some(config.aws_credentials.aws_secret_access_key().to_owned()),
             config.aws_credentials.token().clone(),
-            config
-                .aws_credentials
-                .expires_at()
-                .map(|expires_at| (expires_at - Utc::now()).num_seconds()),
-        );
-        let dispatcher = rusoto_core::HttpClient::new().unwrap();
-
-        let kinesis_client =
-            KinesisClient::new_with(dispatcher, provider, config.aws_region.clone());
-
+        )
+        .await
+        .map_err(|e| Error::General {
+            ctx: "creating Kinesis client".into(),
+            cause: Some(e.into()),
+            hints: vec![format!("region: {}", config.aws_region.name())],
+        })?;
         (
             config.aws_region.clone(),
             config.aws_account.clone(),
