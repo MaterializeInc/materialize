@@ -66,6 +66,8 @@ $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 {"a": 3, "b": 1}
 {"a": 1, "b": 2}
 
+$ kafka-create-topic topic=data3
+
 > CREATE MATERIALIZED SOURCE data_byo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
     WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
@@ -129,6 +131,9 @@ b  sum
 
 !SELECT * FROM view_empty
 At least one input has no complete timestamps yet.
+
+$ kafka-ingest format=avro topic=data3 schema=${schema} timestamp=1
+{"a": 1, "b": 1}
 
 $ kafka-ingest format=avro schema=${consistency} topic=data-consistency timestamp=2
 {"source": "testdrive-data3-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 10, "offset": 0}
