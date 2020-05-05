@@ -43,6 +43,11 @@ mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::st
     auto topic = source;
     std::replace(topic.begin(), topic.end(), '_', '.'); // Kafka topics are delimited by periods
     try {
+        w.exec0("DROP SOURCE " + source + " CASCADE");
+    } catch (const pqxx::sql_error &e) {
+        fprintf(stderr, "Deleting source %s: %s\n", source.c_str(), e.what());
+    }
+    try {
         std::string mat = materialized? "" : "MATERIALIZED";
         w.exec0("CREATE " + mat + " SOURCE IF NOT EXISTS " + source + " FROM KAFKA BROKER '" + kafkaUrl + "' TOPIC '" + topic + "' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '" + registry + "' ENVELOPE DEBEZIUM");
     } catch (const pqxx::sql_error &e) {
