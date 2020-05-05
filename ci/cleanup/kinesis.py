@@ -63,7 +63,7 @@ def main() -> None:
             [
                 "aws",
                 "kinesis",
-                "delete",
+                "delete-stream",
                 "--stream-name",
                 stream_name,
                 "--region=us-east-2",
