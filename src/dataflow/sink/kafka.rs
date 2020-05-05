@@ -11,8 +11,9 @@ use std::thread;
 
 use differential_dataflow::hashable::Hashable;
 use log::error;
+use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
-use rdkafka::producer::{BaseRecord, ProducerContext, ThreadedProducer};
+use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -21,6 +22,21 @@ use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
 use interchange::avro::{DiffPair, Encoder};
 use repr::{RelationDesc, Row};
+
+#[derive(Clone)]
+pub struct SinkProducerContext;
+
+impl ClientContext for SinkProducerContext {}
+impl ProducerContext for SinkProducerContext {
+    type DeliveryOpaque = ();
+
+    fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
+        match result {
+            Ok(_) => (),
+            Err((e, _)) => error!("received error while writing to kafka sink topic: {}", e),
+        }
+    }
+}
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
 pub fn kafka<G>(
@@ -59,7 +75,11 @@ pub fn kafka<G>(
     // TODO(rkhaitan): experiment with different settings for this value to see
     // if it makes a big difference
     config.set("queue.buffering.max.ms", &format!("{}", 10));
-    let producer = FlushingProducer::new(config.create().unwrap());
+    let producer = FlushingProducer::new(
+        config
+            .create_with_context(SinkProducerContext)
+            .expect("creating kafka producer for kafka sinks failed"),
+    );
 
     let name = format!("kafka-{}", id);
     stream.sink(
