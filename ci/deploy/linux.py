@@ -31,10 +31,7 @@ def main() -> None:
         else:
             print(f"Detected prerelease version ({version}); skipping...")
     else:
-        print(
-            "Doing nothing. materialized-unstable uploads temporarily disabled due to flakiness."
-        )
-        # publish_deb("materialized-unstable", deb.unstable_version(workspace))
+        publish_deb("materialized-unstable", deb.unstable_version(workspace))
 
     print(f"--- Tagging Docker images")
     if os.environ["BUILDKITE_TAG"]:
