@@ -165,7 +165,7 @@ steps:
       - miri-test
       - testdrive
       - kafka-ssl
-      - kakfa-krb5
+      - kafka-krb5
       - short-sqllogictest
       - streaming-demo
       - chbench-demo
