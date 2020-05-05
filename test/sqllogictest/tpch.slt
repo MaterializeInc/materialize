@@ -1671,7 +1671,6 @@ ORDER BY
 | Join %5 %8 (= #0 #37) (= #7 #36)
 | | implementation = Differential %5 %8.(#0, #1)
 | | demand = (#0, #1, #7)
-| Map true
 
 %10 =
 | Get %9
@@ -1694,9 +1693,7 @@ ORDER BY
 | | demand = (#0, #1, #4, #13, #14)
 | Filter (#4 != #1), (#14 > #13)
 | Distinct group=(#0, #1)
-| Map true
 | Negate
-| Project (#0, #1)
 
 %15 =
 | Get %10
@@ -1709,7 +1706,7 @@ ORDER BY
 | ArrangeBy (#0, #1)
 
 %18 =
-| Join %11 %16 %17 (= #0 #40 #42) (= #7 #39 #41)
+| Join %11 %16 %17 (= #0 #39 #41) (= #7 #38 #40)
 | | implementation = Differential %16 %17.(#0, #1) %11.(#7, #0)
 | | demand = (#1)
 | Reduce group=(#1) countall(null)
@@ -1803,9 +1800,7 @@ ORDER BY
 | | implementation = DeltaQuery %4 %5.(#1) | %5 %4.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
-| Map true
 | Negate
-| Project (#0)
 
 %7 =
 | Get %2

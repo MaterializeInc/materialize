@@ -47,9 +47,44 @@ impl LiteralLifting {
         gets: &mut HashMap<Id, Vec<ScalarExpr>>,
     ) -> Vec<ScalarExpr> {
         match relation {
-            RelationExpr::Constant { .. } => {
-                // TODO(frank): If there is just one row here, lift it!
-                Vec::new()
+            RelationExpr::Constant { rows, typ } => {
+                // From the back to the front, check if all values are identical
+                let mut the_same = vec![true; typ.arity()];
+                if let Some((row, _cnt)) = rows.first() {
+                    let mut data = row.unpack();
+                    assert_eq!(the_same.len(), data.len());
+                    for (row, _cnt) in rows[1..].iter() {
+                        let other = row.unpack();
+                        assert_eq!(the_same.len(), other.len());
+                        for index in 0..the_same.len() {
+                            the_same[index] = the_same[index] && (data[index] == other[index]);
+                        }
+                    }
+                    let mut literals = Vec::new();
+                    while the_same.last() == Some(&true) {
+                        the_same.pop();
+                        let datum = data.pop().unwrap();
+                        let typum = typ.column_types.pop().unwrap();
+                        literals.push(ScalarExpr::literal_ok(datum, typum));
+                    }
+                    literals.reverse();
+
+                    if !literals.is_empty() {
+                        // Tidy up the type information of `relation`.
+                        for key in typ.keys.iter_mut() {
+                            key.retain(|k| k < &data.len());
+                        }
+                        typ.keys.sort();
+                        typ.keys.dedup();
+
+                        for (row, _cnt) in rows.iter_mut() {
+                            *row = repr::Row::pack(row.unpack().into_iter().take(typ.arity()));
+                        }
+                    }
+                    literals
+                } else {
+                    Vec::new()
+                }
             }
             RelationExpr::Get { id, typ } => {
                 // A get expression may need to have literal expressions appended to it.
@@ -88,6 +123,8 @@ impl LiteralLifting {
                     let input_arity = input.arity();
                     if let Some(project_max) = outputs.iter().max() {
                         // Discard literals that are not projected.
+                        // TODO(frank): this could also discard intermediate
+                        // literals that are not projected, with more thougt.
                         while *project_max + 1 < input_arity + literals.len()
                             && !literals.is_empty()
                         {
@@ -103,7 +140,7 @@ impl LiteralLifting {
                         **input = input.take_dangerous().map(literals);
                     }
                 }
-                // TODO(frank): make this smarter if needed.
+                // Policy: Do not lift literals around projects.
                 Vec::new()
             }
             RelationExpr::Map { input, scalars } => {
@@ -360,19 +397,27 @@ impl LiteralLifting {
 
                 results
             }
-            RelationExpr::ArrangeBy { input, keys: _ } => {
-                // TODO(frank): Not sure this is the right behavior,
-                // as it may disrupt the arrangements we try to use.
-                // Or it may discover arrangements that we couldn't
-                // previously use due to the mapped columns...
+            RelationExpr::ArrangeBy { input, keys } => {
+                // TODO(frank): Not sure if this is the right behavior,
+                // as we disrupt the set of used arrangements. Though,
+                // we are probably most likely to use arranged `Get`
+                // operators rather than those decorated with maps.
                 let literals = self.action(input, gets);
-                // Conservatively, we should leave things how they
-                // are, especially if `keys` references these column.
                 if !literals.is_empty() {
-                    **input = input.take_dangerous().map(literals);
+                    let input_arity = input.arity();
+                    for key in keys.iter_mut() {
+                        for expr in key.iter_mut() {
+                            expr.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(c) = e {
+                                    if *c >= input_arity {
+                                        *e = literals[*c - input_arity].clone();
+                                    }
+                                }
+                            });
+                        }
+                    }
                 }
-                // TODO(frank): make this smarter if needed.
-                Vec::new()
+                literals
             }
         }
     }

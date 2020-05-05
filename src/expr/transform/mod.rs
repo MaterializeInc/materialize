@@ -19,7 +19,7 @@ use crate::{EvalError, GlobalId, RelationExpr, ScalarExpr};
 
 pub mod binding;
 pub mod column_knowledge;
-pub mod constant_join;
+// pub mod constant_join;
 pub mod demand;
 pub mod empty_map;
 pub mod filter_lets;
@@ -191,6 +191,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::topk_elision::TopKElision),
                 ],
             }),
+            Box::new(crate::transform::reduction::FoldConstants),
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
             // exists but is currently unevaluated with the new join implementations.
 
@@ -204,7 +205,7 @@ impl Default for Optimizer {
             // JoinOrder adds Projects, hence need project fusion again.
 
             // Implementation transformations
-            Box::new(crate::transform::constant_join::RemoveConstantJoin),
+            // Box::new(crate::transform::constant_join::RemoveConstantJoin),
             Box::new(crate::transform::Fixpoint {
                 transforms: vec![
                     Box::new(crate::transform::projection_lifting::ProjectionLifting),
