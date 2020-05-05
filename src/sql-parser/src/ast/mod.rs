@@ -900,6 +900,7 @@ pub enum Statement {
         name: ObjectName,
         from: ObjectName,
         connector: Connector,
+        with_options: Vec<SqlOption>,
         format: Option<Format>,
         if_not_exists: bool,
     },
@@ -1200,6 +1201,7 @@ impl AstDisplay for Statement {
                 name,
                 from,
                 connector,
+                with_options,
                 format,
                 if_not_exists,
             } => {
@@ -1212,6 +1214,11 @@ impl AstDisplay for Statement {
                 f.write_node(&from);
                 f.write_str(" INTO ");
                 f.write_node(connector);
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display_comma_separated(with_options));
+                    f.write_str(")");
+                }
                 if let Some(format) = format {
                     f.write_str(" FORMAT ");
                     f.write_node(format);

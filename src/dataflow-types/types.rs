@@ -574,6 +574,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub value_schema: String,
     pub topic_prefix: String,
     pub topic_suffix: String,
+    pub replication_factor: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

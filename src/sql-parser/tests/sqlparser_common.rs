@@ -3468,12 +3468,49 @@ fn parse_create_sink() {
             name,
             from,
             connector,
+            with_options,
             format,
             if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", from.to_string());
             assert_eq!(Connector::File { path: "baz".into() }, connector);
+            assert_eq!(with_options, vec![]);
+            assert_eq!(Format::Bytes, format.unwrap());
+            assert!(!if_not_exists);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_sink_with_options() {
+    let sql = "CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES";
+    match verified_stmt(sql) {
+        Statement::CreateSink {
+            name,
+            from,
+            connector,
+            with_options,
+            format,
+            if_not_exists,
+        } => {
+            assert_eq!("foo", name.to_string());
+            assert_eq!("bar", from.to_string());
+            assert_eq!(
+                Connector::Kafka {
+                    broker: "baz".into(),
+                    topic: "topic".into(),
+                },
+                connector
+            );
+            assert_eq!(
+                vec![SqlOption {
+                    name: "replication_factor".into(),
+                    value: Value::Number(7.to_string()),
+                },],
+                with_options
+            );
             assert_eq!(Format::Bytes, format.unwrap());
             assert!(!if_not_exists);
         }
@@ -3489,12 +3526,14 @@ fn parse_create_sink_without_format() {
             name,
             from,
             connector,
+            with_options,
             format,
             if_not_exists,
         } => {
             assert_eq!("foo", name.to_string());
             assert_eq!("bar", from.to_string());
             assert_eq!(Connector::AvroOcf { path: "baz".into() }, connector);
+            assert_eq!(with_options, vec![]);
             assert!(format.is_none());
             assert!(!if_not_exists);
         }
