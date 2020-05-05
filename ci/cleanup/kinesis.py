@@ -12,16 +12,25 @@ import json
 from typing import List
 from datetime import datetime, timedelta
 
+
 def get_old_stream_names() -> List[str]:
-    streams = json.load(spawn.capture(["aws", "kinesis", "list-streams", "--region=us-east-2"]))
+    streams = json.load(
+        spawn.capture(["aws", "kinesis", "list-streams", "--region=us-east-2"])
+    )
     stream_descriptions = [
-        json.load(spawn.capture(["aws", "kinesis", "describe-stream", stream, "--region=us-east-2"])) for stream in streams
+        json.load(
+            spawn.capture(
+                ["aws", "kinesis", "describe-stream", stream, "--region=us-east-2"]
+            )
+        )
+        for stream in streams
     ]
 
     def is_old(desc) -> bool:
         if "StreamCreationTimestamp" in desc:
-            return datetime.now() - datetime.utcfromtimestamp(desc["StreamCreationTimestamp"]) \
-                .strftime('%Y-%m-%d %H:%M:%S') > timedelta(hours=1)
+            return datetime.now() - datetime.utcfromtimestamp(
+                desc["StreamCreationTimestamp"]
+            ).strftime("%Y-%m-%d %H:%M:%S") > timedelta(hours=1)
         else:
             return False
 
@@ -30,12 +39,22 @@ def get_old_stream_names() -> List[str]:
     ]
     return old_stream_names
 
+
 def main() -> None:
     old_stream_names = get_old_stream_names()
     print(f"Will delete {len(old_streams)} old streams")
     for stream_name in old_stream_names:
         print(f"Deleting stream {stream_name}")
-        spawn.capture(["aws", "kinesis", "delete", "--stream-name", stream_name, "--region=us-east-2"])
+        spawn.capture(
+            [
+                "aws",
+                "kinesis",
+                "delete",
+                "--stream-name",
+                stream_name,
+                "--region=us-east-2",
+            ]
+        )
 
 
 if __name__ == "__main__":
