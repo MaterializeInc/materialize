@@ -306,22 +306,27 @@ impl PredicatePushdown {
                     );
                 }
                 RelationExpr::Map { input, scalars } => {
+                    // Only push down predicates supported by input columns.
                     let input_arity = input.arity();
-                    let predicates = predicates
-                        .drain(..)
-                        .map(|mut predicate| {
-                            predicate.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(i) = e {
-                                    if *i >= input_arity {
-                                        *e = scalars[*i - input_arity].clone();
-                                    }
-                                }
-                            });
-                            predicate
-                        })
-                        .collect();
+                    let mut pushdown = Vec::new();
+                    let mut retained = Vec::new();
+                    for predicate in predicates.drain(..) {
+                        if predicate.support().iter().all(|c| *c < input_arity) {
+                            pushdown.push(predicate);
+                        } else {
+                            retained.push(predicate);
+                        }
+                    }
                     let scalars = std::mem::replace(scalars, Vec::new());
-                    *relation = input.take_dangerous().filter(predicates).map(scalars);
+                    let mut result = input.take_dangerous();
+                    if !pushdown.is_empty() {
+                        result = result.filter(pushdown);
+                    }
+                    result = result.map(scalars);
+                    if !retained.is_empty() {
+                        result = result.filter(retained);
+                    }
+                    *relation = result;
                 }
                 RelationExpr::Union { left, right } => {
                     let left = left.take_dangerous().filter(predicates.clone());

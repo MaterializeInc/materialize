@@ -208,8 +208,6 @@ EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 | Join %0 %1
 | | implementation = Differential %0 %1.()
 | | demand = (#0)
-| Map true
-| Project (#0)
 
 EOF
 
@@ -232,7 +230,6 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 | Join %0 %1 %2 (= #0 #1)
 | | implementation = Differential %1 %2.() %0.(#0)
 | | demand = (#0, #2)
-| Map true
 | Project (#0, #0, #2)
 
 EOF
@@ -275,7 +272,6 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 | Join %3 %6 (= #2 #3)
 | | implementation = Differential %3 %6.(#0)
 | | demand = (#0, #2)
-| Map true
 | Project (#0, #0, #2)
 
 EOF

@@ -86,15 +86,22 @@ impl NonNullRequirements {
             }
             RelationExpr::Map { input, scalars } => {
                 let arity = input.arity();
-                let mut new_columns = HashSet::new();
-                for column in columns {
-                    if column < arity {
-                        new_columns.insert(column);
-                    } else {
-                        scalars[column - arity].non_null_requirements(&mut new_columns);
+                if columns
+                    .iter()
+                    .any(|c| *c >= arity && scalars[*c - arity].is_literal_null())
+                {
+                    relation.take_safely();
+                } else {
+                    let mut new_columns = HashSet::new();
+                    for column in columns {
+                        if column < arity {
+                            new_columns.insert(column);
+                        } else {
+                            scalars[column - arity].non_null_requirements(&mut new_columns);
+                        }
                     }
+                    self.action(input, new_columns, gets);
                 }
-                self.action(input, new_columns, gets);
             }
             RelationExpr::FlatMap {
                 input,

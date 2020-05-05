@@ -19,7 +19,7 @@ use crate::{EvalError, GlobalId, RelationExpr, ScalarExpr};
 
 pub mod binding;
 pub mod column_knowledge;
-pub mod constant_join;
+// pub mod constant_join;
 pub mod demand;
 pub mod empty_map;
 pub mod filter_lets;
@@ -28,6 +28,7 @@ pub mod inline_let;
 pub mod join_elision;
 pub mod join_implementation;
 // pub mod join_order;
+pub mod map_lifting;
 pub mod nonnull_requirements;
 pub mod nonnullable;
 pub mod predicate_pushdown;
@@ -180,15 +181,17 @@ impl Default for Optimizer {
                     Box::new(crate::transform::update_let::UpdateLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                     Box::new(crate::transform::projection_lifting::ProjectionLifting),
+                    Box::new(crate::transform::map_lifting::LiteralLifting),
                     Box::new(crate::transform::filter_lets::FilterLets),
                     Box::new(crate::transform::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::transform::column_knowledge::ColumnKnowledge),
-                    Box::new(crate::transform::constant_join::InsertConstantJoin),
+                    // Box::new(crate::transform::constant_join::InsertConstantJoin),
                     Box::new(crate::transform::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::transform::redundant_join::RedundantJoin),
                     Box::new(crate::transform::topk_elision::TopKElision),
                 ],
             }),
+            Box::new(crate::transform::reduction::FoldConstants),
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
             // exists but is currently unevaluated with the new join implementations.
 
@@ -202,7 +205,7 @@ impl Default for Optimizer {
             // JoinOrder adds Projects, hence need project fusion again.
 
             // Implementation transformations
-            Box::new(crate::transform::constant_join::RemoveConstantJoin),
+            // Box::new(crate::transform::constant_join::RemoveConstantJoin),
             Box::new(crate::transform::Fixpoint {
                 transforms: vec![
                     Box::new(crate::transform::projection_lifting::ProjectionLifting),
