@@ -39,14 +39,25 @@ impl crate::transform::Transform for LiteralLifting {
 
 impl LiteralLifting {
     pub fn transform(&self, relation: &mut RelationExpr) {
-        let scalars = self.action(relation, &mut HashMap::new());
-        if !scalars.is_empty() {
-            *relation = relation.take_dangerous().map(scalars);
+        let literals = self.action(relation, &mut HashMap::new());
+        if !literals.is_empty() {
+            // Literals return up the root should be re-installed.
+            *relation = relation.take_dangerous().map(literals);
         }
     }
-    // Lift literals out from under `relation`.
-    // Returns a list of literal scalar expressions that must be appended
-    // to the result before it is used.
+    /// Lift literals from `relation`.
+    ///
+    /// Returns a list of literal scalar expressions that must be appended
+    /// to the result before it can be correctly used. The intent is that
+    /// this action extracts a maximal set of literals from `relation`,
+    /// which can then often be propagated further up and inlined in any
+    /// expressions as it goes.
+    ///
+    /// In several cases, we only manage to extract literals from the final
+    /// columns. This could be improved using permutations to move all of
+    /// the literals to the final columns, and then rely on projection
+    /// hoisting to allow the these literals to move up the AST.
+    // TODO(frank): Fix this.
     pub fn action(
         &self,
         relation: &mut RelationExpr,
