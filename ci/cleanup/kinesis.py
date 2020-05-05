@@ -7,38 +7,37 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize import spawn
 import json
-from subprocess import Popen, PIPE
 from typing import Dict, List
 from datetime import datetime, timedelta
 
 
 def get_old_stream_names() -> List[str]:
-    process = Popen(
-        ["aws", "kinesis", "list-streams", "--region=us-east-2"],
-        stdout=PIPE,
-        stderr=PIPE,
+    stream_names = json.loads(
+        spawn.capture(
+            ["aws", "kinesis", "list-streams", "--region=us-east-2"], unicode=True
+        )
     )
-    stdout, stderr = process.communicate()
-    if stderr:
-        print(f"Hit error listing Kinesis streams: ", stderr)
-        raise
-
-    stream_names = json.loads(stdout)
     if "StreamNames" not in stream_names:
         print(f"Expected a list of stream names, found ", stream_names)
         raise
 
-    stream_descriptions = []
-    for stream_name in stream_names:
-        process = Popen(
-            ["aws", "kinesis", "describe-stream", stream_name, "--region=us-east-2"]
+    stream_descriptions = [
+        json.loads(
+            spawn.capture(
+                [
+                    "aws",
+                    "kinesis",
+                    "describe-stream",
+                    stream_name,
+                    "--region=us-east-2",
+                ],
+                unicode=True,
+            )
         )
-        stdout, stderr = process.communicate()
-        if stderr:
-            print(f"Hit error describing Kinesis stream ", stream_name, stderr)
-        else:
-            stream_descriptions.append(json.loads(stdout))
+        for stream_name in stream_names
+    ]
 
     def is_old(desc: Dict) -> bool:
         if "StreamCreationTimestamp" in desc:
@@ -59,7 +58,7 @@ def main() -> None:
     print(f"Will delete {len(old_stream_names)} old Kinesis streams")
     for stream_name in old_stream_names:
         print(f"Deleting stream {stream_name}")
-        process = Popen(
+        spawn.capture(
             [
                 "aws",
                 "kinesis",
@@ -69,10 +68,6 @@ def main() -> None:
                 "--region=us-east-2",
             ]
         )
-        stdout, stderr = process.communicate()
-        if stderr:
-            print(f"Hit error deleting Kinesis stream ", stream_name, stderr)
-            raise
 
     print(f"All deleted")
 
