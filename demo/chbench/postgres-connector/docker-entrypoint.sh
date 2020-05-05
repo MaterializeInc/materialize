@@ -29,10 +29,11 @@ topics=(
     debezium.tpcch.region
 )
 
-echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server kafka:9092 --create --partitions 1 --replication-factor 1 --topic
-
 wait-for-it --timeout=60 connect:8083
 wait-for-it --timeout=60 postgres:5432
+
+echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server kafka:9092 --create --partitions 1 --replication-factor 1 --topic
+
 
 curl -H 'Content-Type: application/json'  connect:8083/connectors --data '{
   "name": "psql-connector",
@@ -47,6 +48,7 @@ curl -H 'Content-Type: application/json'  connect:8083/connectors --data '{
     "database.history.kafka.bootstrap.servers": "kafka:9092",
     "include.schema.changes": "true",
     "database.history.kafka.topic": "psql-history",
+    "provide.transaction.metadata": "true",
     "time.precision.mode": "connect"
-   }
+    }
 }'
