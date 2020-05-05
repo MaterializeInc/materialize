@@ -37,7 +37,7 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarT
 use sql_parser::ast::{
     AvroSchema, Connector, CsrSeed, ExplainOptions, ExplainStage, Explainee, Format, Ident,
     IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
-    Statement, Value,
+    SqlOption, Statement, Value,
 };
 
 use crate::kafka_util;
@@ -686,6 +686,7 @@ fn handle_show_create_sink(
 
 fn kafka_sink_builder(
     format: Option<Format>,
+    with_options: Vec<SqlOption>,
     mut broker: String,
     topic_prefix: String,
     desc: RelationDesc,
@@ -709,22 +710,41 @@ fn kafka_sink_builder(
     let encoder = Encoder::new(desc);
     let value_schema = encoder.writer_schema().canonical_form();
 
+    let mut with_options = normalize::with_options(&with_options);
+
+    // Use the user supplied value for replication factor, or default to 1
+    let replication_factor = match with_options.remove("replication_factor") {
+        None => 1,
+        Some(Value::Number(n)) => n.parse::<u32>()?,
+        Some(_) => bail!("replication factor for sink topics has to be a positive integer"),
+    };
+
+    if replication_factor == 0 {
+        bail!("replication factor for sink topics has to be greater than zero");
+    }
+
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_url,
         schema_registry_url,
         value_schema,
         topic_prefix,
         topic_suffix,
+        replication_factor,
     }))
 }
 
 fn avro_ocf_sink_builder(
     format: Option<Format>,
+    with_options: Vec<SqlOption>,
     path: String,
     file_name_suffix: String,
 ) -> Result<SinkConnectorBuilder, failure::Error> {
     if format.is_some() {
         bail!("avro ocf sinks cannot specify a format");
+    }
+
+    if !with_options.is_empty() {
+        bail!("avro ocf sinks do not support WITH options");
     }
 
     let path = PathBuf::from(path);
@@ -741,14 +761,15 @@ fn avro_ocf_sink_builder(
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, from, connector, format, if_not_exists) = match stmt {
+    let (name, from, connector, with_options, format, if_not_exists) = match stmt {
         Statement::CreateSink {
             name,
             from,
             connector,
+            with_options,
             format,
             if_not_exists,
-        } => (name, from, connector, format, if_not_exists),
+        } => (name, from, connector, with_options, format, if_not_exists),
         _ => unreachable!(),
     };
 
@@ -765,11 +786,16 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
 
     let connector_builder = match connector {
         Connector::File { .. } => bail!("file sinks are not yet supported"),
-        Connector::Kafka { broker, topic } => {
-            kafka_sink_builder(format, broker, topic, from.desc()?.clone(), suffix)?
-        }
+        Connector::Kafka { broker, topic } => kafka_sink_builder(
+            format,
+            with_options,
+            broker,
+            topic,
+            from.desc()?.clone(),
+            suffix,
+        )?,
         Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix)?,
+        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
     };
 
     Ok(Plan::CreateSink {

@@ -183,6 +183,7 @@ pub fn create_statement(
             name,
             from,
             connector: _,
+            with_options: _,
             format: _,
             if_not_exists,
         } => {
