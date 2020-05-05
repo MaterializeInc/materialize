@@ -516,12 +516,18 @@ fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() + b.unwrap_int32())
+fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_int32()
+        .checked_add(b.unwrap_int32())
+        .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
 }
 
-fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() + b.unwrap_int64())
+fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_int64()
+        .checked_add(b.unwrap_int64())
+        .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
 }
 
 fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -764,12 +770,18 @@ fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_interval() + b.unwrap_interval())
 }
 
-fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() - b.unwrap_int32())
+fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_int32()
+        .checked_sub(b.unwrap_int32())
+        .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
 }
 
-fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() - b.unwrap_int64())
+fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_int64()
+        .checked_sub(b.unwrap_int64())
+        .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
 }
 
 fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1916,8 +1928,8 @@ impl BinaryFunc {
         match self {
             BinaryFunc::And => and(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Or => or(datums, temp_storage, a_expr, b_expr),
-            BinaryFunc::AddInt32 => Ok(eager!(add_int32)),
-            BinaryFunc::AddInt64 => Ok(eager!(add_int64)),
+            BinaryFunc::AddInt32 => eager!(add_int32),
+            BinaryFunc::AddInt64 => eager!(add_int64),
             BinaryFunc::AddFloat32 => Ok(eager!(add_float32)),
             BinaryFunc::AddFloat64 => Ok(eager!(add_float64)),
             BinaryFunc::AddTimestampInterval => Ok(eager!(add_timestamp_interval)),
@@ -1927,8 +1939,8 @@ impl BinaryFunc {
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddDecimal => Ok(eager!(add_decimal)),
             BinaryFunc::AddInterval => Ok(eager!(add_interval)),
-            BinaryFunc::SubInt32 => Ok(eager!(sub_int32)),
-            BinaryFunc::SubInt64 => Ok(eager!(sub_int64)),
+            BinaryFunc::SubInt32 => eager!(sub_int32),
+            BinaryFunc::SubInt64 => eager!(sub_int64),
             BinaryFunc::SubFloat32 => Ok(eager!(sub_float32)),
             BinaryFunc::SubFloat64 => Ok(eager!(sub_float64)),
             BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
