@@ -396,6 +396,9 @@ class ResolvedImage:
         for d in dependencies:
             self.dependencies[d.name] = d
 
+    def __repr__(self) -> str:
+        return f"ResolvedImage<{self.spec()}>"
+
     @property
     def name(self) -> str:
         """The name of the underlying image."""
@@ -595,7 +598,6 @@ class DependencySet:
                 Hub.
         """
         known_images = docker_images()
-        specs = {d.name: d.spec() for d in self}
         for d in self:
             spec = d.spec()
             if spec not in known_images:
@@ -605,6 +607,8 @@ class DependencySet:
                 else:
                     print(f"==> Acquiring {spec}")
                     acquired_from = d.acquire()
+            else:
+                print(f"==> Already built {spec}")
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self.dependencies.values())
