@@ -39,7 +39,6 @@ def get_old_stream_names() -> List[str]:
         )
         for stream_name in stream_names["StreamNames"]
     ]
-    print(f"stream descriptions ", stream_descriptions)
 
     def is_old(desc: Dict) -> bool:
         if "StreamCreationTimestamp" in desc:
@@ -50,7 +49,7 @@ def get_old_stream_names() -> List[str]:
             return False
 
     old_stream_names = [
-        desc["StreamName"] for desc in stream_descriptions if is_old(desc)
+        desc["StreamName"] for desc in stream_descriptions if is_old(desc["StreamDescription"])
     ]
     return old_stream_names
 
