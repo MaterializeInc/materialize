@@ -637,6 +637,17 @@ impl Encoder {
         &self.writer_schema
     }
 
+    pub fn encode_unchecked(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.write_u8(0).expect("writing to vec cannot fail");
+        buf.write_i32::<NetworkEndian>(schema_id)
+            .expect("writing to vec cannot fail");
+        let avro = self.diff_pair_to_avro(diff_pair);
+        debug_assert!(avro.validate(self.writer_schema.top_node()));
+        avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
+        buf
+    }
+
     /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
     /// See function implementation for Confluent-specific details.
     pub fn encode(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
