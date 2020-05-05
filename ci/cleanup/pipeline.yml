@@ -12,3 +12,5 @@
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.cleanup.bintray
     timeout_in_minutes: 10
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.cleanup.kinesis
+    timeout_in_minutes: 10
