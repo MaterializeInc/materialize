@@ -36,7 +36,7 @@ def get_old_stream_names() -> List[str]:
                 unicode=True,
             )
         )
-        for stream_name in stream_names
+        for stream_name in stream_names["StreamNames"]
     ]
 
     def is_old(desc: Dict) -> bool:
