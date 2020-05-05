@@ -25,6 +25,7 @@ members = [
     "src/sql-parser",
     "src/symbiosis",
     "src/testdrive",
+    "src/transform",
     "test/metabase/smoketest",
     "test/smith",
 ]

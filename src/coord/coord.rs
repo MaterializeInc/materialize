@@ -40,7 +40,7 @@ use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
     SinkConnector, TailSinkConnector, Timestamp, Update,
 };
-use expr::transform::Optimizer;
+use transform::Optimizer;
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
     SourceInstanceId,
@@ -1735,7 +1735,7 @@ where
     // frontiers of participating data inputs.
     pub fn broadcast_dataflow_creation(&mut self, mut dataflow: DataflowDesc) {
         // Optimize the dataflow across views, and any other ways that appeal.
-        dataflow.optimize();
+        transform::optimize_dataflow(&mut dataflow);
 
         // Finalize the dataflow by broadcasting its construction to all workers.
         broadcast(

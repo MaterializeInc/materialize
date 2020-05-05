@@ -1,0 +1,31 @@
+[package]
+name = "transform"
+description = "Transformations of Materialize expressions."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+aho-corasick = "0.7.10"
+chrono = "0.4"
+csv = "1.1"
+dataflow-types = { path = "../dataflow-types" }
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+encoding = "0.2"
+enum-iterator = "0.6.0"
+expr = { path = "../expr" }
+failure = "0.1.8"
+indexmap = "1.3.2"
+num_enum = "0.4.2"
+ordered-float = { version = "1.0.2", features = ["serde"] }
+ore = { path = "../ore" }
+pdqselect = "0.1.0"
+regex = "1.3.7"
+regex-syntax = "0.6.15"
+repr = { path = "../repr" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+unicase = "2.6.0"

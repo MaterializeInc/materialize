@@ -16,7 +16,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use catalog::{Catalog, CatalogItemSerializer, Index, PlanContext, Sink, Source, View};
-use expr::transform::Optimizer;
+use transform::Optimizer;
 use failure::bail;
 use ore::collections::CollectionExt;
 use repr::Row;
