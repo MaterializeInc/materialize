@@ -230,6 +230,7 @@ impl crate::Transform for Hoist {
 
 // =============================================================================
 
+/// Inlines let statements.
 #[derive(Debug)]
 pub struct Unbind;
 
@@ -338,7 +339,9 @@ impl From<Patch> for RelationExpr {
 /// The metadata record associated with a dataflow graph during deduplication.
 #[derive(Debug)]
 pub enum Metadata {
+    /// A count associated with a counting pass.
     Counting(Count),
+    /// A patch associated with a patching pass.
     Patching(Patch),
 }
 

@@ -7,10 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Preliminary work on reduction push-down.
+//!
+//! At the moment, this only absorbs Map operators into Reduce operators.
+
 use std::collections::HashMap;
 
 use crate::{GlobalId, RelationExpr, ScalarExpr};
 
+/// Pushes Reduce operators toward sources.
 #[derive(Debug)]
 pub struct ReductionPushdown;
 
@@ -20,18 +25,15 @@ impl crate::Transform for ReductionPushdown {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        relation.visit_mut(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl ReductionPushdown {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-    }
-
+    /// Pushes Reduce operators toward sources.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Reduce {
             input,

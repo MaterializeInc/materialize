@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Remove TopK operators with both an offset of zero and no limit.
+
 use std::collections::HashMap;
 
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
@@ -21,16 +23,13 @@ impl crate::Transform for TopKElision {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        self.action(relation, &mut HashMap::new());
         Ok(())
     }
 }
 
 impl TopKElision {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        self.action(relation, &mut HashMap::new());
-    }
-
+    /// Remove TopK operators with both an offset of zero and no limit.
     pub fn action(
         &self,
         relation: &mut RelationExpr,

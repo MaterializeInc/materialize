@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Hoist projections through operators.
+//!
+//! Projections can be re-introduced in the physical planning stage.
+
 use std::collections::HashMap;
 
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
 
-/// Hoist projections wherever possible, in order to minimize structural limitations on transformations.
-/// Projections can be re-introduced in the physical planning stage.
+/// Hoist projections through operators.
 #[derive(Debug)]
 pub struct ProjectionLifting;
 
@@ -22,16 +25,14 @@ impl crate::Transform for ProjectionLifting {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        self.action(relation, &mut HashMap::new());
         Ok(())
     }
 }
 
 impl ProjectionLifting {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        self.action(relation, &mut HashMap::new());
-    }
-    // Lift projections out from under `relation`.
+
+    /// Hoist projections through operators.
     pub fn action(
         &self,
         relation: &mut RelationExpr,

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Replace operators on constants collections with constant collections.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use repr::{Datum, Row, RowArena};
@@ -17,6 +19,7 @@ use crate::TransformError;
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
 
+/// Replace operators on constants collections with constant collections.
 #[derive(Debug)]
 pub struct FoldConstants;
 
@@ -26,15 +29,12 @@ impl crate::Transform for FoldConstants {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), TransformError> {
-        self.transform(relation)
+        relation.try_visit_mut(&mut |e| self.action(e))
     }
 }
 
 impl FoldConstants {
-    pub fn transform(&self, relation: &mut RelationExpr) -> Result<(), TransformError> {
-        relation.try_visit_mut(&mut |e| self.action(e))
-    }
-
+    /// Replace operators on constants collections with constant collections.
     pub fn action(&self, relation: &mut RelationExpr) -> Result<(), TransformError> {
         let relation_type = relation.typ();
         match relation {
@@ -389,13 +389,16 @@ impl FoldConstants {
     }
 }
 
+/// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
 pub mod demorgans {
+
     use std::collections::HashMap;
 
     use expr::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
     use crate::TransformError;
 
+    /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
     #[derive(Debug)]
     pub struct DeMorgans;
     impl crate::Transform for DeMorgans {
@@ -404,17 +407,15 @@ pub mod demorgans {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         ) -> Result<(), TransformError> {
-            self.transform(relation);
+            relation.visit_mut_pre(&mut |e| {
+                self.action(e);
+            });
             Ok(())
         }
     }
 
     impl DeMorgans {
-        pub fn transform(&self, relation: &mut RelationExpr) {
-            relation.visit_mut_pre(&mut |e| {
-                self.action(e);
-            });
-        }
+        /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
         pub fn action(&self, relation: &mut RelationExpr) {
             if let RelationExpr::Filter {
                 input: _,
@@ -474,6 +475,7 @@ pub mod demorgans {
     }
 }
 
+/// Transforms predicates from (a && b) || (a && c) into a && (b || c).
 pub mod undistribute_and {
     use std::collections::HashMap;
 
@@ -482,6 +484,7 @@ pub mod undistribute_and {
 
     use crate::TransformError;
 
+    /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
     #[derive(Debug)]
     pub struct UndistributeAnd;
 
@@ -491,17 +494,15 @@ pub mod undistribute_and {
             relation: &mut RelationExpr,
             _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
         ) -> Result<(), TransformError> {
-            self.transform(relation);
+            relation.visit_mut(&mut |e| {
+                self.action(e);
+            });
             Ok(())
         }
     }
 
     impl UndistributeAnd {
-        pub fn transform(&self, relation: &mut RelationExpr) {
-            relation.visit_mut(&mut |e| {
-                self.action(e);
-            });
-        }
+        /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
         pub fn action(&self, relation: &mut RelationExpr) {
             if let RelationExpr::Filter {
                 input: _,

@@ -7,14 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Removes unit collections from joins, and joins with fewer than two inputs.
+//!
+//! Unit collections have no columns and a count of one, and a join with such
+//! a collection act as the identity operator on collections. Once removed,
+//! we may find joins with zero or one input, which can be further simplified.
+
 use std::collections::HashMap;
 
 use repr::RelationType;
 
 use crate::{GlobalId, RelationExpr, ScalarExpr};
 
-/// Removes singleton constants from joins, and removes joins with
-/// single input relations.
+/// Removes unit collections from joins, and joins with fewer than two inputs.
 #[derive(Debug)]
 pub struct JoinElision;
 
@@ -24,18 +29,16 @@ impl crate::Transform for JoinElision {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        relation.visit_mut(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl JoinElision {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-    }
 
+    /// Removes unit collections from joins, and joins with fewer than two inputs.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
             inputs,

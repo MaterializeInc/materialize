@@ -7,14 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Transforms predicates of the form "A and B" into two: "A" and "B".
+
 use std::collections::HashMap;
 
 use expr::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr};
 
+/// Transforms predicates of the form "A and B" into two: "A" and "B".
 #[derive(Debug)]
 pub struct SplitPredicates;
 
 impl crate::Transform for SplitPredicates {
+    /// Transforms predicates of the form "A and B" into two: "A" and "B".
     fn transform(
         &self,
         relation: &mut RelationExpr,

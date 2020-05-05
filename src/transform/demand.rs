@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Transformation based on pushing demand information about columns toward sources.
+
 use std::collections::{HashMap, HashSet};
 
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
@@ -32,19 +34,16 @@ impl crate::Transform for Demand {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
-        Ok(())
-    }
-}
-
-impl Demand {
-    pub fn transform(&self, relation: &mut RelationExpr) {
         self.action(
             relation,
             (0..relation.typ().column_types.len()).collect(),
             &mut HashMap::new(),
         );
+        Ok(())
     }
+}
+
+impl Demand {
 
     /// Columns to be produced.
     pub fn action(

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Re-order relations in a join to process them in an order that makes sense.
+//! Fuses multiple `Filter` operators into one; deduplicates predicates.
 //!
 //! ```rust
 //! use expr::{RelationExpr, ScalarExpr};
@@ -41,6 +41,7 @@ use std::collections::HashMap;
 
 use crate::{GlobalId, RelationExpr, ScalarExpr};
 
+/// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
 pub struct Filter;
 
@@ -50,17 +51,16 @@ impl crate::Transform for Filter {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        relation.visit_mut_pre(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl Filter {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-    }
+
+    /// Fuses multiple `Filter` operators into one and deduplicates predicates.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Filter { input, predicates } = relation {
             // consolidate nested filters.

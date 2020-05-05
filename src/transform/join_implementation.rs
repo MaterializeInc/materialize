@@ -10,21 +10,17 @@
 // Clippy's cognitive complexity is easy to reach.
 //#![allow(clippy::cognitive_complexity)]
 
-//! Transformations that allow join to make use of indexes.
+//! Determines the join implementation for join operators.
 //!
-//! This is mostly a proof-of-concept that indexes work. The transformations in this module
-//! may or may not belong together. Also, the transformations are subject to change as indexes
-//! become more advanced.
+//! This includes determining the type of join (e.g. differential linear, or delta queries),
+//! determining the orders of collections, lifting predicates if useful arrangements exist,
+//! and identifying opportunities to use indexes to replace filters.
 
 use std::collections::HashMap;
 
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Determines the join implementation for join operators.
-///
-/// This includes determining the type of join (e.g. differential linear, or delta queries),
-/// determining the orders of collections, lifting predicates if useful arrangements exist,
-/// and identifying opportunities to use indexes to replace filters.
 #[derive(Debug)]
 pub struct JoinImplementation;
 
@@ -34,25 +30,21 @@ impl crate::Transform for JoinImplementation {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation, indexes);
-        Ok(())
-    }
-}
-
-impl JoinImplementation {
-    pub fn transform(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
         let mut arranged = HashMap::new();
         for (k, v) in indexes {
             arranged.insert(Id::Global(*k), v.clone());
         }
         self.action_recursive(relation, &mut arranged);
+        Ok(())
     }
+}
 
-    /// Pre-order visitor for each `RelationExpr`.
+impl JoinImplementation {
+
+    /// Pre-order visitor for each `RelationExpr` to find join operators.
+    ///
+    /// This method accumulates state about let-bound arrangements, so that
+    /// join operators can more accurately assess their available arrangements.
     pub fn action_recursive(
         &self,
         relation: &mut RelationExpr,
@@ -80,6 +72,8 @@ impl JoinImplementation {
         }
     }
 
+
+    /// Determines the join implementation for join operators.
     pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {
         if let RelationExpr::Join { inputs, .. } = relation {
             // Common information of broad utility.

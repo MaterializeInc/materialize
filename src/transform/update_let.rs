@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Re-assign type information and identifiers to each `Get` to ensure
+//! uniqueness of identifiers.
+
+
 use std::collections::HashMap;
 
 use repr::RelationType;
@@ -27,17 +31,15 @@ impl crate::Transform for UpdateLet {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        let mut id_gen: IdGen = Default::default();
+        self.action(relation, &mut HashMap::new(), &mut id_gen);
         Ok(())
     }
 }
 
 impl UpdateLet {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        let mut id_gen: IdGen = Default::default();
-        self.action(relation, &mut HashMap::new(), &mut id_gen);
-    }
 
+    /// Re-assign type information and identifier to each `Get`.
     pub fn action(
         &self,
         relation: &mut RelationExpr,

@@ -7,10 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Fuses multiple `Join` operators into one `Join` operator.
+//!
+//! Multiway join planning relies on a broad view of the involved relations,
+//! and chains of binary joins can make this challenging to reason about.
+//! Collecting multiple joins together with their constraints improves
+//! our ability to plan these joins, and reason about other operators motion
+//! aroud them.
+
 use std::collections::HashMap;
 
 use crate::{GlobalId, RelationExpr, ScalarExpr};
 
+/// Fuses multiple `Join` operators into one `Join` operator.
 #[derive(Debug)]
 pub struct Join;
 
@@ -20,18 +29,16 @@ impl crate::Transform for Join {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        relation.visit_mut(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl Join {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-    }
 
+    /// Fuses multiple `Join` operators into one `Join` operator.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
             inputs,

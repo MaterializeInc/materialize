@@ -7,6 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Transformations for relation expressions.
+//!
+//! This crate contains traits, types, and methods suitable for transforming
+//! `RelationExpr` types in ways that preserve semantics and improve performance.
+//! The core trait is `Transform`, and many implementors of this trait can be
+//! boxed and iterated over. Some common transformation patterns are wrapped
+//! as `Transform` implementors themselves.
+//!
+//! The crate also contains the beginnings of whole-dataflow optimization,
+//! which uses the same analyses but spanning multiple dataflow elements.
+
+#![forbid(missing_docs)]
 #![deny(missing_debug_implementations)]
 
 use std::collections::HashMap;
@@ -17,7 +29,6 @@ use expr::{EvalError, GlobalId, RelationExpr, ScalarExpr, OptimizedRelationExpr}
 
 pub mod binding;
 pub mod column_knowledge;
-// pub mod constant_join;
 pub mod demand;
 pub mod empty_map;
 pub mod filter_lets;
@@ -25,7 +36,6 @@ pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
 pub mod join_implementation;
-// pub mod join_order;
 pub mod map_lifting;
 pub mod nonnull_requirements;
 pub mod nonnullable;
@@ -36,7 +46,6 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
-// pub mod simplify;
 pub mod split_predicates;
 pub mod topk_elision;
 pub mod update_let;
@@ -55,7 +64,9 @@ pub trait Transform: std::fmt::Debug {
 /// Errors that can occur during a transformation.
 #[derive(Debug, Clone)]
 pub enum TransformError {
+    /// An error resulting from evaluation of a `ScalarExpr`.
     Eval(EvalError),
+    /// An unstructured error.
     Internal(String),
 }
 
@@ -76,9 +87,11 @@ impl From<EvalError> for TransformError {
     }
 }
 
+/// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
 pub struct Fixpoint {
     transforms: Vec<Box<dyn crate::Transform + Send>>,
+    limit: usize,
 }
 
 impl Transform for Fixpoint {
@@ -87,7 +100,7 @@ impl Transform for Fixpoint {
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), TransformError> {
-        for _ in 0..100 {
+        for _ in 0..self.limit {
             let original = relation.clone();
             for transform in self.transforms.iter() {
                 transform.transform(relation, indexes)?;
@@ -101,7 +114,7 @@ impl Transform for Fixpoint {
             transform.transform(relation, indexes)?;
         }
         Err(TransformError::Internal(format!(
-            "fixpoint looped 100 times {:#?} {}\n{}",
+            "fixpoint looped too many times {:#?} {}\n{}",
             self,
             original.pretty(),
             relation.pretty()
@@ -163,10 +176,10 @@ impl Default for Optimizer {
             Box::new(crate::reduction::UndistributeAnd),
             Box::new(crate::split_predicates::SplitPredicates),
             Box::new(crate::Fixpoint {
+                limit: 100,
                 transforms: vec![
                     Box::new(crate::nonnullable::NonNullable),
                     Box::new(crate::reduction::FoldConstants),
-                    // Box::new(crate::simplify::SimplifyFilterPredicates),
                     Box::new(crate::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::fusion::join::Join),
                     Box::new(crate::fusion::filter::Filter),
@@ -183,28 +196,23 @@ impl Default for Optimizer {
                     Box::new(crate::filter_lets::FilterLets),
                     Box::new(crate::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
-                    // Box::new(crate::constant_join::InsertConstantJoin),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
                 ],
             }),
+            // As a final logical action, convert any constant expression to a constant.
+            // Some optimizations fight against this, and we want to be sure to end as a
+            // `RelationExpr::Constant` if that is the case, so that subsequent use can
+            // clearly see this.
             Box::new(crate::reduction::FoldConstants),
+
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
             // exists but is currently unevaluated with the new join implementations.
 
-            /*Box::new(crate::use_indexes::FilterEqualLiteral),
-            Box::new(crate::projection_lifting::ProjectionLifting),
-            Box::new(crate::column_knowledge::ColumnKnowledge),
-            Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::predicate_pushdown::PredicatePushdown),
-            Box::new(crate::fusion::join::Join),
-            Box::new(crate::redundant_join::RedundantJoin),*/
-            // JoinOrder adds Projects, hence need project fusion again.
-
             // Implementation transformations
-            // Box::new(crate::constant_join::RemoveConstantJoin),
             Box::new(crate::Fixpoint {
+                limit: 100,
                 transforms: vec![
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),

@@ -7,25 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Push non-null requirements toward sources.
+//!
+//! This analysis derives NonNull requirements on the arguments to predicates.
+//! These requirements exist because most functions with Null arguments are
+//! themselves Null, and a predicate that evaluates to Null will not pass.
+//!
+//! These requirements are not here introduced as constraints, but rather flow
+//! to sources of data and restrict any constant collections to those rows that
+//! satisfy the constraint. The main consequence is when Null values are added
+//! in support of outer-joins and subqueries, we can occasionally remove that
+//! branch when we observe that Null values would be subjected to predicates.
+//!
+//! This analysis relies on a careful understanding of `ScalarExpr` and the
+//! semantics of various functions, *some of which may be non-Null even with
+//! Null arguments*.
 use std::collections::{HashMap, HashSet};
 
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr, TableFunc};
 
-/// Drive non-null requirements to `RelationExpr::Constant` collections.
-///
-/// This analysis derives NonNull requirements on the arguments to predicates.
-/// These requirements exist because most functions with Null arguments are
-/// themselves Null, and a predicate that evaluates to Null will not pass.
-///
-/// These requirements are not here introduced as constraints, but rather flow
-/// to sources of data and restrict any constant collections to those rows that
-/// satisfy the constraint. The main consequence is when Null values are added
-/// in support of outer-joins and subqueries, we can occasionally remove that
-/// branch when we observe that Null values would be subjected to predicates.
-///
-/// This analysis relies on a careful understanding of `ScalarExpr` and the
-/// semantics of various functions, *some of which may be non-Null even with
-/// Null arguments*.
+
+/// Push non-null requirements toward sources.
 #[derive(Debug)]
 pub struct NonNullRequirements;
 
@@ -35,16 +37,14 @@ impl crate::Transform for NonNullRequirements {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        self.action(relation, HashSet::new(), &mut HashMap::new());
         Ok(())
     }
 }
 
 impl NonNullRequirements {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        self.action(relation, HashSet::new(), &mut HashMap::new());
-    }
-    /// Columns that must be non-null.
+
+    /// Push non-null requirements toward sources.
     pub fn action(
         &self,
         relation: &mut RelationExpr,
@@ -90,6 +90,8 @@ impl NonNullRequirements {
                     .iter()
                     .any(|c| *c >= arity && scalars[*c - arity].is_literal_null())
                 {
+                    // A null value was introduced in a marked column;
+                    // the entire expression can be zerod out.
                     relation.take_safely();
                 } else {
                     let mut new_columns = HashSet::new();

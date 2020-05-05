@@ -7,22 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Hoist literal values from maps wherever possible.
+//!
+//! This transform specifically looks for `RelationExpr::Map` operators
+//! where any of the `ScalarExpr` expressions are literals. Whenever it
+//! can, it lifts those expressions through or around operators.
+//!
+//! The main feature of this operator is that it allows transformations
+//! to locally change the shape of operators, presenting fewer columns
+//! when they are unused and replacing them with mapped default values.
+//! The mapped default values can then be lifted and ideally absorbed.
+//! This type of transformation is difficult to make otherwise, as it
+//! is not easy to locally change the shape of relations.
+
 use std::collections::HashMap;
 
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Hoist literal values from maps wherever possible.
-///
-/// This transform specifically looks for `RelationExpr::Map` operators
-/// where any of the `ScalarExpr` expressions are literals. Whenever it
-/// can, it lifts those expressions through or around operators.
-///
-/// The main feature of this operator is that it allows transformations
-/// to locally change the shape of operators, presenting fewer columns
-/// when they are unused and replacing them with mapped default values.
-/// The mapped default values can then be lifted and ideally absorbed.
-/// This type of transformation is difficult to make otherwise, as it
-/// is not easy to locally change the shape of relations.
 #[derive(Debug)]
 pub struct LiteralLifting;
 
@@ -32,20 +34,18 @@ impl crate::Transform for LiteralLifting {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
-        Ok(())
-    }
-}
-
-impl LiteralLifting {
-    pub fn transform(&self, relation: &mut RelationExpr) {
         let literals = self.action(relation, &mut HashMap::new());
         if !literals.is_empty() {
             // Literals return up the root should be re-installed.
             *relation = relation.take_dangerous().map(literals);
         }
+        Ok(())
     }
-    /// Lift literals from `relation`.
+}
+
+impl LiteralLifting {
+
+    /// Hoist literal values from maps wherever possible.
     ///
     /// Returns a list of literal scalar expressions that must be appended
     /// to the result before it can be correctly used. The intent is that

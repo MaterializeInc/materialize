@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Remove redundant collections of distinct elements from joins.
+
 // If statements seem a bit clearer in this case. Specialized methods
 // that replace simple and common alternatives frustrate developers.
 #![allow(clippy::comparison_chain, clippy::filter_next)]
@@ -14,6 +16,7 @@ use std::collections::HashMap;
 
 use crate::{GlobalId, RelationExpr, ScalarExpr};
 
+/// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
 pub struct RedundantJoin;
 
@@ -23,18 +26,15 @@ impl crate::Transform for RedundantJoin {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        relation.visit_mut(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl RedundantJoin {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-    }
-
+    /// Remove redundant collections of distinct elements from joins.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
             inputs,

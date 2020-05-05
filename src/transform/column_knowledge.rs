@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Transformations based on pulling information about individual columns from sources.
+
 use std::collections::HashMap;
 
 use repr::Datum;
@@ -201,6 +203,7 @@ impl ColumnKnowledge {
     }
 }
 
+/// Information about a specific column.
 #[derive(Clone, Debug)]
 pub struct DatumKnowledge {
     /// If set, a specific value for the column.

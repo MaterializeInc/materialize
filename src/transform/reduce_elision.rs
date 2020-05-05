@@ -7,15 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Removes `Reduce` when the input has as unique keys the keys of the reduce.
+//!
+//! When a reduce has grouping keys that are contained within a
+//! set of columns that form unique keys for the input, the reduce
+//! can be simplified to a map operation.
+
 use std::collections::HashMap;
 
 use crate::{GlobalId, RelationExpr, ScalarExpr};
 
-/// Removes `Reduce` when the input has (compatible) keys.
-///
-/// When a reduce has grouping keys that are contained within a
-/// set of columns that form unique keys for the input, the reduce
-/// can be simplified to a map operation.
+/// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
 pub struct ReduceElision;
 
@@ -25,17 +27,15 @@ impl crate::Transform for ReduceElision {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        relation.visit_mut(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl ReduceElision {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
-    }
+    /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Reduce {
             input,

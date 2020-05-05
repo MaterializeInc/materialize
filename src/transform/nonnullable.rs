@@ -7,11 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Harvests information about non-nullability of columns from sources.
+//!
+//! This transformation can simplify logic when columns are known to be non-nullable.
+//! Predicates that tests for null can be elided, and aggregations can be simplified.
+
+// TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
+
 use std::collections::HashMap;
 
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use expr::{AggregateExpr, AggregateFunc, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
 
+/// Harvests information about non-nullability of columns from sources.
 #[derive(Debug)]
 pub struct NonNullable;
 
@@ -21,18 +29,16 @@ impl crate::Transform for NonNullable {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
+        relation.visit_mut_pre(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl NonNullable {
-    pub fn transform(&self, relation: &mut RelationExpr) {
-        relation.visit_mut_pre(&mut |e| {
-            self.action(e);
-        });
-    }
 
+    /// Harvests information about non-nullability of columns from sources.
     pub fn action(&self, relation: &mut RelationExpr) {
         match relation {
             RelationExpr::Map { input, scalars } => {

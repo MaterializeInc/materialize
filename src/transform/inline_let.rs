@@ -7,10 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Install replace certain `Get` operators with their `Let` value.
+//!
+//! Some `Let` bindings are not useful, for example when they bind
+//! a `Get` as their value, or when there is a single corresponding
+//! `Get` statement in their body. These cases can be inlined without
+//! harming planning.
+
 use std::collections::HashMap;
 
 use expr::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 
+/// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
 pub struct InlineLet;
 
@@ -20,15 +28,8 @@ impl crate::Transform for InlineLet {
         relation: &mut RelationExpr,
         _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation);
-        Ok(())
-    }
-}
-
-impl InlineLet {
-    pub fn transform(&self, relation: &mut RelationExpr) {
         let mut lets = vec![];
-        self.collect_lets(relation, &mut lets);
+        self.action(relation, &mut lets);
         for (id, value) in lets.into_iter().rev() {
             *relation = RelationExpr::Let {
                 id,
@@ -36,15 +37,20 @@ impl InlineLet {
                 body: Box::new(relation.take_safely()),
             };
         }
+        Ok(())
     }
+}
 
-    pub fn collect_lets(
+impl InlineLet {
+
+    /// Install replace certain `Get` operators with their `Let` value.
+    pub fn action(
         &self,
         relation: &mut RelationExpr,
         lets: &mut Vec<(LocalId, RelationExpr)>,
     ) {
         if let RelationExpr::Let { id, value, body } = relation {
-            self.collect_lets(value, lets);
+            self.action(value, lets);
 
             let mut num_gets = 0;
             body.visit_mut_pre(&mut |relation| match relation {
@@ -73,9 +79,9 @@ impl InlineLet {
 
             *relation = body.take_safely();
             // might be another Let in the body so have to recur here
-            self.collect_lets(relation, lets);
+            self.action(relation, lets);
         } else {
-            relation.visit1_mut(|child| self.collect_lets(child, lets));
+            relation.visit1_mut(|child| self.action(child, lets));
         }
     }
 }
