@@ -4,4 +4,9 @@ create_source ::=
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' ('BYTES' | 'TEXT')
-  ('ENVELOPE' ('NONE' ('UPSERT' ('FORMAT' ('BYTES' | 'TEXT'))?)))?
+  ('ENVELOPE'
+    (
+      'NONE' |
+      ('UPSERT' ('FORMAT' ('BYTES' | 'TEXT'))?)
+    )
+  )?
