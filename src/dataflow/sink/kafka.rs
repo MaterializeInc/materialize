@@ -81,7 +81,7 @@ pub fn kafka<G>(
                             after: Some(row),
                         }
                     };
-                    let buf = encoder.encode(connector.schema_id, diff_pair);
+                    let buf = encoder.encode_unchecked(connector.schema_id, diff_pair);
                     for _ in 0..diff.abs() {
                         let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf);
                         if let Err((e, _)) = producer.inner().send(record) {
