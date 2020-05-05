@@ -26,7 +26,7 @@ def get_old_stream_names() -> List[str]:
             return False
 
     old_stream_names = [
-        desc["name"] for desc in stream_descriptions if is_old(desc)
+        desc["StreamName"] for desc in stream_descriptions if is_old(desc)
     ]
     return old_stream_names
 
