@@ -107,9 +107,11 @@ impl LiteralLifting {
                 if !literals.is_empty() {
                     // TODO(frank): inline literals in `expr`.
                     let input_arity = input.arity();
-                    expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
-                        if *c >= input_arity {
-                            *e = literals[*c - input_arity].clone();
+                    expr.visit_mut(&mut |e| {
+                        if let ScalarExpr::Column(c) = e {
+                            if *c >= input_arity {
+                                *e = literals[*c - input_arity].clone();
+                            }
                         }
                     });
 
@@ -124,9 +126,11 @@ impl LiteralLifting {
                     // in predicates and then lift the `map` around the filter.
                     let input_arity = input.arity();
                     for expr in predicates.iter_mut() {
-                        expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
-                            if *c >= input_arity {
-                                *e = literals[*c - input_arity].clone();
+                        expr.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                if *c >= input_arity {
+                                    *e = literals[*c - input_arity].clone();
+                                }
                             }
                         });
                     }
@@ -145,7 +149,6 @@ impl LiteralLifting {
                 }
 
                 if input_literals.iter().any(|l| !l.is_empty()) {
-
                     *demand = None;
                     *implementation = crate::JoinImplementation::Unimplemented;
 
@@ -157,7 +160,7 @@ impl LiteralLifting {
                     let input_arities = input_types
                         .iter()
                         .zip(input_literals.iter())
-                        .map(|(i,l)| i.column_types.len() + l.len())
+                        .map(|(i, l)| i.column_types.len() + l.len())
                         .collect::<Vec<_>>();
 
                     let mut offset = 0;
@@ -179,30 +182,44 @@ impl LiteralLifting {
                     // returned for strictly prior input relations.
                     for equivalence in equivalences.iter_mut() {
                         for expr in equivalence.iter_mut() {
-                            expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
-                                let input = input_relation[*c];
-                                let input_arity = input_types[input].column_types.len();
-                                if *c >= prior_arities[input] + input_arity {
-                                    // Inline any input literal that has been promoted.
-                                    println!("c: {:?}, prior: {:?}, input: {:?}", *c, prior_arities[input], input_arity);
-                                    *e = input_literals[input][*c - (prior_arities[input] + input_arity)].clone()
-                                } else {
-                                    // Subtract off columns that have been promoted.
-                                    *c -= input_literals[..input].iter().map(|l| l.len()).sum::<usize>();
+                            expr.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(c) = e {
+                                    let input = input_relation[*c];
+                                    let input_arity = input_types[input].column_types.len();
+                                    if *c >= prior_arities[input] + input_arity {
+                                        // Inline any input literal that has been promoted.
+                                        *e = input_literals[input]
+                                            [*c - (prior_arities[input] + input_arity)]
+                                            .clone()
+                                    } else {
+                                        // Subtract off columns that have been promoted.
+                                        *c -= input_literals[..input]
+                                            .iter()
+                                            .map(|l| l.len())
+                                            .sum::<usize>();
+                                    }
                                 }
                             });
                         }
                     }
 
                     let old_arity = input_arities.iter().sum();
-                    let new_arity = old_arity - input_literals.iter().map(|l| l.len()).sum::<usize>();
+                    let new_arity =
+                        old_arity - input_literals.iter().map(|l| l.len()).sum::<usize>();
                     let mut projection = Vec::new();
-                    for column in 0 .. old_arity {
+                    for column in 0..old_arity {
                         let input = input_relation[column];
                         let input_arity = input_types[input].column_types.len();
-                        let prior_literals = input_literals[..input].iter().map(|l| l.len()).sum::<usize>();
+                        let prior_literals = input_literals[..input]
+                            .iter()
+                            .map(|l| l.len())
+                            .sum::<usize>();
                         if column >= prior_arities[input] + input_arity {
-                            projection.push(new_arity + prior_literals + ((column - prior_arities[input]) - input_arity));
+                            projection.push(
+                                new_arity
+                                    + prior_literals
+                                    + ((column - prior_arities[input]) - input_arity),
+                            );
                         } else {
                             projection.push(column - prior_literals);
                         }
@@ -223,17 +240,21 @@ impl LiteralLifting {
                     let input_arity = input.arity();
                     // Inline literals into group key expressions.
                     for expr in group_key.iter_mut() {
-                        expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
-                            if *c >= input_arity {
-                                *e = literals[*c - input_arity].clone();
+                        expr.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                if *c >= input_arity {
+                                    *e = literals[*c - input_arity].clone();
+                                }
                             }
                         });
                     }
                     // Inline literals into aggregate value selector expressions.
                     for aggr in aggregates.iter_mut() {
-                        aggr.expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
-                            if *c >= input_arity {
-                                *e = literals[*c - input_arity].clone();
+                        aggr.expr.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                if *c >= input_arity {
+                                    *e = literals[*c - input_arity].clone();
+                                }
                             }
                         })
                     }
