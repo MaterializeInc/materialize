@@ -104,6 +104,7 @@ fn refresh_kafka_metadata(
     result
 }
 
+/// Creates a Kafka-based timely dataflow source operator.
 pub fn kafka<G>(
     config: SourceConfig<G>,
     connector: KafkaSourceConnector,

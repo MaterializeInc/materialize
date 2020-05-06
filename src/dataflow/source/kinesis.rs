@@ -52,6 +52,7 @@ lazy_static! {
 /// (100x/sec per stream) and to improve source performance overall.
 const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
+/// Creates a Kinesis-based timely dataflow source operator.
 pub fn kinesis<G>(
     config: SourceConfig<G>,
     connector: KinesisSourceConnector,
