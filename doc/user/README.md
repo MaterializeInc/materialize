@@ -25,9 +25,7 @@ If you're making changes to the site, you might want a more cache-busting versio
 hugo server --disableFastRender --ignoreCache
 ```
 
-## Writing & managing docs
-
-### Railroad diagrams for SQL grammar
+## Railroad diagrams for SQL grammar
 
 Railroad diagrams consist of two parts:
 
@@ -72,6 +70,87 @@ their output type), largely influenced by the way that Postgres structures their
 function docs.
 
 If you see the need to add or change the grouping here, don't be shy.
+
+## `CREATE SOURCE` docs
+
+Materialize's sources consist of the following components:
+
+- Connectors to some external source of data (e.g. Kafka)
+- Formats of that data (e.g. Avro, text)
+- Envelopes, which express how Materialize treats data w/r/t CRUD operations
+  (e.g. append-only, supporting updated and deletes)
+
+Because each of these three components have multiple implementations, the
+docs for `CREATE SOURCE` are too large to fit on a single page. To manage this,
+we've broken the `CREATE SOURCE` documentation into many pages (one page for
+each meaningfully distinct combination of connector and format), and leveraged
+Hugo partials and shortcodes to simplify page creation and resuse content across
+pages.
+
+You can find all of the `CREATE SOURCE` docs at `/doc/user/sql/create-source/`.
+
+### Hugo shortcodes and partials
+
+Hugo partials are template components, and shortcodes are designed to provide
+a dynamic interface for using those components.
+
+In the case of Materialize, we rely on shortcodes in
+`/www/layouts/shortcodes/create-source` to simplify generating our many
+`CREATE SOURCE` pages, namely `syntax-details`.  This provides an interface
+to dynamically display content from `www/layouts/partials/create-source`.
+
+`...partials/create-source` is structured like:
+
+```
+<component>
+  - <implementation>
+    - details.html (fills in Details heading)
+    - syntax.html (fills in Syntax table)
+    - with-options.html (only for connectors; adds With Options heading)
+```
+
+The `syntax-details` shortcode then provides an interface to express which
+implementations of each components you want to include in the documentation
+by simply including the `<implementation>` folder name in the argument for
+the `<component>`. This should be fairly intuitive, but there are the following
+caveats:
+
+- `connector` only takes one value. The `<implementation>/with-options.html`
+  content displays beneath the **Syntax** header.
+- `formats` and `envelopes` can take multiple arguments separated by spaces (e.g.
+  `"text bytes"`).
+
+Here's an example:
+
+```
+{{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" %}}
+```
+
+### Remaining to-dos
+
+This is currently a v0 of an attempt to simplify managing the `CREATE SOURCE`
+docs. Future wants include:
+
+- Modularizing railroad diagrams (i.e. genericize root diagram, and bring in
+  specific implementation diagrams when invoked).
+- Dynamic front-end that lets users "choose their own adventure" to get the
+  correct content in front of them.
+- Dynamic sample generator.
+
+### Updating `CREATE SOURCE` pages
+
+- To update the details of any specific implementation, updating
+  the partial template content immediately propagates those changes to all
+  of the content that relies on it.
+
+  If you want to express conditional logic in these, the easiest way is passing
+  in some parameter from the `syntax-details` shortcode, and then checking for
+  it in the template.
+
+- To add implementations, simply add the directory to the appropriate component's
+  folder, along with the same files as the other implementations. You'll then
+  need to reference the implementation when invoking the `syntax-details`
+  shortcode.
 
 ## Syntax highlighting
 
