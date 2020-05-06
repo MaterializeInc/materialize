@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Types related to the creation of dataflow sources.
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -27,7 +29,7 @@ pub use file::{file, read_file_task, FileReadStyle};
 pub use kafka::kafka;
 pub use kinesis::kinesis;
 
-// Shared configuration information for all source types.
+/// Shared configuration information for all source types.
 pub struct SourceConfig<'a, G> {
     /// The name to attach to the underlying timely operator.
     pub name: String,
@@ -42,13 +44,17 @@ pub struct SourceConfig<'a, G> {
     pub active: bool,
     // Timestamping fields.
     // TODO: document these.
+    /// TODO(ncrooks)
     pub timestamp_histories: TimestampHistories,
+    /// TODO(ncrooks)
     pub timestamp_tx: TimestampChanges,
+    /// TODO(ncrooks)
     pub consistency: Consistency,
 }
 
-// A `SourceToken` indicates interest in a source. When the `SourceToken` is
-// dropped, its associated source will be stopped.
+/// A `SourceToken` manages interest in a source.
+///
+/// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
     id: SourceInstanceId,
     capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
@@ -57,6 +63,7 @@ pub struct SourceToken {
 }
 
 impl SourceToken {
+    /// Re-activates the associated timely source operator.
     pub fn activate(&self) {
         self.activator.activate();
     }
@@ -76,7 +83,10 @@ impl Drop for SourceToken {
     }
 }
 
+/// The status of a source.
 pub enum SourceStatus {
+    /// The source is still alive.
     Alive,
+    /// The source is complete.
     Done,
 }

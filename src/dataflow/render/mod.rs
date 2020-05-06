@@ -167,6 +167,7 @@ pub(crate) fn build_local_input<A: Allocate>(
             if worker_index == 0 {
                 local_inputs.insert(index.on_id, LocalInput { handle, capability });
             }
+            // TODO: why do we use `index.on_id` here instead of `index_id`? Are they the same?
             let get_expr = RelationExpr::global_get(index.on_id, on_type);
             let err_collection = Collection::empty(region);
             context
