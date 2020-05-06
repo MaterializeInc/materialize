@@ -1004,9 +1004,10 @@ where
                 }
 
                 RelationExpr::ArrangeBy { input, keys } => {
-                    if keys
-                        .iter()
-                        .any(|key| self.arrangement(&input, key).is_none())
+                    if keys.is_empty()
+                        || keys
+                            .iter()
+                            .any(|key| self.arrangement(&input, key).is_none())
                     {
                         self.ensure_rendered(input, scope, worker_index);
                     }
