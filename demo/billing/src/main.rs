@@ -87,6 +87,10 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     let mut k_client =
         kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)?;
 
+    if let Some(partitions) = config.partitions {
+        k_client.create_topic(partitions).await?;
+    }
+
     let mut buf = vec![];
     let mut interval = config.message_sleep.map(tokio::time::interval);
     let mut total_size = 0;
