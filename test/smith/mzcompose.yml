@@ -23,7 +23,12 @@ services:
     entrypoint: /bin/bash
     environment:
       - RUST_LOG=smith-fuzz=debug,info
-    command: -c "wait-for-it materialized:6875 --
-      --materialized-host materialized
-      --query-count 100"
+    entrypoint:
+      - wait-for-it
+      - materialized:6875
+      - --
+      - smith-fuzz
+      - --materialized-host
+      - materialized
+    command: [--query-count, "100"]
     depends_on: [materialized]
