@@ -107,10 +107,10 @@ use std::rc::Weak;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+// use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
-use differential_dataflow::operators::join::JoinCore;
-use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+// use differential_dataflow::operators::join::JoinCore;
+// use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::aggregation::Aggregate;
@@ -143,9 +143,13 @@ use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
 
+mod arrange_by;
 mod context;
 mod delta_join;
+mod join;
 mod reduce;
+mod threshold;
+mod top_k;
 
 pub(crate) fn build_local_input<A: Allocate>(
     manager: &mut TraceManager,
@@ -171,10 +175,8 @@ pub(crate) fn build_local_input<A: Allocate>(
             context
                 .collections
                 .insert(get_expr.clone(), (stream.as_collection(), err_collection));
-            context.render_arranged(
+            context.render_arrangeby(
                 &get_expr.clone().arrange_by(&[index.keys.clone()]),
-                region,
-                worker_index,
                 Some(&index_id.to_string()),
             );
             match context.arrangement(&get_expr, &index.keys) {
@@ -550,17 +552,15 @@ pub(crate) fn build_dataflow<A: Allocate>(
             }
 
             for object in dataflow.objects_to_build.clone() {
+                context.ensure_rendered(object.relation_expr.as_ref(), region, worker_index);
                 if let Some(typ) = object.typ {
-                    context.ensure_rendered(object.relation_expr.as_ref(), region, worker_index);
                     context.clone_from_to(
                         &object.relation_expr.as_ref(),
                         &RelationExpr::global_get(object.id, typ.clone()),
                     );
                 } else {
-                    context.render_arranged(
+                    context.render_arrangeby(
                         &object.relation_expr.as_ref(),
-                        region,
-                        worker_index,
                         Some(&object.id.to_string()),
                     );
                     // Under the premise that this is always an arrange_by aroung a global get,
@@ -898,10 +898,18 @@ where
                 }
 
                 RelationExpr::Filter { input, predicates } => {
-                    let collections = if let RelationExpr::Join { implementation, .. } = &**input {
+                    let collections = if let RelationExpr::Join {
+                        inputs,
+                        implementation,
+                        ..
+                    } = &**input
+                    {
+                        for input in inputs {
+                            self.ensure_rendered(input, scope, worker_index);
+                        }
                         let (ok_collection, err_collection) = match implementation {
                             expr::JoinImplementation::Differential(_start, _order) => {
-                                self.render_join(input, predicates, scope, worker_index)
+                                self.render_join(input, predicates, scope)
                             }
                             expr::JoinImplementation::DeltaQuery(_orders) => self
                                 .render_delta_join(input, predicates, scope, worker_index, |t| {
@@ -933,29 +941,43 @@ where
                     self.collections.insert(relation_expr.clone(), collections);
                 }
 
-                RelationExpr::Join { implementation, .. } => match implementation {
-                    expr::JoinImplementation::Differential(_start, _order) => {
-                        let collection = self.render_join(relation_expr, &[], scope, worker_index);
-                        self.collections.insert(relation_expr.clone(), collection);
+                RelationExpr::Join {
+                    inputs,
+                    implementation,
+                    ..
+                } => {
+                    for input in inputs {
+                        self.ensure_rendered(input, scope, worker_index);
                     }
-                    expr::JoinImplementation::DeltaQuery(_orders) => {
-                        let collection =
-                            self.render_delta_join(relation_expr, &[], scope, worker_index, |t| {
-                                t.saturating_sub(1)
-                            });
-                        self.collections.insert(relation_expr.clone(), collection);
+                    match implementation {
+                        expr::JoinImplementation::Differential(_start, _order) => {
+                            let collection = self.render_join(relation_expr, &[], scope);
+                            self.collections.insert(relation_expr.clone(), collection);
+                        }
+                        expr::JoinImplementation::DeltaQuery(_orders) => {
+                            let collection = self.render_delta_join(
+                                relation_expr,
+                                &[],
+                                scope,
+                                worker_index,
+                                |t| t.saturating_sub(1),
+                            );
+                            self.collections.insert(relation_expr.clone(), collection);
+                        }
+                        expr::JoinImplementation::Unimplemented => {
+                            panic!("Attempt to render unimplemented join");
+                        }
                     }
-                    expr::JoinImplementation::Unimplemented => {
-                        panic!("Attempt to render unimplemented join");
-                    }
-                },
-
-                RelationExpr::Reduce { .. } => {
-                    self.render_reduce(relation_expr, scope, worker_index);
                 }
 
-                RelationExpr::TopK { .. } => {
-                    self.render_topk(relation_expr, scope, worker_index);
+                RelationExpr::Reduce { input, .. } => {
+                    self.ensure_rendered(input, scope, worker_index);
+                    self.render_reduce(relation_expr, scope);
+                }
+
+                RelationExpr::TopK { input, .. } => {
+                    self.ensure_rendered(input, scope, worker_index);
+                    self.render_topk(relation_expr);
                 }
 
                 RelationExpr::Negate { input } => {
@@ -966,8 +988,9 @@ where
                         .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
-                RelationExpr::Threshold { .. } => {
-                    self.render_threshold(relation_expr, scope, worker_index);
+                RelationExpr::Threshold { input } => {
+                    self.ensure_rendered(input, scope, worker_index);
+                    self.render_threshold(relation_expr);
                 }
 
                 RelationExpr::Union { left, right } => {
@@ -983,528 +1006,16 @@ where
                     self.collections.insert(relation_expr.clone(), (ok, err));
                 }
 
-                RelationExpr::ArrangeBy { .. } => {
-                    self.render_arranged(relation_expr, scope, worker_index, None);
+                RelationExpr::ArrangeBy { input, keys } => {
+                    if keys
+                        .iter()
+                        .any(|key| self.arrangement(&input, key).is_none())
+                    {
+                        self.ensure_rendered(input, scope, worker_index);
+                    }
+                    self.render_arrangeby(relation_expr, None);
                 }
             };
-        }
-    }
-
-    fn render_arranged(
-        &mut self,
-        relation_expr: &RelationExpr,
-        scope: &mut G,
-        worker_index: usize,
-        id: Option<&str>,
-    ) {
-        if let RelationExpr::ArrangeBy { input, keys } = relation_expr {
-            if keys.is_empty() {
-                self.ensure_rendered(input, scope, worker_index);
-                let collection = self.collection(input).unwrap();
-                self.collections.insert(relation_expr.clone(), collection);
-            }
-            for key_set in keys {
-                if self.arrangement(&input, &key_set).is_none() {
-                    self.ensure_rendered(input, scope, worker_index);
-                    let (ok_built, err_built) = self.collection(input).unwrap();
-                    let keys2 = key_set.clone();
-                    let name = if let Some(id) = id {
-                        format!("Arrange: {}", id)
-                    } else {
-                        "Arrange".to_string()
-                    };
-                    let (ok_collection, err_collection) = ok_built.map_fallible(move |row| {
-                        let datums = row.unpack();
-                        let temp_storage = RowArena::new();
-                        let key_row =
-                            Row::try_pack(keys2.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-                        Ok::<_, DataflowError>((key_row, row))
-                    });
-                    let err_collection = err_built.concat(&err_collection);
-                    let ok_arrangement =
-                        ok_collection.arrange_named::<OrdValSpine<_, _, _, _>>(&name);
-                    let err_arrangement = err_collection
-                        .arrange_named::<OrdKeySpine<_, _, _>>(&format!("{}-errors", name));
-                    self.set_local(&input, key_set, (ok_arrangement, err_arrangement));
-                }
-                if self.arrangement(relation_expr, key_set).is_none() {
-                    match self.arrangement(&input, key_set).unwrap() {
-                        ArrangementFlavor::Local(oks, errs) => {
-                            self.set_local(relation_expr, key_set, (oks, errs));
-                        }
-                        ArrangementFlavor::Trace(gid, oks, errs) => {
-                            self.set_trace(gid, relation_expr, key_set, (oks, errs));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn render_join(
-        &mut self,
-        relation_expr: &RelationExpr,
-        predicates: &[ScalarExpr],
-        scope: &mut G,
-        worker_index: usize,
-    ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
-        if let RelationExpr::Join {
-            inputs,
-            equivalences,
-            demand,
-            implementation: expr::JoinImplementation::Differential(start, order),
-        } = relation_expr
-        {
-            let column_types = relation_expr.typ().column_types;
-            let arity = column_types.len();
-
-            // We maintain a private copy of `equivalences`, which we will digest
-            // as we produce the join.
-            let mut equivalences = equivalences.clone();
-            for equivalence in equivalences.iter_mut() {
-                equivalence.sort();
-                equivalence.dedup();
-            }
-
-            for input in inputs.iter() {
-                self.ensure_rendered(input, scope, worker_index);
-            }
-
-            let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-            let arities = types
-                .iter()
-                .map(|t| t.column_types.len())
-                .collect::<Vec<_>>();
-            let mut offset = 0;
-            let mut prior_arities = Vec::new();
-            for input in 0..inputs.len() {
-                prior_arities.push(offset);
-                offset += arities[input];
-            }
-            // let input_relation = arities
-            //     .iter()
-            //     .enumerate()
-            //     .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-            //     .collect::<Vec<_>>();
-
-            // Unwrap demand
-            // TODO: If we pushed predicates into the operator, we could have a
-            // more accurate view of demand that does not include the support of
-            // all predicates.
-            let demand = demand.clone().unwrap_or_else(|| (0..arity).collect());
-
-            // This collection will evolve as we join in more inputs.
-            let (mut joined, mut errs) = self.collection(&inputs[*start]).unwrap();
-
-            // Maintain sources of each in-progress column.
-            let mut source_columns = (prior_arities[*start]
-                ..prior_arities[*start] + arities[*start])
-                .collect::<Vec<_>>();
-
-            let mut predicates = predicates.to_vec();
-            let (j, es) = crate::render::delta_join::build_filter(
-                joined,
-                &source_columns,
-                &mut predicates,
-                &mut equivalences,
-            );
-            joined = j;
-            if let Some(es) = es {
-                errs.concat(&es);
-            }
-
-            for (input, next_keys) in order.iter() {
-                let mut next_keys_rebased = next_keys.clone();
-                for expr in next_keys_rebased.iter_mut() {
-                    expr.visit_mut(&mut |e| {
-                        if let ScalarExpr::Column(c) = e {
-                            *c += prior_arities[*input];
-                        }
-                    });
-                }
-
-                // Keys for the next input to be joined must be produced from
-                // ScalarExprs found in `equivalences`, re-written to bind the
-                // appropriate columns (as `joined` has permuted columns).
-                let prev_keys = next_keys_rebased
-                    .iter()
-                    .map(|expr| {
-                        // We expect to find `expr` in some `equivalence` which
-                        // has a bound expression. Otherwise, the join plan is
-                        // defective and we should panic.
-                        let equivalence = equivalences
-                            .iter()
-                            .find(|equivs| equivs.contains(expr))
-                            .expect("Expression in join plan is not in an equivalence relation");
-
-                        // We expect to find exactly one bound expression, as
-                        // multiple bound expressions should result in a filter
-                        // and be removed once they have.
-                        let mut bound_expr = equivalence
-                            .iter()
-                            .find(|expr| {
-                                expr.support()
-                                    .into_iter()
-                                    .all(|c| source_columns.contains(&c))
-                            })
-                            .expect("Expression in join plan is not bound at time of use")
-                            .clone();
-
-                        bound_expr.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
-                                *c = source_columns
-                                    .iter()
-                                    .position(|x| x == c)
-                                    .expect("Did not find bound column in source_columns");
-                            }
-                        });
-                        bound_expr
-                    })
-                    .collect::<Vec<_>>();
-
-                // We should extract each element of `next_keys` from `equivalences`,
-                // as each *should* now be a redundant constraint. We do this so that
-                // the demand analysis does not require these columns be produced.
-                for equivalence in equivalences.iter_mut() {
-                    equivalence.retain(|expr| !next_keys_rebased.contains(expr));
-                }
-                equivalences.retain(|e| e.len() > 1);
-
-                // Determine which columns from `joined` and `input` should be
-                // retained. Columns should be retained if they are required by
-                // `demand`, or are in the support of an equivalence class.
-                let mut column_demand = std::collections::HashSet::new();
-                for equivalence in equivalences.iter() {
-                    for expr in equivalence.iter() {
-                        column_demand.extend(expr.support());
-                    }
-                }
-                column_demand.extend(demand.iter().cloned());
-
-                // Identify the *indexes* of columns that are demanded by any
-                // remaining predicates and equivalence classes.
-                let prev_vals = source_columns
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| {
-                        if column_demand.contains(c) {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let next_vals = (0..arities[*input])
-                    .filter(|c| column_demand.contains(&(prior_arities[*input] + c)))
-                    .collect::<Vec<_>>();
-
-                // Identify the columns we intend to retain.
-                source_columns = prev_vals
-                    .iter()
-                    .map(|i| source_columns[*i])
-                    .chain(next_vals.iter().map(|i| prior_arities[*input] + *i))
-                    .collect();
-
-                // We exploit the demand information to restrict `prev` to its demanded columns.
-                let (prev_keyed, es) = joined.map_fallible({
-                    move |row| {
-                        let datums = row.unpack();
-                        let temp_storage = RowArena::new();
-                        let key = Row::try_pack(
-                            prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
-                        )?;
-                        let row = Row::pack(prev_vals.iter().map(|i| datums[*i]));
-                        Ok((key, row))
-                    }
-                });
-                errs = errs.concat(&es);
-                let prev_keyed = prev_keyed
-                    .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
-
-                match self.arrangement(&inputs[*input], &next_keys[..]) {
-                    Some(ArrangementFlavor::Local(oks, es)) => {
-                        joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
-                            let prev_datums = old.unpack();
-                            let next_datums = new.unpack();
-                            // TODO: We could in principle apply some predicates here, and avoid
-                            // constructing output rows that will be filtered out soon.
-                            Some(Row::pack(
-                                prev_datums
-                                    .iter()
-                                    .chain(next_vals.iter().map(|i| &next_datums[*i])),
-                            ))
-                        });
-                        errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
-                    }
-                    Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
-                        joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
-                            let prev_datums = old.unpack();
-                            let next_datums = new.unpack();
-                            // TODO: We could in principle apply some predicates here, and avoid
-                            // constructing output rows that will be filtered out soon.
-                            Some(Row::pack(
-                                prev_datums
-                                    .iter()
-                                    .chain(next_vals.iter().map(|i| &next_datums[*i])),
-                            ))
-                        });
-                        errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
-                    }
-                    None => {
-                        panic!("Arrangement alarmingly absent!");
-                    }
-                };
-
-                let (j, es) = crate::render::delta_join::build_filter(
-                    joined,
-                    &source_columns,
-                    &mut predicates,
-                    &mut equivalences,
-                );
-                joined = j;
-                if let Some(es) = es {
-                    errs = errs.concat(&es);
-                }
-            }
-
-            // We are obliged to produce demanded columns in order, with dummy data allowed
-            // in non-demanded locations. They must all be in order, in any case. All demanded
-            // columns should be present in `source_columns` (and probably not much else).
-
-            let position_or = (0..arity)
-                .map(|col| {
-                    if let Some(pos) = source_columns.iter().position(|c| c == &col) {
-                        Ok(pos)
-                    } else {
-                        Err({
-                            let typ = &column_types[col];
-                            if typ.nullable {
-                                Datum::Null
-                            } else {
-                                typ.scalar_type.dummy_datum()
-                            }
-                        })
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            (
-                joined.map(move |row| {
-                    let datums = row.unpack();
-                    Row::pack(position_or.iter().map(|pos_or| match pos_or {
-                        Result::Ok(index) => datums[*index],
-                        Result::Err(datum) => *datum,
-                    }))
-                }),
-                errs,
-            )
-        } else {
-            panic!("render_join called on invalid expression.")
-        }
-    }
-
-    fn render_topk(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
-        if let RelationExpr::TopK {
-            input,
-            group_key,
-            order_key,
-            limit,
-            offset,
-        } = relation_expr
-        {
-            use differential_dataflow::operators::reduce::Reduce;
-
-            self.ensure_rendered(input, scope, worker_index);
-            let (ok_input, err_input) = self.collection(input).unwrap();
-
-            // To provide a robust incremental orderby-limit experience, we want to avoid grouping
-            // *all* records (or even large groups) and then applying the ordering and limit. Instead,
-            // a more robust approach forms groups of bounded size (here, 16) and applies the offset
-            // and limit to each, and then increases the sizes of the groups.
-
-            // Builds a "stage", which uses a finer grouping than is required to reduce the volume of
-            // updates, and to reduce the amount of work on the critical path for updates. The cost is
-            // a larger number of arrangements when this optimization does nothing beneficial.
-            fn build_topk_stage<G>(
-                collection: Collection<G, ((Row, u64), Row), Diff>,
-                order_key: &[expr::ColumnOrder],
-                modulus: u64,
-                offset: usize,
-                limit: Option<usize>,
-            ) -> Collection<G, ((Row, u64), Row), Diff>
-            where
-                G: Scope,
-                G::Timestamp: Lattice,
-            {
-                let order_clone = order_key.to_vec();
-
-                collection
-                    .map(move |((key, hash), row)| ((key, hash % modulus), row))
-                    .reduce_named("TopK", {
-                        move |_key, source, target| {
-                            target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
-                            let must_shrink = offset > 0
-                                || limit
-                                    .map(|l| {
-                                        target.iter().map(|(_, d)| *d).sum::<isize>() as usize > l
-                                    })
-                                    .unwrap_or(false);
-                            if must_shrink {
-                                if !order_clone.is_empty() {
-                                    //todo: use arrangements or otherwise make the sort more performant?
-                                    let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
-                                        expr::compare_columns(
-                                            &order_clone,
-                                            &left.0.unpack(),
-                                            &right.0.unpack(),
-                                            || left.cmp(right),
-                                        )
-                                    };
-                                    target.sort_by(sort_by);
-                                }
-
-                                let mut skipped = 0; // Number of records offset so far
-                                let mut output = 0; // Number of produced output records.
-                                let mut cursor = 0; // Position of current input record.
-
-                                //skip forward until an offset number of records is reached
-                                while cursor < target.len() {
-                                    if skipped + (target[cursor].1 as usize) > offset {
-                                        break;
-                                    }
-                                    skipped += target[cursor].1 as usize;
-                                    cursor += 1;
-                                }
-                                let skip_cursor = cursor;
-                                if cursor < target.len() {
-                                    if skipped < offset {
-                                        //if offset only skips some members of a group of identical
-                                        //records, return the rest
-                                        target[skip_cursor].1 -= (offset - skipped) as isize;
-                                    }
-                                    //apply limit
-                                    if let Some(limit) = limit {
-                                        while output < limit && cursor < target.len() {
-                                            let to_emit = std::cmp::min(
-                                                limit - output,
-                                                target[cursor].1 as usize,
-                                            );
-                                            target[cursor].1 = to_emit as isize;
-                                            output += to_emit;
-                                            cursor += 1;
-                                        }
-                                        target.truncate(cursor);
-                                    }
-                                }
-                                target.drain(..skip_cursor);
-                            }
-                        }
-                    })
-            }
-
-            let group_clone = group_key.to_vec();
-            let mut collection = ok_input.map(move |row| {
-                let row_hash = row.hashed();
-                let datums = row.unpack();
-                let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));
-                ((group_row, row_hash), row)
-            });
-            // This sequence of numbers defines the shifts that happen to the 64 bit hash
-            // of the record, and has the properties that 1. there are not too many of them,
-            // and 2. each has a modest difference to the next.
-            //
-            // These two properties mean that there should be no reductions on groups that
-            // are substantially larger than `offset + limit` (the largest factor should be
-            // bounded by two raised to the difference between subsequent numbers);
-            if let Some(limit) = limit {
-                for log_modulus in
-                    [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter()
-                {
-                    // here we do not apply `offset`, but instead restrict ourself with a limit
-                    // that includes the offset. We cannot apply `offset` until we perform the
-                    // final, complete reduction.
-                    collection = build_topk_stage(
-                        collection,
-                        order_key,
-                        1u64 << log_modulus,
-                        0,
-                        Some(*offset + *limit),
-                    );
-                }
-            }
-
-            // We do a final step, both to make sure that we complete the reduction, and to correctly
-            // apply `offset` to the final group, as we have not yet been applying it to the partially
-            // formed groups.
-            let result = build_topk_stage(collection, order_key, 1u64, *offset, *limit)
-                .map(|((_key, _hash), row)| row);
-            self.collections
-                .insert(relation_expr.clone(), (result, err_input));
-        }
-    }
-
-    fn render_threshold(
-        &mut self,
-        relation_expr: &RelationExpr,
-        scope: &mut G,
-        worker_index: usize,
-    ) {
-        if let RelationExpr::Threshold { input } = relation_expr {
-            // TODO: re-use and publish arrangement here.
-            let arity = input.arity();
-            let keys = (0..arity).collect::<Vec<_>>();
-
-            // TODO: easier idioms for detecting, re-using, and stashing.
-            if self.arrangement_columns(&input, &keys[..]).is_none() {
-                self.ensure_rendered(input, scope, worker_index);
-                let (ok_built, err_built) = self.collection(input).unwrap();
-                let keys2 = keys.clone();
-                let ok_keyed = ok_built
-                    .map(move |row| {
-                        let datums = row.unpack();
-                        let key_row = Row::pack(keys2.iter().map(|i| datums[*i]));
-                        (key_row, row)
-                    })
-                    .arrange_by_key();
-                self.set_local_columns(&input, &keys[..], (ok_keyed, err_built.arrange()));
-            }
-
-            use differential_dataflow::operators::reduce::ReduceCore;
-
-            let (ok_arranged, err_arranged) = match self.arrangement_columns(&input, &keys[..]) {
-                Some(ArrangementFlavor::Local(oks, errs)) => (
-                    oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-                        "Threshold",
-                        move |_k, s, t| {
-                            for (record, count) in s.iter() {
-                                if *count > 0 {
-                                    t.push(((*record).clone(), *count));
-                                }
-                            }
-                        },
-                    ),
-                    errs,
-                ),
-                Some(ArrangementFlavor::Trace(_gid, oks, errs)) => (
-                    oks.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-                        "Threshold",
-                        move |_k, s, t| {
-                            for (record, count) in s.iter() {
-                                if *count > 0 {
-                                    t.push(((*record).clone(), *count));
-                                }
-                            }
-                        },
-                    ),
-                    errs.as_collection(|k, _v| k.clone()).arrange(),
-                ),
-                None => {
-                    panic!("Arrangement alarmingly absent!");
-                }
-            };
-
-            let index = (0..keys.len()).collect::<Vec<_>>();
-            self.set_local_columns(relation_expr, &index[..], (ok_arranged, err_arranged));
         }
     }
 }

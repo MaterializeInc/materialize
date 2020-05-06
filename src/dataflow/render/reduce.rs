@@ -17,8 +17,9 @@ use differential_dataflow::operators::{Reduce, Threshold};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
+use timely::progress::{timestamp::Refines, Timestamp};
 
-use dataflow_types::{DataflowError, Timestamp};
+use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
@@ -26,9 +27,11 @@ use super::context::Context;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Arrangement;
 
-impl<G> Context<G, RelationExpr, Row, Timestamp>
+impl<G, T> Context<G, RelationExpr, Row, T>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
 {
     /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
@@ -36,7 +39,7 @@ where
         &mut self,
         relation_expr: &RelationExpr,
         scope: &mut G,
-        worker_index: usize,
+        // worker_index: usize,
     ) {
         if let RelationExpr::Reduce {
             input,
@@ -66,7 +69,6 @@ where
             let keys_clone = group_key.clone();
             let relation_expr_clone = relation_expr.clone();
 
-            self.ensure_rendered(input, scope, worker_index);
             let (ok_input, err_input) = self.collection(input).unwrap();
 
             // Distinct is a special case, as there are no aggregates to aggregate.
