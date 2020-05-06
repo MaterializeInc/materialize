@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::Context;
 use log::info;
 use rusoto_core::{HttpClient, Region};
-use rusoto_credential::StaticProvider;
+use rusoto_credential::{AutoRefreshingProvider, StaticProvider};
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
 
 use crate::aws;
@@ -45,11 +45,15 @@ pub async fn kinesis_client(
             )
         }
     };
+    // The AutoRefreshingProvider caches the underlying provider's AWS credentials,
+    // automatically fetching updated credentials if they've expired.
+    let auto_refreshing_provider =
+        AutoRefreshingProvider::new(credentials_provider).context("Getting AWS credentials")?;
 
     let request_dispatcher =
         HttpClient::new().context("creating HTTP client for Kinesis client")?;
     let kinesis_client =
-        KinesisClient::new_with(request_dispatcher, credentials_provider, region.clone());
+        KinesisClient::new_with(request_dispatcher, auto_refreshing_provider, region.clone());
     Ok(kinesis_client)
 }
 
