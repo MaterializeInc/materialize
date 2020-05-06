@@ -3130,7 +3130,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "url",
- "urlencoding",
 ]
 
 [[package]]
@@ -3837,12 +3836,6 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
-
-[[package]]
-name = "urlencoding"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3df3561629a8bb4c57e5a2e4c43348d9e29c7c29d9b1c4c1f47166deca8f37ed"
 
 [[package]]
 name = "utf8-ranges"
