@@ -35,12 +35,7 @@ where
 {
     /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
-    pub fn render_reduce(
-        &mut self,
-        relation_expr: &RelationExpr,
-        scope: &mut G,
-        // worker_index: usize,
-    ) {
+    pub fn render_reduce(&mut self, relation_expr: &RelationExpr, scope: &mut G) {
         if let RelationExpr::Reduce {
             input,
             group_key,

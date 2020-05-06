@@ -26,13 +26,7 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    pub fn render_arrangeby(
-        &mut self,
-        relation_expr: &RelationExpr,
-        // scope: &mut G,
-        // worker_index: usize,
-        id: Option<&str>,
-    ) {
+    pub fn render_arrangeby(&mut self, relation_expr: &RelationExpr, id: Option<&str>) {
         if let RelationExpr::ArrangeBy { input, keys } = relation_expr {
             if keys.is_empty() {
                 let collection = self.collection(input).unwrap();

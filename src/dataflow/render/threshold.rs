@@ -25,12 +25,7 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    pub fn render_threshold(
-        &mut self,
-        relation_expr: &RelationExpr,
-        // scope: &mut G,
-        // worker_index: usize,
-    ) {
+    pub fn render_threshold(&mut self, relation_expr: &RelationExpr) {
         if let RelationExpr::Threshold { input } = relation_expr {
             // TODO: re-use and publish arrangement here.
             let arity = input.arity();
