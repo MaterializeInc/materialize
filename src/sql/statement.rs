@@ -1187,37 +1187,13 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let mut config_options = kafka_util::extract_config(&mut with_options)?;
+                    let config_options = kafka_util::extract_config(&mut with_options)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
-
-                    // The range of values comes from `statistics.interval.ms` in
-                    // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                    let verbose_stats_err =
-                        "verbose_stats_ms must be a number between 0 and 86400000";
-                    let verbose_stats_ms = match with_options.remove("verbose_stats_ms") {
-                        None => 0,
-                        Some(Value::Number(n)) => match n.parse::<i32>() {
-                            Ok(n @ 0..=86_400_000) => n,
-                            _ => bail!(verbose_stats_err),
-                        },
-                        Some(_) => bail!(verbose_stats_err),
-                    };
-                    config_options.insert(
-                        "statistics.interval.ms".to_string(),
-                        verbose_stats_ms.to_string(),
-                    );
-
-                    let kafka_client_id = match with_options.remove("kafka_client_id") {
-                        None => "materialized".to_string(),
-                        Some(Value::SingleQuotedString(s)) => s,
-                        Some(_) => bail!("kafka_client_id must be a string"),
-                    };
-                    config_options.insert("client.id".to_string(), kafka_client_id);
 
                     let group_id_prefix = match with_options.remove("group_id_prefix") {
                         None => None,

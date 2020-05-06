@@ -1,5 +1,7 @@
+`client_id` | `text` | Use the supplied value as the Kafka client identifier.
+`group_id_prefix` | `text` | Prefix Materialize Kafka users' `group.id` with the provided value. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
 `security_protocol` | `text` | Use either [`ssl`](#ssl-with-options) or [`sasl_plaintext` (Kerberos)](#kerberos-with-options) to connect to the Kafka cluster.
-`group_id_prefix` | `text` | Prefix Materialize Kafka consumers' `group.id` with the provided value. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
+`verbose_stats_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics.
 
 ##### SSL `WITH` options
 
