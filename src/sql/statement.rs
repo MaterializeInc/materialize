@@ -1004,7 +1004,7 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
     } = &mut stmt
     {
         let with_options_map = normalize::with_options(with_options);
-        let mut specified_options = HashMap::new();
+        let mut config_options = HashMap::new();
 
         let mut file = None;
         match connector {
@@ -1014,9 +1014,8 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                 }
 
                 // Verify that the provided security options are valid and then test them.
-                specified_options =
-                    kafka_util::extract_security_config(&mut with_options_map.clone())?;
-                kafka_util::test_config(&specified_options)?;
+                config_options = kafka_util::extract_config(&mut with_options_map.clone())?;
+                kafka_util::test_config(&config_options)?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
@@ -1038,9 +1037,9 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             _ => (),
         }
 
-        purify_format(format, connector, col_names, file, &specified_options).await?;
+        purify_format(format, connector, col_names, file, &config_options).await?;
         if let sql_parser::ast::Envelope::Upsert(format) = envelope {
-            purify_format(format, connector, col_names, None, &specified_options).await?;
+            purify_format(format, connector, col_names, None, &config_options).await?;
         }
     }
     Ok(stmt)
@@ -1084,10 +1083,10 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                             AvroSchema::CsrUrl { url, seed } => {
                                 let url: Url = url.parse()?;
                                 let mut with_options_map = normalize::with_options(with_options);
-                                let config =
-                                    kafka_util::extract_security_config(&mut with_options_map)?;
+                                let config_options =
+                                    kafka_util::extract_config(&mut with_options_map)?;
                                 let ccsr_config =
-                                    kafka_util::generate_ccsr_client_config(url, &config)?;
+                                    kafka_util::generate_ccsr_client_config(url, &config_options)?;
 
                                 if let Some(seed) = seed {
                                     Schema {
@@ -1162,8 +1161,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let mut config_options =
-                        kafka_util::extract_security_config(&mut with_options)?;
+                    let mut config_options = kafka_util::extract_config(&mut with_options)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
@@ -1195,6 +1193,12 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     config_options.insert("client.id".to_string(), kafka_client_id);
 
+                    let group_id_prefix = match with_options.remove("group_id_prefix") {
+                        None => None,
+                        Some(Value::SingleQuotedString(s)) => Some(s),
+                        Some(_) => bail!("group_id_prefix must be a string"),
+                    };
+
                     // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
                     // until we have had time to think about what the right UX/design is on a non-urgent timeline!
                     // In particular, we almost certainly want the offsets to be specified per-partition.
@@ -1219,6 +1223,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         topic: topic.clone(),
                         config_options,
                         start_offset,
+                        group_id_prefix,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)
