@@ -83,13 +83,19 @@ impl<'a> ConfigAggregator<'a> {
 
         Ok(())
     }
+    fn remove_from_input(&mut self, k: &str) -> Option<Value> {
+        self.input.remove(k)
+    }
+    fn insert_into_output(&mut self, k: String, v: String) {
+        self.output.insert(k, v);
+    }
     fn finish(self) -> HashMap<String, String> {
         self.output
     }
 }
 
-/// Parse the `with_options` from a `CREATE SOURCE` statement to determine Kafka
-/// security strategy, and extract any additional supplied configurations.
+/// Parse the `with_options` from a `CREATE SOURCE` statement to determine
+/// user-supplied config options, e.g. security options.
 ///
 /// # Errors
 ///
@@ -97,37 +103,51 @@ impl<'a> ConfigAggregator<'a> {
 /// expected file paths.
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::SingleQuotedString`.
-pub fn extract_security_config(
-    mut with_options: &mut HashMap<String, Value>,
+pub fn extract_config(
+    with_options: &mut HashMap<String, Value>,
 ) -> Result<HashMap<String, String>, failure::Error> {
-    let security_protocol = match with_options.remove("security_protocol") {
+    let mut agg = ConfigAggregator::new(with_options);
+
+    // Represents general config options.
+    // TODO(sploiselle): Import other configs from src/sql/statement.rs
+    let allowed_configs = vec![Config::new("group_id_prefix", ValType::String)];
+
+    for config in allowed_configs {
+        agg.extract(&config)?;
+    }
+
+    extract_security_config(&mut agg)?;
+
+    Ok(agg.finish())
+}
+
+// Parse the `with_options` from a `CREATE SOURCE` statement to determine Kafka
+// security strategy, and extract any additional supplied configurations.
+fn extract_security_config(mut agg: &mut ConfigAggregator) -> Result<(), failure::Error> {
+    let security_protocol = match agg.remove_from_input("security_protocol") {
         None => None,
         Some(Value::SingleQuotedString(p)) => Some(p.to_lowercase()),
         Some(_) => bail!("ssl_certificate_file must be a string"),
     };
 
-    let options: HashMap<String, String> = match security_protocol.as_deref() {
-        None => HashMap::new(),
-        Some("ssl") => ssl_settings(&mut with_options)?,
-        Some("sasl_plaintext") => sasl_plaintext_kerberos_settings(&mut with_options)?,
+    match security_protocol.as_deref() {
+        None => {}
+        Some("ssl") => ssl_settings(&mut agg)?,
+        Some("sasl_plaintext") => sasl_plaintext_kerberos_settings(&mut agg)?,
         Some(invalid_protocol) => bail!(
             "Invalid WITH options: security_protocol='{}'",
             invalid_protocol
         ),
-    };
+    }
 
-    Ok(options)
+    Ok(())
 }
 
 // Filters `sql_parser::ast::Statement::CreateSource.with_options` for the
 // configuration to connect to an SSL-secured cluster. You can find more detail
 // about these settings in [librdkafka's
 // documentation](https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka).
-fn ssl_settings(
-    with_options: &mut HashMap<String, Value>,
-) -> Result<HashMap<String, String>, failure::Error> {
-    let mut agg = ConfigAggregator::new(with_options);
-
+fn ssl_settings(agg: &mut ConfigAggregator) -> Result<(), failure::Error> {
     let allowed_configs = vec![
         Config::new("ssl_ca_location", ValType::Path),
         Config::new("ssl_certificate_location", ValType::Path),
@@ -139,22 +159,17 @@ fn ssl_settings(
         agg.extract(&config)?;
     }
 
-    let mut out = agg.finish();
-    out.insert("security.protocol".to_string(), "ssl".to_string());
+    agg.insert_into_output("security.protocol".to_string(), "ssl".to_string());
 
-    Ok(out)
+    Ok(())
 }
 
 // Filters `sql_parser::ast::Statement::CreateSource.with_options` for the
 // configuration to connect to a
-// Kerberized Kafka cluster. You can find more detail
+// Kerbeinsert_into_outputKafka cluster. You can find more detail
 // about these settings in [librdkafka's
 // documentation](https://github.com/edenhill/librdkafka/wiki/Using-SASL-with-librdkafka).
-fn sasl_plaintext_kerberos_settings(
-    with_options: &mut HashMap<String, Value>,
-) -> Result<HashMap<String, String>, failure::Error> {
-    let mut agg = ConfigAggregator::new(with_options);
-
+fn sasl_plaintext_kerberos_settings(agg: &mut ConfigAggregator) -> Result<(), failure::Error> {
     // Represents valid `with_option` keys to connect to Kerberized Kafka
     // cluster through SASL based on
     // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md.
@@ -178,17 +193,16 @@ fn sasl_plaintext_kerberos_settings(
         agg.extract(&config)?;
     }
 
-    let mut out = agg.finish();
-    out.insert(
+    agg.insert_into_output(
         "security.protocol".to_string(),
         "sasl_plaintext".to_string(),
     );
 
-    Ok(out)
+    Ok(())
 }
 
 /// Create a new
-/// [`rdkafka::ClientConfig`](https://docs.rs/rdkafka/latest/rdkafka/config/struct.ClientConfig.html)
+/// [`rdinsert_into_output:ClientConfig`](https://docs.rs/rdkafka/latest/rdkafka/config/struct.ClientConfig.html)
 /// with the provided
 /// [`options`]](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md),
 /// and test its ability to create an

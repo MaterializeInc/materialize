@@ -117,7 +117,7 @@ where
     let KafkaSourceConnector {
         url,
         topic,
-        config_options,
+        mut config_options,
         start_offset,
     } = connector.clone();
 
@@ -153,7 +153,6 @@ where
 
         let mut kafka_config = ClientConfig::new();
         kafka_config
-            .set("group.id", &format!("materialize-{}", name))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
@@ -162,6 +161,16 @@ where
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &url.to_string());
+
+        let group_id_prefix = match config_options.remove("group.id.prefix") {
+            Some(supplied_prefix) => supplied_prefix,
+            None => "".to_string(),
+        };
+        kafka_config.set(
+            "group.id",
+            &format!("{}materialize-{}", group_id_prefix, name),
+        );
+
         for (k, v) in &config_options {
             kafka_config.set(k, v);
         }

@@ -1290,7 +1290,6 @@ impl Timestamper {
         let mut config = ClientConfig::new();
         config
             .set("auto.offset.reset", "earliest")
-            .set("group.id", &format!("materialize-rt-{}-{}", &kc.topic, id))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", "6000")
@@ -1299,7 +1298,18 @@ impl Timestamper {
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &kc.url.to_string());
 
-        for (k, v) in &kc.config_options {
+        let mut config_options = kc.config_options.clone();
+
+        let group_id_prefix = match config_options.remove("group.id.prefix") {
+            Some(supplied_prefix) => supplied_prefix,
+            None => "".to_string(),
+        };
+        config.set(
+            "group.id",
+            &format!("{}materialize-rt-{}-{}", group_id_prefix, &kc.topic, id),
+        );
+
+        for (k, v) in &config_options {
             config.set(k, v);
         }
 
@@ -1464,10 +1474,6 @@ impl Timestamper {
     ) -> Option<ByoKafkaConnector> {
         let mut config = ClientConfig::new();
         config
-            .set(
-                "group.id",
-                &format!("materialize-byo-{}-{}", &timestamp_topic, id),
-            )
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
@@ -1476,7 +1482,22 @@ impl Timestamper {
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &kc.url.to_string());
-        for (k, v) in &kc.config_options {
+
+        let mut config_options = kc.config_options.clone();
+
+        let group_id_prefix = match config_options.remove("group.id.prefix") {
+            Some(supplied_prefix) => supplied_prefix,
+            None => "".to_string(),
+        };
+        config.set(
+            "group.id",
+            &format!(
+                "{}materialize-byo-{}-{}",
+                group_id_prefix, &timestamp_topic, id
+            ),
+        );
+
+        for (k, v) in &config_options {
             config.set(k, v);
         }
 

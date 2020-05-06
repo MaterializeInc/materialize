@@ -1014,8 +1014,7 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                 }
 
                 // Verify that the provided security options are valid and then test them.
-                specified_options =
-                    kafka_util::extract_security_config(&mut with_options_map.clone())?;
+                specified_options = kafka_util::extract_config(&mut with_options_map.clone())?;
                 kafka_util::test_config(&specified_options)?;
             }
             Connector::AvroOcf { path, .. } => {
@@ -1084,8 +1083,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                             AvroSchema::CsrUrl { url, seed } => {
                                 let url: Url = url.parse()?;
                                 let mut with_options_map = normalize::with_options(with_options);
-                                let config =
-                                    kafka_util::extract_security_config(&mut with_options_map)?;
+                                let config = kafka_util::extract_config(&mut with_options_map)?;
                                 let ccsr_config =
                                     kafka_util::generate_ccsr_client_config(url, &config)?;
 
@@ -1162,8 +1160,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let mut config_options =
-                        kafka_util::extract_security_config(&mut with_options)?;
+                    let mut config_options = kafka_util::extract_config(&mut with_options)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
