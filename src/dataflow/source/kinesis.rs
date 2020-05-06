@@ -91,7 +91,7 @@ where
             let (client, stream_name, shard_set, shard_queue) = match &mut state {
                 Ok(state) => state,
                 Err(e) => {
-                    error!("failed to create Kinesis state: {}", e);
+                    error!("failed to create Kinesis state: {:#?}", e);
                     return SourceStatus::Done;
                 }
             };
@@ -103,7 +103,7 @@ where
                     shard_set,
                     shard_queue,
                 )) {
-                    error!("{}", e);
+                    error!("{:#?}", e);
                     return SourceStatus::Done;
                 }
                 last_checked_shards = std::time::Instant::now();

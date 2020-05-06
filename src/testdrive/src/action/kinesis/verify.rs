@@ -109,12 +109,12 @@ async fn get_shard_iterators(
     let mut iterators: VecDeque<Option<String>> = VecDeque::new();
     for shard_id in get_shard_ids(kinesis_client, stream_name)
         .await
-        .map_err(|e| format!("listing Kinesis shards: {}", e))?
+        .map_err(|e| format!("listing Kinesis shards: {:#?}", e))?
     {
         iterators.push_back(
             get_shard_iterator(kinesis_client, stream_name, &shard_id)
                 .await
-                .map_err(|e| format!("unable to get Kinesis shard iterator: {}", e))?,
+                .map_err(|e| format!("unable to get Kinesis shard iterator: {:#?}", e))?,
         );
     }
 

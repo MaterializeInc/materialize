@@ -27,6 +27,7 @@ members = [
     "src/testdrive",
     "src/transform",
     "test/metabase/smoketest",
+    "test/performance/perf-kinesis",
     "test/smith",
 ]
 
