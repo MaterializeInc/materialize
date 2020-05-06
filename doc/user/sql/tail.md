@@ -19,6 +19,7 @@ Tail will continue to run until cancelled, or until all updates the tailed item 
 Field | Use
 ------|-----
 _object&lowbar;name_ | The item you want to tail
+_expression_ | The logical time to tail from onwards
 
 ## Details
 
@@ -35,6 +36,15 @@ Field | Represents
 `tab-separated column values` | The row's columns' values separated by tab characters.
 `diff value` | Whether the record is an insert (`1`), delete (`-1`), or update (delete for old value, followed by insert of new value).
 `logical timestamp` | Materialize's internal logical timestamp.
+
+### AS OF
+
+If a timestamp is explicitly requested via `AS OF`, that timestamp will be used to determine what events to report rather than one automatically determined by Materialize.
+The timestamp provided to `AS OF` can be a number or a `TIMESTAMP` or `TIMESTAMPTZ` value.
+
+### WITH SNAPSHOT
+
+If `WITH SNAPSHOT` is specified, a snapshot of the state of the system at the chosen timestamp will be reported in addition to any subsequent events.
 
 ## Example
 
@@ -57,3 +67,9 @@ This represents:
 - Inserting `insert_key`.
 - Inserting and then deleting `will_delete`.
 - Inserting `will_update_old`, and then updating it to `will_update_new`
+
+If we wanted to see the updates that had occurred in the last 30 seconds, we could run:
+
+```sql
+TAIL some_materialized_view AS OF now() - '30s'::INTERVAL
+```

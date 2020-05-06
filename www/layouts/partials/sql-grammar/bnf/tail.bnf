@@ -1,2 +1,4 @@
 tail_stmt ::=
     'TAIL' object_name
+    'WITH SNAPSHOT'?
+    ('AS OF' expression)?
