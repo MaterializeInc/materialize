@@ -1004,6 +1004,9 @@ where
                 }
 
                 RelationExpr::ArrangeBy { input, keys } => {
+                    // We can avoid rendering if we have all arrangements present,
+                    // and there is at least one of them (to ensure the collection
+                    // is available independent of arrangements).
                     if keys.is_empty()
                         || keys
                             .iter()
