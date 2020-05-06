@@ -84,7 +84,12 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
 
     let mut recordstate = randomizer::RecordState::new(config.start_time);
 
-    let mut k_client = kafka_client::KafkaClient::new(&config.url, &config.group_id)?;
+    let mut k_client =
+        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)?;
+
+    if let Some(partitions) = config.partitions {
+        k_client.create_topic(partitions).await?;
+    }
 
     let mut buf = vec![];
     let mut interval = config.message_sleep.map(tokio::time::interval);
@@ -96,7 +101,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         let m = randomizer::random_batch(rng, &mut recordstate);
         m.write_to_vec(&mut buf)?;
         log::trace!("sending: {:?}", m);
-        k_client.send(&config.topic, &buf).await?;
+        k_client.send(&buf).await?;
         total_size += buf.len();
         buf.clear();
         if i % (config.message_count / 100).max(5) == 0 {
