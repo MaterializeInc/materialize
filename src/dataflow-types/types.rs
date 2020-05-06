@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{GlobalId, Id, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
@@ -606,64 +606,8 @@ pub struct LinearOperator {
 }
 
 impl DataflowDesc {
-    /// Optimizes the implementation of each dataflow.
-    pub fn optimize(&mut self) {
-        // This method is currently limited in scope to propagating filtering and
-        // projection information, though it could certainly generalize beyond.
-
-        // 1. Propagate demand information from outputs back to sources.
-        let mut demand = HashMap::new();
-
-        // Demand all columns of inputs to sinks.
-        for (_id, sink) in self.sink_exports.iter() {
-            let input_id = sink.from.0;
-            demand
-                .entry(Id::Global(input_id))
-                .or_insert_with(HashSet::new)
-                .extend(0..self.arity_of(&input_id));
-        }
-
-        // Demand all columns of inputs to exported indexes.
-        for (_id, desc, _typ) in self.index_exports.iter() {
-            let input_id = desc.on_id;
-            demand
-                .entry(Id::Global(input_id))
-                .or_insert_with(HashSet::new)
-                .extend(0..self.arity_of(&input_id));
-        }
-
-        // Propagate demand information from outputs to inputs.
-        for build_desc in self.objects_to_build.iter_mut().rev() {
-            let transform = expr::transform::demand::Demand;
-            if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-                transform.action(
-                    build_desc.relation_expr.as_mut(),
-                    columns.clone(),
-                    &mut demand,
-                );
-            }
-        }
-
-        // Push demand information into the SourceDesc.
-        for (source_id, source_desc) in self.source_imports.iter_mut() {
-            if let Some(columns) = demand.get(&Id::Global(source_id.sid)).clone() {
-                // Install no-op demand information if none exists.
-                if source_desc.operators.is_none() {
-                    source_desc.operators = Some(LinearOperator {
-                        predicates: Vec::new(),
-                        projection: (0..source_desc.desc.typ().arity()).collect(),
-                    })
-                }
-                // Restrict required columns by those identified as demanded.
-                if let Some(operator) = &mut source_desc.operators {
-                    operator.projection.retain(|col| columns.contains(col));
-                }
-            }
-        }
-    }
-
     /// The number of columns associated with an identifier in the dataflow.
-    fn arity_of(&self, id: &GlobalId) -> usize {
+    pub fn arity_of(&self, id: &GlobalId) -> usize {
         for (source, desc) in self.source_imports.iter() {
             if &source.sid == id {
                 return desc.desc.typ().arity();

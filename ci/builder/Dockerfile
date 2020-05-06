@@ -160,6 +160,8 @@ ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV PATH=/opt/x-tools/x86_64-unknown-linux-gnu/bin:$PATH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
+# https://github.com/rust-lang/cargo/issues/7529
+ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
 
 # Step 2g. Set a environment variable that tools can check to see if they're in
 # the builder or not.

@@ -1,0 +1,14 @@
+[package]
+name = "transform"
+description = "Transformations of Materialize expressions."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+dataflow-types = { path = "../dataflow-types" }
+expr = { path = "../expr" }
+repr = { path = "../repr" }

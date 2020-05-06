@@ -11,12 +11,13 @@
 
 #![deny(missing_debug_implementations)]
 
+use serde::{Deserialize, Serialize};
+
 mod id;
 mod relation;
 mod scalar;
 
 pub mod explain;
-pub mod transform;
 
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, PartitionId, SourceInstanceId};
 pub use relation::func::{AggregateFunc, TableFunc};
@@ -27,4 +28,34 @@ pub use relation::{
 };
 pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, ScalarExpr};
-pub use transform::OptimizedRelationExpr;
+
+/// A [`RelationExpr`] that claims to have been optimized, e.g., by an
+/// [`Optimizer`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct OptimizedRelationExpr(pub RelationExpr);
+
+impl OptimizedRelationExpr {
+    /// Declare that the input `expr` is optimized, without actually running it
+    /// through an optimizer. This can be useful to mark as optimized literal
+    /// `RelationExpr`s that are obviously optimal, without invoking the whole
+    /// machinery of the optimizer.
+    pub fn declare_optimized(expr: RelationExpr) -> OptimizedRelationExpr {
+        OptimizedRelationExpr(expr)
+    }
+
+    pub fn into_inner(self) -> RelationExpr {
+        self.0
+    }
+}
+
+impl AsRef<RelationExpr> for OptimizedRelationExpr {
+    fn as_ref(&self) -> &RelationExpr {
+        &self.0
+    }
+}
+
+impl AsMut<RelationExpr> for OptimizedRelationExpr {
+    fn as_mut(&mut self) -> &mut RelationExpr {
+        &mut self.0
+    }
+}
