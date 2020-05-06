@@ -28,7 +28,16 @@ $ set schema={
                   "connect.name": "io.debezium.data.Json",
                   "type": "string"
                 }
-              }
+              },
+              {
+                "name": "c",
+                "type": {
+                  "type": "enum",
+                  "name": "Bool",
+                  "symbols": ["True", "False", "FileNotFound"]
+                }
+              },
+              {"name": "d", "type": "Bool"}
             ]
           },
           "null"
@@ -41,9 +50,9 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"a": 1, "b": 1, "json": "null"}}
-{"before": null, "after": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}"}}
-{"before": null, "after": {"a": -1, "b": 7, "json": "[1, 2, 3]"}}
+{"before": null, "after": {"a": 1, "b": 1, "json": "null", "c": "True", "d": "False"}}
+{"before": null, "after": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound"}}
+{"before": null, "after": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True"}}
 
 # Create a source using an inline schema.
 
@@ -55,14 +64,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > SHOW CREATE SOURCE data_schema_inline
 Source   Create Source
 ------------------
-materialize.public.data_schema_inline  "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             }           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] }   ] }\' ENVELOPE DEBEZIUM"
+materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA BROKER \'localhost:9092\' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             },             {               \"name\": \"c\",               \"type\": {                 \"type\": \"enum\",                 \"name\": \"Bool\",                 \"symbols\": [\"True\", \"False\", \"FileNotFound\"]               }             },             {\"name\": \"d\", \"type\": \"Bool\"}           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] }   ] }\' ENVELOPE DEBEZIUM"
 
 > SELECT * FROM data_schema_inline
-a  b  json
-----------
-1  1  null
-2  3  "{\"hello\":\"world\"}"
--1  7 "[1.0,2.0,3.0]"
+a  b  json                     c            d
+--------------------------------------------------------
+1  1  null                     True         False
+2  3  "{\"hello\":\"world\"}"  False        FileNotFound
+-1  7 "[1.0,2.0,3.0]"          FileNotFound True
 
 > CREATE MATERIALIZED SOURCE fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -71,9 +80,9 @@ a  b  json
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM fast_forwarded
-a  b  json
-----------
--1  7 "[1.0,2.0,3.0]"
+a  b  json            c            d
+---------------------------------------
+-1  7 "[1.0,2.0,3.0]" FileNotFound True
 
 # Create a source using a file schema. This should fail if the named schema file
 # does not exist.
@@ -95,14 +104,14 @@ $ file-append path=data-schema.json
 > SHOW CREATE SOURCE data_schema_file
 Source   Create Source
 ------------------
-materialize.public.data_schema_file  "CREATE SOURCE \"materialize\".\"public\".\"data_schema_file\" FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             }           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] }   ] }\n\' ENVELOPE DEBEZIUM"
+materialize.public.data_schema_file  "CREATE SOURCE \"materialize\".\"public\".\"data_schema_file\" FROM KAFKA BROKER \'localhost:9092\' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             },             {               \"name\": \"c\",               \"type\": {                 \"type\": \"enum\",                 \"name\": \"Bool\",                 \"symbols\": [\"True\", \"False\", \"FileNotFound\"]               }             },             {\"name\": \"d\", \"type\": \"Bool\"}           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] }   ] }\n\' ENVELOPE DEBEZIUM"
 
 > SELECT * FROM data_schema_file
-a  b  json
-----------
-1  1  null
-2  3  "{\"hello\":\"world\"}"
--1  7 "[1.0,2.0,3.0]"
+a  b  json                     c            d
+--------------------------------------------------------
+1  1  null                     True         False
+2  3  "{\"hello\":\"world\"}"  False        FileNotFound
+-1  7 "[1.0,2.0,3.0]"          FileNotFound True
 
 # Test an Avro source without a Debezium envelope.
 

@@ -306,7 +306,7 @@ fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
             Significand::from_twos_complement_be(&unscaled)?,
         )),
         Value::Bytes(b) => row.push(Datum::Bytes(&b)),
-        Value::String(s) => row.push(Datum::String(&s)),
+        Value::String(s) | Value::Enum(_ /* idx */, s) => row.push(Datum::String(&s)),
         Value::Union(_, v) => {
             row = pack_value(*v, row)?;
         }
@@ -314,7 +314,6 @@ fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
             row = Jsonb::new(j)?.pack_into(row);
         }
         other @ Value::Fixed(..)
-        | other @ Value::Enum(..)
         | other @ Value::Array(_)
         | other @ Value::Map(_)
         | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
