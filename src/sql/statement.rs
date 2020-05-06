@@ -367,7 +367,7 @@ fn finish_show_where(
     let (r, finishing) = query::plan_show_where(scx, filter, rows, desc)?;
 
     Ok(Plan::Peek {
-        source: r.decorrelate()?,
+        source: r.decorrelate(),
         when: PeekWhen::Immediately,
         finishing,
         materialize: true,
@@ -917,7 +917,7 @@ fn handle_create_view(
     relation_expr.bind_parameters(&params);
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
-    let relation_expr = relation_expr.decorrelate()?;
+    let relation_expr = relation_expr.decorrelate();
     let typ = desc.typ();
     if !columns.is_empty() {
         if columns.len() != typ.column_types.len() {
@@ -1724,7 +1724,7 @@ fn handle_query(
 ) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
-    Ok((expr.decorrelate()?, desc, finishing))
+    Ok((expr.decorrelate(), desc, finishing))
 }
 
 #[derive(Debug)]

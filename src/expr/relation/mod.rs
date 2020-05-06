@@ -999,13 +999,9 @@ impl RelationExpr {
     }
 
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(
-        self,
-        id_gen: &mut IdGen,
-        body: Body,
-    ) -> Result<RelationExpr, failure::Error>
+    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> super::RelationExpr
     where
-        Body: FnOnce(&mut IdGen, RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+        Body: FnOnce(&mut IdGen, RelationExpr) -> super::RelationExpr,
     {
         if let RelationExpr::Get { .. } = self {
             // already done
@@ -1016,12 +1012,12 @@ impl RelationExpr {
                 id: Id::Local(id),
                 typ: self.typ(),
             };
-            let body = (body)(id_gen, get)?;
-            Ok(RelationExpr::Let {
+            let body = (body)(id_gen, get);
+            RelationExpr::Let {
                 id,
                 value: Box::new(self),
                 body: Box::new(body),
-            })
+            }
         }
     }
 
@@ -1035,7 +1031,7 @@ impl RelationExpr {
     ) -> RelationExpr {
         assert_eq!(keys_and_values.arity() - self.arity(), default.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
-            Ok(RelationExpr::join(
+            RelationExpr::join(
                 vec![
                     // all the missing keys (with count 1)
                     keys_and_values
@@ -1058,9 +1054,8 @@ impl RelationExpr {
             .product(RelationExpr::constant(
                 vec![default.iter().map(|(datum, _)| *datum).collect()],
                 RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
-            )))
+            ))
         })
-        .unwrap()
     }
 
     /// Return:
@@ -1073,15 +1068,13 @@ impl RelationExpr {
         keys_and_values: RelationExpr,
         default: Vec<(Datum<'static>, ColumnType)>,
     ) -> RelationExpr {
-        keys_and_values
-            .let_in(id_gen, |id_gen, get_keys_and_values| {
-                Ok(get_keys_and_values.clone().union(self.anti_lookup(
-                    id_gen,
-                    get_keys_and_values,
-                    default,
-                )))
-            })
-            .unwrap()
+        keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
+            get_keys_and_values.clone().union(self.anti_lookup(
+                id_gen,
+                get_keys_and_values,
+                default,
+            ))
+        })
     }
 }
 

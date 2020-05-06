@@ -1300,7 +1300,7 @@ where
         &mut self,
         sql: String,
         raw_plan: sql::RelationExpr,
-        decorrelated_plan: Result<expr::RelationExpr, failure::Error>,
+        decorrelated_plan: expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
@@ -1319,7 +1319,7 @@ where
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let plan = decorrelated_plan?;
+                let plan = decorrelated_plan;
                 let mut explanation = plan.explain(&self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
@@ -1332,7 +1332,7 @@ where
             ExplainStage::OptimizedPlan => {
                 let optimized_plan = self
                     .optimizer
-                    .optimize(decorrelated_plan?, self.catalog.indexes())?
+                    .optimize(decorrelated_plan, self.catalog.indexes())?
                     .into_inner();
                 let mut explanation = optimized_plan.explain(&self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {

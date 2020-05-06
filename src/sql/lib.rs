@@ -115,7 +115,7 @@ pub enum Plan {
     ExplainPlan {
         sql: String,
         raw_plan: crate::expr::RelationExpr,
-        decorrelated_plan: Result<::expr::RelationExpr, failure::Error>,
+        decorrelated_plan: ::expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
