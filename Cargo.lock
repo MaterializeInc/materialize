@@ -935,7 +935,6 @@ dependencies = [
  "aho-corasick",
  "chrono",
  "csv",
- "differential-dataflow",
  "encoding",
  "enum-iterator",
  "failure",
@@ -3695,26 +3694,9 @@ dependencies = [
 name = "transform"
 version = "0.1.0"
 dependencies = [
- "aho-corasick",
- "chrono",
- "csv",
  "dataflow-types",
- "differential-dataflow",
- "encoding",
- "enum-iterator",
  "expr",
- "failure",
- "indexmap",
- "num_enum",
- "ordered-float",
- "ore",
- "pdqselect",
- "regex",
- "regex-syntax",
  "repr",
- "serde",
- "serde_json",
- "unicase",
 ]
 
 [[package]]

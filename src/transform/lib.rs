@@ -27,7 +27,7 @@ use std::fmt;
 
 use expr::{EvalError, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 
-pub mod binding;
+// pub mod binding;
 pub mod column_knowledge;
 pub mod demand;
 pub mod empty_map;

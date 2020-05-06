@@ -369,8 +369,15 @@ impl FoldConstants {
         // nodes.
         if let RelationExpr::Constant { rows, typ } = relation {
             // Reduce down to canonical representation.
-            differential_dataflow::consolidation::consolidate(rows);
-            rows.retain(|(_row, count)| count != &0);
+            let mut accum = HashMap::new();
+            for (row, cnt) in rows.iter() {
+                *accum.entry(row.clone()).or_insert(0) += cnt;
+            }
+            accum.retain(|_k, v| v != &0);
+            rows.clear();
+            rows.extend(accum.into_iter());
+            rows.sort();
+
             // Re-establish nullability of each column.
             for col_type in typ.column_types.iter_mut() {
                 col_type.nullable = false;
