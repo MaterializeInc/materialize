@@ -77,10 +77,7 @@ pub async fn query_materialized_view_until(
                 {
                     log::debug!("Error querying, will try again... {}", e.to_string());
                 } else {
-                    return Err(anyhow::Error::msg(format!(
-                        "trying to query materialized view: {}",
-                        e
-                    )));
+                    return Err(e).context("Querying materialized view");
                 }
             }
         }

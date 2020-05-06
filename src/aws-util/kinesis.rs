@@ -80,7 +80,7 @@ pub async fn list_shards(
 
         match output.shards {
             Some(shards) => {
-                all_shards.extend(shards.into_iter());
+                all_shards.extend(shards);
             }
             None => {
                 return Err(anyhow::Error::msg(format!(
