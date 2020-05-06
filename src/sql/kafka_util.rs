@@ -25,13 +25,13 @@ use sql_parser::ast::Value;
 enum ValType {
     Path,
     String,
+    // Number with range [lower, upper]
+    Number(i32, i32),
 }
 
-// Describes the configuration, including how you want to parse its value if the
-// name is present in the supplied `with_options`.
-// TODO(sploiselle): Support rewriting name, support default values
-// TODO(sploiselle): When needed, support types other than String, e.g. Int, by
-// genericizing Config.
+// Describes Kafka cluster configurations users can suppply using `CREATE
+// SOURCE...WITH (option_list)`.
+// TODO(sploiselle): Support overriding keys, default values.
 struct Config {
     name: &'static str,
     val_type: ValType,
@@ -42,15 +42,41 @@ impl Config {
         Config { name, val_type }
     }
 
-    fn validate_val(&self, val: String) -> Result<String, failure::Error> {
-        match self.val_type {
-            ValType::Path => {
-                if std::fs::metadata(&val).is_err() {
+    // Shorthand for simple string config options.
+    fn string(name: &'static str) -> Self {
+        Config {
+            name,
+            val_type: ValType::String,
+        }
+    }
+
+    // Shorthand for simple path config options.
+    fn path(name: &'static str) -> Self {
+        Config {
+            name,
+            val_type: ValType::Path,
+        }
+    }
+
+    // Get the appropriate String to use as the Kafka config key.
+    fn get_key(&self) -> String {
+        self.name.replace("_", ".")
+    }
+
+    fn validate_val(&self, val: &Value) -> Result<String, failure::Error> {
+        match (&self.val_type, val) {
+            (ValType::String, Value::SingleQuotedString(v)) => Ok(v.to_string()),
+            (ValType::Path, Value::SingleQuotedString(v)) => {
+                if std::fs::metadata(&v).is_err() {
                     bail!("file does not exist")
                 }
-                Ok(val)
+                Ok(v.to_string())
             }
-            _ => Ok(val),
+            (ValType::Number(lower, upper), Value::Number(n)) => match n.parse::<i32>() {
+                Ok(parsed_n) if *lower <= parsed_n && parsed_n <= *upper => Ok(n.to_string()),
+                _ => bail!("must be a number between {} and {}", lower, upper),
+            },
+            _ => bail!("unexpected value type"),
         }
     }
 }
@@ -68,18 +94,17 @@ impl<'a> ConfigAggregator<'a> {
             output: HashMap::new(),
         }
     }
-    fn extract(&mut self, config: &Config) -> Result<(), failure::Error> {
-        let value = match self.input.remove(config.name) {
-            Some(Value::SingleQuotedString(v)) => match config.validate_val(v.clone()) {
-                Ok(v) => v,
-                Err(e) => bail!("Invalid WITH option: {}='{}', {}", config.name, v, e),
-            },
-            Some(_) => bail!("{}'s value must be a single-quoted string", config.name),
-            None => return Ok(()),
-        };
-
-        let key = config.name.replace("_", ".");
-        self.output.insert(key, value);
+    fn extract(&mut self, configs: &[Config]) -> Result<(), failure::Error> {
+        for config in configs {
+            let value = match self.input.remove(config.name) {
+                Some(v) => match config.validate_val(&v) {
+                    Ok(v) => v,
+                    Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
+                },
+                None => continue,
+            };
+            self.output.insert(config.get_key(), value);
+        }
 
         Ok(())
     }
@@ -90,6 +115,7 @@ impl<'a> ConfigAggregator<'a> {
         self.output.insert(k, v);
     }
     fn finish(self) -> HashMap<String, String> {
+        println!("{:?}", self.output);
         self.output
     }
 }
@@ -108,7 +134,18 @@ pub fn extract_config(
 ) -> Result<HashMap<String, String>, failure::Error> {
     let mut agg = ConfigAggregator::new(with_options);
 
-    // TODO(sploiselle): Import other configs from src/sql/statement.rs
+    let allowed_configs = vec![
+        Config::string("client_id"),
+        Config::new(
+            "statistics_interval_ms",
+            // The range of values comes from `statistics.interval.ms` in
+            // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+            ValType::Number(0, 86_400_000),
+        ),
+    ];
+
+    agg.extract(&allowed_configs)?;
+
     extract_security_config(&mut agg)?;
 
     Ok(agg.finish())
@@ -142,15 +179,13 @@ fn extract_security_config(mut agg: &mut ConfigAggregator) -> Result<(), failure
 // [librdkafka's documentation](https://github.com/edenhill/librdkafka/wiki/Using-SSL-with-librdkafka).
 fn ssl_settings(agg: &mut ConfigAggregator) -> Result<(), failure::Error> {
     let allowed_configs = vec![
-        Config::new("ssl_ca_location", ValType::Path),
-        Config::new("ssl_certificate_location", ValType::Path),
-        Config::new("ssl_key_location", ValType::Path),
-        Config::new("ssl_key_password", ValType::String),
+        Config::path("ssl_ca_location"),
+        Config::path("ssl_certificate_location"),
+        Config::path("ssl_key_location"),
+        Config::string("ssl_key_password"),
     ];
 
-    for config in allowed_configs {
-        agg.extract(&config)?;
-    }
+    agg.extract(&allowed_configs)?;
 
     agg.insert_into_output("security.protocol".to_string(), "ssl".to_string());
 
@@ -171,19 +206,16 @@ fn sasl_plaintext_kerberos_settings(agg: &mut ConfigAggregator) -> Result<(), fa
     // Each option's default value are determined by `librdkafka`, and any
     // missing-but-necessary options are surfaced by `librdkafka` either
     // erroring or logging an error.
-
     let allowed_configs = vec![
-        Config::new("sasl_kerberos_keytab", ValType::Path),
-        Config::new("sasl_kerberos_kinit_cmd", ValType::String),
-        Config::new("sasl_kerberos_min_time_before_relogin", ValType::String),
-        Config::new("sasl_kerberos_principal", ValType::String),
-        Config::new("sasl_kerberos_service_name", ValType::String),
-        Config::new("sasl_mechanisms", ValType::String),
+        Config::path("sasl_kerberos_keytab"),
+        Config::string("sasl_kerberos_kinit_cmd"),
+        Config::string("sasl_kerberos_min_time_before_relogin"),
+        Config::string("sasl_kerberos_principal"),
+        Config::string("sasl_kerberos_service_name"),
+        Config::string("sasl_mechanisms"),
     ];
 
-    for config in allowed_configs {
-        agg.extract(&config)?;
-    }
+    agg.extract(&allowed_configs)?;
 
     agg.insert_into_output(
         "security.protocol".to_string(),
