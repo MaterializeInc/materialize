@@ -7,15 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-# Map from host-port:internal port
-#
-# This mostly just shows all the ports that are available to the host system, if you want
-# to change these you must restart the docker-compose cluster.
-x-port-mappings:
-  - &materialized 6875:6875
-  - &grafana 3000:3000
-
 version: '3.7'
 services:
   perf-kinesis:
@@ -28,7 +19,7 @@ services:
   materialized:
     mzbuild: materialized
     ports:
-      - *materialized
+      - 6875
     init: true
     command: -w 4
 
@@ -37,4 +28,4 @@ services:
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:
-      - *grafana
+      - 3000
