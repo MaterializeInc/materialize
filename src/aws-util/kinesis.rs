@@ -15,46 +15,48 @@ use std::time::Duration;
 use anyhow::Context;
 use log::info;
 use rusoto_core::{HttpClient, Region};
-use rusoto_credential::{AutoRefreshingProvider, StaticProvider};
+use rusoto_credential::{AutoRefreshingProvider, ChainProvider, StaticProvider};
 use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsInput, Shard};
-
-use crate::aws;
 
 /// Constructs a KinesisClient from statically provided connection information. If connection
 /// information is not provided, falls back to using credentials gathered by aws::credentials.
+///
+/// The AutoRefreshingProvider caches the underlying provider's AWS credentials,
+/// automatically fetching updated credentials if they've expired.
 pub async fn kinesis_client(
     region: Region,
     access_key: Option<String>,
     secret_access_key: Option<String>,
     token: Option<String>,
 ) -> Result<KinesisClient, anyhow::Error> {
-    let credentials_provider = match (access_key, secret_access_key) {
+    let request_dispatcher =
+        HttpClient::new().context("creating HTTP client for Kinesis client")?;
+    match (access_key, secret_access_key) {
         // Only access_key and secret_access_key are required.
         (Some(access_key), Some(secret_access_key)) => {
             info!("Creating a new Kinesis client from provided access_key and secret_access_key");
-            StaticProvider::new(access_key, secret_access_key, token, None)
+            let provider = AutoRefreshingProvider::new(StaticProvider::new(
+                access_key,
+                secret_access_key,
+                token,
+                None,
+            ))
+            .context("generating AWS credentials")?;
+
+            let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, region);
+            Ok(kinesis_client)
         }
         (_, _) => {
             info!("AWS access_key and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
-            let aws_credentials = aws::credentials(Duration::from_secs(10)).await?;
-            rusoto_credential::StaticProvider::new(
-                aws_credentials.aws_access_key_id().to_owned(),
-                aws_credentials.aws_secret_access_key().to_owned(),
-                aws_credentials.token().clone(),
-                None,
-            )
-        }
-    };
-    // The AutoRefreshingProvider caches the underlying provider's AWS credentials,
-    // automatically fetching updated credentials if they've expired.
-    let auto_refreshing_provider =
-        AutoRefreshingProvider::new(credentials_provider).context("Getting AWS credentials")?;
+            let mut provider = ChainProvider::new();
+            provider.set_timeout(Duration::from_secs(10));
+            let provider =
+                AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
 
-    let request_dispatcher =
-        HttpClient::new().context("creating HTTP client for Kinesis client")?;
-    let kinesis_client =
-        KinesisClient::new_with(request_dispatcher, auto_refreshing_provider, region.clone());
-    Ok(kinesis_client)
+            let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, region);
+            Ok(kinesis_client)
+        }
+    }
 }
 
 /// Wrapper around AWS Kinesis ListShards API.
