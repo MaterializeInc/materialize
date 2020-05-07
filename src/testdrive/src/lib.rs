@@ -77,7 +77,7 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         }
     };
     println!("Running test {} time(s) ... ", execution_count);
-    for _ in 1..execution_count  {
+    for _ in 1..execution_count + 1 {
         println!("Run {} ...", execution_count);
         cmds_exec = cmds.clone();
         let (mut state, state_cleanup) = action::create_state(config).await?;
