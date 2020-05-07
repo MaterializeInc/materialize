@@ -36,6 +36,7 @@ mod avro_ocf;
 mod file;
 mod kafka;
 mod kinesis;
+mod sleep;
 mod sql;
 
 const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
@@ -338,6 +339,11 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         }
                         continue;
                     }
+                    "set-execution-count" => {
+                        // Skip, has already been handled
+                        continue;
+                    }
+                    "random-sleep" => Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?),
                     "set" => {
                         vars.extend(builtin.args);
                         continue;
