@@ -147,11 +147,18 @@ pub enum ScalarExpr {
 
 /// A leveled column reference.
 ///
-/// In the course of decorrelation, multiple levels of columns are
-/// added to rows, where the levels correspond to levels of decorrelation.
+/// In the course of decorrelation, multiple levels of nested subqueries are
+/// traversed, and references to columns may correspond to different levels
+/// of containing outer subqueries.
+///
 /// A `ColumnRef` allows expressions to refer to columns while being clear
-/// about which level the column references, and without manually performing
-/// the bookkeeping tracking their actual column locations.
+/// about which level the column references without manually performing the
+/// bookkeeping tracking their actual column locations.
+///
+/// Specifically, a `ColumnRef` refers to a column `level` subquery level *out*
+/// from the reference, using `column` as a unique identifier in that subquery level.
+/// A `level` of zero corresponds to the current scope, and levels increase to
+/// indicate subqueries further "outwards".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ColumnRef {
     // scope level, where 0 is the current scope and 1+ are outer scopes.
@@ -838,7 +845,7 @@ pub mod decorrelation {
         /// Return a `expr::RelationExpr` which evaluates `self` once for each row of `get_outer`.
         ///
         /// For uncorrelated `self`, this should be the cross-product between `get_outer` and `self`.
-        /// Much more complex, when `self` references columns of `get_outer` work needs to occur.
+        /// When `self` references columns of `get_outer`, much more work needs to occur.
         ///
         /// The `col_map` argument contains mappings to some of the columns of `get_outer`, though
         /// perhaps not all of them. It should be used as the basis of resolving column references,
@@ -1052,9 +1059,8 @@ pub mod decorrelation {
                     aggregates,
                 } => {
                     // Reduce may contain expressions with correlated subqueries.
-                    // In addition, when the reduction key is empty we need to supply default values,
-                    // because that is what SQL does when the reduction key is empty (and it should
-                    // happen for subqueries as well).
+                    // In addition, here an empty reduction key signifies that we need to supply default values
+                    // in the case that there are no results (as in a SQL aggregation without an explicit GROUP BY).
                     let mut input = input.applied_to(id_gen, get_outer.clone(), col_map);
                     let applied_group_key = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))

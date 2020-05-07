@@ -1319,8 +1319,7 @@ where
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let plan = decorrelated_plan;
-                let mut explanation = plan.explain(&self.catalog);
+                let mut explanation = decorrelated_plan.explain(&self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
