@@ -142,51 +142,53 @@ WHERE l1.la IN (
 ----
 %0 =
 | Get materialize.public.l (u1)
-| Distinct group=(#0)
-| ArrangeBy ()
+| Filter !(isnull(#0))
+| Distinct group=(#0, #1)
+| ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.l (u1)
+| Filter !(isnull((#0 + 1)))
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| | demand = (#0, #1)
+| Join %0 %1 (= #0 (#2 + 1))
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0..#3)
 
 %3 =
 | Get materialize.public.l (u1)
+| ArrangeBy (#0, #1)
 
 %4 =
 | Get %2
-| Filter (#0 = (#1 + 1))
 
 %5 =
 | Get %2
-| Filter !(isnull(#1))
-| Distinct group=(#1)
-| ArrangeBy (#0)
+| Filter !(isnull(#2))
+| Distinct group=(#0, #1, #2, #3)
+| ArrangeBy (#2)
 
 %6 =
 | Get materialize.public.l (u1)
 | Filter !(isnull((#0 + 1)))
 
 %7 =
-| Join %5 %6 (= #0 (#1 + 1))
-| | implementation = Differential %6 %5.(#0)
-| | demand = (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
+| Join %5 %6 (= #2 (#4 + 1))
+| | implementation = Differential %6 %5.(#2)
+| | demand = (#0..#3)
+| Distinct group=(#0, #1, #2, #3)
+| ArrangeBy (#0, #1, #2, #3)
 
 %8 =
-| Join %4 %7 (= #1 #3)
-| | implementation = Differential %4 %7.(#0)
-| | demand = (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
+| Join %4 %7 (= #0 #4) (= #1 #5) (= #2 #6) (= #3 #7)
+| | implementation = Differential %4 %7.(#0, #1, #2, #3)
+| | demand = (#0, #1)
+| Distinct group=(#0, #1)
+| ArrangeBy (#0, #1)
 
 %9 =
-| Join %3 %8 (= #0 #2)
-| | implementation = Differential %3 %8.(#0)
+| Join %3 %8 (= #0 #2) (= #1 #3)
+| | implementation = DeltaQuery %3 %8.(#0, #1) | %8 %3.(#0, #1)
 | | demand = (#0, #1)
 | Project (#0, #1)
 
