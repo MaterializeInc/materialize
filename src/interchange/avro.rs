@@ -184,6 +184,8 @@ fn validate_schema_1(schema: SchemaNode) -> Result<RelationDesc> {
                             }
                         }
                     }
+                } else {
+                    column_names.push(Some(f.name.clone()));
                 }
             }
             Ok(RelationDesc::new(
