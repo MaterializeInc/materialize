@@ -2258,7 +2258,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbGetString => f.write_str("->"),
             BinaryFunc::JsonbContainsString => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
-            BinaryFunc::JsonbContainsJsonb => f.write_str("<@"),
+            BinaryFunc::JsonbContainsJsonb => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
