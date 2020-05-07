@@ -11,12 +11,11 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::iter;
-use std::iter::once;
 
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::{bail, format_err};
-use itertools::{Either, Itertools};
+use itertools::Itertools;
 use serde_json::json;
 use sha2::Sha256;
 
@@ -142,63 +141,51 @@ pub fn validate_value_schema(schema: &str, envelope: EnvelopeType) -> Result<Rel
 fn validate_schema_1(schema: SchemaNode) -> Result<RelationDesc> {
     match schema.inner {
         SchemaPiece::Record { fields, .. } => {
-            let column_types = fields
-                .iter()
-                .flat_map(|f| {
-                    if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
-                        if us.variants().is_empty()
-                            || us.variants().len() == 1 && is_null(&us.variants()[0])
-                        {
-                            Either::Left(once(Err(format_err!(
-                                "Empty or null-only unions are not supported"
-                            ))))
-                        } else {
-                            let nullable = us.variants().len() > 1;
-                            Either::Right(us.variants().iter().filter(|s| !is_null(s)).map(
-                                move |var| {
-                                    let node = schema.step(var);
-                                    // `mod avro` should never produce unions nested directly inside of unions.
-                                    // Validate that assumption here just in case.
-                                    if let SchemaPiece::Union(_) = node.inner {
-                                        unreachable!("Internal error: nested avro union!");
-                                    }
-                                    Ok(ColumnType {
-                                        nullable,
-                                        scalar_type: validate_schema_2(node)?,
-                                    })
-                                },
-                            ))
-                        }
+            let mut column_types = vec![];
+            for f in fields {
+                if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
+                    if us.variants().is_empty()
+                        || (us.variants().len() == 1 && is_null(&us.variants()[0]))
+                    {
+                        bail!(format_err!("Empty or null-only unions are not supported"));
                     } else {
-                        let col_type =
-                            validate_schema_2(schema.step(&f.schema)).map(|scalar_type| {
-                                ColumnType {
-                                    nullable: false,
-                                    scalar_type,
+                        let nullable = us.variants().len() > 1;
+                        for v in us.variants() {
+                            if !is_null(v) {
+                                let node = schema.step(v);
+                                if let SchemaPiece::Union(_) = node.inner {
+                                    unreachable!("Internal error: directly nested avro union!");
                                 }
-                            });
-                        Either::Left(once(col_type))
+                                column_types.push(ColumnType {
+                                    nullable,
+                                    scalar_type: validate_schema_2(node)?,
+                                });
+                            }
+                        }
                     }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let column_names = fields.iter().flat_map(|f| {
+                } else {
+                    let scalar_type = validate_schema_2(schema.step(&f.schema))?;
+                    column_types.push(ColumnType {
+                        nullable: false,
+                        scalar_type,
+                    });
+                }
+            }
+            let mut column_names = vec![];
+            for f in fields {
                 if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
                     let vs = us.variants();
                     if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
-                        Either::Right(once(Some(f.name.clone())))
+                        column_names.push(Some(f.name.clone()));
                     } else {
-                        let fname = f.name.clone();
-                        Either::Left(
-                            vs.iter()
-                                .filter(|v| !is_null(v))
-                                .enumerate()
-                                .map(move |(i, _v)| Some(format!("{}{}", fname, i + 1))),
-                        )
+                        for (i, v) in vs.iter().enumerate() {
+                            if !is_null(v) {
+                                column_names.push(Some(format!("{}{}", &f.name, i + 1)));
+                            }
+                        }
                     }
-                } else {
-                    Either::Right(once(Some(f.name.clone())))
                 }
-            });
+            }
             Ok(RelationDesc::new(
                 RelationType::new(column_types),
                 column_names,
