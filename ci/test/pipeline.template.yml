@@ -122,7 +122,7 @@ steps:
   - id: chbench-demo
     label: "chbench sanity check"
     depends_on: build
-    command: bin/ci-builder run stable demo/chbench/dc.sh ci
+    command: bin/ci-builder run stable bin/mzconduct run chbench --workflow ci
     # TODO(benesch): integrate dc.sh into mzcompose, so we don't need to
     # manually track image inputs here.
     inputs: ["#materialized", "#chbenchmark", "#peeker", "#cli"]
