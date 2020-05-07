@@ -11,11 +11,12 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::iter;
+use std::iter::once;
 
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
-use failure::bail;
-use itertools::Itertools;
+use failure::{bail, format_err};
+use itertools::{Either, Itertools};
 use serde_json::json;
 use sha2::Sha256;
 
@@ -24,7 +25,6 @@ use avro::schema::{
     SchemaPieceOrNamed,
 };
 use avro::types::{DecimalValue, Value};
-use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
@@ -144,14 +144,61 @@ fn validate_schema_1(schema: SchemaNode) -> Result<RelationDesc> {
         SchemaPiece::Record { fields, .. } => {
             let column_types = fields
                 .iter()
-                .map(|f| {
-                    Ok(ColumnType {
-                        nullable: is_nullable(schema.step(&f.schema).inner),
-                        scalar_type: validate_schema_2(schema.step(&f.schema))?,
-                    })
+                .flat_map(|f| {
+                    if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
+                        if us.variants().is_empty()
+                            || us.variants().len() == 1 && is_null(&us.variants()[0])
+                        {
+                            Either::Left(once(Err(format_err!(
+                                "Empty or null-only unions are not supported"
+                            ))))
+                        } else {
+                            let nullable = us.variants().len() > 1;
+                            Either::Right(us.variants().iter().filter(|s| !is_null(s)).map(
+                                move |var| {
+                                    let node = schema.step(var);
+                                    // `mod avro` should never produce unions nested directly inside of unions.
+                                    // Validate that assumption here just in case.
+                                    if let SchemaPiece::Union(_) = node.inner {
+                                        unreachable!("Internal error: nested avro union!");
+                                    }
+                                    Ok(ColumnType {
+                                        nullable,
+                                        scalar_type: validate_schema_2(node)?,
+                                    })
+                                },
+                            ))
+                        }
+                    } else {
+                        let col_type =
+                            validate_schema_2(schema.step(&f.schema)).map(|scalar_type| {
+                                ColumnType {
+                                    nullable: false,
+                                    scalar_type,
+                                }
+                            });
+                        Either::Left(once(col_type))
+                    }
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let column_names = fields.iter().map(|f| Some(f.name.clone()));
+            let column_names = fields.iter().flat_map(|f| {
+                if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
+                    let vs = us.variants();
+                    if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
+                        Either::Right(once(Some(f.name.clone())))
+                    } else {
+                        let fname = f.name.clone();
+                        Either::Left(
+                            vs.iter()
+                                .filter(|v| !is_null(v))
+                                .enumerate()
+                                .map(move |(i, _v)| Some(format!("{}{}", fname, i + 1))),
+                        )
+                    }
+                } else {
+                    Either::Right(once(Some(f.name.clone())))
+                }
+            });
             Ok(RelationDesc::new(
                 RelationType::new(column_types),
                 column_names,
@@ -186,28 +233,6 @@ fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
         SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
         SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,
 
-        SchemaPiece::Union(us) => {
-            let utypes: Vec<_> = us
-                .variants()
-                .iter()
-                // Null variants are handled by is_nullable, which makes
-                // the entire union nullable in the presence of a null
-                // variant.
-                .filter(|s| !is_null(s))
-                .map(|s| {
-                    Ok(ColumnType {
-                        nullable: is_nullable(schema.step(s).inner),
-                        scalar_type: validate_schema_2(schema.step(s))?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            if utypes.len() == 1 {
-                utypes.into_element().scalar_type
-            } else {
-                bail!("Unsupported union type: {:?}", schema.inner)
-            }
-        }
         SchemaPiece::Json => ScalarType::Jsonb,
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
@@ -217,14 +242,6 @@ fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
 pub fn parse_schema(schema: &str) -> Result<Schema> {
     let schema = serde_json::from_str(schema)?;
     Schema::parse(&schema)
-}
-
-fn is_nullable(schema: &SchemaPiece) -> bool {
-    match schema {
-        SchemaPiece::Null => true,
-        SchemaPiece::Union(us) => us.variants().iter().any(|v| is_null(v)),
-        _ => false,
-    }
 }
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
@@ -291,7 +308,7 @@ fn first_mismatched_schema_types<'a>(
     }
 }
 
-fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
+fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> Result<RowPacker> {
     match v {
         Value::Null => row.push(Datum::Null),
         Value::Boolean(true) => row.push(Datum::True),
@@ -307,8 +324,28 @@ fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
         )),
         Value::Bytes(b) => row.push(Datum::Bytes(&b)),
         Value::String(s) | Value::Enum(_ /* idx */, s) => row.push(Datum::String(&s)),
-        Value::Union(_, v) => {
-            row = pack_value(*v, row)?;
+        Value::Union(idx, v) => {
+            let mut v = Some(*v);
+            if let SchemaPiece::Union(us) = n.inner {
+                for (var_idx, var_s) in us
+                    .variants()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| !is_null(s))
+                {
+                    if var_idx == idx {
+                        let next = n.step(var_s);
+                        // Making `v` into an option is necessary
+                        // because the use-after-move checker
+                        // can't prove that `v` is only used once.
+                        row = pack_value(v.take().unwrap(), row, next)?;
+                    } else {
+                        row.push(Datum::Null);
+                    }
+                }
+            } else {
+                unreachable!("Avro value out of sync with schema");
+            }
         }
         Value::Json(j) => {
             row = Jsonb::new(j)?.pack_into(row);
@@ -321,32 +358,47 @@ fn pack_value(v: Value, mut row: RowPacker) -> Result<RowPacker> {
     Ok(row)
 }
 
-pub fn extract_nullable_row<'a, I>(mut v: Value, extra: I) -> Result<Option<Row>>
+pub fn extract_nullable_row<'a, I>(v: Value, extra: I, n: SchemaNode) -> Result<Option<Row>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    v = match v {
-        Value::Union(_, v) => *v,
+    let (v, n) = match v {
+        Value::Union(idx, v) => {
+            let next = if let SchemaPiece::Union(us) = n.inner {
+                n.step(&us.variants()[idx])
+            } else {
+                unreachable!("Avro value out of sync with schema")
+            };
+            (*v, next)
+        }
         _ => bail!("unsupported avro value: {:?}", v),
     };
-    extract_row(v, extra)
+    extract_row(v, extra, n)
 }
 
-pub fn extract_row<'a, I>(v: Value, extra: I) -> Result<Option<Row>>
+pub fn extract_row<'a, I>(v: Value, extra: I, n: SchemaNode) -> Result<Option<Row>>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
     match v {
-        Value::Record(fields) => {
-            let mut row = RowPacker::new();
-            for (_, col) in fields.into_iter() {
-                row = pack_value(col, row)?;
+        Value::Record(fields) => match n.inner {
+            SchemaPiece::Record {
+                fields: schema_fields,
+                ..
+            } => {
+                let mut row = RowPacker::new();
+                for (i, (_, col)) in fields.into_iter().enumerate() {
+                    let f_schema = &schema_fields[i].schema;
+                    let f_node = n.step(f_schema);
+                    row = pack_value(col, row, f_node)?;
+                }
+                for d in extra {
+                    row.push(d);
+                }
+                Ok(Some(row.finish()))
             }
-            for d in extra {
-                row.push(d);
-            }
-            Ok(Some(row.finish()))
-        }
+            _ => unreachable!("Avro value out of sync with schema"),
+        },
         Value::Null => Ok(None),
         _ => bail!("unsupported avro value: {:?}", v),
     }
@@ -355,19 +407,38 @@ where
 /// Extract a debezium-format Avro object by parsing it fully,
 /// i.e., when the record isn't laid out such that we can extract the `before` and
 /// `after` fields without decoding the entire record.
-pub fn extract_debezium_slow(v: Value) -> Result<DiffPair<Row>> {
+pub fn extract_debezium_slow(v: Value, n: SchemaNode) -> Result<DiffPair<Row>> {
     let mut before = None;
     let mut after = None;
     match v {
         Value::Record(fields) => {
-            for (name, val) in fields {
-                if name == "before" {
-                    before = extract_nullable_row(val, iter::once(Datum::Int64(-1)))?;
-                } else if name == "after" {
-                    after = extract_nullable_row(val, iter::once(Datum::Int64(1)))?;
-                } else {
-                    // Intentionally ignore other fields.
+            if let SchemaPiece::Record {
+                fields: schema_fields,
+                ..
+            } = n.inner
+            {
+                for (i, (_, val)) in fields.into_iter().enumerate() {
+                    // TODO - We shouldn't need to do these comparisons every time.
+                    // Just precompute them once per source, since the schema isn't changing.
+                    let name = &schema_fields[i].name;
+                    if name == "before" {
+                        before = extract_nullable_row(
+                            val,
+                            iter::once(Datum::Int64(-1)),
+                            n.step(&schema_fields[i].schema),
+                        )?;
+                    } else if name == "after" {
+                        after = extract_nullable_row(
+                            val,
+                            iter::once(Datum::Int64(1)),
+                            n.step(&schema_fields[i].schema),
+                        )?;
+                    } else {
+                        // Intentionally ignore other fields.
+                    }
                 }
+            } else {
+                unreachable!("Avro value out of sync with schema");
             }
         }
         _ => bail!("avro envelope had unexpected type: {:?}", v),
@@ -492,19 +563,21 @@ impl Decoder {
                 let before = extract_nullable_row(
                     avro::from_avro_datum(&schema, &mut bytes)?,
                     iter::once(Datum::Int64(-1)),
+                    schema.top_node(),
                 )?;
                 let after = extract_nullable_row(
                     avro::from_avro_datum(&schema, &mut bytes)?,
                     iter::once(Datum::Int64(1)),
+                    schema.top_node(),
                 )?;
                 DiffPair { before, after }
             } else {
                 let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-                extract_debezium_slow(val)?
+                extract_debezium_slow(val, self.reader_schema.top_node())?
             }
         } else {
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            let row = extract_row(val, iter::empty())?;
+            let row = extract_row(val, iter::empty(), self.reader_schema.top_node())?;
             DiffPair {
                 before: None,
                 after: row,
