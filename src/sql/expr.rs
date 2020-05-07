@@ -168,6 +168,7 @@ pub struct ColumnRef {
 /// The column map only stores references for levels greater than zero,
 /// and column references at level zero simply start at the first column
 /// after all prior references.
+#[derive(Debug, Clone)]
 struct ColumnMap {
     inner: HashMap<ColumnRef, usize>,
 }
@@ -491,44 +492,6 @@ impl RelationExpr {
         }
     }
 
-    /// Visits the column references within this `RelationExpr`.
-    fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &mut ColumnRef),
-    {
-        self.visit_mut(&mut |e| match e {
-            RelationExpr::Join { on, .. } => on.visit_columns(depth, f),
-            RelationExpr::Map { scalars, .. } => {
-                for scalar in scalars {
-                    scalar.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::FlatMap { exprs, .. } => {
-                for expr in exprs {
-                    expr.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::Filter { predicates, .. } => {
-                for predicate in predicates {
-                    predicate.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::Reduce { aggregates, .. } => {
-                for aggregate in aggregates {
-                    aggregate.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::Constant { .. }
-            | RelationExpr::Get { .. }
-            | RelationExpr::Project { .. }
-            | RelationExpr::Distinct { .. }
-            | RelationExpr::TopK { .. }
-            | RelationExpr::Negate { .. }
-            | RelationExpr::Threshold { .. }
-            | RelationExpr::Union { .. } => (),
-        })
-    }
-
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
     pub fn bind_parameters(&mut self, parameters: &Params) {
@@ -573,35 +536,6 @@ impl RelationExpr {
 }
 
 impl ScalarExpr {
-    /// Visits the column references in this scalar expression.
-    fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &mut ColumnRef),
-    {
-        match self {
-            ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) | ScalarExpr::CallNullary(_) => (),
-            ScalarExpr::Column(col_ref) => f(depth, col_ref),
-            ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
-            ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                expr1.visit_columns(depth, f);
-                expr2.visit_columns(depth, f);
-            }
-            ScalarExpr::CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    expr.visit_columns(depth, f);
-                }
-            }
-            ScalarExpr::If { cond, then, els } => {
-                cond.visit_columns(depth, f);
-                then.visit_columns(depth, f);
-                els.visit_columns(depth, f);
-            }
-            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
-                expr.visit_columns(depth + 1, f);
-            }
-        }
-    }
-
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `parameters`.
     pub fn bind_parameters(&mut self, parameters: &Params) {
@@ -755,14 +689,6 @@ impl ScalarExpr {
 }
 
 impl AggregateExpr {
-    /// Visits the column references in this aggregate expression.
-    pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &mut ColumnRef),
-    {
-        self.expr.visit_columns(depth, f);
-    }
-
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
     pub fn bind_parameters(&mut self, parameters: &Params) {
@@ -855,7 +781,7 @@ pub mod decorrelation {
         /// outer rows where `a = b AND c = d`. The second subquery, `(<subquery 2>)
         /// = e`, will be further restricted to outer rows that match `A = b AND c =
         /// d AND EXISTS(<subquery>)`. This can vastly reduce the cost of the
-        /// subquery, especially when the original conjuction contains join keys.
+        /// subquery, especially when the original conjunction contains join keys.
         fn split_subquery_predicates(&mut self) {
             match self {
                 RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
@@ -895,7 +821,7 @@ pub mod decorrelation {
                     let mut subqueries = vec![];
                     for predicate in &mut *predicates {
                         predicate.split_subquery_predicates();
-                        predicate.extract_conjucted_subqueries(&mut subqueries);
+                        predicate.extract_conjuncted_subqueries(&mut subqueries);
                     }
                     // TODO(benesch): we could be smarter about the order in which
                     // we emit subqueries. At the moment we just emit in the order
@@ -936,7 +862,7 @@ pub mod decorrelation {
                     get_outer
                 );
             }
-            assert!(col_map.len() == get_outer.arity());
+            assert_eq!(col_map.len(), get_outer.arity());
             match self {
                 Constant { rows, typ } => {
                     // Constant expressions are not correlated with `get_outer`, and should be cross-products.
@@ -1186,16 +1112,61 @@ pub mod decorrelation {
                 }
             }
         }
+
+        /// Visits the column references in this relation expression.
+        ///
+        /// The `depth` argument should indicate the subquery nesting depth of the expression,
+        /// which will be incremented with each subquery entered and presented to the supplied
+        /// function `f`.
+        fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+        where
+            F: FnMut(usize, &mut ColumnRef),
+        {
+            self.visit_mut(&mut |e| match e {
+                RelationExpr::Join { on, .. } => on.visit_columns(depth, f),
+                RelationExpr::Map { scalars, .. } => {
+                    for scalar in scalars {
+                        scalar.visit_columns(depth, f);
+                    }
+                }
+                RelationExpr::FlatMap { exprs, .. } => {
+                    for expr in exprs {
+                        expr.visit_columns(depth, f);
+                    }
+                }
+                RelationExpr::Filter { predicates, .. } => {
+                    for predicate in predicates {
+                        predicate.visit_columns(depth, f);
+                    }
+                }
+                RelationExpr::Reduce { aggregates, .. } => {
+                    for aggregate in aggregates {
+                        aggregate.visit_columns(depth, f);
+                    }
+                }
+                RelationExpr::Constant { .. }
+                | RelationExpr::Get { .. }
+                | RelationExpr::Project { .. }
+                | RelationExpr::Distinct { .. }
+                | RelationExpr::TopK { .. }
+                | RelationExpr::Negate { .. }
+                | RelationExpr::Threshold { .. }
+                | RelationExpr::Union { .. } => (),
+            })
+        }
     }
 
     impl ScalarExpr {
-        /// Rewrite `self` into a `expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `inner`.
-        /// This requires removing all nested subqueries, which we can do moving them into `inner` using `RelationExpr::applied_to`.
-        /// We expect that `inner` has already been decorrelated, so that:
-        /// * the first `outer_arities[0]` columns of `inner` hold values from the outermost scope
-        /// * the next `outer_arities[1]` columns of `inner` hold values from the next outermost scope
-        /// * ...etc
-        /// * the remaining columns of `inner` hold values from the inner scope (i.e., the direct input to `self`)
+        /// Rewrite `self` into a `expr::ScalarExpr` which can be applied to the modified `inner`.
+        ///
+        /// This method is responsible for decorrelating subqueries in `self` by introducing further columns
+        /// to `inner`, and rewriting `self` to refer to its physical columns (specified by `usize` positions).
+        /// The most complicated logic is for the scalar expressions that involve subqueries, each of which are
+        /// documented in more detail closer to their logic.
+        ///
+        /// This process presumes that `inner` is the result of decorrelation, meaning its first several columns
+        /// may be inherited from outer relations. The `col_map` column map should provide specific offsets where
+        /// each of these references can be found.
         fn applied_to(
             self,
             id_gen: &mut expr::IdGen,
@@ -1229,6 +1200,8 @@ pub mod decorrelation {
                 If { cond, then, els } => {
                     // TODO(jamii) would be nice to only run subqueries in `then` when `cond` is true
                     // (if subqueries later gain the ability to throw errors, this impacts correctness too)
+                    // NOTE: This also affects performance *now* if either branch is expensive to produce
+                    // and/or maintain but is not the returned result.
                     SS::If {
                         cond: Box::new(cond.applied_to(id_gen, col_map, inner)),
                         then: Box::new(then.applied_to(id_gen, col_map, inner)),
@@ -1257,7 +1230,7 @@ pub mod decorrelation {
                             let exists = expr
                                 // compute for every row in get_inner
                                 .applied_to(id_gen, get_inner.clone(), col_map)
-                                // throw away actual values and just remember whether or not there where __any__ rows
+                                // throw away actual values and just remember whether or not there were __any__ rows
                                 .distinct_by((0..get_inner.arity()).collect())
                                 // Append true to anything that returned any rows. This
                                 // join is logically equivalent to
@@ -1325,7 +1298,7 @@ pub mod decorrelation {
             }
         }
 
-        /// Extracts subqueries from a conjuction into `out`.
+        /// Extracts subqueries from a conjunction into `out`.
         ///
         /// For example, given an expression like
         ///
@@ -1341,7 +1314,7 @@ pub mod decorrelation {
         ///
         /// and returns the expression fragments `EXISTS (<subquery 1>)` and
         //// `(<subquery 2>) = e` in the `out` vector.
-        fn extract_conjucted_subqueries(&mut self, out: &mut Vec<ScalarExpr>) {
+        fn extract_conjuncted_subqueries(&mut self, out: &mut Vec<ScalarExpr>) {
             fn contains_subquery(expr: &ScalarExpr) -> bool {
                 match expr {
                     ScalarExpr::Column(_)
@@ -1366,8 +1339,8 @@ pub mod decorrelation {
                     expr1,
                     expr2,
                 } => {
-                    expr1.extract_conjucted_subqueries(out);
-                    expr2.extract_conjucted_subqueries(out);
+                    expr1.extract_conjuncted_subqueries(out);
+                    expr2.extract_conjuncted_subqueries(out);
                 }
                 expr => {
                     if contains_subquery(expr) {
@@ -1413,6 +1386,41 @@ pub mod decorrelation {
                 }
             }
         }
+
+        /// Visits the column references in this scalar expression.
+        ///
+        /// The `depth` argument should indicate the subquery nesting depth of the expression,
+        /// which will be incremented with each subquery entered and presented to the supplied
+        /// function `f`.
+        fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+        where
+            F: FnMut(usize, &mut ColumnRef),
+        {
+            match self {
+                ScalarExpr::Literal(_, _)
+                | ScalarExpr::Parameter(_)
+                | ScalarExpr::CallNullary(_) => (),
+                ScalarExpr::Column(col_ref) => f(depth, col_ref),
+                ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
+                ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                    expr1.visit_columns(depth, f);
+                    expr2.visit_columns(depth, f);
+                }
+                ScalarExpr::CallVariadic { exprs, .. } => {
+                    for expr in exprs {
+                        expr.visit_columns(depth, f);
+                    }
+                }
+                ScalarExpr::If { cond, then, els } => {
+                    cond.visit_columns(depth, f);
+                    then.visit_columns(depth, f);
+                    els.visit_columns(depth, f);
+                }
+                ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+                    expr.visit_columns(depth + 1, f);
+                }
+            }
+        }
     }
 
     /// Prepare to apply `inner` to `outer`. Note that `inner` is a correlated (SQL)
@@ -1439,6 +1447,10 @@ pub mod decorrelation {
             &ColumnMap,
         ) -> expr::RelationExpr,
     {
+        // TODO: It would be nice to have a version of this code w/o optimizations,
+        // at the least for purposes of understanding. It was difficult for one reader
+        // to understand the required properties of `outer` and `col_map`.
+
         // The key consists of the columns from the outer expression upon which the
         // inner relation depends. We discover these dependencies by walking the
         // inner relation expression and looking for column references whose level
@@ -1449,10 +1461,11 @@ pub mod decorrelation {
         // `new_col_map` maps each outer column to its new ordinal position in key.
         let mut outer_cols = BTreeSet::new();
         inner.visit_columns(0, &mut |depth, col| {
+            // Test if the column reference escapes the subquery.
             if col.level > depth {
                 outer_cols.insert(ColumnRef {
                     level: col.level - depth,
-                    ..*col
+                    column: col.column,
                 });
             }
         });
@@ -1462,9 +1475,10 @@ pub mod decorrelation {
             new_col_map.insert(col, key.len());
             key.push(col_map.get(&ColumnRef {
                 level: col.level - 1,
-                ..col
+                column: col.column,
             }));
         }
+        let new_col_map = ColumnMap::new(new_col_map);
 
         outer.let_in(id_gen, |id_gen, get_outer| {
             let keyed_outer = if key.is_empty() {
@@ -1480,7 +1494,7 @@ pub mod decorrelation {
             };
             keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
                 let oa = get_outer.arity();
-                let branch = apply(id_gen, inner, get_keyed_outer, &ColumnMap::new(new_col_map));
+                let branch = apply(id_gen, inner, get_keyed_outer, &new_col_map);
                 let ba = branch.arity();
                 let joined = expr::RelationExpr::join(
                     vec![get_outer.clone(), branch],
@@ -1514,6 +1528,17 @@ pub mod decorrelation {
                 expr: expr.applied_to(id_gen, col_map, inner),
                 distinct,
             }
+        }
+        /// Visits the column references in this aggregate expression.
+        ///
+        /// The `depth` argument should indicate the subquery nesting depth of the expression,
+        /// which will be incremented with each subquery entered and presented to the supplied
+        /// function `f`.
+        pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+        where
+            F: FnMut(usize, &mut ColumnRef),
+        {
+            self.expr.visit_columns(depth, f);
         }
     }
 }
