@@ -120,15 +120,18 @@ $ set non-dbz-schema={
     "name": "cpx",
     "fields": [
       {"name": "a", "type": "long"},
-      {"name": "b", "type": "long"}
+      {"name": "b", "type": "long"},
+      {"name": "u", "type": ["long", "null", "string"]},
+      {"name": "n", "type": ["long", "null"]}
     ]
   }
 
 $ kafka-create-topic topic=non-dbz-data
 
 $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp=1
-{"a": 1, "b": 2}
-{"a": 2, "b": 3}
+{"a": 1, "b": 2, "u": 5, "n": 6}
+{"a": 2, "b": 3, "u": null, "n": null}
+{"a": 3, "b": 4, "u": "hello", "n": 7}
 
 > CREATE MATERIALIZED SOURCE non_dbz_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-${testdrive.seed}'
@@ -136,7 +139,8 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
   ENVELOPE NONE
 
 > SELECT * FROM non_dbz_data
-a b
+a b u1 u2 n
 ---
-1 2
-2 3
+1 2 5 <null> 6
+2 3 <null> <null> <null>
+3 4 <null> "hello" 7

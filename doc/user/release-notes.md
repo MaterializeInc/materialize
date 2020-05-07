@@ -48,6 +48,8 @@ Wrap your release notes at the 80 character mark.
 <span id="0.2.2"></span>
 ## 0.2.1 (Unreleased) &rarr; 0.2.2 (Unreleased)
 
+- Allow Avro enums and unions in value types.
+
 - Support Kafka topics with key-value messages. ([`CREATE SOURCE ... ENVELOPE
   UPSERT  ...`](../overview/api-components/#envelopes))
 

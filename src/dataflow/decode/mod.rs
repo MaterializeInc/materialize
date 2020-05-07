@@ -32,7 +32,7 @@ mod regex;
 use self::csv::csv;
 use self::regex::regex as regex_fn;
 use crate::operator::StreamExt;
-use ::avro::types::Value;
+use ::avro::{types::Value, Schema};
 use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
 
 use log::error;
@@ -41,6 +41,7 @@ use std::iter;
 pub fn decode_avro_values<G>(
     stream: &Stream<G, (Value, Option<i64>)>,
     envelope: &Envelope,
+    schema: Schema,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -53,12 +54,15 @@ where
     stream
         .pass_through("AvroValues")
         .flat_map(move |((value, index), r, d)| {
+            let top_node = schema.top_node();
             let diffs = match envelope {
-                Envelope::None => extract_row(value, index.map(Datum::from)).map(|r| DiffPair {
-                    before: None,
-                    after: r,
-                }),
-                Envelope::Debezium => extract_debezium_slow(value),
+                Envelope::None => {
+                    extract_row(value, index.map(Datum::from), top_node).map(|r| DiffPair {
+                        before: None,
+                        after: r,
+                    })
+                }
+                Envelope::Debezium => extract_debezium_slow(value, top_node),
                 Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
