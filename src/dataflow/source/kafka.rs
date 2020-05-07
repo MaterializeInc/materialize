@@ -609,7 +609,10 @@ fn downgrade_capability(
                     // We have now seen all messages corresponding to this timestamp for this
                     // partition. We
                     // can close the timestamp (on this partition) and remove the associated metadata
-                    println!("ID: {} Partition:{:?} Offset:{} LastOffset {}", id, pid, offset, last_offset);
+                    println!(
+                        "ID: {} Partition:{:?} Offset:{} LastOffset {}",
+                        id, pid, offset, last_offset
+                    );
                     partition_metadata[pid as usize].1 = *ts;
                     entries.remove(0);
                     changed = true;
