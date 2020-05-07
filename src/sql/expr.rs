@@ -12,10 +12,11 @@
 //! similar to that file, with some differences which are noted below. It gets turned into that
 //! representation via a call to decorrelate().
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::mem;
 
 use failure::ensure;
+use itertools::Itertools;
 
 use ore::collections::CollectionExt;
 use repr::*;
@@ -177,6 +178,32 @@ impl ColumnMap {
 
     fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    // Updates references in the `ColumnMap` for use in a nested scope. The
+    // provided `arity` must specify the arity of the current scope.
+    fn enter_scope(&self, arity: usize) -> ColumnMap {
+        // From the perspective of the nested scope, all existing column
+        // references will be one level greater.
+        let existing = self
+            .inner
+            .clone()
+            .into_iter()
+            .update(|(col, _i)| col.level += 1);
+
+        // All columns in the current scope become explicit entries in the
+        // immediate parent scope.
+        let new = (0..arity).map(|i| {
+            (
+                ColumnRef {
+                    level: 1,
+                    column: i,
+                },
+                self.len() + i,
+            )
+        });
+
+        ColumnMap::new(existing.chain(new).collect())
     }
 }
 
@@ -609,44 +636,6 @@ impl RelationExpr {
         }
     }
 
-    /// Visits the column references within this `RelationExpr`.
-    fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &mut ColumnRef),
-    {
-        self.visit_mut(&mut |e| match e {
-            RelationExpr::Join { on, .. } => on.visit_columns(depth, f),
-            RelationExpr::Map { scalars, .. } => {
-                for scalar in scalars {
-                    scalar.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::FlatMap { exprs, .. } => {
-                for expr in exprs {
-                    expr.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::Filter { predicates, .. } => {
-                for predicate in predicates {
-                    predicate.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::Reduce { aggregates, .. } => {
-                for aggregate in aggregates {
-                    aggregate.visit_columns(depth, f);
-                }
-            }
-            RelationExpr::Constant { .. }
-            | RelationExpr::Get { .. }
-            | RelationExpr::Project { .. }
-            | RelationExpr::Distinct { .. }
-            | RelationExpr::TopK { .. }
-            | RelationExpr::Negate { .. }
-            | RelationExpr::Threshold { .. }
-            | RelationExpr::Union { .. } => (),
-        })
-    }
-
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
     pub fn bind_parameters(&mut self, parameters: &Params) {
@@ -879,35 +868,6 @@ impl ScalarExpr {
         }
     }
 
-    /// Visits the column references in this scalar expression.
-    fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &mut ColumnRef),
-    {
-        match self {
-            ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) | ScalarExpr::CallNullary(_) => (),
-            ScalarExpr::Column(col_ref) => f(depth, col_ref),
-            ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
-            ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                expr1.visit_columns(depth, f);
-                expr2.visit_columns(depth, f);
-            }
-            ScalarExpr::CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    expr.visit_columns(depth, f);
-                }
-            }
-            ScalarExpr::If { cond, then, els } => {
-                cond.visit_columns(depth, f);
-                then.visit_columns(depth, f);
-                els.visit_columns(depth, f);
-            }
-            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
-                expr.visit_columns(depth + 1, f);
-            }
-        }
-    }
-
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `parameters`.
     pub fn bind_parameters(&mut self, parameters: &Params) {
@@ -1017,7 +977,7 @@ fn branch<F>(
     id_gen: &mut expr::IdGen,
     outer: expr::RelationExpr,
     col_map: &ColumnMap,
-    mut inner: RelationExpr,
+    inner: RelationExpr,
     apply: F,
 ) -> Result<expr::RelationExpr, failure::Error>
 where
@@ -1028,32 +988,11 @@ where
         &ColumnMap,
     ) -> Result<expr::RelationExpr, failure::Error>,
 {
-    // The key consists of the columns from the outer expression upon which the
-    // inner relation depends. We discover these dependencies by walking the
-    // inner relation expression and looking for column references whose level
-    // escapes inner.
-    //
-    // At the end of this process, `key` contains the decorrelated position of
-    // each outer column, according to the passed-in `col_map`, and
-    // `new_col_map` maps each outer column to its new ordinal position in key.
-    let mut outer_cols = BTreeSet::new();
-    inner.visit_columns(0, &mut |depth, col| {
-        if col.level > depth {
-            outer_cols.insert(ColumnRef {
-                level: col.level - depth,
-                ..*col
-            });
-        }
-    });
-    let mut new_col_map = HashMap::new();
-    let mut key = vec![];
-    for col in outer_cols {
-        new_col_map.insert(col, key.len());
-        key.push(col_map.get(&ColumnRef {
-            level: col.level - 1,
-            ..col
-        }));
-    }
+    // Use all columns of outer as the key, even though the nested query may not
+    // actually refer to all outer columns. This eases optimizations down the
+    // line.
+    let key: Vec<_> = (0..outer.arity()).collect();
+    let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
 
     outer.let_in(id_gen, |id_gen, get_outer| {
         let keyed_outer = if key.is_empty() {
@@ -1069,7 +1008,7 @@ where
         };
         keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
             let oa = get_outer.arity();
-            let branch = apply(id_gen, inner, get_keyed_outer, &ColumnMap::new(new_col_map))?;
+            let branch = apply(id_gen, inner, get_keyed_outer, &new_col_map)?;
             let ba = branch.arity();
             let joined = expr::RelationExpr::join(
                 vec![get_outer.clone(), branch],
@@ -1103,14 +1042,6 @@ impl AggregateExpr {
             expr: expr.applied_to(id_gen, col_map, inner)?,
             distinct,
         })
-    }
-
-    /// Visits the column references in this aggregate expression.
-    fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-    where
-        F: FnMut(usize, &mut ColumnRef),
-    {
-        self.expr.visit_columns(depth, f);
     }
 
     /// Replaces any parameter references in the expression with the
