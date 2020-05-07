@@ -13,9 +13,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
+use chrono::{DateTime, TimeZone, Utc};
 use failure::bail;
 use lazy_static::lazy_static;
 use log::{info, trace};
+use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -23,10 +25,11 @@ use ::sql::catalog::{
     CatalogItemType, ItemMap, PlanCatalog, PlanCatalogEntry, PlanDatabaseResolver, PlanSchema,
     SchemaMap, SchemaType,
 };
-use ::sql::{DatabaseSpecifier, FullName, PartialName, PlanContext};
+use ::sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::RelationDesc;
+use repr::{RelationDesc, Row};
+use transform::Optimizer;
 
 use crate::catalog::error::{Error, ErrorKind};
 
@@ -61,7 +64,6 @@ pub struct Catalog {
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ambient_schemas: Schemas,
     storage: Arc<Mutex<sql::Connection>>,
-    serialize_item: fn(&CatalogItem) -> Vec<u8>,
     creation_time: SystemTime,
     nonce: u64,
 }
@@ -232,9 +234,8 @@ impl Catalog {
     /// Opens or creates a `Catalog` that stores data at `path`. The
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
-    pub fn open<S, F>(path: Option<&Path>, f: F) -> Result<Catalog, Error>
+    pub fn open<F>(path: Option<&Path>, f: F) -> Result<Catalog, Error>
     where
-        S: CatalogItemSerializer,
         F: FnOnce(&mut Self),
     {
         let storage = sql::Connection::open(path)?;
@@ -245,7 +246,6 @@ impl Catalog {
             indexes: HashMap::new(),
             ambient_schemas: Schemas(BTreeMap::new()),
             storage: Arc::new(Mutex::new(storage)),
-            serialize_item: S::serialize,
             creation_time: SystemTime::now(),
             nonce: rand::random(),
         };
@@ -298,7 +298,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match S::deserialize(&catalog, def) {
+            let item = match catalog.deserialize_item(def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -621,7 +621,7 @@ impl Catalog {
                         }
                     };
                     let schema_id = tx.load_schema_id(database_id, &name.schema)?;
-                    let serialized_item = (self.serialize_item)(&item);
+                    let serialized_item = self.serialize_item(&item);
                     tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
                     Action::CreateItem { id, name, item }
                 }
@@ -752,6 +752,78 @@ impl Catalog {
                 }
             })
             .collect())
+    }
+
+    fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
+        let item = match item {
+            CatalogItem::Source(source) => SerializedCatalogItem::V1 {
+                create_sql: source.create_sql.clone(),
+                eval_env: Some(source.plan_cx.clone().into()),
+            },
+            CatalogItem::View(view) => SerializedCatalogItem::V1 {
+                create_sql: view.create_sql.clone(),
+                eval_env: Some(view.plan_cx.clone().into()),
+            },
+            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
+                create_sql: index.create_sql.clone(),
+                eval_env: Some(index.plan_cx.clone().into()),
+            },
+            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
+                create_sql: sink.create_sql.clone(),
+                eval_env: Some(sink.plan_cx.clone().into()),
+            },
+        };
+        serde_json::to_vec(&item).expect("catalog serialization cannot fail")
+    }
+
+    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error> {
+        let SerializedCatalogItem::V1 {
+            create_sql,
+            eval_env,
+        } = serde_json::from_slice(&bytes)?;
+        let params = Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        };
+        let pcx = match eval_env {
+            // Old sources and sinks don't have plan contexts, but it's safe to
+            // just give them a default, as they clearly don't depend on the
+            // plan context.
+            None => PlanContext::default(),
+            Some(eval_env) => eval_env.into(),
+        };
+        let stmt = ::sql::parse(create_sql)?.into_element();
+        let plan = ::sql::plan(&pcx, self, &::sql::InternalSession, stmt, &params)?;
+        Ok(match plan {
+            Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                plan_cx: pcx,
+                connector: source.connector,
+                desc: source.desc,
+            }),
+            Plan::CreateView { view, .. } => {
+                let mut optimizer = Optimizer::default();
+                CatalogItem::View(View {
+                    create_sql: view.create_sql,
+                    plan_cx: pcx,
+                    optimized_expr: optimizer.optimize(view.expr, self.indexes())?,
+                    desc: view.desc,
+                })
+            }
+            Plan::CreateIndex { index, .. } => CatalogItem::Index(Index {
+                create_sql: index.create_sql,
+                plan_cx: pcx,
+                on: index.on,
+                keys: index.keys,
+            }),
+            Plan::CreateSink { sink, .. } => CatalogItem::Sink(Sink {
+                create_sql: sink.create_sql,
+                plan_cx: pcx,
+                from: sink.from,
+                connector: SinkConnectorState::Pending(sink.connector_builder),
+            }),
+            _ => bail!("catalog entry generated inappropriate plan"),
+        })
     }
 
     /// Iterates over the items in the catalog in order of increasing ID.
@@ -885,9 +957,36 @@ impl<'a> DatabaseResolver<'a> {
     }
 }
 
-pub trait CatalogItemSerializer {
-    fn serialize(item: &CatalogItem) -> Vec<u8>;
-    fn deserialize(catalog: &Catalog, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum SerializedCatalogItem {
+    V1 {
+        create_sql: String,
+        // The name "eval_env" is historical.
+        eval_env: Option<SerializedPlanContext>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SerializedPlanContext {
+    pub logical_time: Option<u64>,
+    pub wall_time: Option<DateTime<Utc>>,
+}
+
+impl From<SerializedPlanContext> for PlanContext {
+    fn from(cx: SerializedPlanContext) -> PlanContext {
+        PlanContext {
+            wall_time: cx.wall_time.unwrap_or_else(|| Utc.timestamp(0, 0)),
+        }
+    }
+}
+
+impl From<PlanContext> for SerializedPlanContext {
+    fn from(cx: PlanContext) -> SerializedPlanContext {
+        SerializedPlanContext {
+            logical_time: None,
+            wall_time: Some(cx.wall_time),
+        }
+    }
 }
 
 impl PlanCatalog for Catalog {
