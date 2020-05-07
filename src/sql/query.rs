@@ -2528,11 +2528,7 @@ fn plan_unary_op<'a>(
             _ => bail!("cannot negate {:?}", typ.scalar_type),
         },
     };
-    let expr = ScalarExpr::CallUnary {
-        func,
-        expr: Box::new(expr),
-    };
-    Ok(expr)
+    Ok(expr.call_unary(func))
 }
 
 fn plan_binary_op<'a>(

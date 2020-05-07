@@ -1344,11 +1344,36 @@ impl ScalarExpr {
         }
     }
 
-    pub fn call_unary(self, func: UnaryFunc) -> Self {
+    pub fn call_unary(mut self, func: UnaryFunc) -> Self {
+        #[allow(clippy::single_match)]
+        match func {
+            UnaryFunc::Not => match &mut self {
+                ScalarExpr::CallBinary { expr1, expr2, func } => {
+                    if let Some(negated_func) = negate(&func) {
+                        return ScalarExpr::CallBinary {
+                            expr1: Box::new(expr1.take()),
+                            expr2: Box::new(expr2.take()),
+                            func: negated_func,
+                        };
+                    }
+                }
+                ScalarExpr::CallUnary {
+                    expr,
+                    func: UnaryFunc::Not,
+                } => return expr.take(),
+                _ => {}
+            },
+            _ => {}
+        }
+
         ScalarExpr::CallUnary {
             func,
             expr: Box::new(self),
         }
+    }
+
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, ScalarExpr::literal_null(ScalarType::Unknown))
     }
 
     pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
@@ -1391,6 +1416,18 @@ impl ScalarExpr {
             }
             Exists(..) | Select(..) => (),
         }
+    }
+}
+
+fn negate(f: &BinaryFunc) -> Option<BinaryFunc> {
+    match f {
+        BinaryFunc::Eq => Some(BinaryFunc::NotEq),
+        BinaryFunc::NotEq => Some(BinaryFunc::Eq),
+        BinaryFunc::Lt => Some(BinaryFunc::Gte),
+        BinaryFunc::Gte => Some(BinaryFunc::Lt),
+        BinaryFunc::Gt => Some(BinaryFunc::Lte),
+        BinaryFunc::Lte => Some(BinaryFunc::Gt),
+        _ => None,
     }
 }
 
