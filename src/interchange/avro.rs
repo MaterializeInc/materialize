@@ -322,9 +322,6 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> Result<RowPacker> 
                 {
                     if var_idx == idx {
                         let next = n.step(var_s);
-                        // Making `v` into an option is necessary
-                        // because the use-after-move checker
-                        // can't prove that `v` is only used once.
                         row = pack_value(v.take().unwrap(), row, next)?;
                     } else {
                         row.push(Datum::Null);
