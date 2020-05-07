@@ -60,6 +60,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 $ kafka-create-topic topic=data2
 
+$ kafka-create-topic topic=data3
+
 $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 {"a": 1, "b": 1}
 {"a": 2, "b": 1}
