@@ -115,7 +115,6 @@ impl<'a> ConfigAggregator<'a> {
         self.output.insert(k, v);
     }
     fn finish(self) -> HashMap<String, String> {
-        println!("{:?}", self.output);
         self.output
     }
 }
