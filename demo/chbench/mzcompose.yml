@@ -198,6 +198,8 @@ x-mzconduct:
   workflows:
     ci:
       steps:
+      - step: down
+        destroy_volumes: true
       - step: workflow
         workflow: bring-up-source-data
       - step: workflow
@@ -210,7 +212,7 @@ x-mzconduct:
           --dsn=mysql --gen-dir=/var/lib/mysql-files
           --analytic-threads=0
           --transactional-threads=1
-          --run-seconds=432000
+          --run-seconds=500
           -l /dev/stdout
           --config-file-path=/etc/chbenchmark/mz-default.cfg
           --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
@@ -232,8 +234,6 @@ x-mzconduct:
       steps:
       - step: workflow
         workflow: bring-up-source-data
-      - step: workflow
-        workflow: clean-chbench-init
       - step: run
         service: chbench
         daemon: true
@@ -250,13 +250,40 @@ x-mzconduct:
           --config-file-path=/etc/chbenchmark/mz-default.cfg
           --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
       - step: start-services
-        services: [dashboard]
+        services: [dashboard, metabase]
       - step: run
         service: peeker
         command: >-
           --only-initialize
           -c /etc/peeker/materialized-sources.toml
           -q loadtest
+
+    load-test:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+         run
+         --dsn=mysql --gen-dir=/var/lib/mysql-files
+         --analytic-threads=0
+         --transactional-threads=1
+         --run-seconds=432000
+         -l /dev/stdout
+         --config-file-path=/etc/chbenchmark/mz-default.cfg
+         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+      - step: run
+        service: peeker
+        daemon: true
+        command: --queries loadtest
+      - step: ensure-stays-up
+        container: peeker
+        seconds: 10
+      - step: ensure-stays-up
+        container: dashboard
+        seconds: 1
 
     # Helper workflows
 
@@ -277,9 +304,6 @@ x-mzconduct:
       - step: wait-for-tcp
         host: schema-registry
         port: 8081
-
-    clean-chbench-init:
-      steps:
       - step: drop-kafka-topics
         kafka-container: chbench_kafka_1
         topic_pattern: mysql.tpcch.*
