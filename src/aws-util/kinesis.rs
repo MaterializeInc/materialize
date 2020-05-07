@@ -24,18 +24,20 @@ use crate::aws;
 /// information is not provided, falls back to using credentials gathered by aws::credentials.
 pub async fn kinesis_client(
     region: Region,
-    access_key: Option<String>,
+    access_key_id: Option<String>,
     secret_access_key: Option<String>,
     token: Option<String>,
 ) -> Result<KinesisClient, anyhow::Error> {
-    let credentials_provider = match (access_key, secret_access_key) {
-        // Only access_key and secret_access_key are required.
-        (Some(access_key), Some(secret_access_key)) => {
-            info!("Creating a new Kinesis client from provided access_key and secret_access_key");
-            StaticProvider::new(access_key, secret_access_key, token, None)
+    let credentials_provider = match (access_key_id, secret_access_key) {
+        // Only access_key_id and secret_access_key are required.
+        (Some(access_key_id), Some(secret_access_key)) => {
+            info!(
+                "Creating a new Kinesis client from provided access_key_id and secret_access_key"
+            );
+            StaticProvider::new(access_key_id, secret_access_key, token, None)
         }
         (_, _) => {
-            info!("AWS access_key and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
+            info!("AWS access_key_id and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
             let aws_credentials = aws::credentials(Duration::from_secs(10)).await?;
             rusoto_credential::StaticProvider::new(
                 aws_credentials.aws_access_key_id().to_owned(),

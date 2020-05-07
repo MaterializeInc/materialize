@@ -1272,9 +1272,9 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
                     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
                     // https://github.com/materializeinc/materialize/issues/1991
-                    let access_key = match with_options.remove("access_key") {
-                        Some(Value::SingleQuotedString(access_key)) => Some(access_key),
-                        Some(_) => bail!("access_key must be a string"),
+                    let access_key_id = match with_options.remove("access_key_id") {
+                        Some(Value::SingleQuotedString(access_key_id)) => Some(access_key_id),
+                        Some(_) => bail!("access_key_id must be a string"),
                         _ => None,
                     };
                     let secret_access_key = match with_options.remove("secret_access_key") {
@@ -1293,7 +1293,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                         stream_name,
                         region,
-                        access_key,
+                        access_key_id,
                         secret_access_key,
                         token,
                     });

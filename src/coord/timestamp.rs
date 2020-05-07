@@ -1247,7 +1247,7 @@ impl Timestamper {
     ) -> Option<RtKinesisConnector> {
         let (kinesis_client, cached_shard_ids) = match block_on(aws_util::kinesis::kinesis_client(
             kinc.region.clone(),
-            kinc.access_key.clone(),
+            kinc.access_key_id.clone(),
             kinc.secret_access_key.clone(),
             kinc.token.clone(),
         )) {
