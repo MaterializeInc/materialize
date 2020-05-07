@@ -12,10 +12,11 @@
 //! similar to that file, with some differences which are noted below. It gets turned into that
 //! representation via a call to decorrelate().
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::mem;
 
 use failure::ensure;
+use itertools::Itertools;
 
 use ore::collections::CollectionExt;
 use repr::*;
@@ -177,6 +178,32 @@ impl ColumnMap {
 
     fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    // Updates references in the `ColumnMap` for use in a nested scope. The
+    // provided `arity` must specify the arity of the current scope.
+    fn enter_scope(&self, arity: usize) -> ColumnMap {
+        // From the perspective of the nested scope, all existing column
+        // references will be one level greater.
+        let existing = self
+            .inner
+            .clone()
+            .into_iter()
+            .update(|(col, _i)| col.level += 1);
+
+        // All columns in the current scope become explicit entries in the
+        // immediate parent scope.
+        let new = (0..arity).map(|i| {
+            (
+                ColumnRef {
+                    level: 1,
+                    column: i,
+                },
+                self.len() + i,
+            )
+        });
+
+        ColumnMap::new(existing.chain(new).collect())
     }
 }
 
@@ -1028,31 +1055,21 @@ where
         &ColumnMap,
     ) -> Result<expr::RelationExpr, failure::Error>,
 {
-    // The key consists of the columns from the outer expression upon which the
-    // inner relation depends. We discover these dependencies by walking the
-    // inner relation expression and looking for column references whose level
-    // escapes inner.
-    //
-    // At the end of this process, `key` contains the decorrelated position of
-    // each outer column, according to the passed-in `col_map`, and
-    // `new_col_map` maps each outer column to its new ordinal position in key.
-    let mut outer_cols = BTreeSet::new();
+    // Use all columns of outer as the key, even though the nested query may not
+    // actually refer to all outer columns. This eases optimizations down the
+    // line.
+    let mut key: Vec<_> = (0..outer.arity()).collect();
+    let mut new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
+
+    let mut zero_references = true;
     inner.visit_columns(0, &mut |depth, col| {
         if col.level > depth {
-            outer_cols.insert(ColumnRef {
-                level: col.level - depth,
-                ..*col
-            });
+            zero_references = false;
         }
     });
-    let mut new_col_map = HashMap::new();
-    let mut key = vec![];
-    for col in outer_cols {
-        new_col_map.insert(col, key.len());
-        key.push(col_map.get(&ColumnRef {
-            level: col.level - 1,
-            ..col
-        }));
+    if zero_references {
+        key.clear();
+        new_col_map.inner.clear();
     }
 
     outer.let_in(id_gen, |id_gen, get_outer| {
@@ -1069,7 +1086,7 @@ where
         };
         keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
             let oa = get_outer.arity();
-            let branch = apply(id_gen, inner, get_keyed_outer, &ColumnMap::new(new_col_map))?;
+            let branch = apply(id_gen, inner, get_keyed_outer, &new_col_map)?;
             let ba = branch.arity();
             let joined = expr::RelationExpr::join(
                 vec![get_outer.clone(), branch],

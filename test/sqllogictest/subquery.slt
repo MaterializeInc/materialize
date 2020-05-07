@@ -254,23 +254,22 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 
 %4 =
 | Get %2
-| Distinct group=(#2)
-| ArrangeBy (#0)
+| Distinct group=(#0, #0, #2)
 
 %5 =
 | Get materialize.public.t2 (u39)
 | ArrangeBy (#0)
 
 %6 =
-| Join %4 %5 (= #0 #1)
-| | implementation = DeltaQuery %4 %5.(#0) | %5 %4.(#0)
-| | demand = (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
+| Join %4 %5 (= #2 #3)
+| | implementation = Differential %4 %5.(#0)
+| | demand = (#0..#2)
+| Distinct group=(#0, #1, #2)
+| ArrangeBy (#0, #1, #2)
 
 %7 =
-| Join %3 %6 (= #2 #3)
-| | implementation = Differential %3 %6.(#0)
+| Join %3 %6 (= #0 #3) (= #0 #4) (= #2 #5)
+| | implementation = Differential %3 %6.(#0, #1, #2)
 | | demand = (#0, #2)
 | Project (#0, #0, #2)
 
