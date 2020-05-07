@@ -17,6 +17,7 @@ use repr::{Datum, Row, RowArena};
 use crate::TransformError;
 
 pub use demorgans::DeMorgans;
+pub use negate_predicate::NegatePredicate;
 pub use undistribute_and::UndistributeAnd;
 
 /// Replace operators on constants collections with constant collections.
@@ -597,6 +598,76 @@ pub mod undistribute_and {
                     expr2: Box::new(and_term),
                     func: BinaryFunc::And,
                 };
+            }
+        }
+    }
+}
+
+/// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
+pub mod negate_predicate {
+    use std::collections::HashMap;
+
+    use expr::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
+
+    use crate::TransformError;
+
+    /// Transforms `NOT(a <op> b)` to `a negate(<op>) b`.
+    #[derive(Debug)]
+    pub struct NegatePredicate;
+
+    impl crate::Transform for NegatePredicate {
+        fn transform(
+            &self,
+            relation: &mut RelationExpr,
+            _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        ) -> Result<(), TransformError> {
+            self.action(relation);
+            Ok(())
+        }
+    }
+
+    /// Returns the negation of the given binary function, if it exists.
+    fn negate(f: &BinaryFunc) -> Option<BinaryFunc> {
+        match f {
+            BinaryFunc::Eq => Some(BinaryFunc::NotEq),
+            BinaryFunc::NotEq => Some(BinaryFunc::Eq),
+            BinaryFunc::Lt => Some(BinaryFunc::Gte),
+            BinaryFunc::Gte => Some(BinaryFunc::Lt),
+            BinaryFunc::Gt => Some(BinaryFunc::Lte),
+            BinaryFunc::Lte => Some(BinaryFunc::Gt),
+            _ => None,
+        }
+    }
+
+    impl NegatePredicate {
+        /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
+        pub fn action(&self, relation: &mut RelationExpr) {
+            relation.visit_scalars_mut(&mut |x| negate_predicate(x))
+        }
+    }
+
+    /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
+    pub fn negate_predicate(expr: &mut ScalarExpr) {
+        if let ScalarExpr::CallUnary {
+            expr: not_input,
+            func: UnaryFunc::Not,
+        } = expr
+        {
+            match &mut **not_input {
+                ScalarExpr::CallBinary { expr1, expr2, func } => {
+                    if let Some(negated_func) = negate(func) {
+                        *expr = ScalarExpr::CallBinary {
+                            expr1: Box::new(expr1.take()),
+                            expr2: Box::new(expr2.take()),
+                            func: negated_func,
+                        }
+                    }
+                }
+                ScalarExpr::CallUnary {
+                    expr: inner_expr,
+                    func: UnaryFunc::Not,
+                } => *expr = inner_expr.take(),
+                _ => {}
             }
         }
     }

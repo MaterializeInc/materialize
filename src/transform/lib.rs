@@ -172,6 +172,7 @@ impl Default for Optimizer {
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
             Box::new(crate::reduction::FoldConstants),
+            Box::new(crate::reduction::NegatePredicate),
             Box::new(crate::reduction::DeMorgans),
             Box::new(crate::reduction::UndistributeAnd),
             Box::new(crate::split_predicates::SplitPredicates),
