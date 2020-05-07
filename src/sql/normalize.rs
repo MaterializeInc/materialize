@@ -11,7 +11,6 @@ use std::collections::HashMap;
 
 use failure::bail;
 
-use catalog::names::{DatabaseSpecifier, FullName, PartialName};
 use ore::collections::CollectionExt;
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
@@ -21,6 +20,7 @@ use sql_parser::ast::{
     TableAlias, Value,
 };
 
+use crate::catalog::{DatabaseSpecifier, FullName, PartialName};
 use crate::statement::StatementContext;
 
 pub fn ident(ident: Ident) -> String {

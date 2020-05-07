@@ -12,11 +12,11 @@
 #![deny(missing_debug_implementations)]
 
 use ::expr::{GlobalId, RowSetFinishing};
-use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, PlanContext};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
+
+use crate::catalog::{DatabaseSpecifier, FullName, PlanCatalog, PlanContext};
 
 pub use crate::expr::RelationExpr;
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
@@ -25,6 +25,7 @@ pub use statement::StatementContext;
 
 pub mod normalize;
 
+mod catalog;
 mod explain;
 mod expr;
 mod kafka_util;
@@ -198,7 +199,7 @@ pub async fn purify(stmt: Statement) -> Result<Statement, failure::Error> {
 /// use [`purify`].
 pub fn plan(
     pcx: &PlanContext,
-    catalog: &Catalog,
+    catalog: &dyn PlanCatalog,
     session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
@@ -212,7 +213,7 @@ pub fn plan(
 /// will be returned. If the query uses no parameters, then the returned vector
 /// of types will be empty.
 pub fn describe(
-    catalog: &Catalog,
+    catalog: &dyn PlanCatalog,
     session: &Session,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {

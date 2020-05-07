@@ -38,7 +38,6 @@ use sql_parser::ast::{
 use uuid::Uuid;
 
 use ::expr::{DateTruncTo, Id, RowSetFinishing};
-use catalog::names::PartialName;
 use dataflow_types::Timestamp;
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
@@ -52,6 +51,7 @@ use super::expr::{
 use super::normalize;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 use super::statement::StatementContext;
+use crate::catalog::PartialName;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
