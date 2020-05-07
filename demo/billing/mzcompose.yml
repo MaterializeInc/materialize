@@ -77,3 +77,33 @@ services:
 
 volumes:
   db-data:
+
+x-mzconduct:
+  workflows:
+    ci:
+      steps:
+      - step: start-services
+        services: [materialized, kafka, schema-registry, dashboard]
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: wait-for-tcp
+        host: materialized
+        port: 6875
+      - step: run
+        service: billing-demo
+        daemon: false
+        command: >-
+          -c "
+          billing-demo
+          --message-count ${MZ_BILLING_DEMO_MESSAGES:-100}
+          --materialized-host materialized
+          --kafka-host kafka
+          --schema-registry-url http://schema-registry:8081
+          --csv-file-name /share/billing-demo/data/prices.csv
+          "
+      - step: down
+        destroy_volumes: true
