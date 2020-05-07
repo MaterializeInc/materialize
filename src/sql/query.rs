@@ -51,7 +51,7 @@ use super::expr::{
 use super::normalize;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 use super::statement::StatementContext;
-use crate::catalog::PartialName;
+use crate::names::PartialName;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a

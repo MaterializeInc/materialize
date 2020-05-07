@@ -31,7 +31,7 @@ use failure::bail;
 use repr::ColumnName;
 
 use super::expr::ColumnRef;
-use crate::catalog::PartialName;
+use crate::names::PartialName;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItemName {

@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use expr::GlobalId;
 use ore::cast::CastFrom;
+use sql::{DatabaseSpecifier, FullName};
 
-use crate::error::{Error, ErrorKind};
-use crate::names::{DatabaseSpecifier, FullName};
+use crate::catalog::error::{Error, ErrorKind};
 
 const APPLICATION_ID: i32 = 0x1854_47dc;
 

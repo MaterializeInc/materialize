@@ -4,7 +4,6 @@ members = [
     "fuzz",
     "src/avro",
     "src/aws-util",
-    "src/catalog",
     "src/ccsr",
     "src/comm",
     "src/coord",

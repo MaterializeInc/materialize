@@ -314,28 +314,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 
 [[package]]
-name = "catalog"
-version = "0.1.0"
-dependencies = [
- "backtrace",
- "bincode",
- "chrono",
- "dataflow-types",
- "expr",
- "failure",
- "itertools",
- "lazy_static",
- "log",
- "ore",
- "rand",
- "regex",
- "repr",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "cc"
 version = "1.0.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -464,7 +442,8 @@ version = "0.1.0"
 dependencies = [
  "avro",
  "aws-util",
- "catalog",
+ "backtrace",
+ "bincode",
  "ccsr",
  "chrono",
  "comm",
@@ -482,6 +461,7 @@ dependencies = [
  "ore",
  "pgrepr",
  "prometheus",
+ "rand",
  "rdkafka",
  "regex",
  "repr",
@@ -3138,7 +3118,6 @@ version = "0.1.0"
 dependencies = [
  "avro",
  "aws-arn",
- "catalog",
  "ccsr",
  "chrono",
  "dataflow-types",
@@ -3156,6 +3135,7 @@ dependencies = [
  "repr",
  "reqwest",
  "rusoto_core",
+ "serde",
  "serde_json",
  "sql-parser",
  "tokio",
@@ -3253,7 +3233,6 @@ checksum = "2d67a5a62ba6e01cb2192ff309324cb4875d0c451d55fe2319433abe7a05a8ee"
 name = "symbiosis"
 version = "0.1.0"
 dependencies = [
- "catalog",
  "chrono",
  "dataflow-types",
  "expr",

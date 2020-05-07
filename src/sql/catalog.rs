@@ -7,18 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::time::SystemTime;
 
-use catalog::{
-    Catalog, CatalogEntry, CatalogItem, DatabaseResolver, Index, Schema, Sink, Source, View,
-};
 use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
 
-pub use catalog::names::{DatabaseSpecifier, FullName, PartialName};
-pub use catalog::{PlanContext, SchemaType};
+use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::PlanContext;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SchemaType {
+    Ambient,
+    Normal,
+}
 
 pub trait PlanCatalog: fmt::Debug {
     fn creation_time(&self) -> SystemTime;
@@ -106,138 +108,55 @@ pub trait ItemMap {
     fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (&'a String, &'a GlobalId)> + 'a>;
 }
 
-impl PlanCatalog for Catalog {
+#[derive(Debug)]
+pub struct DummyCatalog;
+
+impl PlanCatalog for DummyCatalog {
     fn creation_time(&self) -> SystemTime {
-        self.creation_time()
+        SystemTime::UNIX_EPOCH
     }
 
     fn nonce(&self) -> u64 {
-        self.nonce()
+        0
     }
 
     fn databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.databases())
+        unimplemented!();
     }
 
-    fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
-        Ok(self.get(name)?)
+    fn get(&self, _: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
+        unimplemented!();
     }
 
-    fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry {
-        self.get_by_id(id)
+    fn get_by_id(&self, _: &GlobalId) -> &dyn PlanCatalogEntry {
+        unimplemented!();
     }
 
     fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a> {
-        Box::new(self.iter().map(|e| e as &dyn PlanCatalogEntry))
+        unimplemented!();
     }
 
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
-        self.get_schemas(database_spec).map(|m| m as &dyn SchemaMap)
+    fn get_schemas(&self, _: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
+        unimplemented!();
     }
 
     fn database_resolver<'a>(
         &'a self,
-        database_spec: DatabaseSpecifier,
+        _: DatabaseSpecifier,
     ) -> Result<Box<dyn PlanDatabaseResolver<'a> + 'a>, failure::Error> {
-        Ok(Box::new(self.database_resolver(database_spec)?))
+        unimplemented!();
     }
 
     fn resolve(
         &self,
-        current_database: DatabaseSpecifier,
-        search_path: &[&str],
-        name: &PartialName,
+        _: DatabaseSpecifier,
+        _: &[&str],
+        _: &PartialName,
     ) -> Result<FullName, failure::Error> {
-        Ok(self.resolve(current_database, search_path, name)?)
+        unimplemented!();
     }
 
     fn empty_item_map(&self) -> Box<dyn ItemMap> {
-        Box::new(BTreeMap::new())
-    }
-}
-
-impl PlanCatalogEntry for CatalogEntry {
-    fn name(&self) -> &FullName {
-        self.name()
-    }
-
-    fn id(&self) -> GlobalId {
-        self.id()
-    }
-
-    fn desc(&self) -> Result<&RelationDesc, failure::Error> {
-        Ok(self.desc()?)
-    }
-
-    fn create_sql(&self) -> &str {
-        match self.item() {
-            CatalogItem::Source(Source { create_sql, .. }) => create_sql,
-            CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
-            CatalogItem::View(View { create_sql, .. }) => create_sql,
-            CatalogItem::Index(Index { create_sql, .. }) => create_sql,
-        }
-    }
-
-    fn plan_cx(&self) -> &PlanContext {
-        match self.item() {
-            CatalogItem::Source(Source { plan_cx, .. }) => plan_cx,
-            CatalogItem::Sink(Sink { plan_cx, .. }) => plan_cx,
-            CatalogItem::View(View { plan_cx, .. }) => plan_cx,
-            CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
-        }
-    }
-
-    fn item_type(&self) -> CatalogItemType {
-        match self.item() {
-            CatalogItem::Source(_) => CatalogItemType::Source,
-            CatalogItem::Sink(_) => CatalogItemType::Sink,
-            CatalogItem::View(_) => CatalogItemType::View,
-            CatalogItem::Index(_) => CatalogItemType::Index,
-        }
-    }
-
-    fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)> {
-        if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
-            Some((keys, *on))
-        } else {
-            None
-        }
-    }
-
-    fn uses(&self) -> Vec<GlobalId> {
-        self.uses()
-    }
-
-    fn used_by(&self) -> &[GlobalId] {
-        self.used_by()
-    }
-}
-
-impl<'a> PlanDatabaseResolver<'a> for DatabaseResolver<'a> {
-    fn resolve_schema(&self, schema_name: &str) -> Option<(&'a dyn PlanSchema, SchemaType)> {
-        self.resolve_schema(schema_name)
-            .map(|(a, b)| (a as &'a dyn PlanSchema, b))
-    }
-}
-
-impl PlanSchema for Schema {
-    fn items(&self) -> &dyn ItemMap {
-        &self.items
-    }
-}
-
-impl SchemaMap for BTreeMap<String, Schema> {
-    fn keys<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.keys().map(|k| k.as_str()))
-    }
-}
-
-impl ItemMap for BTreeMap<String, GlobalId> {
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
-
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (&String, &GlobalId)> + 'a> {
-        Box::new(self.iter())
+        unimplemented!();
     }
 }

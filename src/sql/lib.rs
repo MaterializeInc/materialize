@@ -11,24 +11,28 @@
 
 #![deny(missing_debug_implementations)]
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
-use crate::catalog::{DatabaseSpecifier, FullName, PlanCatalog, PlanContext};
-
 pub use crate::expr::RelationExpr;
+pub use catalog::PlanCatalog;
+pub use names::{DatabaseSpecifier, FullName, PartialName};
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 pub use statement::StatementContext;
 
+pub mod catalog;
 pub mod normalize;
 
-mod catalog;
 mod explain;
 mod expr;
 mod kafka_util;
+mod names;
 mod query;
 mod scope;
 mod session;
@@ -175,6 +179,20 @@ pub enum MutationKind {
 pub struct Params {
     pub datums: Row,
     pub types: Vec<ScalarType>,
+}
+
+/// Controls planning of a SQL query.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct PlanContext {
+    pub wall_time: DateTime<Utc>,
+}
+
+impl Default for PlanContext {
+    fn default() -> PlanContext {
+        PlanContext {
+            wall_time: Utc::now(),
+        }
+    }
 }
 
 /// Parses a raw SQL string into a [`Statement`].

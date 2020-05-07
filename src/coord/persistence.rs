@@ -15,12 +15,13 @@
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use catalog::{Catalog, CatalogItemSerializer, Index, PlanContext, Sink, Source, View};
 use failure::bail;
 use ore::collections::CollectionExt;
 use repr::Row;
-use sql::{Params, Plan};
+use sql::{Params, Plan, PlanContext};
 use transform::Optimizer;
+
+use crate::catalog::{self, Catalog, CatalogItemSerializer, Index, Sink, Source, View};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum CatalogItem {

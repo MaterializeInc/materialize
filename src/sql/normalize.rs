@@ -20,7 +20,7 @@ use sql_parser::ast::{
     TableAlias, Value,
 };
 
-use crate::catalog::{DatabaseSpecifier, FullName, PartialName};
+use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::statement::StatementContext;
 
 pub fn ident(ident: Ident) -> String {
@@ -237,17 +237,18 @@ pub fn create_statement(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Session;
-    use catalog::{Catalog, PlanContext};
     use sql_parser::parser::Parser;
+
+    use super::*;
+    use crate::catalog::DummyCatalog;
+    use crate::{PlanContext, Session};
 
     #[test]
     fn normalized_create() {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
             session: &Session::default(),
-            catalog: &Catalog::dummy(),
+            catalog: &DummyCatalog,
         };
 
         let parsed = Parser::parse_sql("create materialized view foo as select 1 as bar".into())

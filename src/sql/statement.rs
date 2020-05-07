@@ -38,12 +38,11 @@ use sql_parser::ast::{
     SqlOption, Statement, Value,
 };
 
-use crate::catalog::{
-    CatalogItemType, DatabaseSpecifier, FullName, PartialName, PlanCatalog, PlanContext, SchemaType,
-};
+use crate::catalog::{CatalogItemType, PlanCatalog, SchemaType};
 use crate::kafka_util;
+use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::query::QueryLifetime;
-use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, View};
+use crate::{normalize, query, Index, Params, Plan, PlanContext, PlanSession, Sink, Source, View};
 use regex::Regex;
 
 use tokio::io::AsyncBufReadExt;
