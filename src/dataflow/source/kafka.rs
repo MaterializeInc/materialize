@@ -125,7 +125,7 @@ fn create_kafka_consumer(
 }
 
 /// Update the list of Kafka consumers to match the number of partitions
-/// We currently create one customer per partition
+/// We currently create one consumer per partition
 fn update_consumer_list(
     consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
     topic: &str,
@@ -142,7 +142,7 @@ fn update_consumer_list(
     }
 }
 
-/// Poll from the next customer for which a message is available. This function polls the set
+/// Poll from the next consumer for which a message is available. This function polls the set
 /// round-robin: when a consumer is polled, it is placed at the back of the queue.
 fn get_next_message_from_consumers(
     name: &str,
@@ -150,7 +150,6 @@ fn get_next_message_from_consumers(
 ) -> Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> {
     let consumer_count = consumers.len();
     let mut attempts = 0;
-    // No currently buffered message, poll from stream
     while attempts < consumer_count {
         let consumer = consumers.pop_front().unwrap();
         let message = match consumer.poll(Duration::from_millis(0)) {
@@ -239,28 +238,6 @@ where
         for (k, v) in &config_options {
             kafka_config.set(k, v);
         }
-
-        /* let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if active {
-            let cx = GlueConsumerContext(Mutex::new(scope.sync_activator_for(&info.address[..])));
-            Some(
-                kafka_config
-                    .create_with_context(cx)
-                    .expect("Failed to create Kafka Consumer"),
-            )
-        } else {
-            None
-        };
-
-        let mut consumer2: Option<BaseConsumer<GlueConsumerContext>> = if active {
-            let cx = GlueConsumerContext(Mutex::new(scope.sync_activator_for(&info.address[..])));
-            Some(
-                kafka_config
-                    .create_with_context(cx)
-                    .expect("Failed to create Kafka Consumer"),
-            )
-        } else {
-            None
-        }; */
 
         let mut consumers: Option<VecDeque<BaseConsumer<GlueConsumerContext>>> =
             if active { Some(VecDeque::new()) } else { None };
@@ -362,8 +339,8 @@ where
                             iter::repeat((start_offset, last_closed_ts))
                                 .take(1 + partition as usize - partition_metadata.len()),
                         );
-                        //  When updating the customer list to the required number of consumers, we
-                        // have to include the customer that we currently hold
+                        //  When updating the consumer list to the required number of consumers, we
+                        // have to include the consumer that we currently hold
                         update_consumer_list(
                             consumers,
                             &topic,
@@ -609,10 +586,6 @@ fn downgrade_capability(
                     // We have now seen all messages corresponding to this timestamp for this
                     // partition. We
                     // can close the timestamp (on this partition) and remove the associated metadata
-                    println!(
-                        "ID: {} Partition:{:?} Offset:{} LastOffset {}",
-                        id, pid, offset, last_offset
-                    );
                     partition_metadata[pid as usize].1 = *ts;
                     entries.remove(0);
                     changed = true;
