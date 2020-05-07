@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::iter;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lazy_static::lazy_static;
@@ -68,40 +68,105 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
 // for new partitions. Return whether the check succeeded and returned expectedly many partitions.
 #[must_use]
 fn refresh_kafka_metadata(
-    consumer: &mut BaseConsumer<GlueConsumerContext>,
+    consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
     expected_partitions: usize,
     topic: &str,
     activator: &Activator,
 ) -> bool {
-    let result = match consumer.fetch_metadata(Some(topic), Duration::from_secs(1)) {
-        Ok(md) => match md.topics().iter().find(|mdt| mdt.name() == topic) {
-            None => {
-                warn!("Topic {} not found in Kafka metadata", topic);
-                false
-            }
-            Some(mdt) => {
-                let partitions = mdt.partitions().len();
-                if partitions < expected_partitions {
-                    warn!(
-                        "Topic {} does not have as many partitions as expected ({} < {})",
-                        topic, partitions, expected_partitions
-                    );
-                    false
-                } else {
-                    true
+    let mut result = true;
+
+    for c in consumers {
+        match c.fetch_metadata(Some(topic), Duration::from_secs(1)) {
+            Ok(md) => match md.topics().iter().find(|mdt| mdt.name() == topic) {
+                None => {
+                    warn!("Topic {} not found in Kafka metadata", topic);
+                    result = false;
+                    break;
                 }
+                Some(mdt) => {
+                    let partitions = mdt.partitions().len();
+                    if partitions < expected_partitions {
+                        warn!(
+                            "Topic {} does not have as many partitions as expected ({} < {})",
+                            topic, partitions, expected_partitions
+                        );
+                        result = false;
+                        break;
+                    }
+                }
+            },
+            Err(e) => {
+                warn!("Error refreshing Kafka metadata: {}", e);
+                result = false;
+                break;
             }
-        },
-        Err(e) => {
-            warn!("Error refreshing Kafka metadata: {}", e);
-            false
         }
-    };
+    }
+
     if !result {
         warn!("Descheduling for 1s to wait for Kafka metadata to catch up");
         activator.activate_after(Duration::from_secs(1));
     }
     result
+}
+
+/// Create a new kafka consumer
+fn create_kafka_consumer(
+    activator: Arc<Mutex<SyncActivator>>,
+    topic: &str,
+    kafka_config: &ClientConfig,
+) -> BaseConsumer<GlueConsumerContext> {
+    let cx = GlueConsumerContext(activator);
+    let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
+        .create_with_context(cx)
+        .expect("Failed to create Kafka Consumer");
+    consumer.subscribe(&[topic]).unwrap();
+    consumer
+}
+
+/// Update the list of Kafka consumers to match the number of partitions
+/// We currently create one consumer per partition
+fn update_consumer_list(
+    consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
+    topic: &str,
+    to_add: usize,
+    activator: Arc<Mutex<SyncActivator>>,
+    kafka_config: &ClientConfig,
+) {
+    for _ in 0..to_add {
+        consumers.push_front(create_kafka_consumer(
+            activator.clone(),
+            topic,
+            kafka_config,
+        ));
+    }
+}
+
+/// Poll from the next consumer for which a message is available. This function polls the set
+/// round-robin: when a consumer is polled, it is placed at the back of the queue.
+fn get_next_message_from_consumers(
+    name: &str,
+    consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
+) -> Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> {
+    let consumer_count = consumers.len();
+    let mut attempts = 0;
+    while attempts < consumer_count {
+        let consumer = consumers.pop_front().unwrap();
+        let message = match consumer.poll(Duration::from_millis(0)) {
+            Some(Ok(msg)) => Some(MessageParts::from(&msg)),
+            Some(Err(err)) => {
+                error!("kafka error: {}: {}", name, err);
+                None
+            }
+            _ => None,
+        };
+        if let Some(message) = message {
+            return Some((message, consumer));
+        }
+        consumers.push_back(consumer);
+        attempts += 1;
+    }
+    None
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
@@ -154,6 +219,11 @@ where
         let activator = scope.activator_for(&info.address[..]);
 
         let mut kafka_config = ClientConfig::new();
+        let group_id_prefix = group_id_prefix.unwrap_or_else(String::new);
+        kafka_config.set(
+            "group.id",
+            &format!("{}materialize-{}", group_id_prefix, name),
+        );
         kafka_config
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
@@ -162,50 +232,49 @@ where
             .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &url.to_string());
-
-        let group_id_prefix = group_id_prefix.unwrap_or_else(String::new);
-        kafka_config.set(
-            "group.id",
-            &format!("{}materialize-{}", group_id_prefix, name),
-        );
+            .set("bootstrap.servers", &url.to_string())
+            .set("partition.assignment.strategy", "roundrobin");
 
         for (k, v) in &config_options {
             kafka_config.set(k, v);
         }
 
-        let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if active {
-            let cx = GlueConsumerContext(Mutex::new(scope.sync_activator_for(&info.address[..])));
-            Some(
-                kafka_config
-                    .create_with_context(cx)
-                    .expect("Failed to create Kafka Consumer"),
-            )
-        } else {
-            None
-        };
+        let mut consumers: Option<VecDeque<BaseConsumer<GlueConsumerContext>>> =
+            if active { Some(VecDeque::new()) } else { None };
+        // Buffer placeholder for buffering messages for which we did not have a timestamp
+        // INVARIANT: consumer is EITHER in consumers or in buffer, but cannot be in both
+        // Keeping a handle
+        let mut buffer: Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> = None;
 
         // The last timestamp that was closed, or 0 if none has been.
         let mut last_closed_ts: u64 = 0;
-        // Buffer placeholder for buffering messages for which we did not have a timestamp
-        let mut buffer: Option<MessageParts> = None;
         // For each partition, the next offset to process, and the smallest still-open timestamp.
         let mut partition_metadata: Vec<(i64, u64)> = vec![(start_offset, 0)];
         // Whether the Kafka metadata should be refreshed the next time this operator is scheduled.
-        let mut needs_refresh: bool = false;
-
-        if let Some(consumer) = consumer.as_mut() {
-            consumer.subscribe(&[&topic]).unwrap();
-        }
+        let mut needs_refresh: bool = true;
+        // Activator shared across consumers
+        let consumer_activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
 
         move |cap, output| {
             // Accumulate updates to BYTES_READ_COUNTER;
             let mut bytes_read = 0;
-            if let Some(consumer) = consumer.as_mut() {
+            if let Some(mut consumers) = consumers.as_mut() {
                 if needs_refresh {
+                    let to_create = if buffer.is_some() {
+                        partition_metadata.len() - (consumers.len() + 1)
+                    } else {
+                        partition_metadata.len() - consumers.len()
+                    };
+                    update_consumer_list(
+                        consumers,
+                        &topic,
+                        to_create,
+                        consumer_activator.clone(),
+                        &kafka_config,
+                    );
                     // Attempt to pick up new partitions.
                     if !refresh_kafka_metadata(
-                        consumer,
+                        &mut consumers,
                         partition_metadata.len(),
                         &topic,
                         &activator,
@@ -229,8 +298,20 @@ where
                     start_offset,
                     &mut last_closed_ts,
                 ) {
+                    let to_create = if buffer.is_some() {
+                        partition_metadata.len() - (consumers.len() + 1)
+                    } else {
+                        partition_metadata.len() - consumers.len()
+                    };
+                    update_consumer_list(
+                        consumers,
+                        &topic,
+                        to_create,
+                        consumer_activator.clone(),
+                        &kafka_config,
+                    );
                     if !refresh_kafka_metadata(
-                        consumer,
+                        &mut consumers,
                         partition_metadata.len(),
                         &topic,
                         &activator,
@@ -247,33 +328,34 @@ where
                     Some(message)
                 } else {
                     // No currently buffered message, poll from stream
-                    match consumer.poll(Duration::from_millis(0)) {
-                        Some(Ok(msg)) => Some(MessageParts::from(&msg)),
-                        Some(Err(err)) => {
-                            error!("kafka error: {}: {}", name, err);
-                            None
-                        }
-                        _ => None,
-                    }
+                    get_next_message_from_consumers(&name, consumers)
                 };
 
-                while let Some(message) = next_message {
+                while let Some((message, consumer)) = next_message {
                     let partition = message.partition;
                     let offset = message.offset + 1;
-
                     if partition as usize >= partition_metadata.len() {
                         partition_metadata.extend(
                             iter::repeat((start_offset, last_closed_ts))
                                 .take(1 + partition as usize - partition_metadata.len()),
                         );
+                        //  When updating the consumer list to the required number of consumers, we
+                        // have to include the consumer that we currently hold
+                        update_consumer_list(
+                            consumers,
+                            &topic,
+                            partition_metadata.len() - (consumers.len() + 1),
+                            consumer_activator.clone(),
+                            &kafka_config,
+                        );
                         if !refresh_kafka_metadata(
-                            consumer,
+                            &mut consumers,
                             partition_metadata.len(),
                             &topic,
                             &activator,
                         ) {
                             needs_refresh = true;
-                            buffer = Some(message);
+                            buffer = Some((message, consumer));
                             return SourceStatus::Alive;
                         }
                     }
@@ -299,7 +381,9 @@ where
                                 partition, next_offset
                             ),
                             Err(e) => error!("Failed to fast-forward consumer: {}", e),
-                        };
+                        }
+                        // Message has been discarded, we return the consumer to the consumer queue
+                        consumers.push_back(consumer);
                         activator.activate();
                         return SourceStatus::Alive;
                     }
@@ -310,7 +394,7 @@ where
                         None => {
                             // We have not yet decided on a timestamp for this message,
                             // we need to buffer the message
-                            buffer = Some(message);
+                            buffer = Some((message, consumer));
                             activator.activate();
                             return SourceStatus::Alive;
                         }
@@ -324,7 +408,8 @@ where
                             bytes_read += out.len() as i64;
                             let ts_cap = cap.delayed(&ts);
                             output.session(&ts_cap).give((key, (out, Some(offset - 1))));
-
+                            // Message processed, return the consumer
+                            consumers.push_back(consumer);
                             KAFKA_PARTITION_OFFSET_INGESTED
                                 .with_label_values(&[
                                     &topic,
@@ -341,8 +426,17 @@ where
                                 start_offset,
                                 &mut last_closed_ts,
                             ) {
+                                // We have just returned the consumer to the consumer queue, so no
+                                // need for maths
+                                update_consumer_list(
+                                    consumers,
+                                    &topic,
+                                    partition_metadata.len() - consumers.len(),
+                                    consumer_activator.clone(),
+                                    &kafka_config,
+                                );
                                 if !refresh_kafka_metadata(
-                                    consumer,
+                                    &mut consumers,
                                     partition_metadata.len(),
                                     &topic,
                                     &activator,
@@ -365,14 +459,7 @@ where
                     }
 
                     // Try and poll for next message
-                    next_message = match consumer.poll(Duration::from_millis(0)) {
-                        Some(Ok(msg)) => Some(MessageParts::from(&msg)),
-                        Some(Err(err)) => {
-                            error!("kafka error: {}: {}", name, err);
-                            None
-                        }
-                        _ => None,
-                    };
+                    next_message = get_next_message_from_consumers(&name, consumers);
                 }
             }
             // Ensure that we poll kafka more often than the eviction timeout
@@ -526,7 +613,7 @@ fn downgrade_capability(
 
 /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
 /// when the message queue switches from nonempty to empty.
-struct GlueConsumerContext(Mutex<SyncActivator>);
+struct GlueConsumerContext(Arc<Mutex<SyncActivator>>);
 
 impl ClientContext for GlueConsumerContext {
     fn stats(&self, statistics: Statistics) {

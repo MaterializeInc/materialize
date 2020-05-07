@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=1minute
+
 $ set consistency={
      "name": "materialize.byo.consistency",
      "type": "record",
@@ -57,6 +59,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1, "b": 2}
 
 $ kafka-create-topic topic=data2
+
+$ kafka-create-topic topic=data3
 
 $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 {"a": 1, "b": 1}
