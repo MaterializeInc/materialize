@@ -22,7 +22,7 @@ aliases:
 ```sql
 CREATE SOURCE kinesis_source
 FROM KINESIS ARN ...
-WITH (access_key=...,
+WITH (access_key_id=...,
       secret_access_key=...)
 FORMAT BYES;
 ```
