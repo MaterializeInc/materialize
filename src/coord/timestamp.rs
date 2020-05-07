@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::io::BufRead;
 use std::ops::Deref;
 use std::panic;
@@ -153,6 +154,14 @@ lazy_static! {
         "mz_kafka_partition_offset_max",
         "The high watermark for a partition, the maximum offset that we could hope to ingest",
         &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+
+      /// The max timestamp that we have allocated for this partition
+    static ref MAX_TIMESTAMP: IntGaugeVec = register_int_gauge_vec!(
+        "mz_max_timestamp",
+        "The high watermark for a partition, the maximum offset that we could hope to ingest",
+        &["source_id", "partition_id"]
     )
     .unwrap();
 }
@@ -812,6 +821,9 @@ impl Timestamper {
             self.rt_persist_timestamp(&watermarks);
         }
         for (id, partition_count, pid, offset) in watermarks {
+            MAX_TIMESTAMP
+                .with_label_values(&[&id.to_string(), &pid.to_string()])
+                .set(self.current_timestamp.try_into().unwrap());
             self.tx
                 .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                     id,

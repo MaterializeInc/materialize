@@ -134,6 +134,13 @@ impl PartitionId {
             _ => None,
         }
     }
+
+    pub fn to_string(&self) -> String {
+        match &self {
+            PartitionId::Kafka(i) => i.to_string(),
+            _ => "0".to_string(),
+        }
+    }
 }
 
 /// Humanizer that provides no additional information.
