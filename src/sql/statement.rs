@@ -11,7 +11,7 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -22,8 +22,6 @@ use lazy_static::lazy_static;
 use rusoto_core::Region;
 use url::Url;
 
-use catalog::names::{DatabaseSpecifier, FullName, PartialName};
-use catalog::{Catalog, CatalogItem, PlanContext, SchemaType};
 use dataflow_types::{
     AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding, Envelope,
     ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
@@ -40,9 +38,11 @@ use sql_parser::ast::{
     SqlOption, Statement, Value,
 };
 
+use crate::catalog::{CatalogItemType, PlanCatalog, SchemaType};
 use crate::kafka_util;
+use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::query::QueryLifetime;
-use crate::{normalize, query, Index, Params, Plan, PlanSession, Sink, Source, View};
+use crate::{normalize, query, Index, Params, Plan, PlanContext, PlanSession, Sink, Source, View};
 use regex::Regex;
 
 use tokio::io::AsyncBufReadExt;
@@ -99,7 +99,7 @@ pub fn make_show_objects_desc(
 }
 
 pub fn describe_statement(
-    catalog: &Catalog,
+    catalog: &dyn PlanCatalog,
     session: &dyn PlanSession,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
@@ -229,7 +229,7 @@ pub fn describe_statement(
 
 pub fn handle_statement(
     pcx: &PlanContext,
-    catalog: &Catalog,
+    catalog: &dyn PlanCatalog,
     session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
@@ -344,16 +344,16 @@ fn handle_tail(
     let entry = scx.catalog.get(&from)?;
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
 
-    match entry.item() {
-        CatalogItem::Source(_) | CatalogItem::View(_) => Ok(Plan::Tail {
+    match entry.item_type() {
+        CatalogItemType::Source | CatalogItemType::View => Ok(Plan::Tail {
             id: entry.id(),
             ts,
             with_snapshot,
         }),
-        CatalogItem::Index(_) | CatalogItem::Sink(_) => bail!(
+        CatalogItemType::Index | CatalogItemType::Sink => bail!(
             "'{}' cannot be tailed because it is a {}",
             from,
-            entry.item().type_string()
+            entry.item_type(),
         ),
     }
 }
@@ -457,7 +457,7 @@ fn handle_show_objects(
             &make_show_objects_desc(object_type, materialized, full),
         )
     } else {
-        let empty_schema = BTreeMap::new();
+        let empty_schema = scx.catalog.empty_item_map();
         let items = if let Some(mut from) = from {
             if from.0.len() > 2 {
                 bail!(
@@ -471,12 +471,12 @@ fn handle_show_objects(
                 .pop()
                 .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
                 .unwrap_or_else(|| scx.session.database());
-            &scx.catalog
+            scx.catalog
                 .database_resolver(database_spec)?
                 .resolve_schema(&schema_name)
                 .ok_or_else(|| format_err!("schema '{}' does not exist", schema_name))?
                 .0
-                .items
+                .items()
         } else {
             let resolver = scx.catalog.database_resolver(scx.session.database())?;
             scx.session
@@ -484,13 +484,13 @@ fn handle_show_objects(
                 .iter()
                 .filter_map(|schema_name| resolver.resolve_schema(schema_name))
                 .find(|(_schema, typ)| *typ == SchemaType::Normal)
-                .map_or_else(|| &empty_schema, |(schema, _typ)| &schema.items)
+                .map_or_else(|| &*empty_schema, |(schema, _typ)| schema.items())
         };
 
         let filtered_items = items
             .iter()
             .map(|(name, id)| (name, scx.catalog.get_by_id(id)))
-            .filter(|(_name, entry)| object_type_matches(object_type, entry.item()));
+            .filter(|(_name, entry)| object_type_matches(object_type, entry.item_type()));
 
         if object_type == ObjectType::View || object_type == ObjectType::Source {
             // TODO(justin): we can't handle SHOW ... WHERE here yet because the coordinator adds
@@ -538,13 +538,13 @@ fn handle_show_indexes(
     }
     let from_name = scx.resolve_name(from_name)?;
     let from_entry = scx.catalog.get(&from_name)?;
-    if !object_type_matches(ObjectType::View, from_entry.item())
-        && !object_type_matches(ObjectType::Source, from_entry.item())
+    if !object_type_matches(ObjectType::View, from_entry.item_type())
+        && !object_type_matches(ObjectType::Source, from_entry.item_type())
     {
         bail!(
             "cannot show indexes on {} because it is a {}",
             from_name,
-            from_entry.item().type_string()
+            from_entry.item_type(),
         );
     }
     let arena = RowArena::new();
@@ -552,49 +552,42 @@ fn handle_show_indexes(
         .catalog
         .iter()
         .filter(|entry| {
-            object_type_matches(ObjectType::Index, entry.item())
+            object_type_matches(ObjectType::Index, entry.item_type())
                 && entry.uses() == vec![from_entry.id()]
         })
-        .flat_map(|entry| match entry.item() {
-            CatalogItem::Index(catalog::Index {
-                create_sql,
-                keys,
-                on,
-                ..
-            }) => {
-                let key_sqls = match crate::parse(create_sql.to_owned())
-                    .expect("create_sql cannot be invalid")
-                    .into_element()
-                {
-                    Statement::CreateIndex { key_parts, .. } => key_parts,
-                    _ => unreachable!(),
+        .flat_map(|entry| {
+            let (keys, on) = entry.index_details().expect("known to be an index");
+            let key_sqls = match crate::parse(entry.create_sql().to_owned())
+                .expect("create_sql cannot be invalid")
+                .into_element()
+            {
+                Statement::CreateIndex { key_parts, .. } => key_parts,
+                _ => unreachable!(),
+            };
+            let mut row_subset = Vec::new();
+            for (i, (key_expr, key_sql)) in keys.iter().zip_eq(key_sqls).enumerate() {
+                let desc = scx.catalog.get_by_id(&on).desc().unwrap();
+                let key_sql = key_sql.to_string();
+                let (col_name, func) = match key_expr {
+                    expr::ScalarExpr::Column(i) => {
+                        let col_name = match desc.get_unambiguous_name(*i) {
+                            Some(col_name) => col_name.to_string(),
+                            None => format!("@{}", i + 1),
+                        };
+                        (Datum::String(arena.push_string(col_name)), Datum::Null)
+                    }
+                    _ => (Datum::Null, Datum::String(arena.push_string(key_sql))),
                 };
-                let mut row_subset = Vec::new();
-                for (i, (key_expr, key_sql)) in keys.iter().zip_eq(key_sqls).enumerate() {
-                    let desc = scx.catalog.get_by_id(&on).desc().unwrap();
-                    let key_sql = key_sql.to_string();
-                    let (col_name, func) = match key_expr {
-                        expr::ScalarExpr::Column(i) => {
-                            let col_name = match desc.get_unambiguous_name(*i) {
-                                Some(col_name) => col_name.to_string(),
-                                None => format!("@{}", i + 1),
-                            };
-                            (Datum::String(arena.push_string(col_name)), Datum::Null)
-                        }
-                        _ => (Datum::Null, Datum::String(arena.push_string(key_sql))),
-                    };
-                    row_subset.push(vec![
-                        Datum::String(arena.push_string(from_entry.name().to_string())),
-                        Datum::String(arena.push_string(entry.name().to_string())),
-                        col_name,
-                        func,
-                        Datum::from(key_expr.typ(desc.typ()).nullable),
-                        Datum::from((i + 1) as i64),
-                    ]);
-                }
-                row_subset
+                row_subset.push(vec![
+                    Datum::String(arena.push_string(from_entry.name().to_string())),
+                    Datum::String(arena.push_string(entry.name().to_string())),
+                    col_name,
+                    func,
+                    Datum::from(key_expr.typ(desc.typ()).nullable),
+                    Datum::from((i + 1) as i64),
+                ]);
             }
-            _ => unreachable!(),
+            row_subset
         })
         .collect();
 
@@ -638,30 +631,30 @@ fn handle_show_columns(
 
 fn handle_show_create_view(
     scx: &StatementContext,
-    view_name: ObjectName,
+    name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let view_name = scx.resolve_name(view_name)?;
-    let create_sql = if let CatalogItem::View(view) = scx.catalog.get(&view_name)?.item() {
-        &view.create_sql
+    let name = scx.resolve_name(name)?;
+    let entry = scx.catalog.get(&name)?;
+    if let CatalogItemType::View = entry.item_type() {
+        Ok(Plan::SendRows(vec![Row::pack(&[
+            Datum::String(&name.to_string()),
+            Datum::String(entry.create_sql()),
+        ])]))
     } else {
-        bail!("'{}' is not a view", view_name);
-    };
-    Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&view_name.to_string()),
-        Datum::String(create_sql),
-    ])]))
+        bail!("{} is not a view", name);
+    }
 }
 
 fn handle_show_create_source(
     scx: &StatementContext,
-    object_name: ObjectName,
+    name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let name = scx.resolve_name(object_name)?;
-    if let CatalogItem::Source(catalog::Source { create_sql, .. }) = scx.catalog.get(&name)?.item()
-    {
+    let name = scx.resolve_name(name)?;
+    let entry = scx.catalog.get(&name)?;
+    if let CatalogItemType::Source = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
             Datum::String(&name.to_string()),
-            Datum::String(&create_sql),
+            Datum::String(entry.create_sql()),
         ])]))
     } else {
         bail!("{} is not a source", name);
@@ -670,18 +663,18 @@ fn handle_show_create_source(
 
 fn handle_show_create_sink(
     scx: &StatementContext,
-    sink_name: ObjectName,
+    name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let sink_name = scx.resolve_name(sink_name)?;
-    let create_sql = if let CatalogItem::Sink(sink) = scx.catalog.get(&sink_name)?.item() {
-        &sink.create_sql
+    let name = scx.resolve_name(name)?;
+    let entry = scx.catalog.get(&name)?;
+    if let CatalogItemType::Sink = entry.item_type() {
+        Ok(Plan::SendRows(vec![Row::pack(&[
+            Datum::String(&name.to_string()),
+            Datum::String(entry.create_sql()),
+        ])]))
     } else {
-        bail!("'{}' is not a sink", sink_name);
-    };
-    Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&sink_name.to_string()),
-        Datum::String(create_sql),
-    ])]))
+        bail!("'{}' is not a sink", name);
+    }
 }
 
 fn kafka_sink_builder(
@@ -823,13 +816,13 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
     let on_name = scx.resolve_name(on_name)?;
     let catalog_entry = scx.catalog.get(&on_name)?;
     let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
-    if !object_type_matches(ObjectType::View, catalog_entry.item())
-        && !object_type_matches(ObjectType::Source, catalog_entry.item())
+    if !object_type_matches(ObjectType::View, catalog_entry.item_type())
+        && !object_type_matches(ObjectType::Source, catalog_entry.item_type())
     {
         bail!(
             "index cannot be created on {} because it is a {}",
             on_name,
-            catalog_entry.item().type_string()
+            catalog_entry.item_type()
         );
     }
     Ok(Plan::CreateIndex {
@@ -1470,7 +1463,7 @@ fn handle_drop_database(
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
         }
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(err),
     }
     Ok(Plan::DropDatabase { name })
 }
@@ -1521,7 +1514,7 @@ fn handle_drop_schema(
                         schema_name
                     );
                 }
-                Some((schema, SchemaType::Normal)) if !cascade && !schema.items.is_empty() => {
+                Some((schema, SchemaType::Normal)) if !cascade && !schema.items().is_empty() => {
                     bail!("schema '{}.{}' cannot be dropped without CASCADE while it contains objects", database_name, schema_name);
                 }
                 _ => (),
@@ -1531,7 +1524,7 @@ fn handle_drop_schema(
             // TODO(benesch): generate a notice indicating that the
             // database does not exist.
         }
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(err),
     }
     Ok(Plan::DropSchema {
         database_name,
@@ -1588,21 +1581,21 @@ fn handle_drop_item(
                     name
                 );
             }
-            if !object_type_matches(object_type, catalog_entry.item()) {
+            if !object_type_matches(object_type, catalog_entry.item_type()) {
                 bail!("{} is not of type {}", name, object_type);
             }
             if !cascade {
                 for id in catalog_entry.used_by() {
                     let dep = scx.catalog.get_by_id(id);
-                    match dep.item() {
-                        CatalogItem::Source(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
+                    match dep.item_type() {
+                        CatalogItemType::Source | CatalogItemType::View | CatalogItemType::Sink => {
                             bail!(
                                 "cannot drop {}: still depended upon by catalog item '{}'",
                                 catalog_entry.name(),
                                 dep.name()
                             );
                         }
-                        CatalogItem::Index(_) => (),
+                        CatalogItemType::Index => (),
                     }
                 }
             }
@@ -1613,7 +1606,7 @@ fn handle_drop_item(
             // item does not exist.
             Ok(None)
         }
-        Err(err) => Err(err.into()),
+        Err(err) => Err(err),
     }
 }
 
@@ -1647,26 +1640,25 @@ fn handle_explain(
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
             let entry = scx.catalog.get(&full_name)?;
-            let view = match entry.item() {
-                CatalogItem::View(view) => view,
-                other => bail!(
+            if entry.item_type() != CatalogItemType::View {
+                bail!(
                     "Expected {} to be a view, not a {}",
                     name,
-                    other.type_string()
-                ),
-            };
-            let parsed = crate::parse(view.create_sql.clone())
+                    entry.item_type(),
+                );
+            }
+            let parsed = crate::parse(entry.create_sql().to_owned())
                 .expect("Sql for existing view should be valid sql");
             let query = match parsed.into_last() {
                 Statement::CreateView { query, .. } => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
             let scx = StatementContext {
-                pcx: &view.plan_cx,
+                pcx: entry.plan_cx(),
                 catalog: scx.catalog,
                 session: scx.session,
             };
-            (scx, view.create_sql.clone(), *query)
+            (scx, entry.create_sql().to_owned(), *query)
         }
         Explainee::Query(query) => (scx.clone(), query.to_string(), query),
     };
@@ -1746,14 +1738,14 @@ async fn get_remote_avro_schema(
 ///
 /// For now tables are treated as a special kind of source in Materialize, so just
 /// allow `TABLE` to refer to either.
-fn object_type_matches(object_type: ObjectType, item: &CatalogItem) -> bool {
-    match item {
-        CatalogItem::Source { .. } => {
+fn object_type_matches(object_type: ObjectType, item_type: CatalogItemType) -> bool {
+    match item_type {
+        CatalogItemType::Source => {
             object_type == ObjectType::Source || object_type == ObjectType::Table
         }
-        CatalogItem::Sink { .. } => object_type == ObjectType::Sink,
-        CatalogItem::View { .. } => object_type == ObjectType::View,
-        CatalogItem::Index { .. } => object_type == ObjectType::Index,
+        CatalogItemType::Sink => object_type == ObjectType::Sink,
+        CatalogItemType::View => object_type == ObjectType::View,
+        CatalogItemType::Index => object_type == ObjectType::Index,
     }
 }
 
@@ -1772,7 +1764,7 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct StatementContext<'a> {
     pub pcx: &'a PlanContext,
-    pub catalog: &'a Catalog,
+    pub catalog: &'a dyn PlanCatalog,
     pub session: &'a dyn PlanSession,
 }
 

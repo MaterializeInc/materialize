@@ -31,8 +31,6 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 
-use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, CatalogItem, PlanContext, SinkConnectorState};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -48,12 +46,13 @@ use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
 use sql::{
-    ExplainOptions, MutationKind, ObjectType, Params, Plan, PreparedStatement, Session, Statement,
+    DatabaseSpecifier, ExplainOptions, FullName, MutationKind, ObjectType, Params, Plan,
+    PlanContext, PreparedStatement, Session, Statement,
 };
 use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
-use crate::persistence::SqlSerializer;
+use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
@@ -2292,7 +2291,7 @@ fn open_catalog(
     };
     let path = path.as_deref();
     Ok(if let Some(logging_config) = logging_config {
-        Catalog::open::<SqlSerializer, _>(path, |catalog| {
+        Catalog::open(path, |catalog| {
             for log_src in logging_config.active_logs() {
                 let view_name = FullName {
                     database: DatabaseSpecifier::Ambient,
@@ -2398,7 +2397,7 @@ fn open_catalog(
             }
         })?
     } else {
-        Catalog::open::<SqlSerializer, _>(path, |_| ())?
+        Catalog::open(path, |_| ())?
     })
 }
 

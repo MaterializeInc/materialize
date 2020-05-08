@@ -28,10 +28,10 @@
 
 use failure::bail;
 
-use catalog::names::PartialName;
 use repr::ColumnName;
 
 use super::expr::ColumnRef;
+use crate::names::PartialName;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItemName {

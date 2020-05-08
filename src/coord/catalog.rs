@@ -13,22 +13,27 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use failure::bail;
 use lazy_static::lazy_static;
 use log::{info, trace};
+use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use ::sql::catalog::{
+    CatalogItemType, ItemMap, PlanCatalog, PlanCatalogEntry, PlanDatabaseResolver, PlanSchema,
+    SchemaMap, SchemaType,
+};
+use ::sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::RelationDesc;
+use repr::{RelationDesc, Row};
+use transform::Optimizer;
 
-use crate::error::{Error, ErrorKind};
-use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::catalog::error::{Error, ErrorKind};
 
 mod error;
-pub mod names;
 pub mod sql;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -57,9 +62,8 @@ pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ambient_schemas: BTreeMap<String, Schema>,
+    ambient_schemas: Schemas,
     storage: Arc<Mutex<sql::Connection>>,
-    serialize_item: fn(&CatalogItem) -> Vec<u8>,
     creation_time: SystemTime,
     nonce: u64,
 }
@@ -67,27 +71,27 @@ pub struct Catalog {
 #[derive(Debug, Serialize)]
 struct Database {
     id: i64,
-    schemas: BTreeMap<String, Schema>,
+    schemas: Schemas,
 }
 
 lazy_static! {
     static ref EMPTY_DATABASE: Database = Database {
         id: 0,
-        schemas: BTreeMap::new(),
+        schemas: Schemas(BTreeMap::new()),
     };
 }
 
 #[derive(Debug, Serialize)]
+struct Schemas(BTreeMap<String, Schema>);
+
+#[derive(Debug, Serialize)]
 pub struct Schema {
-    pub id: i64,
-    pub items: BTreeMap<String, GlobalId>,
+    id: i64,
+    items: Items,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum SchemaType {
-    Ambient,
-    Normal,
-}
+#[derive(Debug, Serialize)]
+struct Items(BTreeMap<String, GlobalId>);
 
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
@@ -141,23 +145,6 @@ pub struct Index {
     pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<ScalarExpr>,
-}
-
-/// Controls planning of a SQL query.
-///
-// TODO(benesch): this doesn't really belong in `catalog`, but there's nowhere
-// else good to put a type that's used by both `catalog` and `sql`.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct PlanContext {
-    pub wall_time: DateTime<Utc>,
-}
-
-impl Default for PlanContext {
-    fn default() -> PlanContext {
-        PlanContext {
-            wall_time: Utc::now(),
-        }
-    }
 }
 
 impl CatalogItem {
@@ -247,9 +234,8 @@ impl Catalog {
     /// Opens or creates a `Catalog` that stores data at `path`. The
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
-    pub fn open<S, F>(path: Option<&Path>, f: F) -> Result<Catalog, Error>
+    pub fn open<F>(path: Option<&Path>, f: F) -> Result<Catalog, Error>
     where
-        S: CatalogItemSerializer,
         F: FnOnce(&mut Self),
     {
         let storage = sql::Connection::open(path)?;
@@ -258,9 +244,8 @@ impl Catalog {
             by_name: BTreeMap::new(),
             by_id: BTreeMap::new(),
             indexes: HashMap::new(),
-            ambient_schemas: BTreeMap::new(),
+            ambient_schemas: Schemas(BTreeMap::new()),
             storage: Arc::new(Mutex::new(storage)),
-            serialize_item: S::serialize,
             creation_time: SystemTime::now(),
             nonce: rand::random(),
         };
@@ -271,7 +256,7 @@ impl Catalog {
                 name,
                 Database {
                     id,
-                    schemas: BTreeMap::new(),
+                    schemas: Schemas(BTreeMap::new()),
                 },
             );
         }
@@ -288,11 +273,11 @@ impl Catalog {
                 }
                 None => &mut catalog.ambient_schemas,
             };
-            schemas.insert(
+            schemas.0.insert(
                 schema_name,
                 Schema {
                     id,
-                    items: BTreeMap::new(),
+                    items: Items(BTreeMap::new()),
                 },
             );
         }
@@ -313,7 +298,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match S::deserialize(&catalog, def) {
+            let item = match catalog.deserialize_item(def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -330,16 +315,6 @@ impl Catalog {
         }
 
         Ok(catalog)
-    }
-
-    /// Constructs a dummy catalog.
-    ///
-    /// This is a temporary measure for the SQL package.
-    ///
-    /// TODO(benesch): remove.
-    #[cfg(feature = "bincode")]
-    pub fn dummy() -> Catalog {
-        Catalog::open::<BincodeSerializer, _>(None, |_| ()).unwrap()
     }
 
     fn storage(&self) -> MutexGuard<sql::Connection> {
@@ -407,8 +382,8 @@ impl Catalog {
     /// See also [`Catalog::get`].
     pub fn try_get(&self, name: &FullName) -> Option<&CatalogEntry> {
         self.get_schemas(&name.database)
-            .and_then(|schemas| schemas.get(&name.schema))
-            .and_then(|schema| schema.items.get(&name.item))
+            .and_then(|schemas| schemas.0.get(&name.schema))
+            .and_then(|schema| schema.items.0.get(&name.item))
             .map(|id| &self.by_id[id])
     }
 
@@ -455,10 +430,7 @@ impl Catalog {
     }
 
     /// Gets the schema map for the database matching `database_spec`.
-    pub fn get_schemas(
-        &self,
-        database_spec: &DatabaseSpecifier,
-    ) -> Option<&BTreeMap<String, Schema>> {
+    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&Schemas> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
             DatabaseSpecifier::Ambient => Some(&self.ambient_schemas),
@@ -467,10 +439,7 @@ impl Catalog {
     }
 
     /// Like `get_schemas`, but returns a `mut` reference.
-    fn get_schemas_mut(
-        &mut self,
-        database_spec: &DatabaseSpecifier,
-    ) -> Option<&mut BTreeMap<String, Schema>> {
+    fn get_schemas_mut(&mut self, database_spec: &DatabaseSpecifier) -> Option<&mut Schemas> {
         // Keep in sync with `get_schemas`.
         match database_spec {
             DatabaseSpecifier::Ambient => Some(&mut self.ambient_schemas),
@@ -507,9 +476,11 @@ impl Catalog {
         }
         self.get_schemas_mut(&entry.name.database)
             .expect("catalog out of sync")
+            .0
             .get_mut(&entry.name.schema)
             .expect("catalog out of sync")
             .items
+            .0
             .insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
     }
@@ -517,7 +488,7 @@ impl Catalog {
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
         let mut ops = vec![];
         if let Some(database) = self.by_name.get(&name) {
-            for (schema_name, schema) in &database.schemas {
+            for (schema_name, schema) in &database.schemas.0 {
                 Self::drop_schema_items(schema, &self.by_id, &mut ops);
                 ops.push(Op::DropSchema {
                     database_name: DatabaseSpecifier::Name(name.clone()),
@@ -537,7 +508,7 @@ impl Catalog {
         let mut ops = vec![];
         if let DatabaseSpecifier::Name(database_name) = database_spec {
             if let Some(database) = self.by_name.get(&database_name) {
-                if let Some(schema) = database.schemas.get(&schema_name) {
+                if let Some(schema) = database.schemas.0.get(&schema_name) {
                     Self::drop_schema_items(schema, &self.by_id, &mut ops);
                     ops.push(Op::DropSchema {
                         database_name: DatabaseSpecifier::Name(database_name),
@@ -563,7 +534,7 @@ impl Catalog {
         ops: &mut Vec<Op>,
     ) {
         let mut seen = HashSet::new();
-        for &id in schema.items.values() {
+        for &id in schema.items.0.values() {
             Self::drop_item_cascade(id, by_id, ops, &mut seen)
         }
     }
@@ -650,7 +621,7 @@ impl Catalog {
                         }
                     };
                     let schema_id = tx.load_schema_id(database_id, &name.schema)?;
-                    let serialized_item = (self.serialize_item)(&item);
+                    let serialized_item = self.serialize_item(&item);
                     tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
                     Action::CreateItem { id, name, item }
                 }
@@ -692,7 +663,7 @@ impl Catalog {
                         name,
                         Database {
                             id,
-                            schemas: BTreeMap::new(),
+                            schemas: Schemas(BTreeMap::new()),
                         },
                     );
                     OpStatus::CreatedDatabase
@@ -708,11 +679,12 @@ impl Catalog {
                         .get_mut(&database_name)
                         .unwrap()
                         .schemas
+                        .0
                         .insert(
                             schema_name,
                             Schema {
                                 id,
-                                items: BTreeMap::new(),
+                                items: Items(BTreeMap::new()),
                             },
                         );
                     OpStatus::CreatedSchema
@@ -736,6 +708,7 @@ impl Catalog {
                         .get_mut(&database_name)
                         .unwrap()
                         .schemas
+                        .0
                         .remove(&schema_name);
                     OpStatus::DroppedSchema
                 }
@@ -757,9 +730,11 @@ impl Catalog {
                     }
                     self.get_schemas_mut(&metadata.name.database)
                         .expect("catalog out of sync")
+                        .0
                         .get_mut(&metadata.name.schema)
                         .expect("catalog out of sync")
                         .items
+                        .0
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
                     if let CatalogItem::Index(index) = &metadata.item {
@@ -777,6 +752,78 @@ impl Catalog {
                 }
             })
             .collect())
+    }
+
+    fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
+        let item = match item {
+            CatalogItem::Source(source) => SerializedCatalogItem::V1 {
+                create_sql: source.create_sql.clone(),
+                eval_env: Some(source.plan_cx.clone().into()),
+            },
+            CatalogItem::View(view) => SerializedCatalogItem::V1 {
+                create_sql: view.create_sql.clone(),
+                eval_env: Some(view.plan_cx.clone().into()),
+            },
+            CatalogItem::Index(index) => SerializedCatalogItem::V1 {
+                create_sql: index.create_sql.clone(),
+                eval_env: Some(index.plan_cx.clone().into()),
+            },
+            CatalogItem::Sink(sink) => SerializedCatalogItem::V1 {
+                create_sql: sink.create_sql.clone(),
+                eval_env: Some(sink.plan_cx.clone().into()),
+            },
+        };
+        serde_json::to_vec(&item).expect("catalog serialization cannot fail")
+    }
+
+    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error> {
+        let SerializedCatalogItem::V1 {
+            create_sql,
+            eval_env,
+        } = serde_json::from_slice(&bytes)?;
+        let params = Params {
+            datums: Row::pack(&[]),
+            types: vec![],
+        };
+        let pcx = match eval_env {
+            // Old sources and sinks don't have plan contexts, but it's safe to
+            // just give them a default, as they clearly don't depend on the
+            // plan context.
+            None => PlanContext::default(),
+            Some(eval_env) => eval_env.into(),
+        };
+        let stmt = ::sql::parse(create_sql)?.into_element();
+        let plan = ::sql::plan(&pcx, self, &::sql::InternalSession, stmt, &params)?;
+        Ok(match plan {
+            Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                plan_cx: pcx,
+                connector: source.connector,
+                desc: source.desc,
+            }),
+            Plan::CreateView { view, .. } => {
+                let mut optimizer = Optimizer::default();
+                CatalogItem::View(View {
+                    create_sql: view.create_sql,
+                    plan_cx: pcx,
+                    optimized_expr: optimizer.optimize(view.expr, self.indexes())?,
+                    desc: view.desc,
+                })
+            }
+            Plan::CreateIndex { index, .. } => CatalogItem::Index(Index {
+                create_sql: index.create_sql,
+                plan_cx: pcx,
+                on: index.on,
+                keys: index.keys,
+            }),
+            Plan::CreateSink { sink, .. } => CatalogItem::Sink(Sink {
+                create_sql: sink.create_sql,
+                plan_cx: pcx,
+                from: sink.from,
+                connector: SinkConnectorState::Pending(sink.connector_builder),
+            }),
+            _ => bail!("catalog entry generated inappropriate plan"),
+        })
     }
 
     /// Iterates over the items in the catalog in order of increasing ID.
@@ -864,7 +911,7 @@ pub enum OpStatus {
 pub struct DatabaseResolver<'a> {
     database_spec: DatabaseSpecifier,
     database: &'a Database,
-    ambient_schemas: &'a BTreeMap<String, Schema>,
+    ambient_schemas: &'a Schemas,
 }
 
 impl<'a> DatabaseResolver<'a> {
@@ -872,8 +919,8 @@ impl<'a> DatabaseResolver<'a> {
     /// in the database that this resolver is attached to, or in the set of
     /// ambient schemas.
     pub fn resolve_item(&self, schema_name: &str, item_name: &str) -> Option<FullName> {
-        if let Some(schema) = self.database.schemas.get(schema_name) {
-            if schema.items.contains_key(item_name) {
+        if let Some(schema) = self.database.schemas.0.get(schema_name) {
+            if schema.items.0.contains_key(item_name) {
                 return Some(FullName {
                     database: self.database_spec.clone(),
                     schema: schema_name.to_owned(),
@@ -881,8 +928,8 @@ impl<'a> DatabaseResolver<'a> {
                 });
             }
         }
-        if let Some(schema) = self.ambient_schemas.get(schema_name) {
-            if schema.items.contains_key(item_name) {
+        if let Some(schema) = self.ambient_schemas.0.get(schema_name) {
+            if schema.items.0.contains_key(item_name) {
                 return Some(FullName {
                     database: DatabaseSpecifier::Ambient,
                     schema: schema_name.to_owned(),
@@ -898,31 +945,182 @@ impl<'a> DatabaseResolver<'a> {
     pub fn resolve_schema(&self, schema_name: &str) -> Option<(&'a Schema, SchemaType)> {
         self.database
             .schemas
+            .0
             .get(schema_name)
             .map(|s| (s, SchemaType::Normal))
             .or_else(|| {
                 self.ambient_schemas
+                    .0
                     .get(schema_name)
                     .map(|s| (s, SchemaType::Ambient))
             })
     }
 }
 
-pub trait CatalogItemSerializer {
-    fn serialize(item: &CatalogItem) -> Vec<u8>;
-    fn deserialize(catalog: &Catalog, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum SerializedCatalogItem {
+    V1 {
+        create_sql: String,
+        // The name "eval_env" is historical.
+        eval_env: Option<SerializedPlanContext>,
+    },
 }
 
-#[cfg(feature = "bincode")]
-pub struct BincodeSerializer;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SerializedPlanContext {
+    pub logical_time: Option<u64>,
+    pub wall_time: Option<DateTime<Utc>>,
+}
 
-#[cfg(feature = "bincode")]
-impl CatalogItemSerializer for BincodeSerializer {
-    fn serialize(item: &CatalogItem) -> Vec<u8> {
-        bincode::serialize(item).unwrap()
+impl From<SerializedPlanContext> for PlanContext {
+    fn from(cx: SerializedPlanContext) -> PlanContext {
+        PlanContext {
+            wall_time: cx.wall_time.unwrap_or_else(|| Utc.timestamp(0, 0)),
+        }
+    }
+}
+
+impl From<PlanContext> for SerializedPlanContext {
+    fn from(cx: PlanContext) -> SerializedPlanContext {
+        SerializedPlanContext {
+            logical_time: None,
+            wall_time: Some(cx.wall_time),
+        }
+    }
+}
+
+impl PlanCatalog for Catalog {
+    fn creation_time(&self) -> SystemTime {
+        self.creation_time()
     }
 
-    fn deserialize(_: &Catalog, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error> {
-        Ok(bincode::deserialize(&bytes)?)
+    fn nonce(&self) -> u64 {
+        self.nonce()
+    }
+
+    fn databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
+        Box::new(self.databases())
+    }
+
+    fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
+        Ok(self.get(name)?)
+    }
+
+    fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry {
+        self.get_by_id(id)
+    }
+
+    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a> {
+        Box::new(self.iter().map(|e| e as &dyn PlanCatalogEntry))
+    }
+
+    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
+        self.get_schemas(database_spec).map(|m| m as &dyn SchemaMap)
+    }
+
+    fn database_resolver<'a>(
+        &'a self,
+        database_spec: DatabaseSpecifier,
+    ) -> Result<Box<dyn PlanDatabaseResolver<'a> + 'a>, failure::Error> {
+        Ok(Box::new(self.database_resolver(database_spec)?))
+    }
+
+    fn resolve(
+        &self,
+        current_database: DatabaseSpecifier,
+        search_path: &[&str],
+        name: &PartialName,
+    ) -> Result<FullName, failure::Error> {
+        Ok(self.resolve(current_database, search_path, name)?)
+    }
+
+    fn empty_item_map(&self) -> Box<dyn ItemMap> {
+        Box::new(Items(BTreeMap::new()))
+    }
+}
+
+impl PlanCatalogEntry for CatalogEntry {
+    fn name(&self) -> &FullName {
+        self.name()
+    }
+
+    fn id(&self) -> GlobalId {
+        self.id()
+    }
+
+    fn desc(&self) -> Result<&RelationDesc, failure::Error> {
+        Ok(self.desc()?)
+    }
+
+    fn create_sql(&self) -> &str {
+        match self.item() {
+            CatalogItem::Source(Source { create_sql, .. }) => create_sql,
+            CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
+            CatalogItem::View(View { create_sql, .. }) => create_sql,
+            CatalogItem::Index(Index { create_sql, .. }) => create_sql,
+        }
+    }
+
+    fn plan_cx(&self) -> &PlanContext {
+        match self.item() {
+            CatalogItem::Source(Source { plan_cx, .. }) => plan_cx,
+            CatalogItem::Sink(Sink { plan_cx, .. }) => plan_cx,
+            CatalogItem::View(View { plan_cx, .. }) => plan_cx,
+            CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
+        }
+    }
+
+    fn item_type(&self) -> CatalogItemType {
+        match self.item() {
+            CatalogItem::Source(_) => CatalogItemType::Source,
+            CatalogItem::Sink(_) => CatalogItemType::Sink,
+            CatalogItem::View(_) => CatalogItemType::View,
+            CatalogItem::Index(_) => CatalogItemType::Index,
+        }
+    }
+
+    fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)> {
+        if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
+            Some((keys, *on))
+        } else {
+            None
+        }
+    }
+
+    fn uses(&self) -> Vec<GlobalId> {
+        self.uses()
+    }
+
+    fn used_by(&self) -> &[GlobalId] {
+        self.used_by()
+    }
+}
+
+impl<'a> PlanDatabaseResolver<'a> for DatabaseResolver<'a> {
+    fn resolve_schema(&self, schema_name: &str) -> Option<(&'a dyn PlanSchema, SchemaType)> {
+        self.resolve_schema(schema_name)
+            .map(|(a, b)| (a as &'a dyn PlanSchema, b))
+    }
+}
+
+impl PlanSchema for Schema {
+    fn items(&self) -> &dyn ItemMap {
+        &self.items
+    }
+}
+
+impl SchemaMap for Schemas {
+    fn keys<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
+        Box::new(self.0.keys().map(|k| k.as_str()))
+    }
+}
+
+impl ItemMap for Items {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (&String, &GlobalId)> + 'a> {
+        Box::new(self.0.iter())
     }
 }

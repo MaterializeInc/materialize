@@ -11,23 +11,28 @@
 
 #![deny(missing_debug_implementations)]
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
 use ::expr::{GlobalId, RowSetFinishing};
-use catalog::names::{DatabaseSpecifier, FullName};
-use catalog::{Catalog, PlanContext};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
 pub use crate::expr::RelationExpr;
+pub use catalog::PlanCatalog;
+pub use names::{DatabaseSpecifier, FullName, PartialName};
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 pub use statement::StatementContext;
 
+pub mod catalog;
 pub mod normalize;
 
 mod explain;
 mod expr;
 mod kafka_util;
+mod names;
 mod query;
 mod scope;
 mod session;
@@ -176,6 +181,20 @@ pub struct Params {
     pub types: Vec<ScalarType>,
 }
 
+/// Controls planning of a SQL query.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct PlanContext {
+    pub wall_time: DateTime<Utc>,
+}
+
+impl Default for PlanContext {
+    fn default() -> PlanContext {
+        PlanContext {
+            wall_time: Utc::now(),
+        }
+    }
+}
+
 /// Parses a raw SQL string into a [`Statement`].
 pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
     Ok(SqlParser::parse_sql(sql)?)
@@ -198,7 +217,7 @@ pub async fn purify(stmt: Statement) -> Result<Statement, failure::Error> {
 /// use [`purify`].
 pub fn plan(
     pcx: &PlanContext,
-    catalog: &Catalog,
+    catalog: &dyn PlanCatalog,
     session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
@@ -212,7 +231,7 @@ pub fn plan(
 /// will be returned. If the query uses no parameters, then the returned vector
 /// of types will be empty.
 pub fn describe(
-    catalog: &Catalog,
+    catalog: &dyn PlanCatalog,
     session: &Session,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
