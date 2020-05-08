@@ -22,6 +22,7 @@ use sql_parser::parser::Parser as SqlParser;
 pub use crate::expr::RelationExpr;
 pub use catalog::PlanCatalog;
 pub use names::{DatabaseSpecifier, FullName, PartialName};
+pub use pure::purify_statement as purify;
 pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 pub use statement::StatementContext;
@@ -33,6 +34,7 @@ mod explain;
 mod expr;
 mod kafka_util;
 mod names;
+mod pure;
 mod query;
 mod scope;
 mod session;
@@ -198,16 +200,6 @@ impl Default for PlanContext {
 /// Parses a raw SQL string into a [`Statement`].
 pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
     Ok(SqlParser::parse_sql(sql)?)
-}
-
-/// Removes dependencies on external state from `stmt`: inlining schemas in
-/// files, fetching schemas from registries, and so on. The [`Statement`]
-/// returned from this function will be valid to pass to `Plan`.
-///
-/// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete.
-pub async fn purify(stmt: Statement) -> Result<Statement, failure::Error> {
-    statement::purify_statement(stmt).await
 }
 
 /// Produces a [`Plan`] from the purified statement `stmt`.
