@@ -31,17 +31,18 @@
 //!     .filter(vec![predicate2.clone()]);
 //!
 //! // .transform() will deduplicate any predicates
-//! use transform::Transform;
-//! Filter.transform(&mut expr, &std::collections::HashMap::new());
+//! use transform::{Transform, TransformArgs};
+//! Filter.transform(&mut expr, TransformArgs {
+//!   id_gen: &mut Default::default(),
+//!   indexes: &std::collections::HashMap::new(),
+//! });
 //!
 //! let correct = input.filter(vec![predicate0]);
 //!
 //! assert_eq!(expr, correct);
 //! ```
 
-use std::collections::HashMap;
-
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, ScalarExpr, TransformArgs};
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
@@ -51,7 +52,7 @@ impl crate::Transform for Filter {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);
