@@ -12,10 +12,10 @@
 
 import sys
 import time
-from typing import Callable, Generator
+from typing import Callable, Generator, Optional
 
 
-def speaker(prefix: str, for_progress: bool = False) -> Callable[[str, ...], None]:
+def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
     """Create a function that will log with a prefix to stderr
 
     Example::
@@ -26,12 +26,14 @@ def speaker(prefix: str, for_progress: bool = False) -> Callable[[str, ...], Non
     """
 
     def say(msg: str, *fmt: str) -> None:
-        print("{}> {}".format(msg.format(*fmt)), file=sys.stderr)
+        print("{}> {}".format(prefix, msg.format(*fmt)), file=sys.stderr)
 
     return say
 
 
-def progress(msg: str = "", prefix: Optional[str] = None, *, finish=False):
+def progress(
+    msg: str = "", prefix: Optional[str] = None, *, finish: bool = False
+) -> None:
     """Print a progress message to stderr, using the same prefix format as speaker
     """
     if prefix is not None:
