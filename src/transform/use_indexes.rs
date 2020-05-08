@@ -38,9 +38,9 @@ impl crate::Transform for FilterEqualLiteral {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        state: TransformState,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation, indexes);
+        self.transform(relation, &state.indexes);
         Ok(())
     }
 }

@@ -13,7 +13,8 @@
 
 use std::collections::HashMap;
 
-use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::TransformState;
+use expr::{Id, RelationExpr};
 
 /// Hoist projections through operators.
 #[derive(Debug)]
@@ -23,7 +24,7 @@ impl crate::Transform for ProjectionLifting {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         self.action(relation, &mut HashMap::new());
         Ok(())

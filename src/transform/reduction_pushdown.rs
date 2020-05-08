@@ -11,9 +11,7 @@
 //!
 //! At the moment, this only absorbs Map operators into Reduce operators.
 
-use std::collections::HashMap;
-
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, TransformState};
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
@@ -23,7 +21,7 @@ impl crate::Transform for ReductionPushdown {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
             self.action(e);

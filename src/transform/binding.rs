@@ -64,6 +64,7 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
+use crate::TransformState;
 use expr::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
 use repr::RelationType;
 
@@ -221,7 +222,7 @@ impl crate::Transform for Hoist {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         Hoist::hoist(expr);
         Ok(())
@@ -289,7 +290,7 @@ impl crate::Transform for Unbind {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         Unbind::unbind(expr);
         Ok(())
@@ -471,7 +472,7 @@ impl crate::Transform for Deduplicate {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         Deduplicate::deduplicate(expr);
         Ok(())

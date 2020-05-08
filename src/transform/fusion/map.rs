@@ -15,10 +15,10 @@
 //! important to coalesce these operators so that we can more easily
 //! move them around other operators together.
 
-use std::collections::HashMap;
 use std::mem;
 
-use expr::{GlobalId, RelationExpr, ScalarExpr};
+use crate::TransformState;
+use expr::RelationExpr;
 
 /// Fuses a sequence of `Map` operators in to one `Map` operator.
 #[derive(Debug)]
@@ -28,7 +28,7 @@ impl crate::Transform for Map {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);

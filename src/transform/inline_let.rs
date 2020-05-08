@@ -14,9 +14,8 @@
 //! `Get` statement in their body. These cases can be inlined without
 //! harming planning.
 
-use std::collections::HashMap;
-
-use expr::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
+use crate::TransformState;
+use expr::{Id, LocalId, RelationExpr};
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
@@ -26,7 +25,7 @@ impl crate::Transform for InlineLet {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         let mut lets = vec![];
         self.action(relation, &mut lets);
