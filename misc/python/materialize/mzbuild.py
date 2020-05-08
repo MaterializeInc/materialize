@@ -176,6 +176,11 @@ class CargoPreImage(PreImage):
             # *lot* of work.
             "Cargo.lock",
             ".cargo/config",
+            # Crate roots can contain mzcompose files, but mzcompose should
+            # never impact the Rust build process, so exclude them from the
+            # fingerprint (#2940).
+            ":(exclude)**/mzcompose",
+            ":(exclude)**/mzcompose.yml",
         }
 
 
