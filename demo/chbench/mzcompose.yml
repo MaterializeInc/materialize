@@ -184,10 +184,20 @@ services:
     mzbuild: peeker
     init: true
     # run peeker using 'dc.sh run peeker' to adjust which queries are peeked,
-    # and see /src/peeker/config.toml for a list of queries
+    # and see /src/peeker/chbench-config.toml for a list of queries
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
+  test-correctness:
+    # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
+    mzbuild: test-correctness
+    init: true
+    # run correctness using 'dc.sh run correctness' to adjust which queries are peeked,
+    # and see /src/correctness/checks.toml for a list of queries
+    command: ${CORRECTNESS_CMD}
+    volumes:
+      - ./test-correctness-config:/etc/test-correctness
+
 
 volumes:
   chbench-gen:

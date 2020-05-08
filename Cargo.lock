@@ -3387,6 +3387,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-correctness"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "env_logger",
+ "failure",
+ "futures",
+ "getopts",
+ "hyper",
+ "lazy_static",
+ "log",
+ "ore",
+ "pgrepr",
+ "postgres",
+ "postgres-types",
+ "prometheus",
+ "regex",
+ "serde",
+ "tokio",
+ "tokio-postgres",
+ "toml",
+]
+
+[[package]]
 name = "test-util"
 version = "0.1.0"
 dependencies = [
