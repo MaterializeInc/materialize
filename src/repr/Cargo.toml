@@ -12,6 +12,10 @@ path = "lib.rs"
 name = "row"
 harness = false
 
+[[bench]]
+name = "strconv"
+harness = false
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 failure = "0.1.8"

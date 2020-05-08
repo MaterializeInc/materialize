@@ -52,4 +52,38 @@ describe("query api", () => {
     });
     expect(res.rows).toEqual([["12"]]);
   });
+
+  describe("list parameters", () => {
+    it("should handle a simple int array", async () => {
+      const res = await client.query({
+        text: "SELECT $1::int list",
+        values: ["{  1, NULL,   2}"],
+        rowMode: "array",
+      });
+      expect(res.rows).toEqual([["{1,NULL,2}"]]);
+    });
+
+    it("should handle a nested text array", async () => {
+      const res = await client.query({
+        text: "SELECT $1::text list list",
+        values: [`{ {  }, "{}", {a, "", "\\""}, "{a,\\"\\",\\"\\\\\\"\\"}"}`],
+        rowMode: "array",
+      });
+      expect(res.rows).toEqual([[`{{},{},{a,"","\\""},{a,"","\\""}}`]]);
+    });
+
+    it("should reject mismatched types", async () => {
+      await expect(
+        client.query({
+          text: "SELECT $1::int list",
+          values: [`{a}`],
+        }),
+      ).rejects.toThrow(
+        expect.objectContaining({
+          code: "22023",
+          message: "unable to decode parameter: invalid digit found in string",
+        }),
+      );
+    });
+  });
 });

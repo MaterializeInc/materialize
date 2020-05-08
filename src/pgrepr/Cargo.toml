@@ -13,4 +13,5 @@ failure = "0.1.8"
 lazy_static = "1.4.0"
 postgres-types = { version = "0.1.1", features = ["with-chrono-0_4", "with-serde_json-1"] }
 serde_json = "1.0"
+ore = { path = "../ore" }
 repr = { path = "../repr" }
