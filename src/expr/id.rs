@@ -127,18 +127,20 @@ pub enum PartitionId {
     File,
 }
 
+impl fmt::Display for PartitionId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
+            _ => write!(f, "0"),
+        }
+    }
+}
+
 impl PartitionId {
     pub fn kafka_id(&self) -> Option<i32> {
         match self {
             PartitionId::Kafka(id) => Some(*id),
             _ => None,
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        match &self {
-            PartitionId::Kafka(i) => i.to_string(),
-            _ => "0".to_string(),
         }
     }
 }
