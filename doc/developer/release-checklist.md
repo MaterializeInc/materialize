@@ -120,6 +120,26 @@ All of these can be run in parallel.
     ./dc.sh backup
     ```
 
+- [ ] Run the perf-kinesis load test on the tag.
+
+  - [ ] Spin up a fresh VM and start the load test. To start the load test, ssh
+    into the VM and run:
+    ```shell script
+    cd materialize
+    bin/mzcompose -f test/performance/perf-kinesis/mzcompose up -d
+    ```
+
+  - [ ] Ensure all containers started successfully and are running:
+    ```shell script
+    docker ps -a
+    ```
+
+  - [ ] Let the test run for 24 hours.
+
+  - [ ] Take a screenshot of the "Time behind external source" dashboard panel
+    in Grafana. (This metric should have remained at 0ms or similar for the entirety
+    of the run). Share the screenshot in the Slack channel.
+
 - [ ] Run the billing-demo load test on the tag.
 
   - [ ] Spin up the billing-demo with an updated `--message-count` argument.
