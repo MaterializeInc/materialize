@@ -39,13 +39,14 @@ lazy_static! {
     .unwrap();
     static ref KAFKA_PARTITION_OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
         "mz_kafka_partition_offset_ingested",
-        "The most recent kafka offset that we have ingested into a dataflow",
+        "The most recent kafka offset that we have ingested into a dataflow. This correspond to \
+        data that we have 1)ingested 2) assigned a timestamp",
         &["topic", "source_id", "partition_id"]
     )
     .unwrap();
     static ref KAFKA_PARTITION_OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
         "mz_kafka_partition_offset_received",
-        "The most recent kafka offset that we have been received by this source",
+        "The most recent kafka offset that we have been received by this source.",
         &["topic", "source_id", "partition_id"]
     )
     .unwrap();
@@ -57,7 +58,7 @@ lazy_static! {
     .unwrap();
     static ref KAFKA_CAPABILITY: IntGaugeVec = register_int_gauge_vec!(
         "mz_kafka_capability",
-        "The current capability for this dataflow",
+        "The current capability for this dataflow. This corresponds to min(mz_kafka_partition_closed_ts)",
         &["topic", "source_id"]
     )
     .unwrap();
