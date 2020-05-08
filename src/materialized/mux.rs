@@ -18,15 +18,23 @@ use ore::netio::{self, SniffedStream, SniffingStream};
 
 use crate::http;
 
+/// A mux routes incoming network connections to a dynamic set of connection
+/// handlers. It enables serving multiple protocols over the same port.
+///
+/// Connections are routed by sniffing the first several bytes sent over the
+/// wire and matching them against each handler, in order. The first handler
+/// to match the connection will be invoked.
 pub struct Mux<A> {
     handlers: Vec<Box<dyn ConnectionHandler<A> + Send + Sync>>,
 }
 
 impl<A> Mux<A> {
+    /// Constructs a new `Mux`.
     pub fn new() -> Mux<A> {
         Mux { handlers: vec![] }
     }
 
+    /// Adds a new connection handler to this mux.
     pub fn add_handler<H>(&mut self, handler: H)
     where
         H: ConnectionHandler<A> + Send + Sync + 'static,
@@ -34,6 +42,8 @@ impl<A> Mux<A> {
         self.handlers.push(Box::new(handler));
     }
 
+    /// Handles a connection by routing it to the first underlying handler for
+    /// which [`ConnectionHandler::match_handshake`] returns true.
     pub async fn handle_connection(&self, conn: A)
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
@@ -69,10 +79,14 @@ impl<A> Mux<A> {
     }
 }
 
+/// A connection handler manages an incoming network connection.
 #[async_trait]
 pub trait ConnectionHandler<A> {
+    /// Determines whether this handler can accept the connection based on the
+    /// first several bytes in the stream.
     fn match_handshake(&self, buf: &[u8]) -> bool;
 
+    /// Handles the connection.
     async fn handle_connection(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static;
