@@ -15,11 +15,13 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "iteration": 1587591686854,
+  "id": 1,
+  "iteration": 1588902358992,
   "links": [],
   "panels": [
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -45,6 +47,7 @@
         "mode": "spectrum"
       },
       "dataFormat": "tsbuckets",
+      "datasource": null,
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -58,7 +61,6 @@
       "legend": {
         "show": true
       },
-      "options": {},
       "reverseYBuckets": false,
       "targets": [
         {
@@ -110,6 +112,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "the view of how long things took, from inside pgwire",
       "fill": 1,
       "fillGradient": 0,
@@ -119,6 +122,7 @@
         "x": 12,
         "y": 1
       },
+      "hiddenSeries": false,
       "id": 25,
       "legend": {
         "avg": false,
@@ -316,6 +320,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -761,7 +766,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_kafka_bytes_read_total[2s])",
+          "expr": "rate(mz_kafka_bytes_read_total[3s])",
           "legendFormat": "rate",
           "refId": "A"
         },
@@ -904,6 +909,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "description": "Rate at which capabilities are downgraded in the system",
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -912,6 +918,360 @@
         "x": 12,
         "y": 34
       },
+      "id": 50,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "rate(mz_kafka_capability[3s])",
+          "interval": "",
+          "legendFormat": "{{topic}}-{{source_id}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": " Capability Closing Rate",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": false
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Rate at which data is first received from the Kafka Source",
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "hiddenSeries": false,
+      "id": 51,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "mz_kafka_partition_offset_received",
+          "interval": "",
+          "legendFormat": "{{topic}}-{{source_id}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Kafka Data Ingestion Rate",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": false
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Rate at which capabilities are downgraded in the system",
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "hiddenSeries": false,
+      "id": 52,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "max by (topic, source_id) (mz_kafka_partition_closed_ts) - min by (topic, source_id) (mz_kafka_partition_closed_ts)",
+          "interval": "",
+          "legendFormat": "{{topic}}-{{source_id}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Partition Imbalance Amount",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": false
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "description": "Difference between allocated timestamps and close timestamps",
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "hiddenSeries": false,
+      "id": 53,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "(mz_max_timestamp- ignoring(topic) mz_kafka_partition_closed_ts)",         "interval": "",
+          "legendFormat": "{{source_id}}-{{partition_id}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Timestamp Closing Lag",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": false
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "hiddenSeries": false,
       "id": 47,
       "legend": {
         "avg": false,
@@ -994,11 +1354,12 @@
     },
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 58
       },
       "id": 30,
       "panels": [],
@@ -1016,7 +1377,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 59
       },
       "id": 24,
       "legend": {
@@ -1101,7 +1462,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 43
+        "y": 59
       },
       "id": 20,
       "legend": {
@@ -1193,7 +1554,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 67
       },
       "id": 16,
       "legend": {
@@ -1272,6 +1633,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "Uncompacted records in each arrangement",
       "fill": 1,
       "fillGradient": 0,
@@ -1279,7 +1641,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 51
+        "y": 67
       },
       "id": 35,
       "legend": {
@@ -1355,7 +1717,6 @@
     }
   ],
   "refresh": "30s",
-  "schemaVersion": 19,
   "style": "dark",
   "tags": [],
   "templating": {
@@ -1433,6 +1794,7 @@
       {
         "allValue": null,
         "current": {
+          "selected": false,
           "text": "All",
           "value": "$__all"
         },
@@ -1478,13 +1840,14 @@
       {
         "allValue": null,
         "current": {
-          "text": "2020-04-22T21:12:29Z",
-          "value": "2020-04-22T21:12:29Z"
+          "text": "2020-05-08T01:36:48Z",
+          "value": "2020-05-08T01:36:48Z"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, build_time)",
         "hide": 0,
         "includeAll": false,
+        "index": -1,
         "label": "Built at",
         "multi": false,
         "name": "built_at",
@@ -1535,6 +1898,7 @@
         "definition": "label_values(mz_server_metadata_seconds, build_sha)",
         "hide": 0,
         "includeAll": false,
+        "index": -1,
         "label": "Git commit",
         "multi": false,
         "name": "build_sha",

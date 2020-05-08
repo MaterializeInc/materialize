@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, VecDeque};
+use std::convert::TryInto;
 use std::iter;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -38,8 +39,27 @@ lazy_static! {
     .unwrap();
     static ref KAFKA_PARTITION_OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
         "mz_kafka_partition_offset_ingested",
-        "The most recent kafka offset that we have ingested into a dataflow",
+        "The most recent kafka offset that we have ingested into a dataflow. This correspond to \
+        data that we have 1)ingested 2) assigned a timestamp",
         &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+    static ref KAFKA_PARTITION_OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_received",
+        "The most recent kafka offset that we have been received by this source.",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+    static ref KAFKA_PARTITION_CLOSED_TS: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_closed_ts",
+        "The highest closed timestamp for each partition in this dataflow",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+    static ref KAFKA_CAPABILITY: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_capability",
+        "The current capability for this dataflow. This corresponds to min(mz_kafka_partition_closed_ts)",
+        &["topic", "source_id"]
     )
     .unwrap();
 }
@@ -291,6 +311,7 @@ where
                 // there are new messages that can be processed) as timestamps can become
                 // closed in the absence of messages
                 if downgrade_capability(
+                    &topic,
                     &id,
                     cap,
                     &mut partition_metadata,
@@ -334,6 +355,11 @@ where
                 while let Some((message, consumer)) = next_message {
                     let partition = message.partition;
                     let offset = message.offset + 1;
+
+                    KAFKA_PARTITION_OFFSET_RECEIVED
+                        .with_label_values(&[&topic, &id.to_string(), &partition.to_string()])
+                        .set(offset);
+
                     if partition as usize >= partition_metadata.len() {
                         partition_metadata.extend(
                             iter::repeat((start_offset, last_closed_ts))
@@ -419,6 +445,7 @@ where
                                 .set(offset);
 
                             if downgrade_capability(
+                                &topic,
                                 &id,
                                 cap,
                                 &mut partition_metadata,
@@ -523,6 +550,7 @@ fn find_matching_timestamp(
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 fn downgrade_capability(
+    topic: &str,
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
     partition_metadata: &mut Vec<(i64, u64)>,
@@ -582,6 +610,10 @@ fn downgrade_capability(
                 // even if data has subsequently been added to the stream
                 assert!(*offset != 0 || last_offset == 0);
 
+                KAFKA_PARTITION_CLOSED_TS
+                    .with_label_values(&[&topic, &id.to_string(), &pid.to_string()])
+                    .set((partition_metadata[pid as usize].1).try_into().unwrap());
+
                 if last_offset == *offset {
                     // We have now seen all messages corresponding to this timestamp for this
                     // partition. We
@@ -596,6 +628,7 @@ fn downgrade_capability(
             }
         }
     }
+
     //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
     //  timestamp across partitions.
     let min = partition_metadata
@@ -605,9 +638,13 @@ fn downgrade_capability(
         .expect("There should never be 0 partitions!");
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
     if changed && min > 0 {
+        KAFKA_CAPABILITY
+            .with_label_values(&[topic, &id.to_string()])
+            .set(min.try_into().unwrap());
         cap.downgrade(&(&min + 1));
         *last_closed_ts = min;
     }
+
     needs_md_refresh
 }
 
