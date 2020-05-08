@@ -18,6 +18,8 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from materialize import spawn
+from materialize import ui
 from pathlib import Path
 from typing import (
     Any,
@@ -87,10 +89,10 @@ def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> N
     comp = Composition.find(composition)
     if comp is not None:
         if workflow is not None:
-            sayd(f"Executing {comp.name} -> {workflow}")
+            say(f"Executing {comp.name} -> {workflow}")
             comp.run_workflow(workflow)
         else:
-            sayd(f"Starting {comp.name}")
+            say(f"Starting {comp.name}")
             comp.run()
     else:
         raise MzError(
@@ -132,7 +134,7 @@ def nuke(composition: str) -> None:
         comp.down()
         cmds = ["docker system prune -af".split(), "docker volume prune -f".split()]
         for cmd in cmds:
-            runv(cmd)
+            spawn.runv(cmd)
     else:
         raise UnknownItem("composition", comp, Composition.known_compositions())
 
@@ -332,7 +334,7 @@ class StartServicesStep(WorkflowStep):
     def run(self, comp: Composition) -> None:
         proc = mzcompose_up(self._services)
         if proc.returncode != 0:
-            sayd(
+            say(
                 "ERROR: processes didn't come up cleanly: {}".format(
                     ", ".join(self._services)
                 )
@@ -461,12 +463,10 @@ class WaitForTcpStep(WorkflowStep):
         self._timeout_secs = timeout_secs
 
     def run(self, comp: Composition) -> None:
-        progress(
-            f"waiting for {self._host}:{self._port}", start=True,
+        ui.progress(
+            f"waiting for {self._host}:{self._port}", "C",
         )
-        end_time = time.monotonic() + self._timeout_secs
-        last_time = 0
-        while time.monotonic() < end_time:
+        for remaining in ui.timeout_loop(self._timeout_secs):
             cmd = f"docker run --rm -it --network {comp.name}_default ubuntu:bionic-20200403".split()
             cmd.extend(
                 [
@@ -477,14 +477,12 @@ class WaitForTcpStep(WorkflowStep):
                     f"cat < /dev/null > /dev/tcp/{self._host}/{self._port}",
                 ]
             )
-            proc = run_proc(cmd, capture_output=True)
-            if proc.returncode != 0:
-                this_time = int(end_time - time.monotonic())
-                if this_time != last_time:
-                    last_time = this_time
-                    progress(" {}".format(this_time))
+            try:
+                spawn.capture(cmd, unicode=True, stderr_too=True)
+            except CalledProcessError:
+                ui.progress(" {}".format(int(remaining)))
             else:
-                print(" success!")
+                ui.progress(" success!", finish=True)
                 return
         raise Failed(f"Unable to connect to {self._host}:{self._port}")
 
@@ -496,9 +494,9 @@ class DropKafkaTopicsStep(WorkflowStep):
         self._topic_pattern = topic_pattern
 
     def run(self, comp: Composition) -> None:
-        sayd(f"dropping kafka topics {self._topic_pattern} from {self._container}")
+        say(f"dropping kafka topics {self._topic_pattern} from {self._container}")
         try:
-            runv(
+            spawn.runv(
                 [
                     "docker",
                     "exec",
@@ -514,7 +512,7 @@ class DropKafkaTopicsStep(WorkflowStep):
             )
         except subprocess.CalledProcessError as e:
             # generally this is fine, it just means that the topics already don't exist
-            sayd(f"INFO: error purging topics: {e}")
+            say(f"INFO: error purging topics: {e}")
 
 
 @Steps.register("workflow")
@@ -557,16 +555,15 @@ class EnsureStaysUpStep(WorkflowStep):
 
     def run(self, comp: Composition) -> None:
         pattern = f"{comp.name}_{self._container}"
-        progress(f"Ensuring {self._container} stays up ", start=True)
+        ui.progress(f"Ensuring {self._container} stays up ", "C")
         for i in range(self._uptime_secs, 0, -1):
             time.sleep(1)
-            proc = run_proc(
-                ["docker", "ps", "--format={{.Names}}"], capture_output=True,
-            )
-            if proc.returncode != 0:
-                raise Failed(f"{proc.stderr}\n{proc.stdout}")
+            try:
+                stdout = spawn.capture(["docker", "ps", "--format={{.Names}}"])
+            except subprocess.CalledProcessError as e:
+                raise Failed(f"{e.stdout}")
             found = False
-            for line in proc.stdout.splitlines():
+            for line in stdout.splitlines():
                 if line.startswith(pattern):
                     found = True
                     break
@@ -574,7 +571,7 @@ class EnsureStaysUpStep(WorkflowStep):
                 print(f"failed! {pattern} logs follow:")
                 print_docker_logs(pattern, 10)
                 raise Failed(f"container {self._container} stopped running!")
-            progress(f" {i}")
+            ui.progress(f" {i}")
         print()
 
 
@@ -585,7 +582,7 @@ class DownStep(WorkflowStep):
         self._destroy_volumes = destroy_volumes
 
     def run(self, comp: Composition) -> None:
-        sayd("bringing the cluster down")
+        say("bringing the cluster down")
         mzcompose_down(self._destroy_volumes)
 
 
@@ -594,60 +591,39 @@ class DownStep(WorkflowStep):
 
 def mzcompose_up(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "up", "-d"]
-    return runv(cmd + services)
+    return spawn.runv(cmd + services)
 
 
 def mzcompose_run(command: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "run"]
-    return runv(cmd + command)
+    return spawn.runv(cmd + command)
 
 
 def mzcompose_stop(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "stop"]
-    return runv(cmd + services)
+    return spawn.runv(cmd + services)
 
 
 def mzcompose_down(destroy_volumes: bool = False) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "down"]
     if destroy_volumes:
         cmd.append("-v")
-    return runv(cmd)
+    return spawn.runv(cmd)
 
 
 # Helpers
 
 
-def runv(
-    cmd: List[str], check: bool = True, capture_output: bool = False
-) -> subprocess.CompletedProcess:
-    print("🚀>$", " ".join([shlex.quote(c) for c in cmd]))
-    return run_proc(cmd, check=check, capture_output=capture_output)
-
-
-def run_proc(
-    cmd: List[str], encoding: str = "utf-8", **kwargs: Any
-) -> subprocess.CompletedProcess:
-    """subprocess.run wrapper """
-    return subprocess.run(cmd, encoding=encoding, **kwargs)
-
-
-def progress(msg: str, *, start: bool = False) -> None:
-    if start:
-        msg = f"w> {msg}"
-    print(msg, end="", flush=True)
-
-
-def sayd(msg: str) -> None:
-    print("w>", msg)
+say = ui.speaker("C")
 
 
 def print_docker_logs(pattern: str, tail: int = 0) -> None:
-    out = subprocess.check_output(
+    out = spawn.capture(
         ["docker", "ps", "-a", "--format={{.Names}}"], encoding="utf-8"
     ).splitlines()
     for line in out:
         if line.startswith(pattern):
-            runv(["docker", "logs", "--tail", str(tail), line])
+            spwan.runv(["docker", "logs", "--tail", str(tail), line])
 
 
 def now() -> datetime:
@@ -665,13 +641,12 @@ def wait_for_pg(
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)
     """
-    end_time = time.monotonic() + timeout_secs
     args = f"{dbname=} {host=} {port=}"
-    progress(f"waiting for {args} to handle {query!r}", start=True)
+    ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
     if isinstance(expected, tuple):
         expected = list(expected)
-    while time.monotonic() < end_time:
+    for remaining in ui.timeout_loop(timeout_secs):
         try:
             conn = psycopg2.connect(
                 f"dbname={dbname} host={host} port={port}", connect_timeout=1
@@ -684,32 +659,31 @@ def wait_for_pg(
                 if expected == "any" or list(row) == expected:
                     if not found_result:
                         found_result = True
-                        print("up and responding!")
+                        ui.progress(" up and responding!", finish=True)
                         if print_result:
-                            sayd("query result:")
+                            say("query result:")
                     if print_result:
                         print(" ".join([str(r) for r in row]))
             if found_result:
                 return
             else:
-                print(
+                say(
                     f"{host=} {port=} did not return any row matching {expected} got: {result}"
                 )
         except Exception as e:
-            progress(" " + str(int(end_time - time.monotonic())))
+            progress(" " + int(remaining))
             error = e
-        time.sleep(1)
+    ui.progress(finish=True)
     raise Failed(f"never got correct result for {args}: {error}")
 
 
 def wait_for_mysql(
     timeout_secs: int, user: str, passwd: str, host: str, port: int
 ) -> None:
-    end_time = time.monotonic() + timeout_secs
     args = f"mysql {user=} {host=} {port=}"
-    print(f"waitng for {args}", end="", flush=True)
+    ui.progress(f"waitng for {args}", "C")
     error = None
-    while time.monotonic() < end_time:
+    for _ in ui.timeout_loop(timeout_secs):
         try:
             conn = pymysql.connect(user=user, passwd=passwd, host=host, port=port)
             with conn.cursor() as cur:
@@ -721,9 +695,10 @@ def wait_for_mysql(
             else:
                 print(f"weird, {args} did not return 1: {result}")
         except Exception as e:
-            print(".", end="", flush=True)
+            ui.progress(".")
             error = e
-        time.sleep(1)
+    ui.progress(finish=True)
+
     raise Failed(f"Never got correct result for {args}: {error}")
 
 
@@ -742,5 +717,5 @@ if __name__ == "__main__":
     try:
         cli(auto_envvar_prefix="MZ")
     except MzError as e:
-        sayd(f"ERROR: {e}")
+        say(f"ERROR: {e}")
         sys.exit(1)

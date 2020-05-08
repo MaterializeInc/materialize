@@ -70,7 +70,10 @@ def capture(
 
 
 def capture(
-    args: Sequence[Union[Path, str]], cwd: Optional[Path] = None, unicode: bool = False,
+    args: Sequence[Union[Path, str]],
+    cwd: Optional[Path] = None,
+    unicode: bool = False,
+    stderr_too: bool = False,
 ) -> Union[str, bytes]:
     """Capture the output of a subprocess.
 
@@ -79,6 +82,7 @@ def capture(
             the arguments to pass to it.
         cwd: An optional directory to change into before executing the process.
         unicode: Whether to return output as a unicode string or as bytes.
+        stderr_too: Whether to capture stderr in the returned value
 
     Returns:
         output: The verbatim output of the process as a string or bytes object,
@@ -94,7 +98,7 @@ def capture(
         You may want to call `strip()` on the output to remove any trailing
         whitespace.
     """
-    if unicode:
-        return subprocess.check_output(args, cwd=cwd, universal_newlines=True)
-    else:
-        return subprocess.check_output(args, cwd=cwd, universal_newlines=False)
+    stderr = subprocess.STDOUT if stderr_too else None
+    return subprocess.check_output(
+        args, cwd=cwd, universal_newlines=unicode, stderr=stderr
+    )
