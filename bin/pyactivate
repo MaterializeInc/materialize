@@ -93,7 +93,13 @@ def activate_venv(py_dir: Path, dev: bool = False, ci: bool = False) -> Path:
             )
             logger.info(f"python exec error: {e}")
         print("==> Initializing virtualenv in {}".format(venv_dir))
-        venv.create(py_dir / "venv", with_pip=True, clear=True)
+        venv.create(venv_dir, with_pip=True, clear=True)
+        # Work around a Debian bug which incorrectly makes pip think that we've
+        # installed wheel in the virtual environment when we haven't. This is
+        # a no-op on systems without the bug.
+        # See: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=959997
+        for path in venv_dir.glob("share/python-wheels/wheel*"):
+            path.unlink()
 
     acquire_deps(venv_dir)
     if dev:
