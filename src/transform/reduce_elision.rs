@@ -13,9 +13,7 @@
 //! set of columns that form unique keys for the input, the reduce
 //! can be simplified to a map operation.
 
-use std::collections::HashMap;
-
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, ScalarExpr, TransformArgs};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
@@ -25,7 +23,7 @@ impl crate::Transform for ReduceElision {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
             self.action(e);

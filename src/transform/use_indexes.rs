@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use repr::RelationType;
 
-use crate::{BinaryFunc, EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::{BinaryFunc, EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr, TransformArgs};
 
 /// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
 /// which an index exists, with a
@@ -38,29 +38,21 @@ impl crate::Transform for FilterEqualLiteral {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        state: &mut TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation, indexes);
+        self.transform(relation, state);
         Ok(())
     }
 }
 
 impl FilterEqualLiteral {
-    pub fn transform(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
+    pub fn transform(&self, relation: &mut RelationExpr, state: &mut TransformArgs) {
         relation.visit_mut(&mut |e| {
-            self.action(e, indexes);
+            self.action(e, state);
         });
     }
 
-    pub fn action(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
+    pub fn action(&self, relation: &mut RelationExpr, state: &mut TransformArgs) {
         if let RelationExpr::Filter { input, predicates } = relation {
             if let RelationExpr::Get {
                 id: Id::Global(id), ..
@@ -92,7 +84,7 @@ impl FilterEqualLiteral {
                     })
                     .unzip();
                 if !columns.is_empty() {
-                    let key_set = &indexes[id];
+                    let key_set = &state.indexes[id];
                     // find set of keys of the largest size that is a subset of columns
                     let best_index = key_set
                         .iter()
@@ -150,31 +142,19 @@ impl FilterEqualLiteral {
 pub struct FilterLifting;
 
 impl crate::Transform for FilterLifting {
-    fn transform(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
-        self.transform(relation, indexes);
+    fn transform(&self, relation: &mut RelationExpr, state: &mut TransformArgs) {
+        self.transform(relation, state);
     }
 }
 
 impl FilterLifting {
-    pub fn transform(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
+    pub fn transform(&self, relation: &mut RelationExpr, state: &mut TransformArgs) {
         relation.visit_mut(&mut |e| {
-            self.action(e, indexes);
+            self.action(e, state);
         });
     }
 
-    pub fn action(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
+    pub fn action(&self, relation: &mut RelationExpr, state: &mut TransformArgs) {
         if let RelationExpr::Join {
             inputs, variables, ..
         } = relation
@@ -205,7 +185,7 @@ impl FilterLifting {
                     }) {
                         add_matching_index_by_input(
                             &**input,
-                            indexes,
+                            state.indexes,
                             input_num,
                             join_keys,
                             &mut matching_index_by_input,
@@ -214,7 +194,7 @@ impl FilterLifting {
                 } else {
                     add_matching_index_by_input(
                         join_input,
-                        indexes,
+                        state.indexes,
                         input_num,
                         join_keys,
                         &mut matching_index_by_input,
@@ -331,7 +311,7 @@ impl FilterLifting {
 
 fn add_matching_index_by_input(
     join_input: &RelationExpr,
-    indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+    state: &mut TransformArgs,
     input_num: usize,
     join_keys: Vec<usize>,
     matching_index_by_input: &mut Vec<(usize, Vec<ScalarExpr>)>,
@@ -340,7 +320,7 @@ fn add_matching_index_by_input(
         id: Id::Global(id), ..
     } = join_input
     {
-        let index_keys = indexes.get(id).and_then(|indexes| {
+        let index_keys = state.indexes.get(id).and_then(|indexes| {
             indexes.iter().find(|ik| {
                 ik.len() == join_keys.len()
                     && join_keys
