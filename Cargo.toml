@@ -5,6 +5,7 @@ members = [
     "src/avro",
     "src/aws-util",
     "src/ccsr",
+    "src/checker",
     "src/comm",
     "src/coord",
     "src/dataflow-bin",

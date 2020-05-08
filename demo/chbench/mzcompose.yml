@@ -188,6 +188,16 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
+  checker:
+    # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
+    mzbuild: checker
+    init: true
+    # run checker using 'dc.sh run checker' to adjust which queries are peeked,
+    # and see /src/checker/checks.toml for a list of queries
+    command: ${CHECKER_CMD}
+    volumes:
+      - ./checker-config:/etc/checker
+
 
 volumes:
   chbench-gen:

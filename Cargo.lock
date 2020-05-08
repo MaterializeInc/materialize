@@ -343,6 +343,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
+name = "checker"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "env_logger",
+ "failure",
+ "futures",
+ "getopts",
+ "hyper",
+ "lazy_static",
+ "log",
+ "ore",
+ "pgrepr",
+ "postgres",
+ "postgres-types",
+ "prometheus",
+ "regex",
+ "serde",
+ "tokio",
+ "tokio-postgres",
+ "toml",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

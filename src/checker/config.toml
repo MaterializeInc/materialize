@@ -1,0 +1,209 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+[[sources]]
+kafka_broker = "kafka:9092"
+schema_registry = "http://schema-registry:8081"
+topic_namespace = "mysql.tpcch."
+materialized = false
+names = [
+    "customer",
+    "item",
+    "nation",
+    "neworder",
+    "order",
+    "orderline",
+    "stock",
+    "history",
+    "supplier",
+    "district",
+    "nation",
+    "region",
+    "supplier",
+    "warehouse",
+]
+
+
+[default_check]
+# the amount of time to sleep between peeks
+sleep_ms = 0
+# Spin up this many threads querying this view
+# This affects the ratio of times this query is executed vs other queries
+thread_count = 1
+
+# Entries in the WAREHOUSE and DISTRICT tables must satisfy the relationship:
+# W_YTD = sum(D_YTD)
+# for each warehouse defined by (W_ID = D_W_ID)
+[[checks]]
+name = "c3321"
+enabled = true
+query = """
+SELECT count(*) as count FROM warehouse
+FULL JOIN (SELECT d_w_id, sum(d_ytd) AS sum_d_ytd FROM district GROUP BY d_w_id)
+ON w_id = d_w_id WHERE w_ytd != sum_d_ytd
+"""
+ [[checks.rows]]
+   [[checks.rows.columns]]
+    column = "count"
+    value = "0"
+
+# Entries in the DISTRICT, ORDER, and NEW-ORDER tables must satisfy the relationship:
+# D_NEXT_O_ID - 1 = max(O_ID) = max(NO_O_ID)
+# for each district defined by (D_W_ID = O_W_ID = NO_W_ID) and (D_ID = O_D_ID = NO_D_ID).
+# This condition does not apply to the NEW-ORDER table for any districts which have no outstanding new orders (i.e., the number of rows is zero).
+[[checks]]
+name = "c3322"
+enabled = true
+query = """
+SELECT count(*) as count FROM
+(SELECT (d_next_o_id-1) - nomax as next,  (d_next_o_id-1) - omax as next2 from
+(SELECT d_w_id, d_id, d_next_o_id from district)
+INNER JOIN
+(select no_d_id, no_w_id,max(no_o_id) as nomax from neworder group by no_d_id, no_w_id)
+on no_d_id = d_id and no_w_id = d_w_id
+INNER JOIN
+(select o_d_id, o_w_id, max(o_id) as omax from order group by o_d_id, o_w_id)
+on no_d_id=o_d_id and no_w_id = o_w_id)
+WHERE next!=0 or next2!=0
+"""
+ [[checks.rows]]
+    [[checks.rows.columns]]
+    column = "count"
+    value = "0"
+
+# max(O_ID) - min(O_ID) + 1 = # of rows in new_order for each warehouse/district
+# For each district defined by NO_W_ID and NO_D_ID. This condition does not apply to any districts which have no outstanding new orders (i.e., the number of rows is zero).
+[[checks]]
+name = "c3323"
+eabled = true
+query = """
+SELECT count(*) as count FROM
+(SELECT (max(o_id) - min(o_id) - count(*) + 1) as count from order group by o_w_id, o_d_id)
+WHERE count > 0
+"""
+ [[checks.rows]]
+   [[checks.rows.columns]]
+  column = "count"
+ value = "0"
+
+# sum(O_OL_CNT) = [number of rows in the ORDER-LINE table for this district]
+[[checks]]
+name = "c3324"
+enabled = true
+query = """
+SELECT count(*) as count FROM
+(SELECT sum-cnt as count
+FROM (select o_w_id,o_d_id,sum(o_ol_cnt) as sum from order group by o_w_id,o_d_id)
+INNER JOIN
+(select ol_w_id, ol_d_id,count(*) as cnt from orderline group by ol_w_id, ol_d_id)
+on  ol_w_id = o_w_id and o_d_id = ol_d_id
+)
+WHERE count > 0
+"""
+ [[checks.rows]]
+   [[checks.rows.columns]]
+   column = "count"
+   value = "0"
+
+# For any row in the ORDER table, O_CARRIER_ID is set to a null value if and only if there is a corresponding row
+# in the NEW-ORDER table defined by (O_W_ID, O_D_ID, O_ID) = (NO_W_ID, NO_D_ID, NO_O_ID).
+# We want the symmetric difference between the sets:
+# (SELECT no_w_id, no_d_id, no_o_id FROM new_order)
+# (SELECT o_w_id, o_d_id, o_id FROM order@primary WHERE o_carrier_id IS NULL)
+# We achieve this by two EXCEPT ALL queries.
+[[checks]]
+name = "c3325"
+enabled = true
+query = """
+SELECT a+b as count FROM
+(SELECT COUNT(*) as a FROM
+	((SELECT no_w_id, no_d_id, no_o_id FROM neworder)
+		EXCEPT ALL
+	(SELECT o_w_id, o_d_id, o_id FROM order WHERE o_carrier_id IS NULL))),
+(SELECT COUNT(*) as b FROM
+	((SELECT o_w_id, o_d_id, o_id FROM order WHERE o_carrier_id IS NULL)
+		EXCEPT ALL
+	(SELECT no_w_id, no_d_id, no_o_id FROM neworder)))
+"""
+  [[checks.rows]]
+   [[checks.rows.columns]]
+     column = "count"
+     value = "0"
+
+
+# For any row in the ORDER table, O_OL_CNT must equal the number of rows
+# in the ORDER-LINE table for the corresponding order defined by
+# (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID).
+[[checks]]
+name = "c3326"
+enabled = true
+query = """
+SELECT a+b as count FROM
+(SELECT COUNT(*) as a FROM
+	((SELECT o_w_id, o_d_id, o_id, cast(o_ol_cnt as bigint) FROM order)
+		EXCEPT ALL
+	(SELECT ol_w_id, ol_d_id, ol_o_id, cast(COUNT(*) as bigint) as FROM orderline GROUP BY ol_w_id, ol_d_id, ol_o_id))),
+(SELECT COUNT(*) as b FROM
+	((SELECT ol_w_id, ol_d_id, ol_o_id, cast(COUNT(*) as bigint) FROM orderline GROUP BY ol_w_id, ol_d_id, ol_o_id)
+		 EXCEPT ALL
+	(SELECT o_w_id, o_d_id, o_id, cast(o_ol_cnt as bigint) FROM order)))
+"""
+ [[checks.rows]]
+   [[checks.rows.columns]]
+      column = "count"
+      value = "0"
+
+# For any row in the ORDER-LINE table, OL_DELIVERY_D is set to a null
+# date/time if and only if the corresponding row in the ORDER table defined
+# by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) has
+# O_CARRIER_ID set to a null value.
+[[checks]]
+name = "c3327"
+enabled = true
+query = """
+SELECT COUNT(*) as count FROM
+	(SELECT o_w_id, o_d_id, o_id FROM order WHERE o_carrier_id IS NULL)
+	FULL OUTER JOIN
+	(SELECT ol_w_id, ol_d_id, ol_o_id FROM orderline WHERE ol_delivery_d IS NULL)
+	ON (ol_w_id = o_w_id AND ol_d_id = o_d_id AND ol_o_id = o_id)
+WHERE ol_o_id IS NULL OR o_id IS NULL
+"""
+ [[checks.rows]]
+   [[checks.rows.columns]]
+    column = "count"
+    value = "0"
+
+# Entries in the WAREHOUSE and HISTORY tables must satisfy the relationship:
+# W_YTD = SUM(H_AMOUNT) for each warehouse defined by (W_ID = H _W_ID).
+[[checks]]
+name = "c3328"
+enabled = true
+query = """
+SELECT count(*) as count FROM (SELECT w_id, w_ytd, sum FROM warehouse
+JOIN (SELECT h_w_id, sum(h_amount) FROM history GROUP BY h_w_id)
+ON w_id = h_w_id WHERE w_ytd != sum)
+"""
+ [[checks.rows]]
+   [[checks.rows.columns]]
+    column = "count"
+    value = "0"
+
+# Entries in the DISTRICT and HISTORY tables must satisfy the relationship:
+# D_YTD=SUM(H_AMOUNT) for each district defined by (D_W_ID,D_ID)=(H_W_ID,H_D_ID)
+# [[checks]]
+# name = "c3329"
+# enabled = true
+# query = """
+# SELECT count(*) as count FROM (SELECT d_id, d_ytd, sum FROM district JOIN (SELECT h_w_id, h_d_id, sum(h_amount) FROM history GROUP BY (h_w_id, h_d_id))
+# ON d_id = h_d_id AND d_w_id = h_w_id WHERE d_ytd != sum)
+# """
+# [[checks.rows]]
+# [[checks.rows.columns]]
+# column = "count"
+ # value = "0"
