@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import (
     Any,
     Callable,
+    Collection,
     Dict,
     Iterable,
     List,
@@ -134,7 +135,7 @@ def nuke(composition: str) -> None:
         comp.down()
         cmds = ["docker system prune -af".split(), "docker volume prune -f".split()]
         for cmd in cmds:
-            spawn.runv(cmd)
+            spawn.runv2(cmd)
     else:
         raise UnknownItem("composition", comp, Composition.known_compositions())
 
@@ -157,14 +158,14 @@ class Composition:
 
     def __str__(self) -> str:
         return (
-            f"Composition<{self.name}, {self._path}, {len(self._workflows)} workflows>"
+            f"Composition<{self.name}, {self._path}, {len(self.workflows())} workflows>"
         )
 
     def workflow(self, workflow: str) -> "Workflow":
         """Get a workflow by name"""
         return self._workflows[workflow]
 
-    def workflows(self) -> Iterable["Workflow"]:
+    def workflows(self) -> Collection["Workflow"]:
         return self._workflows.all_workflows()
 
     def run(self) -> None:
@@ -244,10 +245,10 @@ class Workflows:
     def __getitem__(self, workflow: str) -> "Workflow":
         return self._inner[workflow]
 
-    def all_workflows(self) -> Iterable["Workflow"]:
+    def all_workflows(self) -> Collection["Workflow"]:
         return self._inner.values()
 
-    def names(self) -> Iterable[str]:
+    def names(self) -> Collection[str]:
         return self._inner.keys()
 
 
@@ -479,7 +480,7 @@ class WaitForTcpStep(WorkflowStep):
             )
             try:
                 spawn.capture(cmd, unicode=True, stderr_too=True)
-            except CalledProcessError:
+            except subprocess.CalledProcessError:
                 ui.progress(" {}".format(int(remaining)))
             else:
                 ui.progress(" success!", finish=True)
@@ -521,7 +522,14 @@ class WorkflowWorkflowStep(WorkflowStep):
         self._workflow = workflow
 
     def run(self, comp: Composition) -> None:
-        comp.workflow(self._workflow).run(comp)
+        try:
+            comp.workflow(self._workflow).run(comp)
+        except KeyError:
+            raise UnknownItem(
+                f"workflow in {comp.name}",
+                self._workflow,
+                (w.name for w in comp.workflows()),
+            )
 
 
 @Steps.register("run")
@@ -559,7 +567,9 @@ class EnsureStaysUpStep(WorkflowStep):
         for i in range(self._uptime_secs, 0, -1):
             time.sleep(1)
             try:
-                stdout = spawn.capture(["docker", "ps", "--format={{.Names}}"])
+                stdout = spawn.capture(
+                    ["docker", "ps", "--format={{.Names}}"], unicode=True
+                )
             except subprocess.CalledProcessError as e:
                 raise Failed(f"{e.stdout}")
             found = False
@@ -591,24 +601,24 @@ class DownStep(WorkflowStep):
 
 def mzcompose_up(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "up", "-d"]
-    return spawn.runv(cmd + services)
+    return spawn.runv2(cmd + services)
 
 
 def mzcompose_run(command: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "run"]
-    return spawn.runv(cmd + command)
+    return spawn.runv2(cmd + command)
 
 
 def mzcompose_stop(services: List[str]) -> subprocess.CompletedProcess:
-    cmd = ["./mzcompose", "stop"]
-    return spawn.runv(cmd + services)
+    cmd = ["./mzcompose", "--mz-quiet", "stop"]
+    return spawn.runv2(cmd + services)
 
 
 def mzcompose_down(destroy_volumes: bool = False) -> subprocess.CompletedProcess:
-    cmd = ["./mzcompose", "down"]
+    cmd = ["./mzcompose", "--mz-quiet", "down"]
     if destroy_volumes:
         cmd.append("-v")
-    return spawn.runv(cmd)
+    return spawn.runv2(cmd)
 
 
 # Helpers
@@ -619,11 +629,11 @@ say = ui.speaker("C")
 
 def print_docker_logs(pattern: str, tail: int = 0) -> None:
     out = spawn.capture(
-        ["docker", "ps", "-a", "--format={{.Names}}"], encoding="utf-8"
+        ["docker", "ps", "-a", "--format={{.Names}}"], unicode=True
     ).splitlines()
     for line in out:
         if line.startswith(pattern):
-            spwan.runv(["docker", "logs", "--tail", str(tail), line])
+            spawn.runv(["docker", "logs", "--tail", str(tail), line])
 
 
 def now() -> datetime:
@@ -671,7 +681,7 @@ def wait_for_pg(
                     f"{host=} {port=} did not return any row matching {expected} got: {result}"
                 )
         except Exception as e:
-            progress(" " + int(remaining))
+            ui.progress(" " + str(int(remaining)))
             error = e
     ui.progress(finish=True)
     raise Failed(f"never got correct result for {args}: {error}")
