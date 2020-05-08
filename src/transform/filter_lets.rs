@@ -9,9 +9,8 @@
 
 //! Pushes common filter predicates on gets into the let binding.
 
-use std::collections::HashMap;
-
-use expr::{GlobalId, Id, LocalId, RelationExpr, ScalarExpr};
+use crate::TransformArgs;
+use expr::{Id, LocalId, RelationExpr, ScalarExpr};
 
 /// Pushes common filter predicates on gets into the let binding.
 ///
@@ -27,7 +26,7 @@ impl crate::Transform for FilterLets {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);
