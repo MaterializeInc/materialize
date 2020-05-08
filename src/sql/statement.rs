@@ -946,6 +946,7 @@ fn handle_create_view(
     })
 }
 
+// The equivalent of `purify_statement` but for the format component of a source.
 async fn purify_format(
     format: &mut Option<Format>,
     connector: &mut Connector,
@@ -1019,6 +1020,29 @@ async fn purify_format(
     Ok(())
 }
 
+// Massages `CREATE SOURCE` statements into a valid, consistent form, which is
+// then stored as the canonical version of the source. All validation checks for
+// source components should be placed within `purify_statement`.
+//
+// This "purified" form is used to instantiate the source when restarting
+// Materialize. This has the subtle side effect of only invoking
+// `purify_statement` when processing the `CREATE SOURCE` statement; any
+// validation of the source done here is _not_ done when restarting Materialize.
+// Note that if the world shifts out from underneath Materialize, it will
+// experience runtime errors that will be handled (or not) by the attendant
+// areas of the code.
+//
+// To illustrate this, consider a function that validates the existence of a
+// file that Materialize depends on. If we check for that file's existence in...
+// - `purify_statement`, we will not let users create sources without the file,
+//   but will let users restart Materialize if the file goes missing
+// - Some other part of the path to create sources (e.g.
+//   `handle_create_source`), we will not let users create sources **or**
+//   restart Materialize without the file!
+//
+//   This would lock users out of Materialize entirely, preventing them from
+//   even fixing the offending source. It's like locking your keys in the car,
+//   but your car is a Linux binary, i.e. much harder to break into.
 pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
     if let Statement::CreateSource {
         col_names,
@@ -1071,6 +1095,9 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
     Ok(stmt)
 }
 
+// Creates a Plan for "purified" `CREATE SOURCE` Statements.
+//
+// What are "purified" statements? Look at the docs for `purify_statement`.
 fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     match &stmt {
         Statement::CreateSource {
