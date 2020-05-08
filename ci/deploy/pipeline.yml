@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - command: bin/ci-builder run stable ci/deploy/devsite.sh
+  - command: bin/ci-builder run nightly ci/deploy/devsite.sh
     branches: master
     timeout_in_minutes: 30
     agents:
