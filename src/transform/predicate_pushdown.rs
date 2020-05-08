@@ -49,9 +49,8 @@
 //! PredicatePushdown.transform(&mut expr, &std::collections::HashMap::new());
 //! ```
 
-use std::collections::HashMap;
-
-use expr::{AggregateFunc, GlobalId, RelationExpr, ScalarExpr};
+use crate::TransformState;
+use expr::{AggregateFunc, RelationExpr, ScalarExpr};
 use repr::{ColumnType, Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
@@ -62,7 +61,7 @@ impl crate::Transform for PredicatePushdown {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);

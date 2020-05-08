@@ -11,7 +11,8 @@
 
 use std::collections::HashMap;
 
-use expr::{GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
+use crate::TransformState;
+use expr::{RelationExpr, ScalarExpr, UnaryFunc};
 use repr::Datum;
 use repr::{ColumnType, RelationType, ScalarType};
 
@@ -23,7 +24,7 @@ impl crate::Transform for ColumnKnowledge {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         self.transform(expr)
     }

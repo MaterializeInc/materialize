@@ -24,7 +24,8 @@
 //! Null arguments*.
 use std::collections::{HashMap, HashSet};
 
-use expr::{GlobalId, Id, RelationExpr, ScalarExpr, TableFunc};
+use crate::TransformState;
+use expr::{Id, RelationExpr, ScalarExpr, TableFunc};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -34,7 +35,7 @@ impl crate::Transform for NonNullRequirements {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         self.action(relation, HashSet::new(), &mut HashMap::new());
         Ok(())

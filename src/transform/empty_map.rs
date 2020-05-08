@@ -9,9 +9,7 @@
 
 //! Remove empty `Map` operators.
 
-use std::collections::HashMap;
-
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, TransformState};
 
 /// Remove empty `Map` operators.
 #[derive(Debug)]
@@ -21,7 +19,7 @@ impl crate::Transform for EmptyMap {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);

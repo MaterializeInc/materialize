@@ -13,11 +13,9 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
-use std::collections::HashMap;
-
 use repr::RelationType;
 
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, TransformState};
 
 /// Removes unit collections from joins, and joins with fewer than two inputs.
 #[derive(Debug)]
@@ -27,7 +25,7 @@ impl crate::Transform for JoinElision {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
             self.action(e);

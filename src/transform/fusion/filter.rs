@@ -39,9 +39,7 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use std::collections::HashMap;
-
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, ScalarExpr, TransformState};
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
@@ -51,7 +49,7 @@ impl crate::Transform for Filter {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);

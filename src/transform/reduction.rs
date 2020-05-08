@@ -11,10 +11,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use expr::{GlobalId, RelationExpr, ScalarExpr};
+use expr::RelationExpr;
 use repr::{Datum, Row, RowArena};
 
-use crate::TransformError;
+use crate::{TransformError, TransformState};
 
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
@@ -27,7 +27,7 @@ impl crate::Transform for FoldConstants {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), TransformError> {
         relation.try_visit_mut(&mut |e| self.action(e))
     }
@@ -399,11 +399,9 @@ impl FoldConstants {
 /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
 pub mod demorgans {
 
-    use std::collections::HashMap;
+    use expr::{BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc};
 
-    use expr::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
-
-    use crate::TransformError;
+    use crate::{TransformError, TransformState};
 
     /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
     #[derive(Debug)]
@@ -412,7 +410,7 @@ pub mod demorgans {
         fn transform(
             &self,
             relation: &mut RelationExpr,
-            _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+            _: &mut TransformState,
         ) -> Result<(), TransformError> {
             relation.visit_mut_pre(&mut |e| {
                 self.action(e);
@@ -484,12 +482,11 @@ pub mod demorgans {
 
 /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
 pub mod undistribute_and {
-    use std::collections::HashMap;
 
-    use expr::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr};
+    use expr::{BinaryFunc, RelationExpr, ScalarExpr};
     use repr::{ColumnType, Datum, ScalarType};
 
-    use crate::TransformError;
+    use crate::{TransformError, TransformState};
 
     /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
     #[derive(Debug)]
@@ -499,7 +496,7 @@ pub mod undistribute_and {
         fn transform(
             &self,
             relation: &mut RelationExpr,
-            _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+            _: &mut TransformState,
         ) -> Result<(), TransformError> {
             relation.visit_mut(&mut |e| {
                 self.action(e);

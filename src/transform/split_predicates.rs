@@ -9,9 +9,8 @@
 
 //! Transforms predicates of the form "A and B" into two: "A" and "B".
 
-use std::collections::HashMap;
-
-use expr::{BinaryFunc, GlobalId, RelationExpr, ScalarExpr};
+use crate::TransformState;
+use expr::{BinaryFunc, RelationExpr, ScalarExpr};
 
 /// Transforms predicates of the form "A and B" into two: "A" and "B".
 #[derive(Debug)]
@@ -22,7 +21,7 @@ impl crate::Transform for SplitPredicates {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |expr| {
             if let RelationExpr::Filter { predicates, .. } = expr {

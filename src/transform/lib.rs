@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
-use expr::{EvalError, GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr};
+use expr::{EvalError, GlobalId, IdGen, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 
 // pub mod binding;
 pub mod column_knowledge;
@@ -51,13 +51,22 @@ pub mod topk_elision;
 pub mod update_let;
 // pub mod use_indexes;
 
+// TODO(justin): this kind of state should be "global" to the entire planning of a given query, so
+// that we can thread through things like unique ID generation.
+/// State that gets threaded through all transforms.
+#[derive(Debug)]
+pub struct TransformState<'a> {
+    id_gen: &'a mut IdGen,
+    indexes: &'a HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+}
+
 /// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        state: &mut TransformState,
     ) -> Result<(), TransformError>;
 }
 
@@ -98,12 +107,12 @@ impl Transform for Fixpoint {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        state: &mut TransformState,
     ) -> Result<(), TransformError> {
         for _ in 0..self.limit {
             let original = relation.clone();
             for transform in self.transforms.iter() {
-                transform.transform(relation, indexes)?;
+                transform.transform(relation, state)?;
             }
             if *relation == original {
                 return Ok(());
@@ -111,7 +120,7 @@ impl Transform for Fixpoint {
         }
         let original = relation.clone();
         for transform in self.transforms.iter() {
-            transform.transform(relation, indexes)?;
+            transform.transform(relation, state)?;
         }
         Err(TransformError::Internal(format!(
             "fixpoint looped too many times {:#?} {}\n{}",
@@ -133,15 +142,20 @@ pub struct Optimizer {
     transforms: Vec<Box<dyn crate::Transform + Send>>,
 }
 
-impl Transform for Optimizer {
+impl Optimizer {
     /// Optimizes the supplied relation expression.
     fn transform(
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), TransformError> {
+        let mut id_gen = Default::default();
+        let mut state = TransformState {
+            id_gen: &mut id_gen,
+            indexes,
+        };
         for transform in self.transforms.iter() {
-            transform.transform(relation, indexes)?;
+            transform.transform(relation, &mut state)?;
         }
         Ok(())
     }
@@ -233,7 +247,7 @@ impl Optimizer {
         mut relation: RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<OptimizedRelationExpr, TransformError> {
-        self.transform(&mut relation, indexes)?;
+        self.transform(&mut relation, &indexes)?;
         Ok(expr::OptimizedRelationExpr(relation))
     }
 

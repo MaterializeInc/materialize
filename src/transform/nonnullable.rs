@@ -14,9 +14,8 @@
 
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
-use std::collections::HashMap;
-
-use expr::{AggregateExpr, AggregateFunc, GlobalId, RelationExpr, ScalarExpr, UnaryFunc};
+use crate::TransformState;
+use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr, UnaryFunc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 /// Harvests information about non-nullability of columns from sources.
@@ -27,7 +26,7 @@ impl crate::Transform for NonNullable {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);

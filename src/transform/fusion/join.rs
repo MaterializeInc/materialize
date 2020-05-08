@@ -15,9 +15,7 @@
 //! our ability to plan these joins, and reason about other operators motion
 //! aroud them.
 
-use std::collections::HashMap;
-
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, ScalarExpr, TransformState};
 
 /// Fuses multiple `Join` operators into one `Join` operator.
 #[derive(Debug)]
@@ -27,7 +25,7 @@ impl crate::Transform for Join {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
             self.action(e);

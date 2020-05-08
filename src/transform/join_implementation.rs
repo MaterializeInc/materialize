@@ -18,7 +18,8 @@
 
 use std::collections::HashMap;
 
-use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::TransformState;
+use expr::{Id, RelationExpr, ScalarExpr};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -28,10 +29,10 @@ impl crate::Transform for JoinImplementation {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        state: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         let mut arranged = HashMap::new();
-        for (k, v) in indexes {
+        for (k, v) in state.indexes {
             arranged.insert(Id::Global(*k), v.clone());
         }
         self.action_recursive(relation, &mut arranged);

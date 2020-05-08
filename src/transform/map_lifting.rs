@@ -22,7 +22,8 @@
 
 use std::collections::HashMap;
 
-use expr::{GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::TransformState;
+use expr::{Id, RelationExpr, ScalarExpr};
 
 /// Hoist literal values from maps wherever possible.
 #[derive(Debug)]
@@ -32,7 +33,7 @@ impl crate::Transform for LiteralLifting {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         let literals = self.action(relation, &mut HashMap::new());
         if !literals.is_empty() {

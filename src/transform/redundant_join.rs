@@ -12,9 +12,8 @@
 // If statements seem a bit clearer in this case. Specialized methods
 // that replace simple and common alternatives frustrate developers.
 #![allow(clippy::comparison_chain, clippy::filter_next)]
-use std::collections::HashMap;
 
-use crate::{GlobalId, RelationExpr, ScalarExpr};
+use crate::{RelationExpr, ScalarExpr, TransformState};
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
@@ -24,7 +23,7 @@ impl crate::Transform for RedundantJoin {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: &mut TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
             self.action(e);
