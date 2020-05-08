@@ -179,3 +179,27 @@ query B
 SELECT NOT 0::bool
 ----
 true
+
+statement ok
+CREATE TABLE x (a int, u int, j jsonb, b bool)
+
+# Ensure the NOT gets pushed into the binary operation.
+query T multiline
+EXPLAIN PLAN FOR SELECT
+  NOT(a = u),
+  NOT(a != u),
+  NOT(a < u),
+  NOT(a > u),
+  NOT(a >= u),
+  NOT(a <= u),
+  NOT(NOT(b)),
+  -- Doesn't have a negation.
+  NOT(j @> '{}'::JSONB)
+FROM x
+----
+%0 =
+| Get materialize.public.x (u5)
+| Map (#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), !((#2 @> {}))
+| Project (#4..#9, #3, #10)
+
+EOF
