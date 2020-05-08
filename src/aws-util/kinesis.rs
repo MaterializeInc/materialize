@@ -31,20 +31,14 @@ pub async fn kinesis_client(
 ) -> Result<KinesisClient, anyhow::Error> {
     let request_dispatcher =
         HttpClient::new().context("creating HTTP client for Kinesis client")?;
-    match (access_key, secret_access_key) {
-        // Only access_key and secret_access_key are required.
+    let kinesis_client = match (access_key, secret_access_key) {
         (Some(access_key), Some(secret_access_key)) => {
             info!("Creating a new Kinesis client from provided access_key and secret_access_key");
-            let provider = AutoRefreshingProvider::new(StaticProvider::new(
-                access_key,
-                secret_access_key,
-                token,
-                None,
-            ))
-            .context("generating AWS credentials")?;
-
-            let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, region);
-            Ok(kinesis_client)
+            KinesisClient::new_with(
+                request_dispatcher,
+                StaticProvider::new(access_key, secret_access_key, token, None),
+                region,
+            )
         }
         (_, _) => {
             info!("AWS access_key and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
@@ -53,10 +47,10 @@ pub async fn kinesis_client(
             let provider =
                 AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
 
-            let kinesis_client = KinesisClient::new_with(request_dispatcher, provider, region);
-            Ok(kinesis_client)
+            KinesisClient::new_with(request_dispatcher, provider, region)
         }
-    }
+    };
+    Ok(kinesis_client)
 }
 
 /// Wrapper around AWS Kinesis ListShards API.
