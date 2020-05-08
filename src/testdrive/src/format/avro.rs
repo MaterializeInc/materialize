@@ -95,6 +95,13 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
             let j = serde_json::from_str(s).map_err(|e| e.to_string())?;
             Ok(Value::Json(j))
         }
+        (JsonValue::String(s), SchemaPiece::Enum { symbols, .. }) => {
+            if symbols.contains(s) {
+                Ok(Value::String(s.clone()))
+            } else {
+                Err(format!("Unrecognized enum variant: {}", s))
+            }
+        }
         (JsonValue::Object(items), SchemaPiece::Record { .. }) => {
             let mut builder = avro::types::Record::new(schema)
                 .expect("`Record::new` should never fail if schema piece is a record!");

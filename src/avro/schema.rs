@@ -1378,19 +1378,20 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
         match piece {
             SchemaPieceRefOrNamed::Piece(piece) => self.clone_piece(piece).into(),
             SchemaPieceRefOrNamed::Named(index) => {
-                let new_index = if let Entry::Vacant(ve) = self.old_to_new_names.entry(index) {
-                    let new_index = self.named.len();
-                    self.named.push(None);
-                    ve.insert(new_index);
-                    let old_named_piece = self.old_root.lookup(index);
-                    let new_named_piece = NamedSchemaPiece {
-                        name: old_named_piece.name.clone(),
-                        piece: self.clone_piece(&old_named_piece.piece),
-                    };
-                    self.named[new_index] = Some(new_named_piece);
-                    new_index
-                } else {
-                    index
+                let new_index = match self.old_to_new_names.entry(index) {
+                    Entry::Vacant(ve) => {
+                        let new_index = self.named.len();
+                        self.named.push(None);
+                        ve.insert(new_index);
+                        let old_named_piece = self.old_root.lookup(index);
+                        let new_named_piece = NamedSchemaPiece {
+                            name: old_named_piece.name.clone(),
+                            piece: self.clone_piece(&old_named_piece.piece),
+                        };
+                        self.named[new_index] = Some(new_named_piece);
+                        new_index
+                    }
+                    Entry::Occupied(oe) => *oe.get(),
                 };
                 SchemaPieceOrNamed::Named(new_index)
             }

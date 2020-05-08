@@ -20,7 +20,7 @@ select LIST[1,LIST[2,3]]
 query T
 select LIST[LIST[1],LIST[2,3]]
 ----
-{"{1}","{2,3}"}
+{{1},{2,3}}
 
 query error Cannot assign type to this empty list
 select LIST[]
@@ -56,4 +56,14 @@ select LIST['foo', 'f}o', '"\', null, 'null', 'NULL']
 query T
 select list[list[list['"']]];
 ----
-{"{\"{\\\"\\\\\\\"\\\"}\"}"}
+{{{"\""}}}
+
+query T
+select list['{1}']
+----
+{"{1}"}
+
+query T
+SELECT LIST[LIST[]::text list, LIST['a', 'b'], LIST['z']]
+----
+{{},{a,b},{z}}

@@ -512,13 +512,14 @@ pub struct KafkaSourceConnector {
     // FIXME (brennan) - in the very near future, this should be made into a hashmap of partition |-> offset.
     // #2736
     pub start_offset: i64,
+    pub group_id_prefix: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KinesisSourceConnector {
     pub stream_name: String,
     pub region: Region,
-    pub access_key: Option<String>,
+    pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
     pub token: Option<String>,
 }

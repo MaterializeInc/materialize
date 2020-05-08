@@ -17,14 +17,14 @@ here's a test string
 
 ! CREATE SOURCE custom_source
   FROM KINESIS ARN 'arn:aws:kinesis:custom-region::stream/fake-stream'
-  WITH (access_key = 'fake_access_key',
+  WITH (access_key_id = 'fake_access_key',
         secret_access_key = 'fake_secret_access_key')
   FORMAT BYTES;
 If providing a custom region, an `endpoint` option must also be provided
 
 > CREATE SOURCE f
   FROM KINESIS ARN 'arn:aws:kinesis:${testdrive.aws-region}:${testdrive.aws-account}:stream/testdrive-test-${testdrive.seed}'
-  WITH (access_key = '${testdrive.aws-access-key}',
+  WITH (access_key_id = '${testdrive.aws-access-key}',
         secret_access_key = '${testdrive.aws-secret-access-key}',
         token = '${testdrive.aws-token}',
         endpoint = '${testdrive.aws-endpoint}')

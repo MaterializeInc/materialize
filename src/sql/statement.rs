@@ -367,7 +367,7 @@ fn finish_show_where(
     let (r, finishing) = query::plan_show_where(scx, filter, rows, desc)?;
 
     Ok(Plan::Peek {
-        source: r.decorrelate()?,
+        source: r.decorrelate(),
         when: PeekWhen::Immediately,
         finishing,
         materialize: true,
@@ -917,7 +917,7 @@ fn handle_create_view(
     relation_expr.bind_parameters(&params);
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
-    let relation_expr = relation_expr.decorrelate()?;
+    let relation_expr = relation_expr.decorrelate();
     let typ = desc.typ();
     if !columns.is_empty() {
         if columns.len() != typ.column_types.len() {
@@ -1030,7 +1030,7 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
     } = &mut stmt
     {
         let with_options_map = normalize::with_options(with_options);
-        let mut specified_options = HashMap::new();
+        let mut config_options = HashMap::new();
 
         let mut file = None;
         match connector {
@@ -1040,9 +1040,8 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
                 }
 
                 // Verify that the provided security options are valid and then test them.
-                specified_options =
-                    kafka_util::extract_security_config(&mut with_options_map.clone())?;
-                kafka_util::test_config(&specified_options)?;
+                config_options = kafka_util::extract_config(&mut with_options_map.clone())?;
+                kafka_util::test_config(&config_options)?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
@@ -1064,9 +1063,9 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
             _ => (),
         }
 
-        purify_format(format, connector, col_names, file, &specified_options).await?;
+        purify_format(format, connector, col_names, file, &config_options).await?;
         if let sql_parser::ast::Envelope::Upsert(format) = envelope {
-            purify_format(format, connector, col_names, None, &specified_options).await?;
+            purify_format(format, connector, col_names, None, &config_options).await?;
         }
     }
     Ok(stmt)
@@ -1110,10 +1109,10 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                             AvroSchema::CsrUrl { url, seed } => {
                                 let url: Url = url.parse()?;
                                 let mut with_options_map = normalize::with_options(with_options);
-                                let config =
-                                    kafka_util::extract_security_config(&mut with_options_map)?;
+                                let config_options =
+                                    kafka_util::extract_config(&mut with_options_map)?;
                                 let ccsr_config =
-                                    kafka_util::generate_ccsr_client_config(url, &config)?;
+                                    kafka_util::generate_ccsr_client_config(url, &config_options)?;
 
                                 if let Some(seed) = seed {
                                     Schema {
@@ -1188,8 +1187,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let mut config_options =
-                        kafka_util::extract_security_config(&mut with_options)?;
+                    let config_options = kafka_util::extract_config(&mut with_options)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
@@ -1197,29 +1195,11 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(_) => bail!("consistency must be a string"),
                     };
 
-                    // The range of values comes from `statistics.interval.ms` in
-                    // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                    let verbose_stats_err =
-                        "verbose_stats_ms must be a number between 0 and 86400000";
-                    let verbose_stats_ms = match with_options.remove("verbose_stats_ms") {
-                        None => 0,
-                        Some(Value::Number(n)) => match n.parse::<i32>() {
-                            Ok(n @ 0..=86_400_000) => n,
-                            _ => bail!(verbose_stats_err),
-                        },
-                        Some(_) => bail!(verbose_stats_err),
+                    let group_id_prefix = match with_options.remove("group_id_prefix") {
+                        None => None,
+                        Some(Value::SingleQuotedString(s)) => Some(s),
+                        Some(_) => bail!("group_id_prefix must be a string"),
                     };
-                    config_options.insert(
-                        "statistics.interval.ms".to_string(),
-                        verbose_stats_ms.to_string(),
-                    );
-
-                    let kafka_client_id = match with_options.remove("kafka_client_id") {
-                        None => "materialized".to_string(),
-                        Some(Value::SingleQuotedString(s)) => s,
-                        Some(_) => bail!("kafka_client_id must be a string"),
-                    };
-                    config_options.insert("client.id".to_string(), kafka_client_id);
 
                     // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
                     // until we have had time to think about what the right UX/design is on a non-urgent timeline!
@@ -1245,6 +1225,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         topic: topic.clone(),
                         config_options,
                         start_offset,
+                        group_id_prefix,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)
@@ -1291,9 +1272,9 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
                     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
                     // https://github.com/materializeinc/materialize/issues/1991
-                    let access_key = match with_options.remove("access_key") {
-                        Some(Value::SingleQuotedString(access_key)) => Some(access_key),
-                        Some(_) => bail!("access_key must be a string"),
+                    let access_key_id = match with_options.remove("access_key_id") {
+                        Some(Value::SingleQuotedString(access_key_id)) => Some(access_key_id),
+                        Some(_) => bail!("access_key_id must be a string"),
                         _ => None,
                     };
                     let secret_access_key = match with_options.remove("secret_access_key") {
@@ -1312,7 +1293,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                         stream_name,
                         region,
-                        access_key,
+                        access_key_id,
                         secret_access_key,
                         token,
                     });
@@ -1724,7 +1705,7 @@ fn handle_query(
 ) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
-    Ok((expr.decorrelate()?, desc, finishing))
+    Ok((expr.decorrelate(), desc, finishing))
 }
 
 #[derive(Debug)]

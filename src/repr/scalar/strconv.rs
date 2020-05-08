@@ -36,6 +36,12 @@ use crate::decimal::Decimal;
 use crate::jsonb::Jsonb;
 use crate::Interval;
 
+#[derive(Debug)]
+pub enum Nestable {
+    Yes,
+    MayNeedEscaping,
+}
+
 /// Parses a [`bool`] from `s`.
 ///
 /// The accepted values are "true", "false", "yes", "no", "on", "off", "1", and
@@ -64,11 +70,12 @@ pub fn format_bool_static(b: bool) -> &'static str {
 ///
 /// `true` is encoded as the char `'t'` and `false` is encoded as the char
 /// `'f'`.
-pub fn format_bool<F>(buf: &mut F, b: bool)
+pub fn format_bool<F>(buf: &mut F, b: bool) -> Nestable
 where
     F: FormatBuffer,
 {
-    buf.write_str(format_bool_static(b))
+    buf.write_str(format_bool_static(b));
+    Nestable::Yes
 }
 
 /// Parses an [`i32`] from `s`.
@@ -80,11 +87,12 @@ pub fn parse_int32(s: &str) -> Result<i32, failure::Error> {
 }
 
 /// Writes an [`i32`] to `buf`.
-pub fn format_int32<F>(buf: &mut F, i: i32)
+pub fn format_int32<F>(buf: &mut F, i: i32) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", i)
+    write!(buf, "{}", i);
+    Nestable::Yes
 }
 
 /// Parses an `i64` from `s`.
@@ -93,11 +101,12 @@ pub fn parse_int64(s: &str) -> Result<i64, failure::Error> {
 }
 
 /// Writes an `i64` to `buf`.
-pub fn format_int64<F>(buf: &mut F, i: i64)
+pub fn format_int64<F>(buf: &mut F, i: i64) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", i)
+    write!(buf, "{}", i);
+    Nestable::Yes
 }
 
 /// Parses an `f32` from `s`.
@@ -111,7 +120,7 @@ pub fn parse_float32(s: &str) -> Result<f32, failure::Error> {
 }
 
 /// Writes an `f32` to `buf`.
-pub fn format_float32<F>(buf: &mut F, f: f32)
+pub fn format_float32<F>(buf: &mut F, f: f32) -> Nestable
 where
     F: FormatBuffer,
 {
@@ -124,6 +133,7 @@ where
     } else {
         write!(buf, "{}", f)
     }
+    Nestable::Yes
 }
 
 /// Parses an `f64` from `s`.
@@ -137,7 +147,7 @@ pub fn parse_float64(s: &str) -> Result<f64, failure::Error> {
 }
 
 /// Writes an `f64` to `buf`.
-pub fn format_float64<F>(buf: &mut F, f: f64)
+pub fn format_float64<F>(buf: &mut F, f: f64) -> Nestable
 where
     F: FormatBuffer,
 {
@@ -150,6 +160,7 @@ where
     } else {
         write!(buf, "{}", f)
     }
+    Nestable::Yes
 }
 
 /// Use the following grammar to parse `s` into:
@@ -211,11 +222,14 @@ pub fn parse_date(s: &str) -> Result<NaiveDate, failure::Error> {
 }
 
 /// Writes a [`NaiveDate`] to `buf`.
-pub fn format_date<F>(buf: &mut F, d: NaiveDate)
+pub fn format_date<F>(buf: &mut F, d: NaiveDate) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", d)
+    write!(buf, "{}", d);
+    // NOTE(benesch): this may be overly conservative. Perhaps dates never
+    // have special characters.
+    Nestable::MayNeedEscaping
 }
 
 /// Parses a `NaiveTime` from `s`, using the following grammar.
@@ -233,12 +247,15 @@ pub fn parse_time(s: &str) -> Result<NaiveTime, failure::Error> {
 }
 
 /// Writes a [`NaiveDateTime`] timestamp to `buf`.
-pub fn format_time<F>(buf: &mut F, t: NaiveTime)
+pub fn format_time<F>(buf: &mut F, t: NaiveTime) -> Nestable
 where
     F: FormatBuffer,
 {
     write!(buf, "{}", t.format("%H:%M:%S"));
     format_nanos(buf, t.nanosecond());
+    // NOTE(benesch): this may be overly conservative. Perhaps times never
+    // have special characters.
+    Nestable::MayNeedEscaping
 }
 
 /// Parses a `NaiveDateTime` from `s`.
@@ -250,12 +267,15 @@ pub fn parse_timestamp(s: &str) -> Result<NaiveDateTime, failure::Error> {
 }
 
 /// Writes a [`NaiveDateTime`] timestamp to `buf`.
-pub fn format_timestamp<F>(buf: &mut F, ts: NaiveDateTime)
+pub fn format_timestamp<F>(buf: &mut F, ts: NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
     format_nanos(buf, ts.timestamp_subsec_nanos());
+    // NOTE(benesch): this may be overly conservative. Perhaps timestamps never
+    // have special characters.
+    Nestable::MayNeedEscaping
 }
 
 /// Parses a `DateTime<Utc>` from `s`.
@@ -276,12 +296,15 @@ pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, failure::Error> {
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.
-pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>)
+pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S+00"));
     format_nanos(buf, ts.timestamp_subsec_nanos());
+    // NOTE(benesch): this may be overly conservative. Perhaps timestamptzs
+    // never have special characters.
+    Nestable::MayNeedEscaping
 }
 
 /// parse
@@ -325,22 +348,32 @@ pub fn parse_interval_w_disambiguator(
     }
 }
 
-pub fn format_interval<F>(buf: &mut F, iv: Interval)
+pub fn format_interval<F>(buf: &mut F, iv: Interval) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", iv)
+    write!(buf, "{}", iv);
+    Nestable::MayNeedEscaping
 }
 
 pub fn parse_decimal(s: &str) -> Result<Decimal, failure::Error> {
     s.trim().parse()
 }
 
-pub fn format_decimal<F>(buf: &mut F, d: &Decimal)
+pub fn format_decimal<F>(buf: &mut F, d: &Decimal) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", d)
+    write!(buf, "{}", d);
+    Nestable::Yes
+}
+
+pub fn format_string<F>(buf: &mut F, s: &str) -> Nestable
+where
+    F: FormatBuffer,
+{
+    buf.write_str(s);
+    Nestable::MayNeedEscaping
 }
 
 pub fn parse_bytes(s: &str) -> Result<Vec<u8>, failure::Error> {
@@ -381,22 +414,24 @@ fn parse_bytes_traditional(buf: &[u8]) -> Result<Vec<u8>, failure::Error> {
     Ok(out)
 }
 
-pub fn format_bytes<F>(buf: &mut F, bytes: &[u8])
+pub fn format_bytes<F>(buf: &mut F, bytes: &[u8]) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "\\x{}", hex::encode(bytes))
+    write!(buf, "\\x{}", hex::encode(bytes));
+    Nestable::Yes
 }
 
 pub fn parse_jsonb(s: &str) -> Result<Jsonb, failure::Error> {
     s.trim().parse()
 }
 
-pub fn format_jsonb<F>(buf: &mut F, jsonb: &Jsonb)
+pub fn format_jsonb<F>(buf: &mut F, jsonb: &Jsonb) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", jsonb)
+    write!(buf, "{}", jsonb);
+    Nestable::MayNeedEscaping
 }
 
 pub fn format_jsonb_pretty<F>(buf: &mut F, jsonb: &Jsonb)
@@ -474,6 +509,22 @@ pub fn parse_list<T>(
                 }
                 elems.push(parse_elem(&elem_text)?);
             }
+            // a nested list
+            Some('{') => {
+                let mut elem_text = String::new();
+                loop {
+                    match chars.next() {
+                        Some(c) => {
+                            elem_text.push(c);
+                            if c == '}' {
+                                break;
+                            }
+                        }
+                        None => bail!("unexpected end of input"),
+                    }
+                }
+                elems.push(parse_elem(&elem_text)?);
+            }
             // an unescaped elem
             Some(_) => {
                 let mut elem_text = String::new();
@@ -515,47 +566,105 @@ pub fn parse_list<T>(
     Ok(elems)
 }
 
-// can't use a FormatBuffer here because we need to pass a temp buffer to format_elem
-pub fn format_list<T>(
-    buf: &mut String,
+pub fn format_list<F, T>(
+    buf: &mut F,
     elems: &[T],
-    mut is_null: impl FnMut(&T) -> bool,
-    mut format_elem: impl FnMut(&mut String, &T),
-) {
-    buf.write_str("{");
+    mut format_elem: impl FnMut(ListElementWriter<F>, &T) -> Nestable,
+) -> Nestable
+where
+    F: FormatBuffer,
+{
+    buf.write_char('{');
     let mut elems = elems.iter().peekable();
     while let Some(elem) = elems.next() {
-        if is_null(elem) {
-            buf.write_str("NULL");
-        } else {
-            let mut tmp = String::new();
-            format_elem(&mut tmp, elem);
-            // https://www.postgresql.org/docs/current/arrays.html#ARRAYS-IO
-            // > The array output routine will put double quotes around element values if they are empty strings, contain curly braces, delimiter characters, double quotes, backslashes, or white space, or match the word NULL. Double quotes and backslashes embedded in element values will be backslash-escaped.
-            let mut needs_escaping = tmp.is_empty() || tmp.trim() == "NULL";
-            for chr in tmp.chars() {
-                match chr {
-                    '{' | '}' | ',' | '"' | '\\' | ' ' => needs_escaping = true,
-                    _ => (),
-                }
-            }
-            if !needs_escaping {
-                buf.write_str(&tmp);
-            } else {
-                buf.write_str(r#"""#);
-                for chr in tmp.chars() {
-                    match chr {
-                        '\\' => buf.write_str(r#"\\"#),
-                        '"' => buf.write_str(r#"\""#),
-                        _ => write!(buf, "{}", chr),
-                    }
-                }
-                buf.write_str(r#"""#);
-            }
+        let start = buf.len();
+        if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem) {
+            escape_list_elem(buf, start);
         }
         if elems.peek().is_some() {
-            buf.write_str(",")
+            buf.write_char(',')
         }
     }
-    buf.write_str("}");
+    buf.write_char('}');
+    Nestable::Yes
+}
+
+/// Escapes a list element in place.
+///
+/// The list element must start at `start` and extend to the end of the buffer.
+/// The buffer will be resized if escaping is necessary to account for the
+/// additional escape characters.
+fn escape_list_elem<F>(buf: &mut F, start: usize)
+where
+    F: FormatBuffer,
+{
+    let elem = &buf.as_ref()[start..];
+    if !elem.is_empty()
+        && elem != b"NULL"
+        && !elem
+            .iter()
+            .any(|c| matches!(c, b'{' | b'}' | b',' | b' ' | b'"' | b'\\'))
+    {
+        // Element does not need escaping.
+        return;
+    }
+
+    // We'll need two extra bytes for the quotes at the start and end of the
+    // element, plus an extra byte for each quote and backslash.
+    let extras = 2 + elem.iter().filter(|b| matches!(b, b'"' | b'\\')).count();
+    let orig_end = buf.len();
+    let new_end = buf.len() + extras;
+
+    // Pad the buffer to the new length. These characters will all be
+    // overwritten.
+    //
+    // NOTE(benesch): we never read these characters, so we could instead use
+    // uninitialized memory, but that's a level of unsafety I'm currently
+    // uncomfortable with. The performance gain is negligible anyway.
+    for _ in 0..extras {
+        buf.write_char('\0');
+    }
+
+    // SAFETY: inserting ASCII characters before other ASCII characters
+    // preserves UTF-8 encoding.
+    let elem = unsafe { buf.as_bytes_mut() };
+
+    // Walk the string backwards, writing characters at the new end index while
+    // reading from the old end index, adding quotes at the beginning and end,
+    // and adding a backslash before every backslash or quote.
+    let mut wi = new_end - 1;
+    elem[wi] = b'"';
+    wi -= 1;
+    for ri in (start..orig_end).rev() {
+        elem[wi] = elem[ri];
+        wi -= 1;
+        if let b'\\' | b'"' = elem[ri] {
+            elem[wi] = b'\\';
+            wi -= 1;
+        }
+    }
+    elem[wi] = b'"';
+
+    assert!(wi == start);
+}
+
+/// A helper for `format_list` that formats a single list element.
+#[derive(Debug)]
+pub struct ListElementWriter<'a, F>(&'a mut F);
+
+impl<'a, F> ListElementWriter<'a, F>
+where
+    F: FormatBuffer,
+{
+    /// Marks this list element as null.
+    pub fn write_null(self) -> Nestable {
+        self.0.write_str("NULL");
+        Nestable::Yes
+    }
+
+    /// Returns a [`FormatBuffer`] into which a non-null element can be
+    /// written.
+    pub fn nonnull_buffer(self) -> &'a mut F {
+        self.0
+    }
 }

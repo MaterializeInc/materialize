@@ -167,6 +167,7 @@ pub(crate) fn build_local_input<A: Allocate>(
             if worker_index == 0 {
                 local_inputs.insert(index.on_id, LocalInput { handle, capability });
             }
+            // TODO: why do we use `index.on_id` here instead of `index_id`? Are they the same?
             let get_expr = RelationExpr::global_get(index.on_id, on_type);
             let err_collection = Collection::empty(region);
             context
@@ -323,86 +324,92 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
                         }
                     } else {
-                        let (stream, capability) = if let ExternalSourceConnector::AvroOcf(c) =
-                            connector
-                        {
-                            // Distribute read responsibility among workers.
-                            let read_style = if c.tail {
-                                FileReadStyle::TailFollowFd
-                            } else {
-                                FileReadStyle::ReadOnce
-                            };
+                        let (stream, capability) =
+                            if let ExternalSourceConnector::AvroOcf(c) = connector {
+                                // Distribute read responsibility among workers.
+                                let read_style = if c.tail {
+                                    FileReadStyle::TailFollowFd
+                                } else {
+                                    FileReadStyle::ReadOnce
+                                };
 
-                            let reader_schema = match &encoding {
-                                DataEncoding::AvroOcf { reader_schema } => reader_schema,
-                                _ => unreachable!(
-                                    "Internal error: \
+                                let reader_schema = match &encoding {
+                                    DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                                    _ => unreachable!(
+                                        "Internal error: \
                                          Avro OCF schema should have already been resolved.\n\
                                         Encoding is: {:?}",
-                                    encoding
-                                ),
-                            };
-                            let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                            let ctor = move |file| avro::Reader::with_schema(&reader_schema, file);
-                            let ((source, err_source), capability) =
-                                source::file(source_config, c.path, read_style, ctor);
-                            err_collection = err_collection.concat(
-                                &err_source
-                                    .map(DataflowError::SourceError)
-                                    .pass_through("AvroOCF-errors")
-                                    .as_collection(),
-                            );
-                            (decode_avro_values(&source, &envelope), capability)
-                        } else {
-                            let ((ok_source, err_source), capability) = match connector {
-                                ExternalSourceConnector::Kafka(kc) => {
-                                    let (source, capability) = source::kafka(source_config, kc);
-                                    (
+                                        encoding
+                                    ),
+                                };
+                                let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                                let ctor = {
+                                    let reader_schema = reader_schema.clone();
+                                    move |file| avro::Reader::with_schema(&reader_schema, file)
+                                };
+
+                                let ((source, err_source), capability) =
+                                    source::file(source_config, c.path, read_style, ctor);
+                                err_collection = err_collection.concat(
+                                    &err_source
+                                        .map(DataflowError::SourceError)
+                                        .pass_through("AvroOCF-errors")
+                                        .as_collection(),
+                                );
+                                (
+                                    decode_avro_values(&source, &envelope, reader_schema),
+                                    capability,
+                                )
+                            } else {
+                                let ((ok_source, err_source), capability) = match connector {
+                                    ExternalSourceConnector::Kafka(kc) => {
+                                        let (source, capability) = source::kafka(source_config, kc);
                                         (
-                                            source.map(|(_key, (payload, aux_num))| {
-                                                (payload, aux_num)
-                                            }),
-                                            operator::empty(region),
-                                        ),
-                                        capability,
-                                    )
-                                }
-                                ExternalSourceConnector::Kinesis(kc) => {
-                                    let (ok_source, cap) = source::kinesis(source_config, kc);
-                                    ((ok_source, operator::empty(region)), cap)
-                                }
-                                ExternalSourceConnector::File(c) => {
-                                    let read_style = if c.tail {
-                                        FileReadStyle::TailFollowFd
-                                    } else {
-                                        FileReadStyle::ReadOnce
-                                    };
-                                    let ctor =
-                                        |file| Ok(std::io::BufReader::new(file).split(b'\n'));
-                                    source::file(source_config, c.path, read_style, ctor)
-                                }
-                                ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                                            (
+                                                source.map(|(_key, (payload, aux_num))| {
+                                                    (payload, aux_num)
+                                                }),
+                                                operator::empty(region),
+                                            ),
+                                            capability,
+                                        )
+                                    }
+                                    ExternalSourceConnector::Kinesis(kc) => {
+                                        let (ok_source, cap) = source::kinesis(source_config, kc);
+                                        ((ok_source, operator::empty(region)), cap)
+                                    }
+                                    ExternalSourceConnector::File(c) => {
+                                        let read_style = if c.tail {
+                                            FileReadStyle::TailFollowFd
+                                        } else {
+                                            FileReadStyle::ReadOnce
+                                        };
+                                        let ctor =
+                                            |file| Ok(std::io::BufReader::new(file).split(b'\n'));
+                                        source::file(source_config, c.path, read_style, ctor)
+                                    }
+                                    ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                                };
+                                err_collection = err_collection.concat(
+                                    &err_source
+                                        .map(DataflowError::SourceError)
+                                        .pass_through("source-errors")
+                                        .as_collection(),
+                                );
+
+                                // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+                                // a hypothetical future avro_extract, protobuf_extract, etc.
+                                let stream = decode_values(
+                                    &ok_source,
+                                    encoding,
+                                    &dataflow.debug_name,
+                                    &envelope,
+                                    &mut src.operators,
+                                    fast_forwarded,
+                                );
+
+                                (stream, capability)
                             };
-                            err_collection = err_collection.concat(
-                                &err_source
-                                    .map(DataflowError::SourceError)
-                                    .pass_through("source-errors")
-                                    .as_collection(),
-                            );
-
-                            // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
-                            // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream = decode_values(
-                                &ok_source,
-                                encoding,
-                                &dataflow.debug_name,
-                                &envelope,
-                                &mut src.operators,
-                                fast_forwarded,
-                            );
-
-                            (stream, capability)
-                        };
 
                         let mut collection = match envelope {
                             Envelope::None => stream.as_collection(),

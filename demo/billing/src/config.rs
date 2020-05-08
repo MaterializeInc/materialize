@@ -77,6 +77,13 @@ pub struct Args {
     /// The input time format should be "%Y-%m-%dT%H:%M:%S"
     #[structopt(long, parse(try_from_str = parse_utc_datetime_from_str))]
     pub start_time: Option<DateTime<Utc>>,
+
+    /// How many partitions to create source topic with. If this parameter is specified
+    /// the billing demo will try to create a new instance of the topic with the specified
+    /// number of partitions using the Kafka Admin API. Otherwise, it uses the auto create
+    /// functionality
+    #[structopt(long)]
+    pub partitions: Option<i32>,
 }
 
 impl Args {
@@ -89,6 +96,7 @@ impl Args {
             message_sleep: self.message_sleep,
             seed: self.seed,
             start_time: self.start_time,
+            partitions: self.partitions,
         }
     }
 
@@ -120,6 +128,7 @@ pub struct KafkaConfig {
     pub message_sleep: Option<Duration>,
     pub seed: Option<u64>,
     pub start_time: Option<DateTime<Utc>>,
+    pub partitions: Option<i32>,
 }
 
 #[derive(Debug)]

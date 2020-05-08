@@ -36,6 +36,7 @@ mod avro_ocf;
 mod file;
 mod kafka;
 mod kinesis;
+mod sleep;
 mod sql;
 
 const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
@@ -61,7 +62,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         const DUMMY_AWS_ACCOUNT: &str = "000000000000";
-        const DUMMY_AWS_ACCESS_KEY: &str = "dummy-access-key";
+        const DUMMY_AWS_ACCESS_KEY_ID: &str = "dummy-access-key-id";
         const DUMMY_AWS_SECRET_ACCESS_KEY: &str = "dummy-secret-access-key";
         Config {
             kafka_url: "plaintext://localhost:9092".into(),
@@ -75,7 +76,7 @@ impl Default for Config {
             aws_region: rusoto_core::Region::default(),
             aws_account: DUMMY_AWS_ACCOUNT.into(),
             aws_credentials: AwsCredentials::new(
-                DUMMY_AWS_ACCESS_KEY,
+                DUMMY_AWS_ACCESS_KEY_ID,
                 DUMMY_AWS_SECRET_ACCESS_KEY,
                 None,
                 None,
@@ -268,7 +269,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     );
     vars.insert("testdrive.aws-account".into(), state.aws_account.clone());
     vars.insert(
-        "testdrive.aws-access-key".into(),
+        "testdrive.aws-access-key-id".into(),
         state.aws_credentials.aws_access_key_id().to_owned(),
     );
     vars.insert(
@@ -338,6 +339,11 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         }
                         continue;
                     }
+                    "set-execution-count" => {
+                        // Skip, has already been handled
+                        continue;
+                    }
+                    "random-sleep" => Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?),
                     "set" => {
                         vars.extend(builtin.args);
                         continue;

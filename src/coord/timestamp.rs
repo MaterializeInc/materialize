@@ -1247,7 +1247,7 @@ impl Timestamper {
     ) -> Option<RtKinesisConnector> {
         let (kinesis_client, cached_shard_ids) = match block_on(aws_util::kinesis::kinesis_client(
             kinc.region.clone(),
-            kinc.access_key.clone(),
+            kinc.access_key_id.clone(),
             kinc.secret_access_key.clone(),
             kinc.token.clone(),
         )) {
@@ -1290,7 +1290,6 @@ impl Timestamper {
         let mut config = ClientConfig::new();
         config
             .set("auto.offset.reset", "earliest")
-            .set("group.id", &format!("materialize-rt-{}-{}", &kc.topic, id))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", "6000")
@@ -1298,6 +1297,12 @@ impl Timestamper {
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &kc.url.to_string());
+
+        let group_id_prefix = kc.group_id_prefix.unwrap_or_else(String::new);
+        config.set(
+            "group.id",
+            &format!("{}materialize-rt-{}-{}", group_id_prefix, &kc.topic, id),
+        );
 
         for (k, v) in &kc.config_options {
             config.set(k, v);
@@ -1464,10 +1469,6 @@ impl Timestamper {
     ) -> Option<ByoKafkaConnector> {
         let mut config = ClientConfig::new();
         config
-            .set(
-                "group.id",
-                &format!("materialize-byo-{}-{}", &timestamp_topic, id),
-            )
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
@@ -1476,6 +1477,16 @@ impl Timestamper {
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &kc.url.to_string());
+
+        let group_id_prefix = kc.group_id_prefix.clone().unwrap_or_else(String::new);
+        config.set(
+            "group.id",
+            &format!(
+                "{}materialize-byo-{}-{}",
+                group_id_prefix, &timestamp_topic, id
+            ),
+        );
+
         for (k, v) in &kc.config_options {
             config.set(k, v);
         }

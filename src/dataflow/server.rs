@@ -99,30 +99,54 @@ pub enum SequencedCommand {
     DropSinks(Vec<GlobalId>),
     /// Drop the indexes bound to these namees.
     DropIndexes(Vec<GlobalId>),
-    /// Peek at a materialized view.
+    /// Peek at an arrangement.
+    ///
+    /// This request elicits data from the worker, by naming an
+    /// arrangement and some actions to appy to the results before
+    /// returning them.
     Peek {
+        /// The identifier of the arrangement.
         id: GlobalId,
+        /// The identifier of this peek request.
+        ///
+        /// Used in responses and cancelation requests.
         conn_id: u32,
+        /// A communication link for sending a response.
         tx: comm::mpsc::Sender<PeekResponse>,
+        /// The logical timestamp at which the arrangement is queried.
         timestamp: Timestamp,
+        /// Actions to apply to the result set before returning them.
         finishing: RowSetFinishing,
+        /// A projection that should be applied to results.
         project: Option<Vec<usize>>,
+        /// A list of predicates that should restrict the set of results.
         filter: Vec<expr::ScalarExpr>,
     },
     /// Cancel the peek associated with the given `conn_id`.
-    CancelPeek { conn_id: u32 },
+    CancelPeek {
+        /// The identifier of the peek request to cancel.
+        conn_id: u32,
+    },
     /// Create a local input named `id`
     CreateLocalInput {
+        /// A name to use for the input.
         name: String,
+        /// A globally unique identifier to use for the source.
         index_id: GlobalId,
+        /// TODO(wangandi) what does this describe?
         index: IndexDesc,
+        /// The relation type of the input.
         on_type: RelationType,
+        /// Initial setting of the input's timestamp capability.
         advance_to: Timestamp,
     },
     /// Insert `updates` into the local input named `id`.
     Insert {
+        /// Identifier of the local input.
         id: GlobalId,
+        /// A list of updates to be introduced to the input.
         updates: Vec<Update>,
+        /// A timestamp to which the input's capability should be advanced.
         advance_to: Timestamp,
     },
     /// Enable compaction in views.
@@ -135,10 +159,15 @@ pub enum SequencedCommand {
     AppendLog(MaterializedEvent),
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
+        /// TODO(ncrooks)
         id: SourceInstanceId,
+        /// TODO(ncrooks)
         partition_count: i32,
+        /// TODO(ncrooks)
         pid: PartitionId,
+        /// TODO(ncrooks)
         timestamp: Timestamp,
+        /// TODO(ncrooks)
         offset: i64,
     },
     /// Request that feedback is streamed to the provided channel.
@@ -150,10 +179,13 @@ pub enum SequencedCommand {
 /// Information from timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerFeedbackWithMeta {
+    /// Identifies the worker by its identifier.
     pub worker_id: usize,
+    /// The feedback itself.
     pub message: WorkerFeedback,
 }
 
+/// Responses the worker can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
@@ -236,6 +268,7 @@ where
 /// the first offset >= `x`.
 pub type TimestampHistories =
     Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<(i32, Timestamp, i64)>>>>>;
+/// TODO(ncrooks)
 pub type TimestampChanges = Rc<
     RefCell<
         Vec<(
@@ -245,6 +278,10 @@ pub type TimestampChanges = Rc<
     >,
 >;
 
+/// State maintained for each worker thread.
+///
+/// Much of this state can be viewed as local variables for the worker thread,
+/// holding state that persists across function calls.
 struct Worker<'w, A>
 where
     A: Allocate,

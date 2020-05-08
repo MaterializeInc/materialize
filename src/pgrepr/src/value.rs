@@ -10,13 +10,15 @@
 use std::error::Error;
 use std::str;
 
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
+use ore::fmt::FormatBuffer;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::Jsonb;
-use repr::{strconv, ColumnType, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::strconv::{self, Nestable};
+use repr::{Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 use crate::{Format, Interval, Numeric, Type};
 
@@ -63,8 +65,8 @@ impl Value {
     ///
     /// The conversion happens in the obvious manner, except that `Datum::Null`
     /// is converted to `None` to align with how PostgreSQL handles NULL.
-    pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<Value> {
-        match (datum, &typ.scalar_type) {
+    pub fn from_datum(datum: Datum, typ: &ScalarType) -> Option<Value> {
+        match (datum, typ) {
             (Datum::Null, _) => None,
             (Datum::True, ScalarType::Bool) => Some(Value::Bool(true)),
             (Datum::False, ScalarType::Bool) => Some(Value::Bool(false)),
@@ -83,14 +85,11 @@ impl Value {
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
             (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
-            (Datum::List(list), ScalarType::List(elem_type)) => {
-                let col_type = ColumnType::new((**elem_type).clone()).nullable(true);
-                Some(Value::List(
-                    list.iter()
-                        .map(|elem| Value::from_datum(elem, &col_type))
-                        .collect(),
-                ))
-            }
+            (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
+                list.iter()
+                    .map(|elem| Value::from_datum(elem, elem_type))
+                    .collect(),
+            )),
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -102,7 +101,7 @@ impl Value {
     /// not the datum.
     ///
     /// To construct a null datum, see the [`null_datum`] function.
-    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: Type) -> (Datum<'a>, ScalarType) {
+    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, ScalarType) {
         match self {
             Value::Bool(true) => (Datum::True, ScalarType::Bool),
             Value::Bool(false) => (Datum::False, ScalarType::Bool),
@@ -127,13 +126,13 @@ impl Value {
             ),
             Value::List(elems) => {
                 let elem_pg_type = match typ {
-                    Type::List(t) => *t,
+                    Type::List(t) => &*t,
                     _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
                 };
-                let (_, elem_type) = null_datum(elem_pg_type.clone());
+                let (_, elem_type) = null_datum(&elem_pg_type);
                 let mut packer = RowPacker::new();
                 packer.push_list(elems.into_iter().map(|elem| match elem {
-                    Some(elem) => elem.into_datum(buf, elem_pg_type.clone()).0,
+                    Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
                     None => Datum::Null,
                 }));
                 (
@@ -147,14 +146,19 @@ impl Value {
     /// Serializes this value to `buf` in the specified `format`.
     pub fn encode(&self, format: Format, buf: &mut BytesMut) {
         match format {
-            Format::Text => self.encode_text(buf),
+            Format::Text => {
+                self.encode_text(buf);
+            }
             Format::Binary => self.encode_binary(buf),
         }
     }
 
     /// Serializes this value to `buf` using the [text encoding
     /// format](Format::Text).
-    pub fn encode_text(&self, buf: &mut BytesMut) {
+    pub fn encode_text<F>(&self, buf: &mut F) -> Nestable
+    where
+        F: FormatBuffer,
+    {
         match self {
             Value::Bool(b) => strconv::format_bool(buf, *b),
             Value::Bytea(b) => strconv::format_bytes(buf, b),
@@ -168,7 +172,7 @@ impl Value {
             Value::Float4(f) => strconv::format_float32(buf, *f),
             Value::Float8(f) => strconv::format_float64(buf, *f),
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
-            Value::Text(s) => buf.put(s.as_bytes()),
+            Value::Text(s) => strconv::format_string(buf, s),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js),
             Value::List(elems) => encode_list(buf, elems),
         }
@@ -208,7 +212,7 @@ impl Value {
     /// `format`.
     pub fn decode(
         format: Format,
-        ty: Type,
+        ty: &Type,
         raw: &[u8],
     ) -> Result<Value, Box<dyn Error + Sync + Send>> {
         match format {
@@ -219,7 +223,7 @@ impl Value {
 
     /// Deserializes a value of type `ty` from `raw` using the [text encoding
     /// format](Format::Text).
-    pub fn decode_text(ty: Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+    pub fn decode_text(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         let raw = str::from_utf8(raw)?;
         Ok(match ty {
             Type::Bool => Value::Bool(strconv::parse_bool(raw)?),
@@ -243,7 +247,7 @@ impl Value {
 
     /// Deserializes a value of type `ty` from `raw` using the [binary encoding
     /// format](Format::Binary).
-    pub fn decode_binary(ty: Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
+    pub fn decode_binary(ty: &Type, raw: &[u8]) -> Result<Value, Box<dyn Error + Sync + Send>> {
         match ty {
             Type::Bool => bool::from_sql(ty.inner(), raw).map(Value::Bool),
             Type::Bytea => Vec::<u8>::from_sql(ty.inner(), raw).map(Value::Bytea),
@@ -272,7 +276,7 @@ impl Value {
 }
 
 /// Constructs a null datum of the specified type.
-pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
+pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
     let ty = match ty {
         Type::Bool => ScalarType::Bool,
         Type::Bytea => ScalarType::Bytes,
@@ -289,7 +293,7 @@ pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
         Type::Timestamp => ScalarType::Timestamp,
         Type::TimestampTz => ScalarType::TimestampTz,
         Type::List(t) => {
-            let (_, elem_type) = null_datum(*t);
+            let (_, elem_type) = null_datum(t);
             ScalarType::List(Box::new(elem_type))
         }
         Type::Unknown => ScalarType::Unknown,
@@ -304,33 +308,27 @@ pub fn null_datum(ty: Type) -> (Datum<'static>, ScalarType) {
 pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
     row.iter()
         .zip(typ.column_types.iter())
-        .map(|(col, typ)| Value::from_datum(col, typ))
+        .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
 }
 
-pub fn encode_list(buf: &mut BytesMut, elems: &[Option<Value>]) {
-    // we eat a lot of copies in encode_list and in strconv::format_list because it's hard to be generic over both BytesMut here and String in func
-    let mut tmp = String::new();
-    strconv::format_list(
-        &mut tmp,
-        elems,
-        |elem| elem.is_none(),
-        |buf, elem| {
-            let mut tmp = BytesMut::new();
-            elem.as_ref().unwrap().encode_text(&mut tmp);
-            buf.push_str(str::from_utf8(&tmp).unwrap());
-        },
-    );
-    buf.extend_from_slice(tmp.as_bytes());
+pub fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
+where
+    F: FormatBuffer,
+{
+    strconv::format_list(buf, elems, |buf, elem| match elem {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+    })
 }
 
 pub fn decode_list(elem_type: &Type, raw: &str) -> Result<Vec<Option<Value>>, failure::Error> {
     strconv::parse_list(
         raw,
         || None,
-        |elem_text| match Value::decode_text((*elem_type).clone(), elem_text.as_bytes()) {
+        |elem_text| match Value::decode_text(elem_type, elem_text.as_bytes()) {
             Ok(elem) => Ok(Some(elem)),
-            Err(err) => Err(failure::format_err!("{}", err)),
+            Err(e) => Err(failure::Error::from_boxed_compat(e)),
         },
     )
 }

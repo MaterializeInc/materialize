@@ -176,7 +176,7 @@ fn initialize(config: &Args) -> Result<()> {
         }
         warn!("init error, retry in 10 seconds ({} remaining)", counter);
         thread::sleep(Duration::from_secs(10));
-        init_result = initialize(&config);
+        init_result = init_inner(&config);
     }
     Ok(())
 }

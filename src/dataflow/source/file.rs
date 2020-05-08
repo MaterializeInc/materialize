@@ -32,9 +32,12 @@ use crate::server::TimestampHistories;
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
 
+/// Strategies for streaming content from a file.
 #[derive(PartialEq, Eq)]
 pub enum FileReadStyle {
+    /// File is read once and marked complete once the last line is read.
     ReadOnce,
+    /// File is read and continually checked for new content, indefinitely.
     TailFollowFd,
     // TODO: TailFollowName,
 }
@@ -74,6 +77,7 @@ impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
     }
 }
 
+/// Sends a sequence of records and activates a timely operator for each.
 fn send_records<I, Out, Err>(
     iter: I,
     tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
@@ -84,10 +88,15 @@ fn send_records<I, Out, Err>(
 {
     for record in iter {
         let record = record.map_err(Into::into);
+        // TODO: each call to `send` allocates and performs some
+        // atomic work; we could aim to batch up transmissions.
         if tx.send(record).is_err() {
             // The receiver went away, probably due to `DROP SOURCE`
             break;
         }
+        // TODO: this is very spammy for the timely activator; it
+        // appends an address to a list for each activation which
+        // looks like it will be per-record in this case.
         if let Some(activator) = &activator {
             activator
                 .lock()
@@ -98,6 +107,7 @@ fn send_records<I, Out, Err>(
     }
 }
 
+/// Blocking logic to read from a file, intended for its own thread.
 pub fn read_file_task<Ctor, I, Out, Err>(
     path: PathBuf,
     tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
@@ -266,6 +276,7 @@ fn find_matching_timestamp(
     }
 }
 
+/// Create a file-based timely dataflow source operator.
 pub fn file<G, Ctor, I, Out, Err>(
     config: SourceConfig<G>,
     path: PathBuf,

@@ -25,23 +25,23 @@ use rusoto_kinesis::{GetShardIteratorInput, Kinesis, KinesisClient, ListShardsIn
 /// automatically fetching updated credentials if they've expired.
 pub async fn kinesis_client(
     region: Region,
-    access_key: Option<String>,
+    access_key_id: Option<String>,
     secret_access_key: Option<String>,
     token: Option<String>,
 ) -> Result<KinesisClient, anyhow::Error> {
     let request_dispatcher =
         HttpClient::new().context("creating HTTP client for Kinesis client")?;
-    let kinesis_client = match (access_key, secret_access_key) {
-        (Some(access_key), Some(secret_access_key)) => {
+    let kinesis_client = match (access_key_id, secret_access_key) {
+        (Some(access_key_id), Some(secret_access_key)) => {
             info!("Creating a new Kinesis client from provided access_key and secret_access_key");
             KinesisClient::new_with(
                 request_dispatcher,
-                StaticProvider::new(access_key, secret_access_key, token, None),
+                StaticProvider::new(access_key_id, secret_access_key, token, None),
                 region,
             )
         }
         (_, _) => {
-            info!("AWS access_key and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
+            info!("AWS access_key_id and secret_access_key not provided, creating a new Kinesis client using a chain provider.");
             let mut provider = ChainProvider::new();
             provider.set_timeout(Duration::from_secs(10));
             let provider =
