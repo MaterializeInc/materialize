@@ -125,8 +125,8 @@ All of these can be run in parallel.
   - [ ] Spin up a fresh VM and start the load test. To start the load test, ssh
     into the VM and run:
     ```shell script
-    cd materialize
-    bin/mzcompose -f test/performance/perf-kinesis/mzcompose up -d
+    cd materialize/test/performance/perf-kinesis
+    ./mzcompose up -d
     ```
 
   - [ ] Ensure all containers started successfully and are running:
