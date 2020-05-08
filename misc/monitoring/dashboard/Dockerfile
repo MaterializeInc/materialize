@@ -141,6 +141,7 @@ COPY --chown=nobody:nogroup conf/grafana/grafana.ini /etc/grafana/grafana.ini
 # Entrypoint/supervisor/externally visible
 COPY bin/startup.py /bin/startup.py
 COPY bin/log-prefixer.py /bin/log-prefixer.py
+COPY bin/snapshot-prom /bin/snapshot-prom
 
 USER       nobody
 COPY       conf/supervisord.conf /supervisord/supervisord.conf

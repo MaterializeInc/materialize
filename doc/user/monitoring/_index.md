@@ -18,7 +18,9 @@ The only configuration required to get started with the docker image is the
 `MATERIALIZED_URL=<host>:<port>` environment variable.
 
 As an example, if you are running `materialized` in a cloud instance at the IP address
-172.16.0.0, you could get a dashboard by running this command and opening `http://localhost:3000` in your web browser:
+172.16.0.0 (see "Observing Local materialized" below if you are running materialized on
+the same host as the dashboard), you could get a dashboard by running this command and
+opening `http://localhost:3000` in your web browser:
 
 ```console
 #               expose ports  ______point it at materialize______
@@ -66,6 +68,42 @@ Materialize provides a [recommended dashboard][dashboard-json] that you can [imp
 Grafana][graf-import]. It relies on you having configured prometheus to scrape
 materialized.
 
+# Other Setups
+
+Even if you aren't running materialized at web scale, you can still use our web-scale
+tools to observe it.
+
+## Observing Local materialized
+
+### Inside docker-compose or kubernetes
+
+Local schedulers like `docker-compose` (which we use for our demos) or kubernetes will
+typically expose running containers to each other using their service name as a public
+DNS hostname, but _only_ within the network that they are running in.
+
+The easiest way to use the dashboard inside a scheduler is to tell the scheduler to run
+it. [Here is an example][dc-example] of configuring docker-compose to run the dashboard.
+
+### On MacOS, with materialized running outside of Docker
+
+The problem with this is that `localhost` inside of docker cannot, on Docker for Mac,
+refer to the mac network. So instead you must use `host.docker.internal`:
+
+```
+docker run -p 3000:3000 -e MATERIALIZED_URL=host.docker.internal:6875 materialize/dashboard
+```
+
+### On Linux, with materialized running outside of docker
+
+Docker containers use a different network than their host by default, but that is easy to
+get around using the `--network` flag. Using the host network means that ports will be
+allocated from the host, so the `-p` flag is no longer necessary:
+
+```
+docker run --network host -e MATERIALIZED_URL=local:6875 materialize/dashboard
+```
+
 [simplemon-hub]: https://hub.docker.com/repository/docker/materialize/dashboard
-[dashboard-json]: https://github.com/MaterializeInc/materialize/tree/master/misc/monitoring/simple-monitor/user/conf/grafana/dashboards/overview.json
+[dashboard-json]: https://github.com/MaterializeInc/materialize/blob/master/misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
 [graf-import]: https://grafana.com/docs/grafana/latest/reference/export_import/#importing-a-dashboard
+[dc-example]: https://github.com/MaterializeInc/materialize/blob/d793b112758c840c1240eefdd56ca6f7e4f484cf/demo/billing/mzcompose.yml#L60-L70
