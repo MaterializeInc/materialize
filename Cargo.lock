@@ -1604,6 +1604,7 @@ dependencies = [
  "prometheus",
  "rlimit",
  "serde_json",
+ "stream-cancel",
  "sysctl",
  "tempfile",
  "tokio",
@@ -3201,6 +3202,18 @@ dependencies = [
  "sql-parser",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "stream-cancel"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15c2f5be039aed0d08b3596461637480d35858ca4360c905b0e802b934fa8e48"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "pin-project",
+ "tokio",
 ]
 
 [[package]]

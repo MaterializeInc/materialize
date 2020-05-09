@@ -11,10 +11,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::future::TryFutureExt;
-use futures::stream::StreamExt;
+use futures::stream::{Stream, StreamExt};
 use log::error;
-use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::Incoming;
+use tokio::io::{self, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use ore::netio::{self, SniffedStream, SniffingStream};
@@ -48,7 +47,10 @@ impl Mux {
     }
 
     /// Serves incoming TCP traffic from `listener`.
-    pub async fn serve(self, mut incoming: Incoming<'_>) {
+    pub async fn serve<S>(self, mut incoming: S)
+    where
+        S: Stream<Item = io::Result<TcpStream>> + Unpin,
+    {
         let handlers = Arc::new(self.handlers);
         while let Some(conn) = incoming.next().await {
             let conn = match conn {
