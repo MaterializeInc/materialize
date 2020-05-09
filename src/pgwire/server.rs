@@ -21,7 +21,7 @@ use tokio_util::codec::Framed;
 
 use sql::Session;
 
-use crate::codec::{self, Codec};
+use crate::codec::{self, Codec, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::FrontendStartupMessage;
 use crate::protocol::StateMachine;
@@ -109,18 +109,18 @@ impl Server {
                     // the move_ref_patterns feature stabilizes.
                     // See: https://github.com/rust-lang/rust/issues/68354
                     Conn::Unencrypted(mut conn) if self.tls.is_some() => {
-                        conn.write_all(&[b'S']).await?;
+                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                         let tls = self.tls.as_ref().unwrap();
                         Conn::Ssl(tokio_openssl::accept(tls, conn).await?)
                     }
                     mut conn => {
-                        conn.write_all(&[b'N']).await?;
+                        conn.write_all(&[REJECT_ENCRYPTION]).await?;
                         conn
                     }
                 },
 
                 FrontendStartupMessage::GssEncRequest => {
-                    conn.write_all(&[b'N']).await?;
+                    conn.write_all(&[REJECT_ENCRYPTION]).await?;
                     conn
                 }
             }

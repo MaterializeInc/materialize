@@ -15,10 +15,13 @@
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
 use std::convert::TryFrom;
+use std::error::Error;
+use std::fmt;
 use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
+use lazy_static::lazy_static;
 use postgres::error::SqlState;
 use prometheus::{register_int_counter, IntCounter};
 use tokio::io::{self, AsyncRead, AsyncReadExt};
@@ -32,8 +35,6 @@ use crate::message::{
     VERSION_GSSENC, VERSION_SSL,
 };
 
-use lazy_static::lazy_static;
-
 lazy_static! {
     static ref BYTES_SENT: IntCounter = register_int_counter!(
         "mz_pg_sent_bytes",
@@ -42,14 +43,18 @@ lazy_static! {
     .unwrap();
 }
 
+pub const REJECT_ENCRYPTION: u8 = b'N';
+pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
+
 #[derive(Debug)]
 enum CodecError {
     StringNoTerminator,
 }
 
-impl std::error::Error for CodecError {}
-impl std::fmt::Display for CodecError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Error for CodecError {}
+
+impl fmt::Display for CodecError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
             CodecError::StringNoTerminator => "The string does not have a terminator",
         })
