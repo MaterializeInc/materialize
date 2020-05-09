@@ -30,23 +30,23 @@ use std::time::{Duration, Instant};
 
 use compile_time_run::run_command_str;
 use failure::format_err;
-use futures::channel::mpsc::{self, UnboundedSender};
-use futures::future::TryFutureExt;
+use futures::channel::mpsc;
 use futures::stream::StreamExt;
 use log::error;
-use tokio::io::{self, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use tokio::io;
+use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
-use ore::future::OreTryFutureExt;
-use ore::netio;
-use ore::netio::{SniffedStream, SniffingStream};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
+use crate::mux::Mux;
+
 mod http;
+mod mux;
 
 /// The version of the crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -81,28 +81,9 @@ pub fn version() -> String {
 }
 
 /// Configuration for a `materialized` server.
+#[derive(Debug, Clone)]
 pub struct Config {
-    /// The interval at which the internal Timely cluster should publish updates
-    /// about its state.
-    pub logging_granularity: Option<Duration>,
-    /// The interval at which sources should be timestamped.
-    pub timestamp_frequency: Duration,
-    /// The maximum size of a timestamp batch.
-    pub max_increment_ts_size: i64,
-    /// If set to true, records RT consistency information to the SQL lite store
-    /// and attempts to recover that information on startup
-    pub persist_ts: bool,
-    /// The historical window in which distinctions are maintained for arrangements.
-    ///
-    /// As arrangements accept new timestamps they may optionally collapse prior
-    /// timestamps to the same value, retaining their effect but removing their
-    /// distinction. A large value or `None` results in a large amount of historical
-    /// detail for arrangements; this increases the logical times at which they can
-    /// be accurately queried, but consumes more memory. A low value reduces the
-    /// amount of memory required but also risks not being able to use the arrangement
-    /// in a query that has other constraints on the timestamps used (e.g. when joined
-    /// with other arrangements).
-    pub logical_compaction_window: Option<Duration>,
+    // === Timely and Differential worker options. ===
     /// The number of Timely worker threads that this process should host.
     pub threads: usize,
     /// The ID of this process in the cluster. IDs must be contiguously
@@ -111,17 +92,47 @@ pub struct Config {
     /// The addresses of each process in the cluster, including this node,
     /// in order of process ID.
     pub addresses: Vec<SocketAddr>,
+
+    // === Performance tuning options. ===
+    /// The interval at which the internal Timely cluster should publish updates
+    /// about its state.
+    pub logging_granularity: Option<Duration>,
+    /// The historical window in which distinctions are maintained for
+    /// arrangements.
+    ///
+    /// As arrangements accept new timestamps they may optionally collapse prior
+    /// timestamps to the same value, retaining their effect but removing their
+    /// distinction. A large value or `None` results in a large amount of
+    /// historical detail for arrangements; this increases the logical times at
+    /// which they can be accurately queried, but consumes more memory. A low
+    /// value reduces the amount of memory required but also risks not being
+    /// able to use the arrangement in a query that has other constraints on the
+    /// timestamps used (e.g. when joined with other arrangements).
+    pub logical_compaction_window: Option<Duration>,
+    /// The interval at which sources should be timestamped.
+    pub timestamp_frequency: Duration,
+    /// The maximum size of a timestamp batch.
+    pub max_increment_ts_size: i64,
+    /// Whether to record realtime consistency information to the data directory
+    /// and attempt to recover that information on startup.
+    pub persist_ts: bool,
+    /// Whether to collect metrics. If enabled, metrics can be collected by
+    /// e.g. Prometheus via the `/metrics` HTTP endpoint.
+    pub gather_metrics: bool,
+
+    // === Connection options. ===
+    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
+    /// where <addr_port> is the address of this process's entry in `addresses`.
+    pub listen_addr: Option<SocketAddr>,
+    /// TLS encryption configuration.
+    pub tls: Option<TlsConfig>,
+
+    // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: Option<PathBuf>,
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
-    /// Whether to collect metrics. If enabled, metrics can be collected by
-    /// e.g. Prometheus via the `/metrics` HTTP endpoint.
-    pub gather_metrics: bool,
-    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
-    /// where <addr_port> is the address of this process's entry in `addresses`.
-    pub listen_addr: Option<SocketAddr>,
 }
 
 impl Config {
@@ -132,49 +143,21 @@ impl Config {
     }
 }
 
-async fn handle_connection(
-    conn: TcpStream,
-    switchboard: Switchboard<SniffedStream<TcpStream>>,
-    cmd_tx: UnboundedSender<coord::Command>,
-    gather_metrics: bool,
-    start_time: Instant,
-) {
-    // Sniff out what protocol we've received. Choosing how many bytes to sniff
-    // is a delicate business. Read too many bytes and you'll stall out
-    // protocols with small handshakes, like pgwire. Read too few bytes and
-    // you won't be able to tell what protocol you have. For now, eight bytes
-    // is the magic number, but this may need to change if we learn to speak
-    // new protocols.
-    let mut ss = SniffingStream::new(conn);
-    let mut buf = [0; 8];
-    let nread = match netio::read_exact_or_eof(&mut ss, &mut buf).await {
-        Ok(nread) => nread,
-        Err(err) => {
-            error!("error handling request: {}", err);
-            return;
-        }
-    };
-    let buf = &buf[..nread];
+/// Configures TLS encryption for connections.
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    /// The path to the TLS certificate.
+    pub cert: PathBuf,
+    /// The path to the TLS key.
+    pub key: PathBuf,
+}
 
-    let res = if pgwire::match_handshake(buf) {
-        pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).await
-    } else if http::match_handshake(buf) {
-        http::handle_connection(ss.into_sniffed(), cmd_tx, gather_metrics, start_time).await
-    } else if comm::protocol::match_handshake(buf) {
-        switchboard
-            .handle_connection(ss.into_sniffed())
-            .err_into()
-            .await
-    } else {
-        log::warn!("unknown protocol connection!");
-        ss.into_sniffed()
-            .write_all(b"unknown protocol\n")
-            .discard()
-            .err_into()
-            .await
-    };
-    if let Err(err) = res {
-        error!("error handling request: {}", err)
+impl TlsConfig {
+    fn acceptor(&self) -> Result<SslAcceptor, failure::Error> {
+        let mut builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+        builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
+        builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
+        Ok(builder.build())
     }
 }
 
@@ -216,10 +199,32 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     );
 
     let switchboard = Switchboard::new(config.addresses, config.process, executor.clone());
-    let gather_metrics = config.gather_metrics;
     runtime.spawn({
-        let switchboard = switchboard.clone();
-        let cmd_tx = Arc::downgrade(&cmd_tx);
+        let mux = {
+            let mut mux = Mux::new();
+            mux.add_handler(switchboard.clone());
+            if is_primary {
+                // The primary is responsible for pgwire and HTTP traffic in
+                // addition to switchboard traffic.
+                let cmd_tx = Arc::downgrade(&cmd_tx);
+                let tls = match config.tls {
+                    None => None,
+                    Some(tls_config) => Some(tls_config.acceptor()?),
+                };
+                mux.add_handler(pgwire::Server::new(
+                    tls.clone(),
+                    cmd_tx.clone(),
+                    config.gather_metrics,
+                ));
+                mux.add_handler(http::Server::new(
+                    tls,
+                    cmd_tx,
+                    config.gather_metrics,
+                    start_time,
+                ));
+            }
+            Arc::new(mux)
+        };
         async move {
             let mut incoming = listener.incoming();
             while let Some(conn) = incoming.next().await {
@@ -242,26 +247,8 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                 //
                 // [0]: https://news.ycombinator.com/item?id=10608356
                 conn.set_nodelay(true).expect("set_nodelay failed");
-                if is_primary {
-                    if let Some(cmd_tx) = cmd_tx.upgrade() {
-                        tokio::spawn(handle_connection(
-                            conn,
-                            switchboard.clone(),
-                            (*cmd_tx).clone(),
-                            gather_metrics,
-                            start_time,
-                        ));
-                        continue;
-                    }
-                }
-                // When not the primary, or when shutting down, we only need to
-                // route switchboard traffic.
-                let ss = SniffingStream::new(conn).into_sniffed();
-                tokio::spawn(
-                    switchboard
-                        .handle_connection(ss)
-                        .map_err(|err| error!("error handling connection: {}", err)),
-                );
+                let mux = mux.clone();
+                tokio::spawn(async move { mux.handle_connection(conn).await });
             }
         }
     });

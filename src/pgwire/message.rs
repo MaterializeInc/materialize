@@ -83,12 +83,9 @@ impl NoticeSeverity {
     }
 }
 
-/// A decoded frontend pgwire [message], representing instructions for the
-/// backend.
-///
-/// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
-#[derive(Debug)]
-pub enum FrontendMessage {
+/// Like [`FrontendMessage`], but only the messages that can occur during
+/// startup protocol negotiation.
+pub enum FrontendStartupMessage {
     /// Begin a connection.
     Startup {
         version: i32,
@@ -108,7 +105,14 @@ pub enum FrontendMessage {
         /// The secret key for the target connection.
         secret_key: u32,
     },
+}
 
+/// A decoded frontend pgwire [message], representing instructions for the
+/// backend.
+///
+/// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
+#[derive(Debug)]
+pub enum FrontendMessage {
     /// Execute the specified SQL.
     ///
     /// This is issued as part of the simple query flow.
@@ -213,10 +217,6 @@ pub enum FrontendMessage {
 impl FrontendMessage {
     pub fn name(&self) -> &'static str {
         match self {
-            FrontendMessage::Startup { .. } => "startup",
-            FrontendMessage::SslRequest => "ssl_request",
-            FrontendMessage::GssEncRequest => "gssenc_request",
-            FrontendMessage::CancelRequest { .. } => "cancel_request",
             FrontendMessage::Query { .. } => "query",
             FrontendMessage::Parse { .. } => "parse",
             FrontendMessage::DescribeStatement { .. } => "describe_statement",
@@ -232,13 +232,6 @@ impl FrontendMessage {
     }
 }
 
-#[derive(Debug)]
-pub enum EncryptionType {
-    None,
-    Ssl,
-    GssApi,
-}
-
 /// Internal representation of a backend [message]
 ///
 /// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
@@ -249,7 +242,6 @@ pub enum BackendMessage {
         tag: String,
     },
     EmptyQueryResponse,
-    EncryptionResponse(EncryptionType),
     ReadyForQuery(TransactionStatus),
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<pgrepr::Value>>, Arc<Vec<pgrepr::Format>>),

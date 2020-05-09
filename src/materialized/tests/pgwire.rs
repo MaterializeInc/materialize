@@ -16,7 +16,10 @@ use std::thread;
 use std::time::Duration;
 
 use futures::stream::{self, StreamExt, TryStreamExt};
+use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
+use postgres::config::SslMode;
 use postgres::error::SqlState;
+use postgres_openssl::MakeTlsConnector;
 use tokio::runtime::Runtime;
 
 pub mod util;
@@ -343,6 +346,122 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
                 "catalog item 'materialize.public.logging_derived' depends on system logging, \
                  but logging is disabled"
             ),
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_tls() -> Result<(), Box<dyn Error>> {
+    fn make_tls<F>(configure: F) -> Result<MakeTlsConnector, Box<dyn Error>>
+    where
+        F: FnOnce(&mut SslConnectorBuilder) -> Result<(), openssl::error::ErrorStack>,
+    {
+        let mut connector_builder = SslConnector::builder(SslMethod::tls())?;
+        configure(&mut connector_builder)?;
+        Ok(MakeTlsConnector::new(connector_builder.build()))
+    }
+
+    let make_nonverifying_tls = || {
+        make_tls(|b| {
+            b.set_verify(SslVerifyMode::NONE);
+            Ok(())
+        })
+    };
+
+    let smoke_test = |mut client: postgres::Client| -> Result<(), Box<dyn Error>> {
+        assert_eq!(client.query_one("SELECT 1", &[])?.get::<_, i32>(0), 1);
+        Ok(())
+    };
+
+    // Test TLS modes with a server that does not support TLS.
+    {
+        let config = util::Config::default();
+        let (server, _client) = util::start_server(config)?;
+
+        // Explicitly disabling TLS should succeed.
+        smoke_test(
+            server
+                .pg_config()
+                .ssl_mode(SslMode::Disable)
+                .connect(make_nonverifying_tls()?)?,
+        )?;
+
+        // Preferring TLS should fall back to no TLS.
+        smoke_test(
+            server
+                .pg_config()
+                .ssl_mode(SslMode::Prefer)
+                .connect(make_nonverifying_tls()?)?,
+        )?;
+
+        // Requiring TLS should fail.
+        match server
+            .pg_config()
+            .ssl_mode(SslMode::Require)
+            .connect(make_nonverifying_tls()?)
+        {
+            Ok(_) => panic!("expected connection to fail"),
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "error performing TLS handshake: server does not support TLS"
+            ),
+        }
+    }
+
+    // Test TLS modes with a server that does support TLS.
+    {
+        let temp_dir = tempfile::tempdir()?;
+        let cert_path = Path::join(temp_dir.path(), "server.crt");
+        let key_path = Path::join(temp_dir.path(), "server.key");
+        util::generate_certs(&cert_path, &key_path)?;
+
+        let config = util::Config::default().enable_tls(cert_path.clone(), key_path);
+        let (server, _client) = util::start_server(config)?;
+
+        // Disabling TLS should succeed.
+        smoke_test(
+            server
+                .pg_config()
+                .ssl_mode(SslMode::Disable)
+                .connect(make_nonverifying_tls()?)?,
+        )?;
+
+        // Preferring TLS should succeed.
+        smoke_test(
+            server
+                .pg_config()
+                .ssl_mode(SslMode::Prefer)
+                .connect(make_nonverifying_tls()?)?,
+        )?;
+
+        // Requiring TLS should succeed.
+        smoke_test(
+            server
+                .pg_config()
+                .ssl_mode(SslMode::Require)
+                .connect(make_nonverifying_tls()?)?,
+        )?;
+
+        // Requiring TLS with server identity verification should succeed when
+        // the server's certificate is set as trusted.
+        smoke_test(
+            server
+                .pg_config()
+                .ssl_mode(SslMode::Require)
+                .connect(make_tls(|b| b.set_ca_file(&cert_path))?)?,
+        )?;
+
+        // Requiring TLS with server identity verification should fail when the
+        // server's certificate is not trusted.
+        match server
+            .pg_config()
+            .ssl_mode(SslMode::Require)
+            .connect(make_tls(|_| Ok(()))?)
+        {
+            Ok(_) => panic!("expected connection to fail"),
+            Err(e) => assert!(e.to_string().contains("certificate verify failed")),
         }
     }
 

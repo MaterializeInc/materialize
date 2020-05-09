@@ -15,24 +15,25 @@
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
 use std::convert::TryFrom;
+use std::error::Error;
+use std::fmt;
 use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
+use lazy_static::lazy_static;
 use postgres::error::SqlState;
 use prometheus::{register_int_counter, IntCounter};
-use tokio::io;
+use tokio::io::{self, AsyncRead, AsyncReadExt};
 use tokio_util::codec::{Decoder, Encoder};
 
 use ore::cast::CastFrom;
 use ore::netio;
 
 use crate::message::{
-    BackendMessage, EncryptionType, FrontendMessage, TransactionStatus, VERSION_CANCEL,
+    BackendMessage, FrontendMessage, FrontendStartupMessage, TransactionStatus, VERSION_CANCEL,
     VERSION_GSSENC, VERSION_SSL,
 };
-
-use lazy_static::lazy_static;
 
 lazy_static! {
     static ref BYTES_SENT: IntCounter = register_int_counter!(
@@ -42,14 +43,18 @@ lazy_static! {
     .unwrap();
 }
 
+pub const REJECT_ENCRYPTION: u8 = b'N';
+pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
+
 #[derive(Debug)]
 enum CodecError {
     StringNoTerminator,
 }
 
-impl std::error::Error for CodecError {}
-impl std::fmt::Display for CodecError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Error for CodecError {}
+
+impl fmt::Display for CodecError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
             CodecError::StringNoTerminator => "The string does not have a terminator",
         })
@@ -82,13 +87,8 @@ impl Codec {
     /// Creates a new `Codec`.
     pub fn new() -> Codec {
         Codec {
-            decode_state: DecodeState::Startup,
+            decode_state: DecodeState::Head,
         }
-    }
-
-    /// Instructs the codec to expect another startup message.
-    pub fn reset_decode_state(&mut self) {
-        self.decode_state = DecodeState::Startup;
     }
 
     fn encode_error_notice_response(
@@ -127,18 +127,8 @@ impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
-        if let BackendMessage::EncryptionResponse(typ) = msg {
-            dst.put_u8(match typ {
-                EncryptionType::None => b'N',
-                EncryptionType::Ssl => b'S',
-                EncryptionType::GssApi => b'G',
-            });
-            return Ok(());
-        }
-
         // Write type byte.
         let byte = match msg {
-            BackendMessage::EncryptionResponse(_) => unreachable!(),
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_, _) => b'D',
@@ -167,7 +157,6 @@ impl Encoder<BackendMessage> for Codec {
 
         // Write message contents.
         match msg {
-            BackendMessage::EncryptionResponse(_) => unreachable!(),
             BackendMessage::CopyOutResponse {
                 overall_format,
                 column_formats,
@@ -296,9 +285,42 @@ impl<B: BufMut> Pgbuf for B {
     }
 }
 
+pub async fn decode_startup<A>(mut conn: A) -> Result<FrontendStartupMessage, io::Error>
+where
+    A: AsyncRead + Unpin,
+{
+    let mut frame_len = [0; 4];
+    conn.read_exact(&mut frame_len).await?;
+    let frame_len = parse_frame_len(&frame_len)?;
+
+    let mut buf = BytesMut::new();
+    buf.resize(frame_len, b'0');
+    conn.read_exact(&mut buf).await?;
+
+    let mut buf = Cursor::new(&buf);
+    let version = buf.read_i32()?;
+    if version == VERSION_CANCEL {
+        Ok(FrontendStartupMessage::CancelRequest {
+            conn_id: buf.read_u32()?,
+            secret_key: buf.read_u32()?,
+        })
+    } else if version == VERSION_SSL {
+        Ok(FrontendStartupMessage::SslRequest)
+    } else if version == VERSION_GSSENC {
+        Ok(FrontendStartupMessage::GssEncRequest)
+    } else {
+        let mut params = vec![];
+        while buf.peek_byte()? != 0 {
+            let name = buf.read_cstr()?.to_owned();
+            let value = buf.read_cstr()?.to_owned();
+            params.push((name, value));
+        }
+        Ok(FrontendStartupMessage::Startup { version, params })
+    }
+}
+
 #[derive(Debug)]
 enum DecodeState {
-    Startup,
     Head,
     Data(u8, usize),
 }
@@ -326,16 +348,6 @@ impl Decoder for Codec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
         loop {
             match self.decode_state {
-                DecodeState::Startup => {
-                    if src.len() < 4 {
-                        return Ok(None);
-                    }
-                    let frame_len = parse_frame_len(&src)?;
-                    src.advance(4);
-                    src.reserve(frame_len);
-                    self.decode_state = DecodeState::Data(b's', frame_len);
-                }
-
                 DecodeState::Head => {
                     if src.len() < 5 {
                         return Ok(None);
@@ -354,10 +366,6 @@ impl Decoder for Codec {
                     let buf = src.split_to(frame_len).freeze();
                     let buf = Cursor::new(&buf);
                     let msg = match msg_type {
-                        // Initialization and termination.
-                        b's' => decode_startup(buf)?,
-                        b'X' => decode_terminate(buf)?,
-
                         // Simple query flow.
                         b'Q' => decode_query(buf)?,
 
@@ -369,6 +377,9 @@ impl Decoder for Codec {
                         b'H' => decode_flush(buf)?,
                         b'S' => decode_sync(buf)?,
                         b'C' => decode_close(buf)?,
+
+                        // Termination.
+                        b'X' => decode_terminate(buf)?,
 
                         // Invalid.
                         _ => {
@@ -384,28 +395,6 @@ impl Decoder for Codec {
                 }
             }
         }
-    }
-}
-
-fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
-    let version = buf.read_i32()?;
-    if version == VERSION_CANCEL {
-        Ok(FrontendMessage::CancelRequest {
-            conn_id: buf.read_u32()?,
-            secret_key: buf.read_u32()?,
-        })
-    } else if version == VERSION_SSL {
-        Ok(FrontendMessage::SslRequest)
-    } else if version == VERSION_GSSENC {
-        Ok(FrontendMessage::GssEncRequest)
-    } else {
-        let mut params = vec![];
-        while buf.peek_byte()? != 0 {
-            let name = buf.read_cstr()?.to_owned();
-            let value = buf.read_cstr()?.to_owned();
-            params.push((name, value));
-        }
-        Ok(FrontendMessage::Startup { version, params })
     }
 }
 

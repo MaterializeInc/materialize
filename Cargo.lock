@@ -1576,7 +1576,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "materialized"
 version = "0.2.3-dev"
 dependencies = [
- "avro",
+ "async-trait",
  "backtrace",
  "chrono",
  "comm",
@@ -1595,16 +1595,19 @@ dependencies = [
  "lazy_static",
  "log",
  "once_cell",
+ "openssl",
  "ore",
  "parse_duration",
  "pgwire",
  "postgres",
+ "postgres-openssl",
  "prometheus",
  "rlimit",
  "serde_json",
  "sysctl",
  "tempfile",
  "tokio",
+ "tokio-openssl",
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
@@ -2144,6 +2147,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "openssl",
  "ordered-float",
  "ore",
  "pgrepr",
@@ -2153,6 +2157,7 @@ dependencies = [
  "repr",
  "sql",
  "tokio",
+ "tokio-openssl",
  "tokio-util",
 ]
 
@@ -2234,6 +2239,20 @@ dependencies = [
  "futures",
  "log",
  "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
+name = "postgres-openssl"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f10ea2d77c744e1846d03b58362679e51c6647acf0e6a65a1f1e5f0d5e99387"
+dependencies = [
+ "bytes",
+ "futures",
+ "openssl",
+ "tokio",
+ "tokio-openssl",
  "tokio-postgres",
 ]
 
@@ -3546,6 +3565,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-openssl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
+dependencies = [
+ "openssl",
+ "tokio",
 ]
 
 [[package]]

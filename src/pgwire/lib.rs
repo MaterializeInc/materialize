@@ -25,6 +25,8 @@ mod id_alloc;
 mod message;
 mod protocol;
 mod secrets;
+mod server;
 
 pub use codec::Codec;
-pub use protocol::{match_handshake, serve};
+pub use protocol::match_handshake;
+pub use server::Server;

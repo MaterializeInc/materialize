@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::Mutex;
 use std::thread;
+use std::time::Duration;
 
 use backtrace::Backtrace;
 use failure::{bail, format_err, ResultExt};
@@ -51,14 +52,49 @@ fn run() -> Result<(), failure::Error> {
     panic::set_hook(Box::new(handle_panic));
 
     let args: Vec<_> = env::args().collect();
-
     let mut opts = getopts::Options::new();
+
+    // Options that request informational output.
     opts.optflag("h", "help", "show this usage information");
     opts.optflag("v", "version", "print version and exit");
+
+    // Accidental debug build protection.
+    if cfg!(debug_assertions) {
+        opts.optflag("", "dev", "allow running this dev (unoptimized) build");
+    }
+
+    // Timely and Differential worker options.
+    opts.optopt("w", "threads", "number of per-process worker threads", "N");
+    opts.optopt(
+        "p",
+        "process",
+        "identity of this process (default 0)",
+        "INDEX",
+    );
+    opts.optopt(
+        "n",
+        "processes",
+        "total number of processes (default 1)",
+        "N",
+    );
+    opts.optopt(
+        "a",
+        "address-file",
+        "text file whose lines are process addresses",
+        "FILE",
+    );
+
+    // Performance tuning parameters.
     opts.optopt(
         "l",
         "logging-granularity",
         "dataflow logging granularity (default 1s)",
+        "DURATION/\"off\"",
+    );
+    opts.optopt(
+        "",
+        "logical-compaction-window",
+        "historical detail maintained for arrangements (default 60s)",
         "DURATION/\"off\"",
     );
     opts.optopt(
@@ -79,56 +115,43 @@ fn run() -> Result<(), failure::Error> {
         "persists consistency information locally and recovers from local store",
         "true/false",
     );
-    opts.optopt(
-        "",
-        "logical-compaction-window",
-        "historical detail maintained for arrangements (default 60s)",
-        "DURATION/\"off\"",
-    );
-    opts.optopt("w", "threads", "number of per-process worker threads", "N");
-    opts.optopt(
-        "p",
-        "process",
-        "identity of this process (default 0)",
-        "INDEX",
-    );
-    opts.optopt(
-        "n",
-        "processes",
-        "total number of processes (default 1)",
-        "N",
-    );
-    opts.optopt(
-        "a",
-        "address-file",
-        "text file whose lines are process addresses",
-        "FILE",
-    );
-    opts.optopt(
-        "D",
-        "data-directory",
-        "where materialized will store metadata (default mzdata)",
-        "PATH",
-    );
+    opts.optflag("", "no-prometheus", "do not gather prometheus metrics");
+
+    // Logging options.
     opts.optopt(
         "",
         "log-file",
         "where materialized will write logs (default <data directory>/materialized.log)",
         "PATH",
     );
+
+    // Connection options.
     opts.optopt(
         "",
         "listen-addr",
         "the address and port on which materialized will listen for connections",
         "ADDR:PORT",
     );
+    opts.optopt(
+        "",
+        "tls-cert",
+        "certificate file for TLS connections",
+        "PATH",
+    );
+    opts.optopt("", "tls-key", "private key for TLS connections", "PATH");
+
+    // Storage options.
+    opts.optopt(
+        "D",
+        "data-directory",
+        "where materialized will store metadata (default mzdata)",
+        "PATH",
+    );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
-    opts.optflag("", "no-prometheus", "do not gather prometheus metrics");
-    if cfg!(debug_assertions) {
-        opts.optflag("", "dev", "allow running this dev (unoptimized) build");
-    }
 
     let popts = opts.parse(&args[1..])?;
+
+    // Handle options that request informational output.
     if popts.opt_present("h") {
         print!("{}", opts.usage("usage: materialized [options]"));
         return Ok(());
@@ -141,45 +164,7 @@ fn run() -> Result<(), failure::Error> {
         return Ok(());
     }
 
-    let logging_granularity = match popts.opt_str("logging-granularity").as_deref() {
-        None => Some(std::time::Duration::new(1, 0)),
-        Some("off") => None,
-        Some(d) => Some(parse_duration::parse(&d)?),
-    };
-
-    let timestamp_frequency = match popts.opt_str("timestamp-frequency").as_deref() {
-        None => parse_duration::parse("10ms")?,
-        Some(d) => parse_duration::parse(&d)?,
-    };
-
-    let log_file = popts.opt_str("log-file");
-    let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
-    let persist_ts = popts.opt_get_default("persist-ts", false)?;
-
-    let threads = match popts.opt_get::<usize>("threads")? {
-        Some(val) => val,
-        None => match env::var("MZ_THREADS") {
-            Ok(val) => val.parse()?,
-            Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_THREADS"),
-            Err(VarError::NotPresent) => 0,
-        },
-    };
-    if threads == 0 {
-        bail!(
-            "'--threads' must be specified and greater than 0\n\
-             hint: As a starting point, set the number of threads to half of the number of\n\
-             cores on your system. Then, further adjust based on your performance needs.\n\
-             hint: You may also set the environment variable MZ_THREADS to the desired number\n\
-             of threads."
-        );
-    }
-
-    let process = popts.opt_get_default("process", 0)?;
-    let processes = popts.opt_get_default("processes", 1)?;
-    let address_file = popts.opt_str("address-file");
-    let gather_metrics = !popts.opt_present("no-prometheus");
-    let listen_addr = popts.opt_get("listen-addr")?;
-
+    // Prevent accidental usage of development builds.
     if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
         bail!(
             "refusing to run dev (unoptimized) binary without explicit opt-in\n\
@@ -188,16 +173,30 @@ fn run() -> Result<(), failure::Error> {
         );
     }
 
-    let logical_compaction_window = match popts.opt_str("logical-compaction-window").as_deref() {
-        None => Some(parse_duration::parse("60s")?),
-        Some("off") => None,
-        Some(d) => Some(parse_duration::parse(&d)?),
+    // Configure Timely and Differential workers.
+    let threads = match popts.opt_get::<usize>("threads")? {
+        Some(val) if val == 0 => {
+            bail!(
+                "'--threads' must be specified and greater than 0\n\
+                 hint: As a starting point, set the number of threads to half of the number of\n\
+                 cores on your system. Then, further adjust based on your performance needs.\n\
+                 hint: You may also set the environment variable MZ_THREADS to the desired number\n\
+                 of threads."
+            );
+        }
+        Some(val) => val,
+        None => match env::var("MZ_THREADS") {
+            Ok(val) => val.parse()?,
+            Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_THREADS"),
+            Err(VarError::NotPresent) => 0,
+        },
     };
-
+    let process = popts.opt_get_default("process", 0)?;
+    let processes = popts.opt_get_default("processes", 1)?;
+    let address_file = popts.opt_str("address-file");
     if process >= processes {
         bail!("process ID {} is not between 0 and {}", process, processes);
     }
-
     let addresses = match address_file {
         None => (0..processes)
             .map(|i| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6875 + i as u16))
@@ -205,7 +204,41 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
+    // Handle performance tuning parameters.
+    let logging_granularity = match popts.opt_str("logging-granularity").as_deref() {
+        None => Some(Duration::from_secs(1)),
+        Some("off") => None,
+        Some(d) => Some(parse_duration::parse(&d)?),
+    };
+    let logical_compaction_window = match popts.opt_str("logical-compaction-window").as_deref() {
+        None => Some(Duration::from_secs(60)),
+        Some("off") => None,
+        Some(d) => Some(parse_duration::parse(&d)?),
+    };
+    let timestamp_frequency = match popts.opt_str("timestamp-frequency").as_deref() {
+        None => Duration::from_millis(10),
+        Some(d) => parse_duration::parse(&d)?,
+    };
+    let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
+    let persist_ts = popts.opt_get_default("persist-ts", false)?;
+    let gather_metrics = !popts.opt_present("no-prometheus");
+
+    // Configure connections.
+    let listen_addr = popts.opt_get("listen-addr")?;
+    let tls = match (popts.opt_str("tls-cert"), popts.opt_str("tls-key")) {
+        (None, None) => None,
+        (None, Some(_)) | (Some(_), None) => {
+            bail!("--tls-cert and --tls-key must be specified together");
+        }
+        (Some(cert), Some(key)) => Some(materialized::TlsConfig {
+            cert: cert.into(),
+            key: key.into(),
+        }),
+    };
+
+    // Configure storage.
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
+    let symbiosis_url = popts.opt_str("symbiosis");
     fs::create_dir_all(&data_directory)
         .with_context(|e| format!("creating data directory: {}", e))?;
 
@@ -215,6 +248,7 @@ fn run() -> Result<(), failure::Error> {
             .or_else(|_| EnvFilter::try_new("info"))
             .unwrap();
         let subscriber = FmtSubscriber::builder().with_env_filter(filter);
+        let log_file = popts.opt_str("log-file");
         if log_file.as_deref() == Some("stderr") {
             subscriber.with_writer(io::stderr).init();
         } else {
@@ -263,18 +297,19 @@ environment:{}",
     beta_splash();
 
     let _server = materialized::serve(materialized::Config {
-        logging_granularity,
-        timestamp_frequency,
-        max_increment_ts_size,
-        persist_ts,
-        logical_compaction_window,
         threads,
         process,
         addresses,
-        data_directory: Some(data_directory),
-        symbiosis_url: popts.opt_str("symbiosis"),
+        logging_granularity,
+        logical_compaction_window,
+        timestamp_frequency,
+        max_increment_ts_size,
+        persist_ts,
         gather_metrics,
         listen_addr,
+        tls,
+        data_directory: Some(data_directory),
+        symbiosis_url,
     })?;
 
     // Block forever.

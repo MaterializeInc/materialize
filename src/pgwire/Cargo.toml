@@ -21,6 +21,7 @@ futures = "0.3"
 itertools = "0.9"
 lazy_static = "1.4.0"
 log = "0.4.8"
+openssl = { version = "0.10.29", features = ["vendored"] }
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
@@ -29,5 +30,6 @@ rand = "0.7"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
 tokio = "0.2"
+tokio-openssl = "0.4.0"
 tokio-util = { version = "0.3", features = ["codec"] }
 postgres = "0.17.2"
