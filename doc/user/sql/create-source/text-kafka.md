@@ -6,7 +6,10 @@ menu:
     parent: 'create-source'
 ---
 
-{{% create-source/intro format="text- or byte-" connector="Kafka topic" %}}
+{{% create-source/intro %}}
+This document details how to connect Materialize to a text- or byte–formatted
+Kafka topic.
+{{% /create-source/intro %}}
 
 ## Syntax
 

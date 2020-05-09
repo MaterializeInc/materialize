@@ -10,7 +10,10 @@ aliases:
     - /docs/sql/create-source/avro-source
 ---
 
-{{% create-source/intro format="Avro" connector="Kafka topic" %}}
+{{% create-source/intro %}}
+This document details how to connect Materialize to an Avro-formatted Kafka
+topic.
+{{% /create-source/intro %}}
 
 ## Syntax
 

@@ -10,7 +10,10 @@ aliases:
     - /docs/sql/create-source/protobuf-source
 ---
 
-{{% create-source/intro format="Protobuf" connector="Kafka brokers" %}}
+{{% create-source/intro %}}
+This document details how to connect Materialize to Protobuf-formatted Kafka
+topics.
+{{% /create-source/intro %}}
 
 ## Syntax
 
