@@ -50,7 +50,6 @@ fn sniff_tls(buf: &[u8]) -> bool {
 pub struct Server {
     tls: Option<SslAcceptor>,
     cmd_tx: Weak<UnboundedSender<coord::Command>>,
-    gather_metrics: bool,
     start_time: Instant,
 }
 
@@ -58,13 +57,11 @@ impl Server {
     pub fn new(
         tls: Option<SslAcceptor>,
         cmd_tx: Weak<UnboundedSender<coord::Command>>,
-        gather_metrics: bool,
         start_time: Instant,
     ) -> Server {
         Server {
             tls,
             cmd_tx,
-            gather_metrics,
             start_time,
         }
     }
@@ -112,14 +109,11 @@ impl Server {
     {
         let svc = service::service_fn(move |req: Request<Body>| {
             let cmd_tx = (*cmd_tx).clone();
-            let gather_metrics = self.gather_metrics;
             let start_time = self.start_time;
             async move {
                 match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => handle_home(req).await,
-                    (&Method::GET, "/metrics") => {
-                        handle_prometheus(req, gather_metrics, start_time).await
-                    }
+                    (&Method::GET, "/metrics") => handle_prometheus(req, start_time).await,
                     (&Method::GET, "/status") => handle_status(req, start_time).await,
                     (&Method::GET, "/internal/catalog") => {
                         handle_internal_catalog(req, cmd_tx).await
@@ -158,28 +152,13 @@ async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error>
 
 async fn handle_prometheus(
     _: Request<Body>,
-    gather_metrics: bool,
     start_time: Instant,
 ) -> Result<Response<Body>, failure::Error> {
     let metric_families = load_prom_metrics(start_time);
     let encoder = prometheus::TextEncoder::new();
     let mut buffer = Vec::new();
-
     encoder.encode(&metric_families, &mut buffer)?;
-
-    let metrics = String::from_utf8(buffer)?;
-    if !gather_metrics {
-        log::warn!("requested metrics but they are disabled");
-        if !metrics.is_empty() {
-            log::error!("gathered metrics despite prometheus being disabled!");
-        }
-        Ok(Response::builder()
-            .status(404)
-            .body(Body::from("metrics are disabled"))
-            .unwrap())
-    } else {
-        Ok(Response::new(Body::from(metrics)))
-    }
+    Ok(Response::new(Body::from(buffer)))
 }
 
 async fn handle_status(

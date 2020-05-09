@@ -32,21 +32,18 @@ pub struct Server {
     secrets: SecretManager,
     tls: Option<SslAcceptor>,
     cmdq_tx: Weak<futures::channel::mpsc::UnboundedSender<coord::Command>>,
-    gather_metrics: bool,
 }
 
 impl Server {
     pub fn new(
         tls: Option<SslAcceptor>,
         cmdq_tx: Weak<futures::channel::mpsc::UnboundedSender<coord::Command>>,
-        gather_metrics: bool,
     ) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
             secrets: SecretManager::new(),
             tls,
             cmdq_tx,
-            gather_metrics,
         }
     }
 
@@ -80,7 +77,6 @@ impl Server {
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
                         cmdq_tx,
-                        gather_metrics: self.gather_metrics,
                     };
                     let res = machine.start(Session::default(), version, params).await;
 

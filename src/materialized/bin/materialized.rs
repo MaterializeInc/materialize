@@ -115,7 +115,6 @@ fn run() -> Result<(), failure::Error> {
         "persists consistency information locally and recovers from local store",
         "true/false",
     );
-    opts.optflag("", "no-prometheus", "do not gather prometheus metrics");
 
     // Logging options.
     opts.optopt(
@@ -221,7 +220,6 @@ fn run() -> Result<(), failure::Error> {
     };
     let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
     let persist_ts = popts.opt_get_default("persist-ts", false)?;
-    let gather_metrics = !popts.opt_present("no-prometheus");
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -305,7 +303,6 @@ environment:{}",
         timestamp_frequency,
         max_increment_ts_size,
         persist_ts,
-        gather_metrics,
         listen_addr,
         tls,
         data_directory: Some(data_directory),

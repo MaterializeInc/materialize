@@ -116,9 +116,6 @@ pub struct Config {
     /// Whether to record realtime consistency information to the data directory
     /// and attempt to recover that information on startup.
     pub persist_ts: bool,
-    /// Whether to collect metrics. If enabled, metrics can be collected by
-    /// e.g. Prometheus via the `/metrics` HTTP endpoint.
-    pub gather_metrics: bool,
 
     // === Connection options. ===
     /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
@@ -211,17 +208,8 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                     None => None,
                     Some(tls_config) => Some(tls_config.acceptor()?),
                 };
-                mux.add_handler(pgwire::Server::new(
-                    tls.clone(),
-                    cmd_tx.clone(),
-                    config.gather_metrics,
-                ));
-                mux.add_handler(http::Server::new(
-                    tls,
-                    cmd_tx,
-                    config.gather_metrics,
-                    start_time,
-                ));
+                mux.add_handler(pgwire::Server::new(tls.clone(), cmd_tx.clone()));
+                mux.add_handler(http::Server::new(tls, cmd_tx, start_time));
             }
             Arc::new(mux)
         };
