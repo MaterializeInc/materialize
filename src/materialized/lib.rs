@@ -31,8 +31,6 @@ use std::time::{Duration, Instant};
 use compile_time_run::run_command_str;
 use failure::format_err;
 use futures::channel::mpsc;
-use futures::stream::StreamExt;
-use log::error;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio::io;
 use tokio::net::TcpListener;
@@ -196,50 +194,22 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     );
 
     let switchboard = Switchboard::new(config.addresses, config.process, executor.clone());
-    runtime.spawn({
-        let mux = {
-            let mut mux = Mux::new();
-            mux.add_handler(switchboard.clone());
-            if is_primary {
-                // The primary is responsible for pgwire and HTTP traffic in
-                // addition to switchboard traffic.
-                let cmd_tx = Arc::downgrade(&cmd_tx);
-                let tls = match config.tls {
-                    None => None,
-                    Some(tls_config) => Some(tls_config.acceptor()?),
-                };
-                mux.add_handler(pgwire::Server::new(tls.clone(), cmd_tx.clone()));
-                mux.add_handler(http::Server::new(tls, cmd_tx, start_time));
-            }
-            Arc::new(mux)
+
+    // Launch task to serve connections.
+    let mut mux = Mux::new();
+    mux.add_handler(switchboard.clone());
+    if is_primary {
+        // The primary is responsible for pgwire and HTTP traffic in
+        // addition to switchboard traffic.
+        let cmd_tx = Arc::downgrade(&cmd_tx);
+        let tls = match config.tls {
+            None => None,
+            Some(tls_config) => Some(tls_config.acceptor()?),
         };
-        async move {
-            let mut incoming = listener.incoming();
-            while let Some(conn) = incoming.next().await {
-                let conn = match conn {
-                    Ok(conn) => conn,
-                    Err(err) => {
-                        error!("error accepting connection: {}", err);
-                        continue;
-                    }
-                };
-                // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-                // algorithm), which forces a 40ms delay between each query
-                // on linux. According to John Nagle [0], the true problem
-                // is delayed acks, but disabling those is a receive-side
-                // operation (TCP_QUICKACK), and we can't always control the
-                // client. PostgreSQL sets TCP_NODELAY on both sides of its
-                // sockets, so it seems sane to just do the same.
-                //
-                // If set_nodelay fails, it's a programming error, so panic.
-                //
-                // [0]: https://news.ycombinator.com/item?id=10608356
-                conn.set_nodelay(true).expect("set_nodelay failed");
-                let mux = mux.clone();
-                tokio::spawn(async move { mux.handle_connection(conn).await });
-            }
-        }
-    });
+        mux.add_handler(pgwire::Server::new(tls.clone(), cmd_tx.clone()));
+        mux.add_handler(http::Server::new(tls, cmd_tx, start_time));
+    }
+    runtime.spawn(async move { mux.serve(listener.incoming()).await });
 
     let dataflow_conns = runtime
         .block_on(switchboard.rendezvous(Duration::from_secs(30)))?
