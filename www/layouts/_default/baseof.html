@@ -26,21 +26,28 @@ by the Apache License, Version 2.0.  */}}
     {{ partial "head.html" . }}
 </head>
 
-<body class="hg">
+<body>
     {{ partial "header.html" . }}
     {{ block "body" .}}
-        <div class="hg-body">
-            <main class="hg-content">
+        <div class="content-wrapper">
+            {{ partial "sidebar.html" . }}
+
+            <main class="content">
                 {{ block "main" . }}{{ end }}
                 <!-- Footer goes in main so the border-right of
                 sidebar.html can extend to the bottom of the page. -->
                 {{ partial "footer.html" . }}
             </main>
-            {{ partial "sidebar.html" . }}
-            {{ partial "toc.html" . }}
 
+            {{ partial "toc.html" . }}
         </div>
     {{ end }}
+
+    <script>
+        anchors.add(".content h2, .content h3, .content h4, .content h5, .content h6");
+
+        $(".content ol:has(p)").addClass("has-p");
+    </script>
 </body>
 
 </html>
