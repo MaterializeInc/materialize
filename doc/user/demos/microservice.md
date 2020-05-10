@@ -200,21 +200,19 @@ with the columns we know we'll need:
 
 ```sql
 CREATE MATERIALIZED VIEW billing_records AS
-SELECT
-    r.value->>'id' id,
-    billing_source.id batch_id,
-    r.value->>'interval_start' interval_start,
-    r.value->>'interval_end' interval_end,
-    r.value->>'meter' meter,
-    (r.value->'value')::int value,
-    (r.value->'info'->'client_id')::int client_id,
-    (r.value->'info'->'vm_id')::int vm_id,
-    (r.value->'info'->'cpu_num')::int cpu_num,
-    (r.value->'info'->'memory_gb')::int memory_gb,
-    (r.value->'info'->'disk_gb')::int disk_gb
-FROM
-    billing_source,
-    jsonb_array_elements(records) AS r;
+    SELECT
+        r.value->>'id' id,
+        billing_source.id batch_id,
+        r.value->>'interval_start' interval_start,
+        r.value->>'interval_end' interval_end,
+        r.value->>'meter' meter,
+        (r.value->'value')::int value,
+        (r.value->'info'->'client_id')::int client_id,
+        (r.value->'info'->'vm_id')::int vm_id,
+        (r.value->'info'->'cpu_num')::int cpu_num,
+        (r.value->'info'->'memory_gb')::int memory_gb,
+        (r.value->'info'->'disk_gb')::int disk_gb
+    FROM billing_source, jsonb_array_elements(records) AS r;
 ```
 
 This makes `billing_records` a normalized view of our data that we can begin
@@ -262,8 +260,8 @@ And here is how we can import that into Materialize.
 
 ```sql
 CREATE SOURCE price_source
-    FROM 'file:///prices.csv'
-    FORMAT CSV WITH 3 COLUMNS;
+FROM 'file:///prices.csv'
+FORMAT CSV WITH 3 COLUMNS;
 ```
 
 This creates a source with the following columns:
@@ -287,8 +285,7 @@ CREATE MATERIALIZED VIEW billing_prices AS
 			AS price_per_cpu_ms,
 		((CAST(column3 AS FLOAT8)) / 1000.0)
 			AS price_per_gb_ms
-	FROM
-		price_source;
+	FROM price_source;
 ```
 
 For more details on how CSV sources work, see [`CREATE SOURCES`](../../sql/create-source/#csv-sources).
@@ -313,8 +310,7 @@ CREATE MATERIALIZED VIEW billing_agg_by_month AS
         memory_gb,
         disk_gb,
         sum(value)
-    FROM
-        billing_records
+    FROM billing_records
     GROUP BY
         substr(interval_start, 0, 8),
         client_id,
@@ -362,20 +358,16 @@ CREATE VIEW billing_monthly_statement AS
             )
         )
             AS monthly_bill
-    FROM
-        billing_agg_by_month, billing_prices
+    FROM billing_agg_by_month, billing_prices
     WHERE
-        billing_agg_by_month.client_id
-        = billing_prices.client_id
+        billing_agg_by_month.client_id = billing_prices.client_id
         AND billing_agg_by_month.meter = 'execution_time_ms';
 ```
 
 Note that there is an implicit `JOIN` with:
 
 ```sql
-WHERE
-        billing_agg_by_month.client_id
-        = billing_prices.client_id
+WHERE billing_agg_by_month.client_id = billing_prices.client_id
 ```
 
 For each VM configuration, this view takes the user's monthly usage of that VM configuration (`billing_agg_by_month.sum`), and multiplies it by the sum of:
@@ -388,12 +380,9 @@ Like the `billing_agg_by_month` view, this view shows the itemized bill.
 We can also use this itemized bill to generate users' total bills:
 
 ```sql
-SELECT
-    month, client_id, sum(monthly_bill) AS total_bill
-FROM
-    billing_monthly_statement
-GROUP BY
-    month, client_id;
+SELECT month, client_id, sum(monthly_bill) AS total_bill
+FROM billing_monthly_statement
+GROUP BY month, client_id;
 ```
 
 And that's it! We've converted our `protobuf` messages into a customer's monthly
@@ -548,12 +537,9 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
 1. We an also perform arbitrary `SELECT`s on our views to explore new aggregations we might want to materialize with their own views. For example, we can view each user's total monthly bill:
 
     ```sql
-    SELECT
-        month, client_id, sum(monthly_bill) AS total_bill
-    FROM
-        billing_monthly_statement
-    GROUP BY
-        month, client_id;
+    SELECT month, client_id, sum(monthly_bill) AS total_bill
+    FROM billing_monthly_statement
+    GROUP BY month, client_id;
     ```
 
 ## Recap
