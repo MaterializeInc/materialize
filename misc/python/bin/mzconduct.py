@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 from materialize import spawn
 from materialize import ui
+from materialize.errors import UnknownItem, BadSpec, Failed, error_handler
 from pathlib import Path
 from typing import (
     Any,
@@ -43,33 +44,6 @@ import pymysql
 import yaml
 
 T = TypeVar("T")
-
-
-class MzError(Exception):
-    """All errors are MzErrors"""
-
-
-class UnknownItem(MzError):
-    """A user specified something that we don't recognize"""
-
-    def __init__(self, kind: str, item: Any, acceptable: Iterable[Any]) -> None:
-        self.kind = kind
-        self.item = item
-        self.acceptable = acceptable
-
-    def __str__(self) -> str:
-        val = f"Unknown {self.kind}: '{self.item}'"
-        if self.acceptable:
-            val += ". Expected one of: " + ", ".join([str(a) for a in self.acceptable])
-        return val
-
-
-class BadSpec(MzError):
-    """User provided a bad specification"""
-
-
-class Failed(MzError):
-    """The workflow failed"""
 
 
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]))
@@ -96,9 +70,7 @@ def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> N
             say(f"Starting {comp.name}")
             comp.run()
     else:
-        raise MzError(
-            f"Unknown test {composition}, expected one of: {' '.join(Composition.known_compositions())}"
-        )
+        raise UnknownItem("composition", composition, Composition.known_compositions())
 
 
 @cli.command()
@@ -724,8 +696,5 @@ def cd(path: Path) -> Any:
 
 
 if __name__ == "__main__":
-    try:
+    with error_handler(say):
         cli(auto_envvar_prefix="MZ")
-    except MzError as e:
-        say(f"ERROR: {e}")
-        sys.exit(1)
