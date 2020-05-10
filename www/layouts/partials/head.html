@@ -1,32 +1,19 @@
+<meta name="viewport" content="width=1024">
+
 {{/*  Include all JavaScript files here  */}}
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
-<script src="https://identity.netlify.com/v1/netlify-identity-widget.js" async></script>
-
-{{ $toggle := resources.Get "js/menutoggle.js" -}}
-{{ $js := slice $toggle | resources.Concat "js/bundle.js" | resources.Minify }}
-<script src="{{ $js.RelPermalink }}"></script>
-
-<!-- Latest compiled and minified CSS -->
-<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css"
-  integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
-<!-- Latest compiled and minified JavaScript -->
-<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"
-  integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/anchor-js/anchor.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/simple-scrollspy@2.0.3/dist/simple-scrollspy.min.js"></script>
 
 {{/*  Sass processing here  */}}
 {{ $style := resources.Get "sass/main.scss" | toCSS | fingerprint }}
 <link rel="stylesheet" href="{{ $style.RelPermalink }}">
-
-{{/* Linked fonts here  */}}
-<link href="https://fonts.googleapis.com/css?family=Roboto+Mono&display=swap" rel="stylesheet">
 
 {{/* Algolia DocSearch */}}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css" />
 <script src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
 <script defer>
 addEventListener("DOMContentLoaded", () => {
-  console.log("now");
-  console.log(document.querySelectorAll("#search"));
   docsearch({
     apiKey: "4a00e9b5208d93ae2445d7ea064ddbac",
     indexName: "materialize",

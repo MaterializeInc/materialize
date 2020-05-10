@@ -38,9 +38,9 @@ accessible.
 
 ## Updating CSS
 
-For changes to CSS that should only apply to the documentation, the current
-convention is to prepend the SASS file with `_docs`, though this is something we
-might be able to clean up in the near future.
+No CSS is shared with the marketing website to keep the docs CSS maintainable.
+If the marketing website changes, we will need to update the docs CSS to
+visually match.
 
 ### General stylesheet updates
 
@@ -51,7 +51,7 @@ You can use this as a scratch area by editing `/www/content/stylesheet.md`.
 
 ### Syntax highlighting
 
-We use Hugo's built-in support for syntax highlighting through Rouge. In
+We use Hugo's built-in support for syntax highlighting through Chroma. In
 `config.toml`:
 
 ```toml
@@ -64,38 +64,23 @@ highlighting Materialized extensions to the SQL standard, as well as generally
 beautifying the syntax highlighting color scheme––but for right now, what's
 there suffices.
 
-However, you can add any hacks you need to `/www/assets/sass/_docs_code.scss`.
+You can adjust the highlight colors as necessary in
+`www/assets/_highlight.scss`.
 
 # Known limitations
 
 - Cannot display formatted text in descriptions or menus (e.g. cannot format
   page titles in code blocks).
 - Does not support more than 2 levels in menus.
-- Headers are not linkable.
-- Pages have no TOC feature.
 - Is not "responsive" and makes naive decisions about breakpoints. If someone
   would like to volunteer their web development expertise to make this more
   sane, I would be really happy to help them out.
 
 # Miscellany, Trivia, & Footguns
 
-- Headers are automatically hyperlinked using
-  `/www/layouts/partials/content-parser.html`, inspired by [this Hugo
-  thread](https://discourse.gohugo.io/t/adding-anchor-next-to-headers/1726/8),
-  and more specifically
-  [kaushalmodi/hugo-onyx-theme](https://github.com/kaushalmodi/hugo-onyx-theme/blob/cd232177f1af37f5371d252f8401ce049dc52db8/layouts/partials/headline-hash.html).
+- Headers are automatically hyperlinked using [AnchorJS].
 - Railroad diagrams are managed in this directory at
   `/www/layouts/partials/sql-grammar` but are more properly part of the docs
   site. Get more details in </doc/user/README.md>.
-- Pages have no TOC feature.
-- Is not "responsive" and makes naive decisions about breakpoints. If someone
-  would like to volunteer their web development expertise to make this more
-  sane, I would be really happy to help them out.
 
-# Miscellany, Trivia, & Footguns
-
-- Headers are automatically hyperlinked using
-  `/doc/user/layouts/partials/content-parser.html`, inspired by [this Hugo
-  thread](https://discourse.gohugo.io/t/adding-anchor-next-to-headers/1726/8),
-  and more specifically
-  [kaushalmodi/hugo-onyx-theme](https://github.com/kaushalmodi/hugo-onyx-theme/blob/cd232177f1af37f5371d252f8401ce049dc52db8/layouts/partials/headline-hash.html).
+[AnchorJS]: https://www.bryanbraun.com/anchorjs/

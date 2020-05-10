@@ -2,7 +2,7 @@
 
 <h1>{{.Title}}</h1>
 
-{{ partial "content-parser.html" .Content }}
+{{ .Content }}
 
 {{ if not (.Params.disable_list) }}
 {{ range .Pages.ByWeight }}

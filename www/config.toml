@@ -2,7 +2,7 @@ baseURL = "https://materialize.io/"
 languageCode = "en-us"
 title = "Materialize Documentation"
 pygmentsCodeFences = true
-pygmentsStyle = "xcode"
+pygmentsUseClasses = true
 disableKinds = ["home"]
 
 [params]
