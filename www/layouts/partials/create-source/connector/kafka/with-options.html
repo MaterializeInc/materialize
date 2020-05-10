@@ -3,7 +3,7 @@
 `security_protocol` | `text` | Use either [`ssl`](#ssl-with-options) or [`sasl_plaintext` (Kerberos)](#kerberos-with-options) to connect to the Kafka cluster.
 `statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics.
 
-##### SSL `WITH` options
+#### SSL `WITH` options
 
 Use the following options to connect Materialize to an SSL-encrypted Kafka
 cluster. For more detail, see [SSL-encrypted Kafka details](#ssl-encrypted-kafka-details).
@@ -15,7 +15,7 @@ Field | Value | Description
 `ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
 `ssl_key_password` | `text` | Your SSL key's password.
 
-##### Kerberos `WITH` options
+#### Kerberos `WITH` options
 
 Use the following options to connect Materialize to an Kerberized Kafka
 cluster. For more detail, see [Kerberized Kafka details](#kerberized-kafka-details).

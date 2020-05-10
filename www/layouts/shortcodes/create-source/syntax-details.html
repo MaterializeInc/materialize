@@ -11,7 +11,7 @@ _col&lowbar;name_ | Override default column name with the provided [identifier](
 {{ range $formats }}{{ partial (printf "create-source/format/%s/syntax" .) . }}{{ end -}}
 {{ range $envelopes }}{{ partial (printf "create-source/envelope/%s/syntax" .) . }}{{ end -}}
 
-#### `WITH` options
+### `WITH` options
 
 The following options are valid within the `WITH` clause.
 
