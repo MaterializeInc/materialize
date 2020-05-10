@@ -60,12 +60,6 @@ disableKinds = ["home"]
     parent = "sql"
 
     [[menu.main]]
-    identifier = "monitoring"
-    name = "Monitoring"
-    url = "/docs/monitoring"
-    weight = 80
-
-    [[menu.main]]
     identifier = "demos"
     name = "Demos"
     weight = 100

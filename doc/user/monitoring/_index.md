@@ -1,6 +1,8 @@
 ---
 title: "Monitoring"
 description: "Find details about monitoring your Materialize instances"
+menu: "main"
+weight: 80
 ---
 
 _This page is a work in progress and will have more detail in the coming months.
