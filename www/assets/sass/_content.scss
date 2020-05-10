@@ -137,6 +137,15 @@ a {
     font-size: 0.9375em;
   }
 
+  // Merge a highlighted code block followed by a non-highlighted code block,
+  // since this is a common pattern in our docs to indicate a (highlighted)
+  // shell or SQL snippet followed by its (unhighlighted) output.
+  .highlight + pre {
+    border-top: 0;
+    margin-top: -20px;
+    padding-top: 0;
+  }
+
   ul {
     margin: 0;
   }
