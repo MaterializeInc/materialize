@@ -47,15 +47,9 @@ To get started, though, we'll begin with a simple version that doesn't require c
 1. From your Materialize CLI, create a materialized view that contains actual data we can work with.
 
     ```sql
-    CREATE MATERIALIZED VIEW pseudo_source AS
-        SELECT column1 as key, column2 as value FROM (VALUES
-            ('a', 1),
-            ('a', 2),
-            ('a', 3),
-            ('a', 4),
-            ('b', 5),
-            ('c', 6),
-            ('c', 7)) AS tbl;
+    CREATE MATERIALIZED VIEW pseudo_source (key, value) AS
+        VALUES ('a', 1), ('a', 2), ('a', 3), ('a', 4),
+        ('b', 5), ('c', 6), ('c', 7);
     ```
 
     You'll notice that we end up entering data into Materialize by creating a materialized view from some other data, rather than the typical `INSERT` operation. This is how one interacts with Materialize. In most cases, this data would have come from an external source and get fed into Materialize from a file or a stream.
@@ -108,11 +102,8 @@ To get started, though, we'll begin with a simple version that doesn't require c
 1. We can also perform complex operations like `JOIN`s. Given the simplicity of our data, the `JOIN` clauses themselves aren't very exciting, but Materialize offers support for a full range of arbitrarily complex `JOIN`s.
 
     ```sql
-    CREATE MATERIALIZED VIEW lhs AS
-        SELECT column1 as key, column2 as value FROM (VALUES
-            ('x', 'a'),
-            ('y', 'b'),
-            ('z', 'c')) AS lhs;
+    CREATE MATERIALIZED VIEW lhs (key, value) AS
+        VALUES ('x', 'a'), ('y', 'b'), ('z', 'c');
     ```
     ```sql
     SELECT lhs.key, sum(rhs.value)
@@ -143,8 +134,7 @@ Materialize is built to handle streams of data, and provide incredibly low-laten
 
     ```sql
     CREATE SOURCE wikirecent
-    FROM FILE '[path to wikirecent]'
-    WITH ( tail=true )
+    FROM FILE '[path to wikirecent]' WITH (tail = true)
     FORMAT REGEX '^data: (?P<data>.*)';
     ```
 
@@ -153,7 +143,7 @@ Materialize is built to handle streams of data, and provide incredibly low-laten
     You can see the columns that get generated for this source:
 
     ```sql
-    SHOW COLUMNS FROM wikirecent
+    SHOW COLUMNS FROM wikirecent;
     ```
 
 1. Because this stream comes in as JSON, we'll need to normalize the data to perform aggregations on it. Materialize offers the ability to do this easily using our built-in [`jsonb` functions](/docs/sql/functions/#json).
@@ -161,41 +151,42 @@ Materialize is built to handle streams of data, and provide incredibly low-laten
     ```sql
     CREATE MATERIALIZED VIEW recentchanges AS
         SELECT
-        val->>'$schema' AS r_schema,
-        (val->'bot')::bool AS bot,
-        val->>'comment' AS comment,
-        (val->'id')::float::int AS id,
-        (val->'length'->'new')::float::int AS length_new,
-        (val->'length'->'old')::float::int AS length_old,
-        val->'meta'->>'uri' AS meta_uri,
-        val->'meta'->>'id' as meta_id,
-        (val->'minor')::bool AS minor,
-        (val->'namespace')::float AS namespace,
-        val->>'parsedcomment' AS parsedcomment,
-        (val->'revision'->'new')::float::int AS revision_new,
-        (val->'revision'->'old')::float::int AS revision_old,
-        val->>'server_name' AS server_name,
-        (val->'server_script_path')::text AS server_script_path,
-        val->>'server_url' AS server_url,
-        (val->'timestamp')::float AS r_ts,
-        val->>'title' AS title,
-        val->>'type' AS type,
-        val->>'user' AS user,
-        val->>'wiki' AS wiki
+            val->>'$schema' AS r_schema,
+            (val->'bot')::bool AS bot,
+            val->>'comment' AS comment,
+            (val->'id')::float::int AS id,
+            (val->'length'->'new')::float::int AS length_new,
+            (val->'length'->'old')::float::int AS length_old,
+            val->'meta'->>'uri' AS meta_uri,
+            val->'meta'->>'id' as meta_id,
+            (val->'minor')::bool AS minor,
+            (val->'namespace')::float AS namespace,
+            val->>'parsedcomment' AS parsedcomment,
+            (val->'revision'->'new')::float::int AS revision_new,
+            (val->'revision'->'old')::float::int AS revision_old,
+            val->>'server_name' AS server_name,
+            (val->'server_script_path')::text AS server_script_path,
+            val->>'server_url' AS server_url,
+            (val->'timestamp')::float AS r_ts,
+            val->>'title' AS title,
+            val->>'type' AS type,
+            val->>'user' AS user,
+            val->>'wiki' AS wiki
         FROM (SELECT data::jsonb AS val FROM wikirecent);
     ```
 
 1. From here we can start building our aggregations. The simplest place to start is simply counting the number of items we've seen:
 
     ```sql
-    CREATE MATERIALIZED VIEW counter
-    AS SELECT COUNT(*) FROM recentchanges;
+    CREATE MATERIALIZED VIEW counter AS
+        SELECT COUNT(*) FROM recentchanges;
     ```
 
 1. However,  we can also see more interesting things from our stream. For instance, who are making the most changes to Wikipedia?
 
     ```sql
-    CREATE MATERIALIZED VIEW useredits AS SELECT user, count(*) FROM recentchanges GROUP BY user;
+    CREATE MATERIALIZED VIEW useredits AS
+        SELECT user, count(*) FROM recentchanges GROUP BY user;
     ```
 
     ```sql
@@ -205,14 +196,14 @@ Materialize is built to handle streams of data, and provide incredibly low-laten
 1. If this is a factoid we often want to know, we could also create a view of just the top 10 editors we've seen.
 
     ```sql
-    CREATE MATERIALIZED VIEW top10
-    AS SELECT * FROM useredits ORDER BY "count" DESC LIMIT 10;
+    CREATE MATERIALIZED VIEW top10 AS
+        SELECT * FROM useredits ORDER BY count DESC LIMIT 10;
     ```
 
     We can then quickly get the answer to who the top 10 editors are:
 
     ```sql
-    SELECT * FROM top10 ORDER BY "count" DESC;
+    SELECT * FROM top10 ORDER BY count DESC;
     ```
 
 Naturally, there are many interesting views of this data. If you're interested

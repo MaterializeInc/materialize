@@ -29,8 +29,7 @@ aliases:
 ```sql
 CREATE SOURCE events
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'events'
-FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 ```
 
 This creates a source that...
@@ -48,15 +47,14 @@ This creates a source that...
 ```sql
 CREATE SOURCE user
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'user'
-FORMAT AVRO
-USING SCHEMA '{
+FORMAT AVRO USING SCHEMA '{
   "type": "record",
   "name": "envelope",
   "fields": [
     ...
   ],
 }'
-    ENVELOPE DEBEZIUM;
+ENVELOPE DEBEZIUM;
 ```
 
 This creates a source that...
@@ -71,8 +69,7 @@ This creates a source that...
 ```sql
 CREATE SOURCE current_predictions
 FROM KAFKA BROKER 'localhost:9092' TOPIC 'current_predictions'
-FORMAT AVRO
-USING SCHEMA FILE '/scratch/current_predictions.json'
+FORMAT AVRO USING SCHEMA FILE '/scratch/current_predictions.json'
 ENVELOPE UPSERT;
 ```
 
@@ -87,16 +84,14 @@ This creates a source that...
 
 ```sql
 CREATE MATERIALIZED SOURCE data_v1
-  FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret'
-    WITH (
-      security_protocol='SSL',
-      ssl_key_location='/secrets/materialized.key',
-      ssl_certificate_location='/secrets/materialized.crt',
-      ssl_ca_location='/secrets/ca.crt',
-      ssl_key_password='mzmzmz'
-    )
-  FORMAT AVRO
-    USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081';
+FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret' WITH (
+    security_protocol = 'SSL',
+    ssl_key_location = '/secrets/materialized.key',
+    ssl_certificate_location = '/secrets/materialized.crt',
+    ssl_ca_location = '/secrets/ca.crt',
+    ssl_key_password = 'mzmzmz'
+)
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081';
 ```
 
 This creates a source that...
@@ -114,15 +109,13 @@ This creates a source that...
 
 ```sql
 CREATE MATERIALIZED SOURCE data_v1
-  FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'tps-reports'
-    WITH (
-      security_protocol = 'sasl_plaintext',
-		  sasl_kerberos_keytab = '/secrets/materialized.keytab',
-		  sasl_kerberos_service_name = 'kafka',
-		  sasl_kerberos_principal = 'materialized@CI.MATERIALIZE.IO'
-    )
-  FORMAT AVRO
-    USING SCHEMA FILE '/tps-reports-schema.json'
+FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'tps-reports' WITH (
+    security_protocol = 'sasl_plaintext',
+    sasl_kerberos_keytab = '/secrets/materialized.keytab',
+    sasl_kerberos_service_name = 'kafka',
+    sasl_kerberos_principal = 'materialized@CI.MATERIALIZE.IO'
+)
+FORMAT AVRO USING SCHEMA FILE '/tps-reports-schema.json'
 ```
 
 This creates a source that...

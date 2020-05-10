@@ -55,13 +55,10 @@ Some things you might want to do with indexes...
 ```sql
 CREATE VIEW purchase_sum_by_region
 AS
-    SELECT sum(purchase.amount) AS region_sum,
-           region.id AS region_id
+    SELECT sum(purchase.amount) AS region_sum, region.id AS region_id
     FROM mysql_simple_region AS region
-    INNER JOIN mysql_simple_user AS user
-        ON region.id = user.region_id
-    INNER JOIN mysql_simple_purchase AS purchase
-        ON purchase.user_id = user.id
+    INNER JOIN mysql_simple_user AS user ON region.id = user.region_id
+    INNER JOIN mysql_simple_purchase AS purchase ON purchase.user_id = user.id
     GROUP BY region.id;
 ```
 

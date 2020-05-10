@@ -21,9 +21,10 @@ aliases:
 
 ```sql
 CREATE SOURCE kinesis_source
-FROM KINESIS ARN ...
-WITH (access_key_id=...,
-      secret_access_key=...)
+FROM KINESIS ARN ... WITH (
+    access_key_id = ...,
+    secret_access_key = ...
+)
 FORMAT BYES;
 ```
 
@@ -37,11 +38,11 @@ To use this data in views, you can decode its bytes into
 
 ```sql
 CREATE MATERIALIZED VIEW jsonified_kinesis_source AS
-SELECT CAST(data AS JSONB) AS data
-FROM (
-    SELECT CONVERT_FROM(data, 'utf8') AS data
-    FROM kinesis_source
-)
+  SELECT CAST(data AS jsonb) AS data
+  FROM (
+      SELECT convert_from(data, 'utf8') AS data
+      FROM kinesis_source
+  )
 ```
 
 ## Related pages

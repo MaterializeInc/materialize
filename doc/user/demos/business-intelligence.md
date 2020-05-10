@@ -180,19 +180,17 @@ Materialize to maintain for us.
    <a name="define-query01"></a>
 
     ```sql
-    CREATE MATERIALIZED VIEW query01 as SELECT
-        ol_number,
-        sum(ol_quantity) as sum_qty,
-        sum(ol_amount) as sum_amount,
-        avg(ol_quantity) as avg_qty,
-        avg(ol_amount) as avg_amount,
-        count(*) as count_order
-    FROM
-        orderline
-    WHERE
-        ol_delivery_d > date '1998-12-01'
-    GROUP BY
-        ol_number;
+    CREATE MATERIALIZED VIEW query01 AS
+        SELECT
+            ol_number,
+            sum(ol_quantity) as sum_qty,
+            sum(ol_amount) as sum_amount,
+            avg(ol_quantity) as avg_qty,
+            avg(ol_amount) as avg_amount,
+            count(*) as count_order
+        FROM orderline
+        WHERE ol_delivery_d > date '1998-12-01'
+        GROUP BY ol_number;
     ```
 
     This is used to repesent "Query 01" in chBench, which tracks statistics
@@ -214,37 +212,36 @@ Materialize to maintain for us.
 
     ```sql
     CREATE MATERIALIZED VIEW query07 AS
-    SELECT
-        su_nationkey AS supp_nation,
-        substr(c_state, 1, 1) AS cust_nation,
-        extract('year' FROM o_entry_d) AS l_year,
-        sum(ol_amount) AS revenue
-    FROM
-        supplier,
-        stock,
-        orderline,
-        order,
-        customer,
-        nation AS n1,
-        nation AS n2
-    WHERE
-        ol_supply_w_id = s_w_id
-        AND ol_i_id = s_i_id
-        AND s_su_suppkey = su_suppkey
-        AND ol_w_id = o_w_id
-        AND ol_d_id = o_d_id
-        AND ol_o_id = o_id
-        AND c_id = o_c_id
-        AND c_w_id = o_w_id
-        AND c_d_id = o_d_id
-        AND su_nationkey = n1.n_nationkey
-        AND c_n_nationkey = n2.n_nationkey
-    GROUP BY
-        su_nationkey,
-        substr(c_state, 1, 1),
-        extract('year' FROM o_entry_d)
-    ORDER BY
-        su_nationkey, cust_nation, l_year;
+        SELECT
+            su_nationkey AS supp_nation,
+            substr(c_state, 1, 1) AS cust_nation,
+            extract('year' FROM o_entry_d) AS l_year,
+            sum(ol_amount) AS revenue
+        FROM
+            supplier,
+            stock,
+            orderline,
+            order,
+            customer,
+            nation AS n1,
+            nation AS n2
+        WHERE
+            ol_supply_w_id = s_w_id
+            AND ol_i_id = s_i_id
+            AND s_su_suppkey = su_suppkey
+            AND ol_w_id = o_w_id
+            AND ol_d_id = o_d_id
+            AND ol_o_id = o_id
+            AND c_id = o_c_id
+            AND c_w_id = o_w_id
+            AND c_d_id = o_d_id
+            AND su_nationkey = n1.n_nationkey
+            AND c_n_nationkey = n2.n_nationkey
+        GROUP BY
+            su_nationkey,
+            substr(c_state, 1, 1),
+            extract('year' FROM o_entry_d)
+        ORDER BY su_nationkey, cust_nation, l_year;
     ```
 
 1. Check the results of this query:
@@ -256,8 +253,10 @@ Materialize to maintain for us.
     This query can take a few minutes to begin producing answers. Before answers
     are produced, you will see the following error:
 
+    ```sql
+    SELECT * FROM query07;
+    ```
     ```nofmt
-    mz>  SELECT * FROM query07;
     At least one input has no complete timestamps yet.
     ```
 

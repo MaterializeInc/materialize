@@ -95,8 +95,7 @@ SELECT
   employees."name" AS employee,
   managers."name" AS manager
 FROM employees
-INNER JOIN managers
-  ON employees.id = managers.manages;
+INNER JOIN managers ON employees.id = managers.manages;
 ```
 ```nofmt
  employee | manager
@@ -120,8 +119,7 @@ SELECT
   employees."name" AS employee,
   managers."name" AS manager
 FROM employees
-LEFT OUTER JOIN managers
-  ON employees.id = managers.manages;
+LEFT OUTER JOIN managers ON employees.id = managers.manages;
 ```
 ```nofmt
  employee | manager
@@ -149,8 +147,7 @@ SELECT
   employees."name" AS employee,
   managers."name" AS manager
 FROM employees
-RIGHT OUTER JOIN managers
-  ON employees.id = managers.manages;
+RIGHT OUTER JOIN managers ON employees.id = managers.manages;
 ```
 ```nofmt
  employee | manager
@@ -176,8 +173,7 @@ SELECT
   employees."name" AS employee,
   managers."name" AS manager
 FROM employees
-FULL OUTER JOIN managers
-  ON employees.id = managers.manages;
+FULL OUTER JOIN managers ON employees.id = managers.manages;
 ```
 ```nofmt
  employee | manager

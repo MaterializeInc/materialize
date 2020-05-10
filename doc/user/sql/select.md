@@ -89,13 +89,11 @@ This assumes you've already [created a source](../create-source).
 The following query creates a materialized view representing the total of all purchases made by users per region.
 
 ``` sql
-CREATE VIEW mat_view AS
+CREATE MATERIALIZED VIEW mat_view AS
     SELECT region.id, sum(purchase.total)
     FROM mysql_simple_purchase AS purchase
-    JOIN mysql_simple_user AS user
-        ON purchase.user_id = user.id
-    JOIN mysql_simple_region AS region
-        ON user.region_id = region.id
+    JOIN mysql_simple_user AS user ON purchase.user_id = user.id
+    JOIN mysql_simple_region AS region ON user.region_id = region.id
     GROUP BY region.id;
 ```
 
@@ -116,10 +114,8 @@ In this case, Materialized simply returns the results of the dataflow you create
 ```sql
 SELECT region.id, sum(purchase.total)
 FROM mysql_simple_purchase AS purchase
-JOIN mysql_simple_user AS user
-    ON purchase.user_id = user.id
-JOIN mysql_simple_region AS region
-    ON user.region_id = region.id
+JOIN mysql_simple_user AS user ON purchase.user_id = user.id
+JOIN mysql_simple_region AS region ON user.region_id = region.id
 GROUP BY region.id;
 ```
 

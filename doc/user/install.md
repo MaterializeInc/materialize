@@ -25,7 +25,8 @@ brew install MaterializeInc/materialize/materialized
 ### curl
 
 ```shell
-curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-apple-darwin.tar.gz | tar -xzC /usr/local --strip-components=1
+curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-apple-darwin.tar.gz \
+    | tar -xzC /usr/local --strip-components=1
 ```
 
 ## Linux installation
@@ -46,7 +47,8 @@ apt install materialized
 
 ### curl
 ```shell
-curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-unknown-linux-gnu.tar.gz | tar -xzC /usr/local --strip-components=1
+curl -L https://downloads.mtrlz.dev/materialized-{{< version >}}-x86_64-unknown-linux-gnu.tar.gz \
+    | tar -xzC /usr/local --strip-components=1
 ```
 
 ## Build from source
