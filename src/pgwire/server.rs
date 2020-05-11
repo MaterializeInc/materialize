@@ -73,7 +73,7 @@ impl Server {
                     // Clean up state tied to this specific connection.
                     self.cmdq_tx
                         .clone()
-                        .send(coord::Command::TerminateConnectionObjects { conn_id })
+                        .send(coord::Command::Terminate { conn_id })
                         .await?;
                     self.id_alloc.free(conn_id);
                     self.secrets.free(conn_id);

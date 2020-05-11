@@ -443,8 +443,8 @@ where
                     let _ = tx.send(self.catalog.dump());
                 }
 
-                Message::Command(Command::TerminateConnectionObjects { conn_id }) => {
-                    self.handle_terminate_connection_objects(conn_id);
+                Message::Command(Command::Terminate { conn_id }) => {
+                    self.handle_terminate(conn_id);
                 }
 
                 Message::Worker(WorkerFeedbackWithMeta {
@@ -540,7 +540,9 @@ where
         }
     }
 
-    pub fn handle_terminate_connection_objects(&mut self, conn_id: u32) {
+    /// Terminate any temporary objects created by the named `conn_id`
+    /// stored on the Coordinator.
+    pub fn handle_terminate(&mut self, conn_id: u32) {
         if let Some(name) = self.active_tails.remove(&conn_id) {
             self.drop_sinks(vec![name]);
         }

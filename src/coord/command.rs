@@ -52,7 +52,7 @@ pub enum Command {
     },
 
     /// Remove temporary objects created by a given connection.
-    TerminateConnectionObjects { conn_id: u32 },
+    Terminate { conn_id: u32 },
 }
 
 #[derive(Debug)]
