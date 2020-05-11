@@ -439,6 +439,7 @@ where
                             Err(e) => error!("Failed to fast-forward consumer: {}", e),
                         }
                         // Message has been discarded, we return the consumer to the consumer queue
+                        message.consume();
                         consumers.push_back(consumer);
                         activator.activate();
                         return SourceStatus::Alive;
