@@ -35,7 +35,7 @@ impl crate::Transform for NonNullRequirements {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         self.action(relation, HashSet::new(), &mut HashMap::new());
         Ok(())

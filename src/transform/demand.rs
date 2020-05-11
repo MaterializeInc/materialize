@@ -33,7 +33,7 @@ impl crate::Transform for Demand {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         self.action(
             relation,

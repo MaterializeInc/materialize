@@ -29,7 +29,7 @@ impl crate::Transform for JoinImplementation {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        state: &mut TransformState,
+        state: TransformState,
     ) -> Result<(), crate::TransformError> {
         let mut arranged = HashMap::new();
         for (k, v) in state.indexes {

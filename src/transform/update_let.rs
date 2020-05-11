@@ -29,11 +29,10 @@ impl crate::Transform for UpdateLet {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        state: &mut TransformState,
+        state: TransformState,
     ) -> Result<(), crate::TransformError> {
-        let mut id_gen: IdGen = Default::default();
-        self.action(relation, &mut HashMap::new(), &mut id_gen);
-        *state.id_gen = id_gen;
+        *state.id_gen = IdGen::default();
+        self.action(relation, &mut HashMap::new(), state.id_gen);
         Ok(())
     }
 }

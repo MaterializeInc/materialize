@@ -24,7 +24,7 @@ impl crate::Transform for ColumnKnowledge {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         self.transform(expr)
     }

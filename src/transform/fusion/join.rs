@@ -25,7 +25,7 @@ impl crate::Transform for Join {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
             self.action(e);

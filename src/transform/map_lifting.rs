@@ -33,7 +33,7 @@ impl crate::Transform for LiteralLifting {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         let literals = self.action(relation, &mut HashMap::new());
         if !literals.is_empty() {

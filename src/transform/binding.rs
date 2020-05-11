@@ -222,7 +222,7 @@ impl crate::Transform for Hoist {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         Hoist::hoist(expr);
         Ok(())
@@ -290,7 +290,7 @@ impl crate::Transform for Unbind {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         Unbind::unbind(expr);
         Ok(())
@@ -472,7 +472,7 @@ impl crate::Transform for Deduplicate {
     fn transform(
         &self,
         expr: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         Deduplicate::deduplicate(expr);
         Ok(())

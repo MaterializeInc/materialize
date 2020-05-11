@@ -22,7 +22,7 @@ impl crate::Transform for TopKElision {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         self.action(relation, &mut HashMap::new());
         Ok(())

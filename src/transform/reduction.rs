@@ -27,7 +27,7 @@ impl crate::Transform for FoldConstants {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), TransformError> {
         relation.try_visit_mut(&mut |e| self.action(e))
     }
@@ -410,7 +410,7 @@ pub mod demorgans {
         fn transform(
             &self,
             relation: &mut RelationExpr,
-            _: &mut TransformState,
+            _: TransformState,
         ) -> Result<(), TransformError> {
             relation.visit_mut_pre(&mut |e| {
                 self.action(e);
@@ -496,7 +496,7 @@ pub mod undistribute_and {
         fn transform(
             &self,
             relation: &mut RelationExpr,
-            _: &mut TransformState,
+            _: TransformState,
         ) -> Result<(), TransformError> {
             relation.visit_mut(&mut |e| {
                 self.action(e);

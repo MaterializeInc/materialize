@@ -21,7 +21,7 @@ impl crate::Transform for SplitPredicates {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |expr| {
             if let RelationExpr::Filter { predicates, .. } = expr {

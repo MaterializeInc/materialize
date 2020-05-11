@@ -49,7 +49,7 @@ impl crate::Transform for Filter {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);

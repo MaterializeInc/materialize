@@ -66,7 +66,7 @@ pub trait Transform: std::fmt::Debug {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        state: &mut TransformState,
+        state: TransformState,
     ) -> Result<(), TransformError>;
 }
 
@@ -107,12 +107,18 @@ impl Transform for Fixpoint {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        state: &mut TransformState,
+        state: TransformState,
     ) -> Result<(), TransformError> {
         for _ in 0..self.limit {
             let original = relation.clone();
             for transform in self.transforms.iter() {
-                transform.transform(relation, state)?;
+                transform.transform(
+                    relation,
+                    TransformState {
+                        id_gen: state.id_gen,
+                        indexes: state.indexes,
+                    },
+                )?;
             }
             if *relation == original {
                 return Ok(());
@@ -120,7 +126,13 @@ impl Transform for Fixpoint {
         }
         let original = relation.clone();
         for transform in self.transforms.iter() {
-            transform.transform(relation, state)?;
+            transform.transform(
+                relation,
+                TransformState {
+                    id_gen: state.id_gen,
+                    indexes: state.indexes,
+                },
+            )?;
         }
         Err(TransformError::Internal(format!(
             "fixpoint looped too many times {:#?} {}\n{}",
@@ -150,12 +162,14 @@ impl Optimizer {
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) -> Result<(), TransformError> {
         let mut id_gen = Default::default();
-        let mut state = TransformState {
-            id_gen: &mut id_gen,
-            indexes,
-        };
         for transform in self.transforms.iter() {
-            transform.transform(relation, &mut state)?;
+            transform.transform(
+                relation,
+                TransformState {
+                    id_gen: &mut id_gen,
+                    indexes,
+                },
+            )?;
         }
         Ok(())
     }

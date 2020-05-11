@@ -25,7 +25,7 @@ impl crate::Transform for InlineLet {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &mut TransformState,
+        _: TransformState,
     ) -> Result<(), crate::TransformError> {
         let mut lets = vec![];
         self.action(relation, &mut lets);
