@@ -143,7 +143,7 @@ where
                             // case, rather than panic, though we surely want to see what is up.
                             // XXX: This panic reports user-supplied data!
                             panic!(
-                                "ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}\n\tKey:{:?}\nRelationExpr:\n{}",
+                                "[customer-data] ReduceCollation found unexpected indexes:\n\tExpected:\t{:?}\n\tFound:\t{:?}\n\tFor:\t{:?}\n\tKey:{:?}\nRelationExpr:\n{}",
                                 (0..aggregates_len).collect::<Vec<_>>(),
                                 input.iter().map(|((p,_),_)| p).collect::<Vec<_>>(),
                                 aggregates_clone,
@@ -280,7 +280,7 @@ where
                     // XXX: This reports user data, which we perhaps should not do!
                     for (val, cnt) in source.iter() {
                         if cnt < &0 {
-                            log::error!("Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
+                            log::error!("[customer-data] Negative accumulation in ReduceInaccumulable: {:?} with count {:?}", val, cnt);
                         }
                     }
                 } else {
@@ -390,7 +390,7 @@ where
                     // operator, when this key is presented but matching aggregates are not found. We will
                     // suppress the output for inputs without net-positive records, which *should* avoid
                     // that panic.
-                    log::error!("ReduceAccumulable observed net-zero records with non-zero accumulation: {:?}: {:?}, {:?}", aggr, agg1, agg2);
+                    log::error!("[customer-data] ReduceAccumulable observed net-zero records with non-zero accumulation: {:?}: {:?}, {:?}", aggr, agg1, agg2);
                 }
 
                 // The finished value depends on the aggregation function in a variety of ways.
@@ -489,7 +489,7 @@ where
                     for (val, cnt) in source.iter() {
                         if cnt <= &0 {
                             // XXX: This reports user data, which we perhaps should not do!
-                            log::error!("Non-positive accumulation in ReduceHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
+                            log::error!("[customer-data] Non-positive accumulation in ReduceHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
                         }
                     }
                 } else {
