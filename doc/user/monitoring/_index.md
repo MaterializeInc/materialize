@@ -12,7 +12,7 @@ Materialize supports integration with monitoring tools using HTTP endpoints.
 ## Quick Monitoring Dashboards
 
 Materialize provides a recommended grafana dashboard and an all-inclusive docker image
-preconfigured to run it as [`materialize/dashboard`][dashboard-hub].
+preconfigured to run it as [`materialize/dashboard`][simplemon-hub].
 
 The only configuration required to get started with the docker image is the
 `MATERIALIZED_URL=<host>:<port>` environment variable.
