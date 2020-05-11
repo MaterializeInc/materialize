@@ -123,7 +123,7 @@ dependencies = [
  "failure",
  "itertools",
  "lazy_static",
- "libflate",
+ "libflate 1.0.0",
  "log",
  "md-5",
  "rand",
@@ -1492,6 +1492,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "libflate"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1fbe6b967a94346446d37ace319ae85be7eca261bb8149325811ac435d35d64"
+dependencies = [
+ "adler32",
+ "crc32fast",
+ "libflate_lz77",
+ "rle-decode-fast",
+]
+
+[[package]]
+name = "libflate_lz77"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3286f09f7d4926fc486334f28d8d2e6ebe4f7f9994494b6dab27ddfad2c9b11b"
+
+[[package]]
 name = "libfuzzer-sys"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2393,7 +2411,7 @@ dependencies = [
  "hex",
  "lazy_static",
  "libc",
- "libflate",
+ "libflate 0.1.27",
 ]
 
 [[package]]
