@@ -623,7 +623,7 @@ def wait_for_pg(
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)
     """
-    args = f"{dbname=} {host=} {port=}"
+    args = f"dbname={dbname} host={host} port={port}"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
     if isinstance(expected, tuple):
@@ -650,7 +650,7 @@ def wait_for_pg(
                 return
             else:
                 say(
-                    f"{host=} {port=} did not return any row matching {expected} got: {result}"
+                    f"host={host} port={port} did not return any row matching {expected} got: {result}"
                 )
         except Exception as e:
             ui.progress(" " + str(int(remaining)))
@@ -662,7 +662,7 @@ def wait_for_pg(
 def wait_for_mysql(
     timeout_secs: int, user: str, passwd: str, host: str, port: int
 ) -> None:
-    args = f"mysql {user=} {host=} {port=}"
+    args = f"mysql user={user} host={host} port={port}"
     ui.progress(f"waitng for {args}", "C")
     error = None
     for _ in ui.timeout_loop(timeout_secs):
