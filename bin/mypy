@@ -21,4 +21,6 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 py_files=
 mapfile_shim py_files < <(git ls-files "ci/*.py" "misc/python/*.py")
 
-exec "$root"/bin/pyactivate --dev -m mypy "${py_files[@]}"
+set -x
+
+exec "$root"/bin/pyactivate --dev -m mypy --pretty "${py_files[@]}"
