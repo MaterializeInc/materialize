@@ -131,7 +131,13 @@ RUN mkdir rust \
     && rm -rf rust \
     && cargo install --root /usr/local cargo-deb cargo-deny
 
-# Step 2d. Install Python dependencies. These are so quick to install and change
+# Step 2d. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
+# unnecessary when we upgrade to Python 3.7+.
+# See: https://www.python.org/dev/peps/pep-0538/
+
+ENV LC_CTYPE=C.UTF-8
+
+# Step 2e. Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
 COPY requirements.txt requirements-dev.txt requirements-ci.txt /workdir/
@@ -142,12 +148,12 @@ RUN pip3 install \
     -r /workdir/requirements-ci.txt \
     && rm /workdir/requirements*.txt
 
-# Step 2e. Hardcode some known SSH hosts, or else SSH will ask whether the host
+# Step 2f. Hardcode some known SSH hosts, or else SSH will ask whether the host
 # is trustworthy on the first connection.
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
-# Step 2f. Set the necessary environment variables to point Cargo and C/C++
+# Step 2g. Set the necessary environment variables to point Cargo and C/C++
 # build systems at our cross-compiling toolchain.
 
 ENV AR=x86_64-unknown-linux-gnu-ar
@@ -163,16 +169,10 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 # https://github.com/rust-lang/cargo/issues/7529
 ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
 
-# Step 2g. Set a environment variable that tools can check to see if they're in
+# Step 2h. Set a environment variable that tools can check to see if they're in
 # the builder or not.
 
 ENV MZ_DEV_CI_BUILDER=1
-
-# Step 2h. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
-# unnecessary when we upgrade to Python 3.7+.
-# See: https://www.python.org/dev/peps/pep-0538/
-
-ENV LC_CTYPE=C.UTF-8
 
 # Step 2i. Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +

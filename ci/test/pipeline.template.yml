@@ -119,14 +119,14 @@ steps:
           config: demo/billing/mzcompose.yml
           run: billing-demo
 
-  # - id: chbench-demo
-  #   label: "chbench sanity check"
-  #   depends_on: build
-  #   command: bin/ci-builder run stable bin/mzconduct run chbench --workflow ci
-  #   # TODO(benesch): integrate dc.sh into mzcompose, so we don't need to
-  #   # manually track image inputs here.
-  #   inputs: ["#materialized", "#chbenchmark", "#peeker", "#cli"]
-  #   timeout_in_minutes: 30
+  - id: chbench-demo
+    label: "chbench sanity check"
+    depends_on: build
+    command: bin/ci-builder run stable bin/mzconduct run chbench --workflow ci
+    # TODO(benesch): integrate dc.sh into mzcompose, so we don't need to
+    # manually track image inputs here.
+    inputs: ["#materialized", "#chbenchmark", "#peeker", "#cli"]
+    timeout_in_minutes: 30
 
   - id: catalog-compat
     label: ":book: catalog compatibility check"
@@ -168,7 +168,7 @@ steps:
       - kafka-krb5
       - short-sqllogictest
       - streaming-demo
-      # - chbench-demo
+      - chbench-demo
       - catalog-compat
       - lang-js
       - metabase-demo

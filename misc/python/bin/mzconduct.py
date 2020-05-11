@@ -39,7 +39,7 @@ from typing import (
 from typing_extensions import Literal
 
 import click
-import psycopg2  # type: ignore
+import pg8000  # type: ignore
 import pymysql
 import yaml
 
@@ -623,15 +623,15 @@ def wait_for_pg(
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)
     """
-    args = f"dbname={dbname} host={host} port={port}"
+    args = f"dbname={dbname} host={host} port={port} user=ignored"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
     if isinstance(expected, tuple):
         expected = list(expected)
     for remaining in ui.timeout_loop(timeout_secs):
         try:
-            conn = psycopg2.connect(
-                f"dbname={dbname} host={host} port={port}", connect_timeout=1
+            conn = pg8000.connect(
+                database=dbname, host=host, port=port, user="ignored", timeout=1
             )
             cur = conn.cursor()
             cur.execute(query)
