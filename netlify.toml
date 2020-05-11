@@ -1,7 +1,7 @@
 [build]
 base = "doc/user"
 publish = "public"
-command = "hugo --gc --baseURL $URL/docs"
+command = "hugo --gc --baseURL $URL/docs --destination public/docs"
 ignore = "../ci/doc/changed.sh"
 environment = { HUGO_VERSION = "0.68.3" }
 
