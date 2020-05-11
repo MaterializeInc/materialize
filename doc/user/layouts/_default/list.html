@@ -1,0 +1,15 @@
+{{ define "main"}}
+
+<h1>{{.Title}}</h1>
+
+{{ .Content }}
+
+{{ if not (.Params.disable_list) }}
+{{ range .Pages.ByWeight }}
+<li>
+  <a href="{{.Permalink}}">{{.Title}}</a>
+</li>
+{{ end }}{{/*  {{ range .Pages.ByWeight }} */}}
+{{ end }}{{/*  {{ if not (.Params.disable_list) }} */}}
+
+{{ end }}{{/*  {{ define "main"}} */}}

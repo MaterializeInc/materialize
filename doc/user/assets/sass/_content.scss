@@ -1,0 +1,208 @@
+a {
+  text-decoration: none;
+
+  &:hover {
+    opacity: 0.75;
+  }
+}
+
+.content {
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 500;
+
+    a {
+      color: $black;
+      font-weight: 500;
+    }
+
+    + ul {
+      padding-left: 20px;
+    }
+  }
+
+  h1 {
+    font-weight: bold;
+    margin: 16px 0;
+
+    + h2 {
+      margin-top: 0;
+    }
+  }
+
+  h2 {
+    font-size: 22px;
+    margin: 32px 0 8px;
+
+    + h3 {
+      margin-top: 16px;
+    }
+  }
+
+  h3 {
+    color: $off-black;
+    font-size: 18px;
+    margin: 32px 0 8px;
+
+    + h4 {
+      margin-top: 8px;
+    }
+
+    a {
+      color: $off-black;
+    }
+  }
+
+  h4 {
+    color: $grey-dark;
+    font-size: 16px;
+    margin: 32px 0 8px;
+
+    a {
+      color: $grey-dark;
+    }
+  }
+
+  p, ul > li:first-child > p:first-child {
+    margin: 0;
+  }
+
+  p + p,
+  p + ul,
+  ul + p,
+  ul p,
+  ol p,
+  p + ol,
+  p + ol.has-p,
+  .highlight + p,
+  pre + p,
+  table + p {
+    margin-top: 16px;
+  }
+
+  p + table {
+    margin-top: 8px;
+  }
+
+  p, li {
+    line-height: 1.5;
+  }
+
+  a {
+    color: $purple;
+    font-weight: 500;
+
+    // Coloring of code overrides link coloring; instead insert border-bottom to
+    // indicate hyperlink on code element. This is very prevalent in our docs,
+    // especially among type references.
+    code {
+      border-bottom: 1px dotted $purple-20;
+    }
+  }
+
+  img {
+    max-width: 100%;
+  }
+
+  table {
+    border-collapse: collapse;
+  }
+
+  tr {
+    border-bottom: 1px $grey solid;
+  }
+
+  th {
+    color: $purple;
+    border-bottom: 2px $purple solid;
+    text-align: left;
+    padding: 8px;
+  }
+
+  td {
+    padding: 10px;
+
+    pre {
+      background-color: inherit;
+      border: 0;
+      font-size: inherit;
+      margin: 0;
+      padding: 0;
+    }
+  }
+
+  pre {
+    background-color: #f9f7fd;
+    border-radius: 0;
+    border: 1px solid $grey-light;
+    color: $off-black;
+    font-family: Courier, monospace;
+    font-size: 15px;
+    margin: 16px 0 4px;
+    overflow: auto;
+    padding: 10px;
+
+    code {
+      color: $off-black;
+    }
+  }
+
+  code {
+    color: #3f6e75;
+    font-family: Courier, monospace;
+    font-size: 0.9375em;
+  }
+
+  // Merge a highlighted code block followed by a non-highlighted code block,
+  // since this is a common pattern in our docs to indicate a (highlighted)
+  // shell or SQL snippet followed by its (unhighlighted) output.
+  .highlight + pre {
+    border-top: 0;
+    margin-top: -20px;
+    padding-top: 0;
+  }
+
+  ul {
+    margin: 0;
+  }
+
+  ol.has-p {
+    list-style-type: none;
+    counter-reset: list-counter;
+    margin: 0;
+    padding: 0;
+
+    li {
+      counter-increment: list-counter;
+      position: relative;
+      padding: 0 0 16px 48px;
+      border-top: 2px dashed $grey-light;
+
+      &:before {
+        content: counter(list-counter);
+        color: $grey;
+        font-size: 32px;
+        position: absolute;
+        top: 4px;
+        left: 10px;
+      }
+
+      &:last-child {
+        padding-bottom: 0;
+      }
+    }
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid $grey-light;
+    margin: 36px auto;
+    width: 80%;
+  }
+
+  .warning {
+    background-color: rgba(255, 124, 26, 0.1);
+    border: 1px dashed rgb(255, 124, 26);
+    margin: 16px 0;
+    padding: 16px;
+  }
+}

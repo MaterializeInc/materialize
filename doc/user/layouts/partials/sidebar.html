@@ -1,0 +1,42 @@
+<div class="sidebar-wrapper">
+  {{ $currentPage := . }}
+  <nav role="navigation" class="sidebar">
+    <input id="search-input" placeholder="Search">
+
+    <ul>
+      {{ range .Site.Menus.main.ByWeight }}
+      <li class="level-1 {{if .HasChildren }}has-children{{end}}">
+        <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+          {{.Name}}
+        </a>
+
+        {{- if .HasChildren }}
+        <ul>
+          {{- range .Children }}
+          <li class="level-2">
+            <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+              {{.Name}}
+            </a>
+          </li>
+          {{- end}}
+        </ul>
+        {{- end}}
+      </li>
+      {{- end}}
+    </ul>
+  </nav>
+</div>
+
+<script>
+// A plugin to expand and collapse submenus in the sidebar.
+
+// Add click handlers for all top-level items with children.
+const menus = $("nav[role=navigation] li.has-children");
+menus.find("> a").click(e => {
+    $(e.target).parent().toggleClass("open");
+    e.preventDefault();
+});
+
+// Open the submenu containing the current page by default.
+menus.has(".active").addClass("open");
+</script>
