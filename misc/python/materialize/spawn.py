@@ -16,9 +16,10 @@ operations provided by the standard [`subprocess`][subprocess] module.
 """
 
 from pathlib import Path
-from typing import Sequence, Union, Optional, IO, overload
+from typing import Iterable, Sequence, Union, Optional, IO, overload
 from typing_extensions import Literal
 import subprocess
+import shlex
 
 CalledProcessError = subprocess.CalledProcessError
 
@@ -46,8 +47,34 @@ def runv(
             program does not exist.
         CalledProcessError: The process exited with a non-zero exit status.
     """
-    print("$", " ".join(str(arg) for arg in args))
+    print("$", " ".join(shlex.quote(str(arg)) for arg in args))
     subprocess.check_call(args, cwd=cwd, stdin=stdin, stdout=stdout)
+
+
+def runv2(
+    args: Iterable[str], cwd: Optional[Path] = None, capture: bool = False,
+) -> subprocess.CompletedProcess:
+    """
+    Like runv, but uses subprocess.run, and returns a CompletedProcess
+
+    A description of the subprocess will be written to stdout before the
+    subprocess is executed.
+
+    Args:
+        args: A list of strings or paths describing the program to run and
+            the arguments to pass to it.
+        cwd: An optional directory to change into before executing the process.
+
+        capture: if true, stdout and stderr will be returned on the returned object,
+            instead of printed to the terminal
+
+    Raises:
+        OSError: The process cannot be executed, e.g. because the specified
+            program does not exist.
+        CalledProcessError: The process exited with a non-zero exit status.
+    """
+    print("$", " ".join(shlex.quote(arg) for arg in args))
+    return subprocess.run(args, cwd=cwd, check=True, capture_output=capture)  # type: ignore
 
 
 @overload
@@ -55,6 +82,7 @@ def capture(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = ...,
     unicode: Literal[False] = ...,
+    stderr_too: bool = False,
 ) -> bytes:
     ...
 
@@ -65,12 +93,16 @@ def capture(
     cwd: Optional[Path] = ...,
     *,
     unicode: Literal[True],
+    stderr_too: bool = False,
 ) -> str:
     ...
 
 
 def capture(
-    args: Sequence[Union[Path, str]], cwd: Optional[Path] = None, unicode: bool = False,
+    args: Sequence[Union[Path, str]],
+    cwd: Optional[Path] = None,
+    unicode: bool = False,
+    stderr_too: bool = False,
 ) -> Union[str, bytes]:
     """Capture the output of a subprocess.
 
@@ -79,6 +111,7 @@ def capture(
             the arguments to pass to it.
         cwd: An optional directory to change into before executing the process.
         unicode: Whether to return output as a unicode string or as bytes.
+        stderr_too: Whether to capture stderr in the returned value
 
     Returns:
         output: The verbatim output of the process as a string or bytes object,
@@ -94,7 +127,7 @@ def capture(
         You may want to call `strip()` on the output to remove any trailing
         whitespace.
     """
-    if unicode:
-        return subprocess.check_output(args, cwd=cwd, universal_newlines=True)
-    else:
-        return subprocess.check_output(args, cwd=cwd, universal_newlines=False)
+    stderr = subprocess.STDOUT if stderr_too else None
+    return subprocess.check_output(  # type: ignore
+        args, cwd=cwd, universal_newlines=unicode, stderr=stderr
+    )
