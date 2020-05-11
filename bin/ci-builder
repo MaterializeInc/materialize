@@ -17,7 +17,15 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <build|push|run> <stable|nightly> [<args>...]"
+    echo -n "usage: $0 <build|push|run> <stable|nightly> [<args>...]
+
+Subcommands:
+
+    run        run a command inside the ci-builder in the current directory.
+
+    push       build the ci-builder image *and* push it to docker hub
+    build      only build the ci-builder image
+"
     exit 1
 fi
 
