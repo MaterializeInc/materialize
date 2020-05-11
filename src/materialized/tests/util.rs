@@ -74,7 +74,6 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
         data_directory: config.data_directory,
         symbiosis_url: None,
-        gather_metrics: false,
         listen_addr: None,
         tls: config.tls,
     })?);

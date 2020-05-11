@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
-use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
@@ -49,22 +48,19 @@ fn sniff_tls(buf: &[u8]) -> bool {
 
 pub struct Server {
     tls: Option<SslAcceptor>,
-    cmd_tx: Weak<UnboundedSender<coord::Command>>,
-    gather_metrics: bool,
+    cmdq_tx: UnboundedSender<coord::Command>,
     start_time: Instant,
 }
 
 impl Server {
     pub fn new(
         tls: Option<SslAcceptor>,
-        cmd_tx: Weak<UnboundedSender<coord::Command>>,
-        gather_metrics: bool,
+        cmdq_tx: UnboundedSender<coord::Command>,
         start_time: Instant,
     ) -> Server {
         Server {
             tls,
-            cmd_tx,
-            gather_metrics,
+            cmdq_tx,
             start_time,
         }
     }
@@ -85,44 +81,29 @@ impl Server {
     where
         A: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
-        let cmd_tx = match self.cmd_tx.upgrade() {
-            Some(cmd_tx) => cmd_tx,
-            None => {
-                // The server is terminating. Drop the connection on the floor.
-                return Ok(());
-            }
-        };
-
         match (&self.tls, sniff_tls(&conn.sniff_buffer())) {
             (Some(tls), true) => {
                 let conn = tokio_openssl::accept(tls, conn).await?;
-                self.handle_connection_inner(conn, cmd_tx).await
+                self.handle_connection_inner(conn).await
             }
-            _ => self.handle_connection_inner(conn, cmd_tx).await,
+            _ => self.handle_connection_inner(conn).await,
         }
     }
 
-    async fn handle_connection_inner<A>(
-        &self,
-        conn: A,
-        cmd_tx: Arc<UnboundedSender<coord::Command>>,
-    ) -> Result<(), failure::Error>
+    async fn handle_connection_inner<A>(&self, conn: A) -> Result<(), failure::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + 'static,
     {
         let svc = service::service_fn(move |req: Request<Body>| {
-            let cmd_tx = (*cmd_tx).clone();
-            let gather_metrics = self.gather_metrics;
+            let cmdq_tx = (self.cmdq_tx).clone();
             let start_time = self.start_time;
             async move {
                 match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => handle_home(req).await,
-                    (&Method::GET, "/metrics") => {
-                        handle_prometheus(req, gather_metrics, start_time).await
-                    }
+                    (&Method::GET, "/metrics") => handle_prometheus(req, start_time).await,
                     (&Method::GET, "/status") => handle_status(req, start_time).await,
                     (&Method::GET, "/internal/catalog") => {
-                        handle_internal_catalog(req, cmd_tx).await
+                        handle_internal_catalog(req, cmdq_tx).await
                     }
                     _ => handle_unknown(req).await,
                 }
@@ -158,28 +139,13 @@ async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error>
 
 async fn handle_prometheus(
     _: Request<Body>,
-    gather_metrics: bool,
     start_time: Instant,
 ) -> Result<Response<Body>, failure::Error> {
     let metric_families = load_prom_metrics(start_time);
     let encoder = prometheus::TextEncoder::new();
     let mut buffer = Vec::new();
-
     encoder.encode(&metric_families, &mut buffer)?;
-
-    let metrics = String::from_utf8(buffer)?;
-    if !gather_metrics {
-        log::warn!("requested metrics but they are disabled");
-        if !metrics.is_empty() {
-            log::error!("gathered metrics despite prometheus being disabled!");
-        }
-        Ok(Response::builder()
-            .status(404)
-            .body(Body::from("metrics are disabled"))
-            .unwrap())
-    } else {
-        Ok(Response::new(Body::from(metrics)))
-    }
+    Ok(Response::new(Body::from(buffer)))
 }
 
 async fn handle_status(
@@ -379,10 +345,10 @@ impl PromMetric<'_> {
 
 async fn handle_internal_catalog(
     _: Request<Body>,
-    mut cmd_tx: UnboundedSender<coord::Command>,
+    mut cmdq_tx: UnboundedSender<coord::Command>,
 ) -> Result<Response<Body>, failure::Error> {
     let (tx, rx) = futures::channel::oneshot::channel();
-    cmd_tx.send(coord::Command::DumpCatalog { tx }).await?;
+    cmdq_tx.send(coord::Command::DumpCatalog { tx }).await?;
     let dump = rx.await?;
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")

@@ -9,7 +9,6 @@
 
 use std::fmt;
 use std::pin::Pin;
-use std::sync::Weak;
 use std::task::{Context, Poll};
 
 use failure::bail;
@@ -31,22 +30,19 @@ pub struct Server {
     id_alloc: IdAllocator,
     secrets: SecretManager,
     tls: Option<SslAcceptor>,
-    cmdq_tx: Weak<futures::channel::mpsc::UnboundedSender<coord::Command>>,
-    gather_metrics: bool,
+    cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
 }
 
 impl Server {
     pub fn new(
         tls: Option<SslAcceptor>,
-        cmdq_tx: Weak<futures::channel::mpsc::UnboundedSender<coord::Command>>,
-        gather_metrics: bool,
+        cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
     ) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
             secrets: SecretManager::new(),
             tls,
             cmdq_tx,
-            gather_metrics,
         }
     }
 
@@ -54,16 +50,7 @@ impl Server {
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {
-        let mut cmdq_tx = match self.cmdq_tx.upgrade() {
-            Some(cmdq_tx) => (*cmdq_tx).clone(),
-            None => {
-                // The server is terminating. Drop the connection on the floor.
-                return Ok(());
-            }
-        };
-
         let mut conn = Conn::Unencrypted(conn);
-
         loop {
             conn = match codec::decode_startup(&mut conn).await? {
                 FrontendStartupMessage::Startup { version, params } => {
@@ -79,8 +66,7 @@ impl Server {
                         conn: &mut Framed::new(conn, Codec::new()).buffer(32),
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
-                        cmdq_tx,
-                        gather_metrics: self.gather_metrics,
+                        cmdq_tx: self.cmdq_tx.clone(),
                     };
                     let res = machine.start(Session::default(), version, params).await;
 
@@ -94,7 +80,8 @@ impl Server {
                     secret_key,
                 } => {
                     if self.secrets.verify(conn_id, secret_key) {
-                        cmdq_tx
+                        self.cmdq_tx
+                            .clone()
                             .send(coord::Command::CancelRequest { conn_id })
                             .await?;
                     }

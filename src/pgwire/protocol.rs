@@ -89,7 +89,6 @@ pub struct StateMachine<'a, A> {
     pub conn_id: u32,
     pub secret_key: u32,
     pub cmdq_tx: futures::channel::mpsc::UnboundedSender<coord::Command>,
-    pub gather_metrics: bool,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -163,15 +162,13 @@ where
             None => State::Done,
         };
 
-        if self.gather_metrics {
-            let status = match next_state {
-                State::Ready(_) | State::Done => "success",
-                State::Drain(_) => "error",
-            };
-            COMMAND_DURATIONS
-                .with_label_values(&[name, status])
-                .observe(timer.elapsed().as_secs_f64());
-        }
+        let status = match next_state {
+            State::Ready(_) | State::Done => "success",
+            State::Drain(_) => "error",
+        };
+        COMMAND_DURATIONS
+            .with_label_values(&[name, status])
+            .observe(timer.elapsed().as_secs_f64());
 
         Ok(next_state)
     }
