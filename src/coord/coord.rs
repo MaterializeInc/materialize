@@ -444,6 +444,10 @@ where
                     let _ = tx.send(self.catalog.dump());
                 }
 
+                Message::Command(Command::TerminateConnectionObjects { conn_id }) => {
+                    self.handle_terminate_connection_objects(conn_id);
+                }
+
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
                     message: WorkerFeedback::FrontierUppers(updates),
@@ -534,6 +538,12 @@ where
                 &mut self.broadcast_tx,
                 SequencedCommand::CancelPeek { conn_id },
             );
+        }
+    }
+
+    pub fn handle_terminate_connection_objects(&mut self, conn_id: u32) {
+        if let Some(name) = self.active_tails.remove(&conn_id) {
+            self.drop_sinks(vec![name]);
         }
     }
 

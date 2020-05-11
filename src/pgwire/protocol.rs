@@ -101,13 +101,19 @@ where
         conn: &mut Framed::new(conn, Codec::new()).buffer(32),
         conn_id,
         conn_secrets: CONN_SECRETS.clone(),
-        cmdq_tx,
+        cmdq_tx: cmdq_tx.clone(),
         gather_metrics,
     };
     let res = machine.start(Session::default()).await;
 
+    // Clean up state tied to this specific connection.
+    cmdq_tx
+        .clone()
+        .send(coord::Command::TerminateConnectionObjects { conn_id })
+        .await?;
     CONN_ID_ALLOCATOR.free(conn_id);
     CONN_SECRETS.free(conn_id);
+
     Ok(res?)
 }
 
