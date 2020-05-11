@@ -9,7 +9,9 @@ aliases:
     - /docs/sql/create-source/csv-source
 ---
 
-{{% create-source/intro format="CSV" connector="local files" %}}
+{{% create-source/intro %}}
+This document details how to connect Materialize to local CSV files.
+{{% /create-source/intro %}}
 
 ## Syntax
 

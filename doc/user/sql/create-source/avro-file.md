@@ -6,21 +6,25 @@ menu:
     parent: 'create-source'
 ---
 
-{{% create-source/intro format="[Avro Object Container File](https://avro.apache.org/docs/current/spec.html#Object+Container+Files)" connector="local files" %}}
+{{% create-source/intro connector="local files" %}}
+This document details how to connect Materialize to local [Avro Object Container
+Files] (OCFs).
+
+[Avro Object Container Files]: https://avro.apache.org/docs/current/spec.html#Object+Container+Files
+{{% /create-source/intro %}}
 
 ## Syntax
 
 {{< diagram "create-source-avro-file.html" >}}
 
-{{% create-source/syntax-details connector="file" formats="avro-ocf text" envelopes="debezium append-only" %}}
+{{% create-source/syntax-details connector="avro-ocf" formats="none" envelopes="append-only debezium" %}}
 
 ## Examples
 
 ```sql
 CREATE SOURCE events
-FROM FILE '[path to .ocf]'
+FROM AVRO OCF '[path to .ocf]'
 WITH (tail = true)
-FORMAT AVRO OCF
 ENVELOPE NONE;
 ```
 

@@ -9,7 +9,10 @@ aliases:
     - /docs/sql/create-source/kinesis-source
 ---
 
-{{% create-source/intro format="JSON" connector="Kinesis streams" %}}
+{{% create-source/intro %}}
+This document details how to connect Materialize to JSON-formatted Kinesis
+streams.
+{{% /create-source/intro %}}
 
 ## Syntax
 

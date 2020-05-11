@@ -13,7 +13,10 @@ aliases:
     - /docs/sql/create-source/files
 ---
 
-{{% create-source/intro format="text- or byte-" connector="local files" %}}
+{{% create-source/intro %}}
+This document details how to connect Materialize to text- or byte–formatted
+local files.
+{{% /create-source/intro %}}
 
 ### Formatting text
 

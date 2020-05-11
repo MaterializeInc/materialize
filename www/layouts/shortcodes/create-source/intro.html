@@ -1,1 +1,10 @@
-{{ partial "create-source/intro" ( dict "context" . "format" (.Get "format") "connector" (.Get "connector") ) -}}
+`CREATE SOURCE` connects Materialize to some data source, and lets you interact
+with its data as if it were in a SQL table.
+
+{{.Inner}}
+
+## Conceptual framework
+
+Sources represent connections to resources outside Materialize that it can read
+data from. For more information, see [API Components:
+Sources](../../../overview/api-components#sources).
