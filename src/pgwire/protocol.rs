@@ -854,7 +854,7 @@ where
 
         if rows.is_empty() {
             self.send(BackendMessage::CommandComplete {
-                tag: "SELECT".into(),
+                tag: format!("SELECT {}", row_count),
             })
             .await?;
         } else {
