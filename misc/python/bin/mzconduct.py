@@ -39,7 +39,7 @@ from typing import (
 from typing_extensions import Literal
 
 import click
-import psycopg2  # type: ignore
+import pg8000  # type: ignore
 import pymysql
 import yaml
 
@@ -107,7 +107,7 @@ def nuke(composition: str) -> None:
         comp.down()
         cmds = ["docker system prune -af".split(), "docker volume prune -f".split()]
         for cmd in cmds:
-            spawn.runv2(cmd)
+            spawn.runv(cmd, capture_output=True)
     else:
         raise UnknownItem("composition", comp, Composition.known_compositions())
 
@@ -573,24 +573,24 @@ class DownStep(WorkflowStep):
 
 def mzcompose_up(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "up", "-d"]
-    return spawn.runv2(cmd + services)
+    return spawn.runv(cmd + services, capture_output=True)
 
 
 def mzcompose_run(command: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "run"]
-    return spawn.runv2(cmd + command)
+    return spawn.runv(cmd + command, capture_output=True)
 
 
 def mzcompose_stop(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "stop"]
-    return spawn.runv2(cmd + services)
+    return spawn.runv(cmd + services, capture_output=True)
 
 
 def mzcompose_down(destroy_volumes: bool = False) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "down"]
     if destroy_volumes:
         cmd.append("-v")
-    return spawn.runv2(cmd)
+    return spawn.runv(cmd, capture_output=True)
 
 
 # Helpers
@@ -623,15 +623,15 @@ def wait_for_pg(
 ) -> None:
     """Wait for a pg-compatible database (includes materialized)
     """
-    args = f"dbname={dbname} host={host} port={port}"
+    args = f"dbname={dbname} host={host} port={port} user=ignored"
     ui.progress(f"waiting for {args} to handle {query!r}", "C")
     error = None
     if isinstance(expected, tuple):
         expected = list(expected)
     for remaining in ui.timeout_loop(timeout_secs):
         try:
-            conn = psycopg2.connect(
-                f"dbname={dbname} host={host} port={port}", connect_timeout=1
+            conn = pg8000.connect(
+                database=dbname, host=host, port=port, user="ignored", timeout=1
             )
             cur = conn.cursor()
             cur.execute(query)

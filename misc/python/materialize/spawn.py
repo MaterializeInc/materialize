@@ -27,9 +27,10 @@ CalledProcessError = subprocess.CalledProcessError
 def runv(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
-    stdin: Optional[IO[bytes]] = None,
-    stdout: Optional[IO[bytes]] = None,
-) -> None:
+    stdin: Union[None, int, IO[bytes]] = None,
+    stdout: Union[None, int, IO[bytes]] = None,
+    capture_output: bool = False,
+) -> subprocess.CompletedProcess:
     """Verbosely run a subprocess.
 
     A description of the subprocess will be written to stdout before the
@@ -41,6 +42,12 @@ def runv(
         cwd: An optional directory to change into before executing the process.
         stdin: An optional IO handle to use as the process's stdin stream.
         stdout: An optional IO handle to use as the process's stdout stream.
+        capture_output: Whether to prevent the process from streaming output
+            the parent process's stdin/stdout handles. If true, the output
+            will be captured and made available as the `stdout` and `stderr`
+            fields on the returned `subprocess.CompletedProcess`. Note that
+            setting this parameter to true will override the behavior of the
+            `stdout` parameter.
 
     Raises:
         OSError: The process cannot be executed, e.g. because the specified
@@ -48,33 +55,13 @@ def runv(
         CalledProcessError: The process exited with a non-zero exit status.
     """
     print("$", " ".join(shlex.quote(str(arg)) for arg in args))
-    subprocess.check_call(args, cwd=cwd, stdin=stdin, stdout=stdout)
-
-
-def runv2(
-    args: Iterable[str], cwd: Optional[Path] = None, capture: bool = False,
-) -> subprocess.CompletedProcess:
-    """
-    Like runv, but uses subprocess.run, and returns a CompletedProcess
-
-    A description of the subprocess will be written to stdout before the
-    subprocess is executed.
-
-    Args:
-        args: A list of strings or paths describing the program to run and
-            the arguments to pass to it.
-        cwd: An optional directory to change into before executing the process.
-
-        capture: if true, stdout and stderr will be returned on the returned object,
-            instead of printed to the terminal
-
-    Raises:
-        OSError: The process cannot be executed, e.g. because the specified
-            program does not exist.
-        CalledProcessError: The process exited with a non-zero exit status.
-    """
-    print("$", " ".join(shlex.quote(arg) for arg in args))
-    return subprocess.run(args, cwd=cwd, check=True, capture_output=capture)  # type: ignore
+    stderr = None
+    if capture_output:
+        stdout = subprocess.PIPE
+        stderr = subprocess.PIPE
+    return subprocess.run(
+        args, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, check=True
+    )
 
 
 @overload
