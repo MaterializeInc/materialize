@@ -397,7 +397,7 @@ dependencies = [
  "futures",
  "getopts",
  "log",
- "num_enum 0.4.3",
+ "num_enum",
  "ore",
  "predicates",
  "rand",
@@ -919,7 +919,7 @@ dependencies = [
  "enum-iterator",
  "failure",
  "indexmap",
- "num_enum 0.4.3",
+ "num_enum",
  "ordered-float",
  "ore",
  "pdqselect",
@@ -1909,34 +1909,12 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca565a7df06f3d4b485494f25ba05da1435950f4dc263440eda7a6fa9b8e36e4"
-dependencies = [
- "derivative",
- "num_enum_derive 0.4.3",
-]
-
-[[package]]
-name = "num_enum"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f1e2d7c9c4282839fc56f549bc006a54e6f28a851a7de7adcf3f50575751760"
 dependencies = [
  "derivative",
- "num_enum_derive 0.5.0",
-]
-
-[[package]]
-name = "num_enum_derive"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffa5a33ddddfee04c0283a7653987d634e880347e96b5b2ed64de07efb59db9d"
-dependencies = [
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn",
+ "num_enum_derive",
 ]
 
 [[package]]
@@ -2601,7 +2579,7 @@ dependencies = [
  "cmake",
  "libc",
  "libz-sys",
- "num_enum 0.5.0",
+ "num_enum",
  "openssl-sys",
  "pkg-config",
  "sasl2-sys",
