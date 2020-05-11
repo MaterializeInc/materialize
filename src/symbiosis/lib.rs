@@ -34,12 +34,13 @@ use sql_parser::ast::ColumnOption;
 use sql_parser::ast::{DataType, ObjectType, Statement};
 use tokio_postgres::types::FromSql;
 
-use catalog::names::FullName;
-use catalog::{Catalog, PlanContext};
 use repr::decimal::Significand;
 use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
-use sql::{normalize, scalar_type_from_sql, MutationKind, Plan, Session, StatementContext};
+use sql::{
+    normalize, scalar_type_from_sql, FullName, MutationKind, Plan, PlanCatalog, PlanContext,
+    Session, StatementContext,
+};
 
 pub struct Postgres {
     client: tokio_postgres::Client,
@@ -122,7 +123,7 @@ END $$;
     pub async fn execute(
         &mut self,
         pcx: &PlanContext,
-        catalog: &Catalog,
+        catalog: &dyn PlanCatalog,
         session: &Session,
         stmt: &Statement,
     ) -> Result<Plan, failure::Error> {
@@ -230,7 +231,7 @@ END $$;
                             }
                         }
                     };
-                    match catalog.try_get(&name) {
+                    match catalog.get(&name).ok() {
                         None => {
                             if !if_exists {
                                 bail!("internal error: table {} missing from catalog", name);

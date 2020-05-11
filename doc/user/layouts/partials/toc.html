@@ -1,0 +1,76 @@
+{{ if not (.Params.disable_toc) }}
+<aside class="toc-wrapper">
+    <div class="toc">
+        <h2>On this page</h2>
+        {{ .TableOfContents }}
+    </div>
+</aside>
+{{else}}
+<aside class="toc-dummy">
+{{/* Takes up space when there is no TOC to keep the main content centered. */}}
+</aside>
+{{end}}
+
+<script>
+    // A custom "scrollspy" plugin that highlights the TOC link for the
+    // currently-visible section.
+
+    /// Computes the absolute offset of each heading from the top of the page.
+    /// Offsets are massaged so that headings beyond the maximum scroll offset
+    /// of the page are reassigned a reasonable and unique offset within the
+    /// page's scroll boundaries. This makes it possible to distinguish headings
+    /// that would otherwise all require scrolling to the very end of the
+    /// viewport.
+    function headingOffsets() {
+        const headings = $(".content h2, .content h3");
+        let offsets = headings.toArray().map(h => ({
+            id: h.id,
+            offset: h.offsetTop,
+        }));
+        const scrollMax = $(document).height() - $(window).height();
+        const firstBad = offsets.findIndex(o => o.offset + 50 > scrollMax);
+        if (firstBad === -1)
+            return offsets;
+        const lastGoodOffset = firstBad > 0 ? offsets[firstBad - 1].offset : 0;
+        const allotment = (scrollMax - lastGoodOffset) / (offsets.length - firstBad);
+        for (var i = firstBad; i < offsets.length; i++)
+            offsets[i].offset = lastGoodOffset + (i - firstBad + 1) * allotment;
+        return offsets;
+    }
+
+    // Update the active TOC link on every scroll event.
+    $(window).scroll(() => {
+        const scroll = $(window).scrollTop();
+        const offsets = headingOffsets();
+        let activeId = offsets[offsets.length - 1].id;
+        for (let i = 0; i < offsets.length; i++) {
+            if (offsets[i].offset > scroll) {
+                if (i > 0) {
+                    activeId = offsets[i - 1].id;
+                } else {
+                    activeId = null;
+                }
+                break;
+            }
+        }
+        $(".toc .active").removeClass("active");
+        if (activeId)
+            $(`.toc [href="#${activeId}"]`).addClass("active");
+    })
+
+    // Scroll to our massaged offsets on a hashchange event, to override the
+    // browser's automatic scroll to the unmassaged offset.
+    $(window).on("hashchange", function () {
+        const id = window.location.hash.substring(1);
+        const offsets = headingOffsets();
+        const offset = offsets.find(o => o.id == id);
+        if (offset)
+            $(window).scrollTop(offset.offset + 1);
+        else
+            $(window).trigger("scroll");
+    });
+
+    // Trigger an initial hash change event to handle scrolling to the page's
+    // initial hash.
+    $(() => $(window).trigger("hashchange"));
+</script>

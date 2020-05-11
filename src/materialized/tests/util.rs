@@ -8,14 +8,24 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use openssl::asn1::Asn1Time;
+use openssl::hash::MessageDigest;
+use openssl::nid::Nid;
+use openssl::pkey::PKey;
+use openssl::rsa::Rsa;
+use openssl::x509::extension::SubjectAlternativeName;
+use openssl::x509::{X509NameBuilder, X509};
 
 #[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
     logging_granularity: Option<Duration>,
+    tls: Option<materialized::TlsConfig>,
 }
 
 impl Default for Config {
@@ -23,6 +33,7 @@ impl Default for Config {
         Config {
             data_directory: None,
             logging_granularity: Some(Duration::from_millis(10)),
+            tls: None,
         }
     }
 }
@@ -35,6 +46,18 @@ impl Config {
 
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
         self.data_directory = Some(data_directory.into());
+        self
+    }
+
+    pub fn enable_tls(
+        mut self,
+        cert_path: impl Into<PathBuf>,
+        key_path: impl Into<PathBuf>,
+    ) -> Self {
+        self.tls = Some(materialized::TlsConfig {
+            cert: cert_path.into(),
+            key: key_path.into(),
+        });
         self
     }
 }
@@ -51,8 +74,8 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
         data_directory: config.data_directory,
         symbiosis_url: None,
-        gather_metrics: false,
         listen_addr: None,
+        tls: config.tls,
     })?);
     let client = server.connect()?;
     Ok((server, client))
@@ -65,7 +88,7 @@ impl Server {
         let local_addr = self.0.local_addr();
         let mut config = postgres::Config::new();
         config
-            .host(&local_addr.ip().to_string())
+            .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
             .user("root");
         config
@@ -75,7 +98,7 @@ impl Server {
         let local_addr = self.0.local_addr();
         let mut config = tokio_postgres::Config::new();
         config
-            .host(&local_addr.ip().to_string())
+            .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
             .user("root");
         config
@@ -97,4 +120,33 @@ impl Server {
         });
         Ok(client)
     }
+}
+
+pub fn generate_certs(cert_path: &Path, key_path: &Path) -> Result<(), Box<dyn Error>> {
+    let rsa = Rsa::generate(2048)?;
+    let pkey = PKey::from_rsa(rsa)?;
+    let name = {
+        let mut builder = X509NameBuilder::new()?;
+        builder.append_entry_by_nid(Nid::COMMONNAME, "test certificate")?;
+        builder.build()
+    };
+    let cert = {
+        let mut builder = X509::builder()?;
+        builder.set_version(2)?;
+        builder.set_pubkey(&pkey)?;
+        builder.set_issuer_name(&name)?;
+        builder.set_subject_name(&name)?;
+        builder.append_extension(
+            SubjectAlternativeName::new()
+                .ip(&Ipv4Addr::LOCALHOST.to_string())
+                .build(&builder.x509v3_context(None, None))?,
+        )?;
+        builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
+        builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
+        builder.sign(&pkey, MessageDigest::sha256())?;
+        builder.build()
+    };
+    fs::write(cert_path, &cert.to_pem()?)?;
+    fs::write(key_path, &pkey.private_key_to_pem_pkcs8()?)?;
+    Ok(())
 }

@@ -21,9 +21,9 @@ use std::fmt;
 
 use failure::bail;
 
-use catalog::names::DatabaseSpecifier;
 use repr::{Datum, Row, ScalarType};
 
+use crate::names::DatabaseSpecifier;
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};

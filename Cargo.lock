@@ -186,9 +186,9 @@ checksum = "b41b7ea54a0c9d92199de89e20e58d49f02f8e699814ef3fdf266f6f748d15c7"
 
 [[package]]
 name = "base64"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5ca2cd0adc3f48f9e9ea5a6bbdf9ccc0bfade884847e484d452414c7ccffb3"
+checksum = "53d1ccbaf7d9ec9537465a97bf19edc1a4e158ecb49fc16178202238c569cc42"
 
 [[package]]
 name = "billing-demo"
@@ -312,28 +312,6 @@ name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
-
-[[package]]
-name = "catalog"
-version = "0.1.0"
-dependencies = [
- "backtrace",
- "bincode",
- "chrono",
- "dataflow-types",
- "expr",
- "failure",
- "itertools",
- "lazy_static",
- "log",
- "ore",
- "rand",
- "regex",
- "repr",
- "rusqlite",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "cc"
@@ -464,7 +442,8 @@ version = "0.1.0"
 dependencies = [
  "avro",
  "aws-util",
- "catalog",
+ "backtrace",
+ "bincode",
  "ccsr",
  "chrono",
  "comm",
@@ -482,6 +461,7 @@ dependencies = [
  "ore",
  "pgrepr",
  "prometheus",
+ "rand",
  "rdkafka",
  "regex",
  "repr",
@@ -1097,9 +1077,9 @@ dependencies = [
 
 [[package]]
 name = "futures-channel"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0c77d04ce8edd9cb903932b608268b3fffec4163dc053b3b402bf47eac1f1a8"
+checksum = "f366ad74c28cca6ba456d95e6422883cfb4b252a83bed929c83abfdbbf2967d5"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -1107,9 +1087,9 @@ dependencies = [
 
 [[package]]
 name = "futures-core"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f25592f769825e89b92358db00d26f965761e094951ac44d3663ef25b7ac464a"
+checksum = "59f5fff90fd5d971f936ad674802482ba441b6f09ba5e15fd8b39145582ca399"
 
 [[package]]
 name = "futures-executor"
@@ -1142,9 +1122,9 @@ dependencies = [
 
 [[package]]
 name = "futures-sink"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3466821b4bc114d95b087b850a724c6f83115e929bc88f1fa98a3304a944c8a6"
+checksum = "3f2032893cb734c7a05d85ce0cc8b8c4075278e93b24b66f9de99d6eb0fa8acc"
 
 [[package]]
 name = "futures-task"
@@ -1383,7 +1363,7 @@ name = "interchange"
 version = "0.1.0"
 dependencies = [
  "avro",
- "base64 0.12.0",
+ "base64 0.12.1",
  "byteorder",
  "ccsr",
  "chrono",
@@ -1596,7 +1576,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "materialized"
 version = "0.2.3-dev"
 dependencies = [
- "avro",
+ "async-trait",
  "backtrace",
  "chrono",
  "comm",
@@ -1615,16 +1595,20 @@ dependencies = [
  "lazy_static",
  "log",
  "once_cell",
+ "openssl",
  "ore",
  "parse_duration",
  "pgwire",
  "postgres",
+ "postgres-openssl",
  "prometheus",
  "rlimit",
  "serde_json",
+ "stream-cancel",
  "sysctl",
  "tempfile",
  "tokio",
+ "tokio-openssl",
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
@@ -2164,6 +2148,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "openssl",
  "ordered-float",
  "ore",
  "pgrepr",
@@ -2173,6 +2158,7 @@ dependencies = [
  "repr",
  "sql",
  "tokio",
+ "tokio-openssl",
  "tokio-util",
 ]
 
@@ -2258,11 +2244,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-openssl"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f10ea2d77c744e1846d03b58362679e51c6647acf0e6a65a1f1e5f0d5e99387"
+dependencies = [
+ "bytes",
+ "futures",
+ "openssl",
+ "tokio",
+ "tokio-openssl",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "postgres-protocol"
 version = "0.5.1"
 source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
 dependencies = [
- "base64 0.12.0",
+ "base64 0.12.1",
  "byteorder",
  "bytes",
  "fallible-iterator",
@@ -2717,7 +2717,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a8d624cb48fcaca612329e4dd544380aa329ef338e83d3a90f5b7897e631971"
 dependencies = [
  "async-trait",
- "base64 0.12.0",
+ "base64 0.12.1",
  "bytes",
  "futures",
  "hmac",
@@ -2779,7 +2779,7 @@ version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62940a2bd479900a1bf8935b8f254d3e19368ac3ac4570eb4bd48eb46551a1b7"
 dependencies = [
- "base64 0.12.0",
+ "base64 0.12.1",
  "bytes",
  "futures",
  "hex",
@@ -2951,9 +2951,9 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
 name = "serde"
-version = "1.0.106"
+version = "1.0.110"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36df6ac6412072f67cf767ebbde4133a5b2e88e76dc6187fa7104cd16f783399"
+checksum = "99e7b308464d16b56eba9964e4972a3eee817760ab60d88c3f86e1fecb08204c"
 dependencies = [
  "serde_derive",
 ]
@@ -2982,9 +2982,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.106"
+version = "1.0.110"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e549e3abf4fb8621bd1609f11dfc9f5e50320802273b12f3811a67e6716ea6c"
+checksum = "818fbf6bfa9a42d3bfcaca148547aa00c7b915bec71d1757aa2d44ca68771984"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2993,9 +2993,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.52"
+version = "1.0.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7894c8ed05b7a3a279aeb79025fdec1d3158080b75b98a08faf2806bb799edd"
+checksum = "993948e75b189211a9b31a7528f950c6adc21f9720b6438ff80a7fa2f864cea2"
 dependencies = [
  "itoa",
  "ryu",
@@ -3139,7 +3139,6 @@ version = "0.1.0"
 dependencies = [
  "avro",
  "aws-arn",
- "catalog",
  "ccsr",
  "chrono",
  "dataflow-types",
@@ -3157,6 +3156,7 @@ dependencies = [
  "repr",
  "reqwest",
  "rusoto_core",
+ "serde",
  "serde_json",
  "sql-parser",
  "tokio",
@@ -3202,6 +3202,18 @@ dependencies = [
  "sql-parser",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "stream-cancel"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15c2f5be039aed0d08b3596461637480d35858ca4360c905b0e802b934fa8e48"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "pin-project",
+ "tokio",
 ]
 
 [[package]]
@@ -3254,7 +3266,6 @@ checksum = "2d67a5a62ba6e01cb2192ff309324cb4875d0c451d55fe2319433abe7a05a8ee"
 name = "symbiosis"
 version = "0.1.0"
 dependencies = [
- "catalog",
  "chrono",
  "dataflow-types",
  "expr",
@@ -3567,6 +3578,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-openssl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c4b08c5f4208e699ede3df2520aca2e82401b2de33f45e96696a074480be594"
+dependencies = [
+ "openssl",
+ "tokio",
 ]
 
 [[package]]

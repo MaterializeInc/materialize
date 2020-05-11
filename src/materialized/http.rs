@@ -16,8 +16,11 @@ use futures::future::TryFutureExt;
 use futures::sink::SinkExt;
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
+use openssl::ssl::SslAcceptor;
 use prometheus::{register_gauge_vec, Encoder, Gauge, GaugeVec};
 use tokio::io::{AsyncRead, AsyncWrite};
+
+use ore::netio::SniffedStream;
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
@@ -37,37 +40,78 @@ const METHODS: &[&[u8]] = &[
     b"OPTIONS", b"GET", b"HEAD", b"POST", b"PUT", b"DELETE", b"TRACE", b"CONNECT",
 ];
 
-pub fn match_handshake(buf: &[u8]) -> bool {
-    let buf = if let Some(pos) = buf.iter().position(|&b| b == b' ') {
-        &buf[..pos]
-    } else {
-        &buf[..]
-    };
-    METHODS.contains(&buf)
+const TLS_HANDSHAKE_START: u8 = 22;
+
+fn sniff_tls(buf: &[u8]) -> bool {
+    !buf.is_empty() && buf[0] == TLS_HANDSHAKE_START
 }
 
-pub async fn handle_connection<A: 'static + AsyncRead + AsyncWrite + Unpin>(
-    a: A,
-    cmd_tx: UnboundedSender<coord::Command>,
-    gather_metrics: bool,
+pub struct Server {
+    tls: Option<SslAcceptor>,
+    cmdq_tx: UnboundedSender<coord::Command>,
     start_time: Instant,
-) -> Result<(), failure::Error> {
-    let svc = service::service_fn(move |req: Request<Body>| {
-        let cmd_tx = cmd_tx.clone();
-        async move {
-            match (req.method(), req.uri().path()) {
-                (&Method::GET, "/") => handle_home(req).await,
-                (&Method::GET, "/metrics") => {
-                    handle_prometheus(req, gather_metrics, start_time).await
-                }
-                (&Method::GET, "/status") => handle_status(req, start_time).await,
-                (&Method::GET, "/internal/catalog") => handle_internal_catalog(req, cmd_tx).await,
-                _ => handle_unknown(req).await,
-            }
+}
+
+impl Server {
+    pub fn new(
+        tls: Option<SslAcceptor>,
+        cmdq_tx: UnboundedSender<coord::Command>,
+        start_time: Instant,
+    ) -> Server {
+        Server {
+            tls,
+            cmdq_tx,
+            start_time,
         }
-    });
-    let http = hyper::server::conn::Http::new();
-    http.serve_connection(a, svc).err_into().await
+    }
+
+    pub fn match_handshake(&self, buf: &[u8]) -> bool {
+        if self.tls.is_some() && sniff_tls(buf) {
+            return true;
+        }
+        let buf = if let Some(pos) = buf.iter().position(|&b| b == b' ') {
+            &buf[..pos]
+        } else {
+            &buf[..]
+        };
+        METHODS.contains(&buf)
+    }
+
+    pub async fn handle_connection<A>(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
+    {
+        match (&self.tls, sniff_tls(&conn.sniff_buffer())) {
+            (Some(tls), true) => {
+                let conn = tokio_openssl::accept(tls, conn).await?;
+                self.handle_connection_inner(conn).await
+            }
+            _ => self.handle_connection_inner(conn).await,
+        }
+    }
+
+    async fn handle_connection_inner<A>(&self, conn: A) -> Result<(), failure::Error>
+    where
+        A: AsyncRead + AsyncWrite + Unpin + 'static,
+    {
+        let svc = service::service_fn(move |req: Request<Body>| {
+            let cmdq_tx = (self.cmdq_tx).clone();
+            let start_time = self.start_time;
+            async move {
+                match (req.method(), req.uri().path()) {
+                    (&Method::GET, "/") => handle_home(req).await,
+                    (&Method::GET, "/metrics") => handle_prometheus(req, start_time).await,
+                    (&Method::GET, "/status") => handle_status(req, start_time).await,
+                    (&Method::GET, "/internal/catalog") => {
+                        handle_internal_catalog(req, cmdq_tx).await
+                    }
+                    _ => handle_unknown(req).await,
+                }
+            }
+        });
+        let http = hyper::server::conn::Http::new();
+        http.serve_connection(conn, svc).err_into().await
+    }
 }
 
 async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error> {
@@ -95,28 +139,13 @@ async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error>
 
 async fn handle_prometheus(
     _: Request<Body>,
-    gather_metrics: bool,
     start_time: Instant,
 ) -> Result<Response<Body>, failure::Error> {
     let metric_families = load_prom_metrics(start_time);
     let encoder = prometheus::TextEncoder::new();
     let mut buffer = Vec::new();
-
     encoder.encode(&metric_families, &mut buffer)?;
-
-    let metrics = String::from_utf8(buffer)?;
-    if !gather_metrics {
-        log::warn!("requested metrics but they are disabled");
-        if !metrics.is_empty() {
-            log::error!("gathered metrics despite prometheus being disabled!");
-        }
-        Ok(Response::builder()
-            .status(404)
-            .body(Body::from("metrics are disabled"))
-            .unwrap())
-    } else {
-        Ok(Response::new(Body::from(metrics)))
-    }
+    Ok(Response::new(Body::from(buffer)))
 }
 
 async fn handle_status(
@@ -316,10 +345,10 @@ impl PromMetric<'_> {
 
 async fn handle_internal_catalog(
     _: Request<Body>,
-    mut cmd_tx: UnboundedSender<coord::Command>,
+    mut cmdq_tx: UnboundedSender<coord::Command>,
 ) -> Result<Response<Body>, failure::Error> {
     let (tx, rx) = futures::channel::oneshot::channel();
-    cmd_tx.send(coord::Command::DumpCatalog { tx }).await?;
+    cmdq_tx.send(coord::Command::DumpCatalog { tx }).await?;
     let dump = rx.await?;
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")

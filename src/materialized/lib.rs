@@ -24,29 +24,27 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use compile_time_run::run_command_str;
 use failure::format_err;
-use futures::channel::mpsc::{self, UnboundedSender};
-use futures::future::TryFutureExt;
-use futures::stream::StreamExt;
-use log::error;
-use tokio::io::{self, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use futures::channel::mpsc;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use stream_cancel::{StreamExt as _, Trigger, Tripwire};
+use tokio::io;
+use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
-use ore::future::OreTryFutureExt;
-use ore::netio;
-use ore::netio::{SniffedStream, SniffingStream};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
+use crate::mux::Mux;
+
 mod http;
+mod mux;
 
 /// The version of the crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -81,28 +79,9 @@ pub fn version() -> String {
 }
 
 /// Configuration for a `materialized` server.
+#[derive(Debug, Clone)]
 pub struct Config {
-    /// The interval at which the internal Timely cluster should publish updates
-    /// about its state.
-    pub logging_granularity: Option<Duration>,
-    /// The interval at which sources should be timestamped.
-    pub timestamp_frequency: Duration,
-    /// The maximum size of a timestamp batch.
-    pub max_increment_ts_size: i64,
-    /// If set to true, records RT consistency information to the SQL lite store
-    /// and attempts to recover that information on startup
-    pub persist_ts: bool,
-    /// The historical window in which distinctions are maintained for arrangements.
-    ///
-    /// As arrangements accept new timestamps they may optionally collapse prior
-    /// timestamps to the same value, retaining their effect but removing their
-    /// distinction. A large value or `None` results in a large amount of historical
-    /// detail for arrangements; this increases the logical times at which they can
-    /// be accurately queried, but consumes more memory. A low value reduces the
-    /// amount of memory required but also risks not being able to use the arrangement
-    /// in a query that has other constraints on the timestamps used (e.g. when joined
-    /// with other arrangements).
-    pub logical_compaction_window: Option<Duration>,
+    // === Timely and Differential worker options. ===
     /// The number of Timely worker threads that this process should host.
     pub threads: usize,
     /// The ID of this process in the cluster. IDs must be contiguously
@@ -111,17 +90,44 @@ pub struct Config {
     /// The addresses of each process in the cluster, including this node,
     /// in order of process ID.
     pub addresses: Vec<SocketAddr>,
+
+    // === Performance tuning options. ===
+    /// The interval at which the internal Timely cluster should publish updates
+    /// about its state.
+    pub logging_granularity: Option<Duration>,
+    /// The historical window in which distinctions are maintained for
+    /// arrangements.
+    ///
+    /// As arrangements accept new timestamps they may optionally collapse prior
+    /// timestamps to the same value, retaining their effect but removing their
+    /// distinction. A large value or `None` results in a large amount of
+    /// historical detail for arrangements; this increases the logical times at
+    /// which they can be accurately queried, but consumes more memory. A low
+    /// value reduces the amount of memory required but also risks not being
+    /// able to use the arrangement in a query that has other constraints on the
+    /// timestamps used (e.g. when joined with other arrangements).
+    pub logical_compaction_window: Option<Duration>,
+    /// The interval at which sources should be timestamped.
+    pub timestamp_frequency: Duration,
+    /// The maximum size of a timestamp batch.
+    pub max_increment_ts_size: i64,
+    /// Whether to record realtime consistency information to the data directory
+    /// and attempt to recover that information on startup.
+    pub persist_ts: bool,
+
+    // === Connection options. ===
+    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
+    /// where <addr_port> is the address of this process's entry in `addresses`.
+    pub listen_addr: Option<SocketAddr>,
+    /// TLS encryption configuration.
+    pub tls: Option<TlsConfig>,
+
+    // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: Option<PathBuf>,
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
-    /// Whether to collect metrics. If enabled, metrics can be collected by
-    /// e.g. Prometheus via the `/metrics` HTTP endpoint.
-    pub gather_metrics: bool,
-    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
-    /// where <addr_port> is the address of this process's entry in `addresses`.
-    pub listen_addr: Option<SocketAddr>,
 }
 
 impl Config {
@@ -132,49 +138,21 @@ impl Config {
     }
 }
 
-async fn handle_connection(
-    conn: TcpStream,
-    switchboard: Switchboard<SniffedStream<TcpStream>>,
-    cmd_tx: UnboundedSender<coord::Command>,
-    gather_metrics: bool,
-    start_time: Instant,
-) {
-    // Sniff out what protocol we've received. Choosing how many bytes to sniff
-    // is a delicate business. Read too many bytes and you'll stall out
-    // protocols with small handshakes, like pgwire. Read too few bytes and
-    // you won't be able to tell what protocol you have. For now, eight bytes
-    // is the magic number, but this may need to change if we learn to speak
-    // new protocols.
-    let mut ss = SniffingStream::new(conn);
-    let mut buf = [0; 8];
-    let nread = match netio::read_exact_or_eof(&mut ss, &mut buf).await {
-        Ok(nread) => nread,
-        Err(err) => {
-            error!("error handling request: {}", err);
-            return;
-        }
-    };
-    let buf = &buf[..nread];
+/// Configures TLS encryption for connections.
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    /// The path to the TLS certificate.
+    pub cert: PathBuf,
+    /// The path to the TLS key.
+    pub key: PathBuf,
+}
 
-    let res = if pgwire::match_handshake(buf) {
-        pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).await
-    } else if http::match_handshake(buf) {
-        http::handle_connection(ss.into_sniffed(), cmd_tx, gather_metrics, start_time).await
-    } else if comm::protocol::match_handshake(buf) {
-        switchboard
-            .handle_connection(ss.into_sniffed())
-            .err_into()
-            .await
-    } else {
-        log::warn!("unknown protocol connection!");
-        ss.into_sniffed()
-            .write_all(b"unknown protocol\n")
-            .discard()
-            .err_into()
-            .await
-    };
-    if let Err(err) = res {
-        error!("error handling request: {}", err)
+impl TlsConfig {
+    fn acceptor(&self) -> Result<SslAcceptor, failure::Error> {
+        let mut builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
+        builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
+        builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
+        Ok(builder.build())
     }
 }
 
@@ -184,8 +162,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
 
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
-    let (cmd_tx, cmd_rx) = mpsc::unbounded::<coord::Command>();
-    let cmd_tx = Arc::new(cmd_tx);
+    let (cmdq_tx, cmd_rx) = mpsc::unbounded::<coord::Command>();
 
     // Extract timely dataflow parameters.
     let is_primary = config.process == 0;
@@ -194,6 +171,12 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     // Start Tokio runtime.
     let mut runtime = tokio::runtime::Runtime::new()?;
     let executor = runtime.handle().clone();
+
+    // Validate TLS configuration, if present.
+    let tls = match &config.tls {
+        None => None,
+        Some(tls_config) => Some(tls_config.acceptor()?),
+    };
 
     // Initialize network listener.
     let listen_addr = config.listen_addr.unwrap_or_else(|| {
@@ -216,53 +199,38 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     );
 
     let switchboard = Switchboard::new(config.addresses, config.process, executor.clone());
-    let gather_metrics = config.gather_metrics;
+
+    // Launch task to serve connections.
+    //
+    // The lifetime of this task is controlled by two triggers that activate on
+    // drop. Draining marks the beginning of the server shutdown process and
+    // indicates that new user connections (i.e., pgwire and HTTP connections)
+    // should be rejected. Gracefully handling existing user connections
+    // requires that new system (i.e., switchboard) connections continue to be
+    // routed whiles draining. The shutdown trigger indicates that draining is
+    // complete, so switchboard traffic can cease and the task can exit.
+    let (drain_trigger, drain_tripwire) = Tripwire::new();
+    let (shutdown_trigger, shutdown_tripwire) = Tripwire::new();
     runtime.spawn({
         let switchboard = switchboard.clone();
-        let cmd_tx = Arc::downgrade(&cmd_tx);
         async move {
-            let mut incoming = listener.incoming();
-            while let Some(conn) = incoming.next().await {
-                let conn = match conn {
-                    Ok(conn) => conn,
-                    Err(err) => {
-                        error!("error accepting connection: {}", err);
-                        continue;
-                    }
-                };
-                // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-                // algorithm), which forces a 40ms delay between each query
-                // on linux. According to John Nagle [0], the true problem
-                // is delayed acks, but disabling those is a receive-side
-                // operation (TCP_QUICKACK), and we can't always control the
-                // client. PostgreSQL sets TCP_NODELAY on both sides of its
-                // sockets, so it seems sane to just do the same.
-                //
-                // If set_nodelay fails, it's a programming error, so panic.
-                //
-                // [0]: https://news.ycombinator.com/item?id=10608356
-                conn.set_nodelay(true).expect("set_nodelay failed");
-                if is_primary {
-                    if let Some(cmd_tx) = cmd_tx.upgrade() {
-                        tokio::spawn(handle_connection(
-                            conn,
-                            switchboard.clone(),
-                            (*cmd_tx).clone(),
-                            gather_metrics,
-                            start_time,
-                        ));
-                        continue;
-                    }
-                }
-                // When not the primary, or when shutting down, we only need to
-                // route switchboard traffic.
-                let ss = SniffingStream::new(conn).into_sniffed();
-                tokio::spawn(
-                    switchboard
-                        .handle_connection(ss)
-                        .map_err(|err| error!("error handling connection: {}", err)),
-                );
+            let incoming = &mut listener.incoming();
+
+            // The primary is responsible for pgwire and HTTP traffic in
+            // addition to switchboard traffic until draining starts.
+            if is_primary {
+                let mut mux = Mux::new();
+                mux.add_handler(switchboard.clone());
+                mux.add_handler(pgwire::Server::new(tls.clone(), cmdq_tx.clone()));
+                mux.add_handler(http::Server::new(tls, cmdq_tx, start_time));
+                mux.serve(incoming.take_until(drain_tripwire)).await;
             }
+
+            // Draining primaries and non-primary servers are only responsible
+            // for switchboard traffic.
+            let mut mux = Mux::new();
+            mux.add_handler(switchboard.clone());
+            mux.serve(incoming.take_until(shutdown_tripwire)).await
         }
     });
 
@@ -311,9 +279,10 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
 
     Ok(Server {
         local_addr,
-        _cmd_tx: cmd_tx,
+        _drain_trigger: drain_trigger,
         _dataflow_guard: Box::new(dataflow_guard),
         _coord_thread: coord_thread,
+        _shutdown_trigger: shutdown_trigger,
         _runtime: runtime,
     })
 }
@@ -322,9 +291,10 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
 pub struct Server {
     local_addr: SocketAddr,
     // Drop order matters for these fields.
-    _cmd_tx: Arc<mpsc::UnboundedSender<coord::Command>>,
+    _drain_trigger: Trigger,
     _dataflow_guard: Box<dyn Any>,
     _coord_thread: Option<JoinOnDropHandle<()>>,
+    _shutdown_trigger: Trigger,
     _runtime: Runtime,
 }
 

@@ -356,6 +356,14 @@ where
                     let partition = message.partition;
                     let offset = message.offset + 1;
 
+                    // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
+                    // a network issue or a new partition added, at which point the consumer may
+                    // start processing the topic from the beginning, or we may see duplicate offsets
+                    // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
+                    // that we are ever going to see holds.
+                    // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
+                    // is enabled, there may be gaps in the sequence.
+
                     KAFKA_PARTITION_OFFSET_RECEIVED
                         .with_label_values(&[&topic, &id.to_string(), &partition.to_string()])
                         .set(offset);
@@ -614,7 +622,7 @@ fn downgrade_capability(
                     .with_label_values(&[&topic, &id.to_string(), &pid.to_string()])
                     .set((partition_metadata[pid as usize].1).try_into().unwrap());
 
-                if last_offset == *offset {
+                if last_offset >= *offset {
                     // We have now seen all messages corresponding to this timestamp for this
                     // partition. We
                     // can close the timestamp (on this partition) and remove the associated metadata

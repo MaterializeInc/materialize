@@ -20,9 +20,9 @@
 //! [`pgwire`](../pgwire/index.html) produces, though they can, in theory, be
 //! provided by something other than a pgwire server.
 
+mod catalog;
 mod command;
 mod coord;
-mod persistence;
 mod sink_connector;
 mod timestamp;
 mod util;

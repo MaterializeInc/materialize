@@ -1,0 +1,53 @@
+{{/*  Copyright Materialize, Inc. All rights reserved.
+
+Use of this software is governed by the Business Source License
+included in the LICENSE file at the root of this repository.
+
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
+by the Apache License, Version 2.0.  */}}
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+
+    <title>
+    {{ block "title" . }}
+        {{ if isset .Params "htmltitle" }}
+            {{ .Params.htmltitle }}
+        {{ else }}
+            {{ .Page.Title }}
+        {{ end }}
+        &mdash; {{ .Site.Title }}
+    {{ end }}
+    </title>
+
+    {{ partial "head.html" . }}
+</head>
+
+<body>
+    {{ partial "header.html" . }}
+    {{ block "body" .}}
+        <div class="content-wrapper">
+            {{ partial "sidebar.html" . }}
+
+            <main class="content">
+                {{ block "main" . }}{{ end }}
+                <!-- Footer goes in main so the border-right of
+                sidebar.html can extend to the bottom of the page. -->
+                {{ partial "footer.html" . }}
+            </main>
+
+            {{ partial "toc.html" . }}
+        </div>
+    {{ end }}
+
+    <script>
+        anchors.add(".content h2, .content h3, .content h4, .content h5, .content h6");
+
+        $(".content ol:has(p)").addClass("has-p");
+    </script>
+</body>
+
+</html>

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 use rand::Rng;
 
@@ -18,13 +18,12 @@ use rand::Rng;
 /// it, that is known to both the client and the server. Cancellation requests
 /// are required to authenticate with the secret of the connection that they
 /// are targeting.
-#[derive(Clone)]
-pub struct SecretManager(Arc<RwLock<HashMap<u32, u32>>>);
+pub struct SecretManager(RwLock<HashMap<u32, u32>>);
 
 impl SecretManager {
     /// Constructs a new `SecretManager`.
     pub fn new() -> SecretManager {
-        SecretManager(Arc::new(RwLock::new(HashMap::new())))
+        SecretManager(RwLock::new(HashMap::new()))
     }
 
     /// Generates a secret for the given the connection with ID `conn_id`.

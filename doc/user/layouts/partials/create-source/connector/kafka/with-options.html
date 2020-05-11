@@ -1,0 +1,30 @@
+`client_id` | `text` | Use the supplied value as the Kafka client identifier.
+`group_id_prefix` | `text` | Prefix Materialize Kafka users' `group.id` with the provided value. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
+`security_protocol` | `text` | Use either [`ssl`](#ssl-with-options) or [`sasl_plaintext` (Kerberos)](#kerberos-with-options) to connect to the Kafka cluster.
+`statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics.
+
+#### SSL `WITH` options
+
+Use the following options to connect Materialize to an SSL-encrypted Kafka
+cluster. For more detail, see [SSL-encrypted Kafka details](#ssl-encrypted-kafka-details).
+
+Field | Value | Description
+------|-------|------------
+`ssl_ca_location` | `text` | The absolute path to your SSL certificate's CA certificate. Required for SSL client and server authentication.
+`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
+`ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
+`ssl_key_password` | `text` | Your SSL key's password.
+
+#### Kerberos `WITH` options
+
+Use the following options to connect Materialize to an Kerberized Kafka
+cluster. For more detail, see [Kerberized Kafka details](#kerberized-kafka-details).
+
+Field | Value | Description
+------|-------|------------
+`sasl_kerberos_keytab` | `text` | The absolute path to your keytab.
+`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket.
+`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0.
+`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required for `sasl_plaintext`.
+`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`.
+`sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanism is `'GSSAPI'`.
