@@ -12,7 +12,7 @@ aliases:
 
 ## Syntax
 
-{{< diagram "show-columns.html" >}}
+{{< diagram "show-columns.svg" >}}
 
 Field | Use
 ------|-----

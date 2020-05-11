@@ -1,2 +1,0 @@
-schema_spec ::=
-  'SCHEMA' ('FILE' schema_file_path | inline_schema)

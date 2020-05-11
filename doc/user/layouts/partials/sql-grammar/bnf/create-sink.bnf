@@ -1,7 +1,0 @@
-create_sink ::=
-   'CREATE SINK' 'IF NOT EXISTS'? sink_name
-   'FROM' item_name
-   'INTO' (
-    kafka_connector |
-   'AVRO OCF' path-prefix
-   )

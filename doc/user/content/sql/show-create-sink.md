@@ -10,7 +10,7 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-sink.html" >}}
+{{< diagram "show-create-sink.svg" >}}
 
 Field | Use
 ------|-----

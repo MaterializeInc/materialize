@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="313" height="37">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="58" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">DROP</text>
+   <rect x="109" y="3" width="62" height="32" rx="10"/>
+   <rect x="107"
+         y="1"
+         width="62"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="117" y="21">INDEX</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#index_name"
+      xlink:title="index_name">
+      <rect x="191" y="3" width="94" height="32"/>
+      <rect x="189" y="1" width="94" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="199" y="21">index_name</text>
+   </a>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m58 0 h10 m0 0 h10 m62 0 h10 m0 0 h10 m94 0 h10 m3 0 h-3"/>
+   <polygon points="303 17 311 13 311 21"/>
+   <polygon points="303 17 295 13 295 21"/>
+</svg>

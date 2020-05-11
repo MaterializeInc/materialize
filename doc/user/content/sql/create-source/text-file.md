@@ -30,7 +30,7 @@ the **TEXT** formatting option.
 
 ## Syntax
 
-{{< diagram "create-source-text.html" >}}
+{{< diagram "create-source-text.svg" >}}
 
 {{% create-source/syntax-details connector="file" formats="regex text bytes" envelopes="append-only" %}}
 

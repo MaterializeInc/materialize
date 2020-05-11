@@ -17,7 +17,7 @@ into Materialize's behavior for specific queries, e.g. performance.
 
 ## Syntax
 
-{{< diagram "explain.html" >}}
+{{< diagram "explain.svg" >}}
 
 Field | Use
 ------|-----

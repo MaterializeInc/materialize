@@ -1,4 +1,0 @@
-create_view ::=
-  'CREATE' 'VIEW' view_name 'AS' select_stmt |
-  'CREATE' 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt

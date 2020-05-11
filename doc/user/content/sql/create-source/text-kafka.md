@@ -13,7 +13,7 @@ Kafka topic.
 
 ## Syntax
 
-{{< diagram "create-source-text-kafka.html" >}}
+{{< diagram "create-source-text-kafka.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="text bytes" envelopes="upsert append-only" %}}
 

@@ -12,7 +12,7 @@ aliases:
 
 ## Syntax
 
-{{< diagram "show-sinks.html" >}}
+{{< diagram "show-sinks.svg" >}}
 
 ## Examples
 

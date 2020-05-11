@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="611" height="289">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="51" y="3" width="106" height="32" rx="10"/>
+   <rect x="49"
+         y="1"
+         width="106"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="21">AVRO USING</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#avro_schema_spec"
+      xlink:title="avro_schema_spec">
+      <rect x="177" y="3" width="138" height="32"/>
+      <rect x="175" y="1" width="138" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="185" y="21">avro_schema_spec</text>
+   </a>
+   <rect x="51" y="47" width="168" height="32" rx="10"/>
+   <rect x="49"
+         y="45"
+         width="168"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="65">PROTOBUF MESSAGE</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#message_name"
+      xlink:title="message_name">
+      <rect x="239" y="47" width="116" height="32"/>
+      <rect x="237" y="45" width="116" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="247" y="65">message_name</text>
+   </a>
+   <rect x="375" y="47" width="64" height="32" rx="10"/>
+   <rect x="373"
+         y="45"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="383" y="65">USING</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#schema_spec"
+      xlink:title="schema_spec">
+      <rect x="459" y="47" width="104" height="32"/>
+      <rect x="457" y="45" width="104" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="467" y="65">schema_spec</text>
+   </a>
+   <rect x="51" y="91" width="66" height="32" rx="10"/>
+   <rect x="49"
+         y="89"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="109">REGEX</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#regex"
+      xlink:title="regex">
+      <rect x="137" y="91" width="54" height="32"/>
+      <rect x="135" y="89" width="54" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="145" y="109">regex</text>
+   </a>
+   <rect x="51" y="135" width="88" height="32" rx="10"/>
+   <rect x="49"
+         y="133"
+         width="88"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="153">CSV WITH</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#n"
+      xlink:title="n">
+      <rect x="159" y="135" width="28" height="32"/>
+      <rect x="157" y="133" width="28" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="167" y="153">n</text>
+   </a>
+   <rect x="207" y="135" width="90" height="32" rx="10"/>
+   <rect x="205"
+         y="133"
+         width="90"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="215" y="153">COLUMNS</text>
+   <rect x="337" y="167" width="116" height="32" rx="10"/>
+   <rect x="335"
+         y="165"
+         width="116"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="185">DELIMITED BY</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#char"
+      xlink:title="char">
+      <rect x="473" y="167" width="46" height="32"/>
+      <rect x="471" y="165" width="46" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="481" y="185">char</text>
+   </a>
+   <rect x="51" y="211" width="54" height="32" rx="10"/>
+   <rect x="49"
+         y="209"
+         width="54"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="229">TEXT</text>
+   <rect x="51" y="255" width="64" height="32" rx="10"/>
+   <rect x="49"
+         y="253"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="273">BYTES</text>
+   <path class="line"
+         d="m17 17 h2 m20 0 h10 m106 0 h10 m0 0 h10 m138 0 h10 m0 0 h248 m-552 0 h20 m532 0 h20 m-572 0 q10 0 10 10 m552 0 q0 -10 10 -10 m-562 10 v24 m552 0 v-24 m-552 24 q0 10 10 10 m532 0 q10 0 10 -10 m-542 10 h10 m168 0 h10 m0 0 h10 m116 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m104 0 h10 m-542 -10 v20 m552 0 v-20 m-552 20 v24 m552 0 v-24 m-552 24 q0 10 10 10 m532 0 q10 0 10 -10 m-542 10 h10 m66 0 h10 m0 0 h10 m54 0 h10 m0 0 h372 m-542 -10 v20 m552 0 v-20 m-552 20 v24 m552 0 v-24 m-552 24 q0 10 10 10 m532 0 q10 0 10 -10 m-542 10 h10 m88 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m90 0 h10 m20 0 h10 m0 0 h192 m-222 0 h20 m202 0 h20 m-242 0 q10 0 10 10 m222 0 q0 -10 10 -10 m-232 10 v12 m222 0 v-12 m-222 12 q0 10 10 10 m202 0 q10 0 10 -10 m-212 10 h10 m116 0 h10 m0 0 h10 m46 0 h10 m20 -32 h24 m-542 -10 v20 m552 0 v-20 m-552 20 v56 m552 0 v-56 m-552 56 q0 10 10 10 m532 0 q10 0 10 -10 m-542 10 h10 m54 0 h10 m0 0 h458 m-542 -10 v20 m552 0 v-20 m-552 20 v24 m552 0 v-24 m-552 24 q0 10 10 10 m532 0 q10 0 10 -10 m-542 10 h10 m64 0 h10 m0 0 h448 m23 -252 h-3"/>
+   <polygon points="601 17 609 13 609 21"/>
+   <polygon points="601 17 593 13 593 21"/>
+</svg>

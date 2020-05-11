@@ -19,7 +19,7 @@ explicitly](../drop-view) or use the **CASCADE** option.
 
 ## Syntax
 
-{{< diagram "drop-source.html" >}}
+{{< diagram "drop-source.svg" >}}
 
 Field | Use
 ------|-----

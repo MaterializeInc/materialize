@@ -13,7 +13,7 @@ database without confirmation. Use with care! {{< /warning >}}
 
 ## Syntax
 
-{{< diagram "drop-database.html" >}}
+{{< diagram "drop-database.svg" >}}
 
 Field | Use
 ------|-----

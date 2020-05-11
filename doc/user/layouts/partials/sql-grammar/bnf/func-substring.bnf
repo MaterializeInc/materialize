@@ -1,2 +1,0 @@
-func_substr ::=
-  'substring' '(' str ',' start_pos (',' len)? ')'

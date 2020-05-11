@@ -1,2 +1,0 @@
-show_databases ::=
-    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)

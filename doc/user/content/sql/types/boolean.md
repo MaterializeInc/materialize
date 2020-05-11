@@ -18,7 +18,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-bool.html" >}}
+{{< diagram "type-bool.svg" >}}
 
 ## Details
 

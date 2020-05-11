@@ -1,4 +1,0 @@
-kafka_connector ::=
-    'KAFKA BROKER' host 'TOPIC' topic-prefix
-    ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
-    'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url

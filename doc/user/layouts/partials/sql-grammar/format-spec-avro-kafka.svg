@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="429" height="191">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="58" height="32" rx="10"/>
+   <rect x="31"
+         y="1"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="41" y="21">AVRO</text>
+   <rect x="111" y="3" width="64" height="32" rx="10"/>
+   <rect x="109"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="119" y="21">USING</text>
+   <rect x="45" y="69" width="240" height="32" rx="10"/>
+   <rect x="43"
+         y="67"
+         width="240"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="53" y="87">CONFLUENT SCHEMA REGISTRY</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#url"
+      xlink:title="url">
+      <rect x="305" y="69" width="36" height="32"/>
+      <rect x="303" y="67" width="36" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="313" y="87">url</text>
+   </a>
+   <rect x="45" y="113" width="80" height="32" rx="10"/>
+   <rect x="43"
+         y="111"
+         width="80"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="53" y="131">SCHEMA</text>
+   <rect x="165" y="113" width="48" height="32" rx="10"/>
+   <rect x="163"
+         y="111"
+         width="48"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="173" y="131">FILE</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#schema_file_path"
+      xlink:title="schema_file_path">
+      <rect x="233" y="113" width="128" height="32"/>
+      <rect x="231" y="111" width="128" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="241" y="131">schema_file_path</text>
+   </a>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#inline_schema"
+      xlink:title="inline_schema">
+      <rect x="165" y="157" width="108" height="32"/>
+      <rect x="163" y="155" width="108" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="173" y="175">inline_schema</text>
+   </a>
+   <path class="line"
+         d="m19 17 h2 m0 0 h10 m58 0 h10 m0 0 h10 m64 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-194 66 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m240 0 h10 m0 0 h10 m36 0 h10 m0 0 h40 m-376 0 h20 m356 0 h20 m-396 0 q10 0 10 10 m376 0 q0 -10 10 -10 m-386 10 v24 m376 0 v-24 m-376 24 q0 10 10 10 m356 0 q10 0 10 -10 m-366 10 h10 m80 0 h10 m20 0 h10 m48 0 h10 m0 0 h10 m128 0 h10 m-236 0 h20 m216 0 h20 m-256 0 q10 0 10 10 m236 0 q0 -10 10 -10 m-246 10 v24 m236 0 v-24 m-236 24 q0 10 10 10 m216 0 q10 0 10 -10 m-226 10 h10 m108 0 h10 m0 0 h88 m43 -88 h-3"/>
+   <polygon points="419 83 427 79 427 87"/>
+   <polygon points="419 83 411 79 411 87"/>
+</svg>

@@ -24,7 +24,7 @@ For more information, see [Namespaces](../namespaces).
 
 ## Syntax
 
-{{< diagram "create-schema.html" >}}
+{{< diagram "create-schema.svg" >}}
 
 Field | Use
 ------|-----

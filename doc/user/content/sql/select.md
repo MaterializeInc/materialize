@@ -33,7 +33,7 @@ Scenario | `SELECT` dataflow behavior
 
 ## Syntax
 
-{{< diagram "select_stmt.html" >}}
+{{< diagram "select-stmt.svg" >}}
 
 Field | Use
 ------|-----

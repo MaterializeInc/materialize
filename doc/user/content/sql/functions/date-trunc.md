@@ -10,7 +10,7 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-date-trunc.html" >}}
+{{< diagram "func-date-trunc.svg" >}}
 
 Parameter | Type | Description
 ----------|------|------------

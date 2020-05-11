@@ -10,7 +10,7 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-extract.html" >}}
+{{< diagram "func-extract.svg" >}}
 
 Parameter | Type | Description
 ----------|------|------------

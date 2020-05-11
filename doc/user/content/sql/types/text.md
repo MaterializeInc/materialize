@@ -19,7 +19,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-text.html" >}}
+{{< diagram "type-text.svg" >}}
 
 ## Details
 

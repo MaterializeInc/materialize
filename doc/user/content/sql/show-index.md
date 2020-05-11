@@ -13,7 +13,7 @@ aliases:
 
 ## Syntax
 
-{{< diagram "show-index.html" >}}
+{{< diagram "show-index.svg" >}}
 
 Field | Use
 ------|-----

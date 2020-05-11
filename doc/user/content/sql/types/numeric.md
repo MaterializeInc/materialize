@@ -22,7 +22,7 @@ Detail | Info
 
 ### Numeric values
 
-{{< diagram "type-numeric-val.html" >}}
+{{< diagram "type-numeric-val.svg" >}}
 
 Field | Use
 ------|-----------
@@ -30,7 +30,7 @@ Field | Use
 
 ### Decimal definitions
 
-{{< diagram "type-numeric-def.html" >}}
+{{< diagram "type-numeric-dec.svg" >}}
 
 Field | Use
 ------|-----------

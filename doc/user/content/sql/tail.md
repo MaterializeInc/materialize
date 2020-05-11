@@ -17,7 +17,7 @@ A tail at a given timestamp might not be possible if data it would report has al
 
 ## Syntax
 
-{{< diagram "tail.html" >}}
+{{< diagram "tail-stmt.svg" >}}
 
 Field | Use
 ------|-----

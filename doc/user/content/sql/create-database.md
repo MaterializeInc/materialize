@@ -24,7 +24,7 @@ For more information, see [Namespaces](../namespaces).
 
 ## Syntax
 
-{{< diagram "create-database.html" >}}
+{{< diagram "create-database.svg" >}}
 
 Field | Use
 ------|-----

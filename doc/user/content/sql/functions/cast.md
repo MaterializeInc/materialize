@@ -10,9 +10,9 @@ The `cast` function and operator return a value converted to the specified type.
 
 ## Signatures
 
-{{< diagram "func-cast.html" >}}
+{{< diagram "func-cast.svg" >}}
 
-{{< diagram "op-cast.html" >}}
+{{< diagram "op-cast.svg" >}}
 
 Parameter | Type | Description
 ----------|------|------------

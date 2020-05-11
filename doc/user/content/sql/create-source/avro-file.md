@@ -15,7 +15,7 @@ Files] (OCFs).
 
 ## Syntax
 
-{{< diagram "create-source-avro-file.html" >}}
+{{< diagram "create-source-avro-file.svg" >}}
 
 {{% create-source/syntax-details connector="avro-ocf" formats="none" envelopes="append-only debezium" %}}
 

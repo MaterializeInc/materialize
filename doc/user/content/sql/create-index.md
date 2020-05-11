@@ -33,7 +33,7 @@ You might want to create indexes when...
 
 ## Syntax
 
-{{< diagram "create-index.html" >}}
+{{< diagram "create-index.svg" >}}
 
 Field | Use
 ------|-----

@@ -1,2 +1,0 @@
-show_index ::=
-    'DROP' 'INDEX' index_name

@@ -1,2 +1,0 @@
-func_extract ::=
-  'EXTRACT' '(' ( 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'DOW' | 'EPOCH' ) 'FROM' val ')'
