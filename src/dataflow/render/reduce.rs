@@ -483,13 +483,13 @@ where
     collection
         .map(move |((key, hash), row)| ((key, hash % modulus), row))
         .reduce_named("ReduceHierarchical", {
-            move |_key, source, target| {
+            move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
                     for (val, cnt) in source.iter() {
                         if cnt <= &0 {
                             // XXX: This reports user data, which we perhaps should not do!
-                            log::error!("Non-positive accumulation in ReduceHierarchical: value: {:?}\tcount: {:?}", val, cnt);
+                            log::error!("Non-positive accumulation in ReduceHierarchical: key: {:?}\tvalue: {:?}\tcount: {:?}", key, val, cnt);
                         }
                     }
                 } else {
