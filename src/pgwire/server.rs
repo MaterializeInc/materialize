@@ -70,6 +70,11 @@ impl Server {
                     };
                     let res = machine.start(Session::default(), version, params).await;
 
+                    // Clean up state tied to this specific connection.
+                    self.cmdq_tx
+                        .clone()
+                        .send(coord::Command::Terminate { conn_id })
+                        .await?;
                     self.id_alloc.free(conn_id);
                     self.secrets.free(conn_id);
                     return Ok(res?);

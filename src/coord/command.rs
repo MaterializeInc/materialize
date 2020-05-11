@@ -50,6 +50,9 @@ pub enum Command {
     DumpCatalog {
         tx: futures::channel::oneshot::Sender<String>,
     },
+
+    /// Remove temporary objects created by a given connection.
+    Terminate { conn_id: u32 },
 }
 
 #[derive(Debug)]

@@ -443,6 +443,10 @@ where
                     let _ = tx.send(self.catalog.dump());
                 }
 
+                Message::Command(Command::Terminate { conn_id }) => {
+                    self.handle_terminate(conn_id);
+                }
+
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
                     message: WorkerFeedback::FrontierUppers(updates),
@@ -533,6 +537,14 @@ where
                 &mut self.broadcast_tx,
                 SequencedCommand::CancelPeek { conn_id },
             );
+        }
+    }
+
+    /// Terminate any temporary objects created by the named `conn_id`
+    /// stored on the Coordinator.
+    pub fn handle_terminate(&mut self, conn_id: u32) {
+        if let Some(name) = self.active_tails.remove(&conn_id) {
+            self.drop_sinks(vec![name]);
         }
     }
 
