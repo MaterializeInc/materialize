@@ -1909,9 +1909,9 @@ dependencies = [
 
 [[package]]
 name = "num_enum"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca565a7df06f3d4b485494f25ba05da1435950f4dc263440eda7a6fa9b8e36e4"
+checksum = "5f1e2d7c9c4282839fc56f549bc006a54e6f28a851a7de7adcf3f50575751760"
 dependencies = [
  "derivative",
  "num_enum_derive",
@@ -1919,9 +1919,9 @@ dependencies = [
 
 [[package]]
 name = "num_enum_derive"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffa5a33ddddfee04c0283a7653987d634e880347e96b5b2ed64de07efb59db9d"
+checksum = "4a9f19dafa80d8af21ede328f2c4ed836604a2eb1c309d688f89a7cc40568923"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2560,7 +2560,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.23.1"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#7059333050c0b51ab7a1ebb024d9abaf7634d0c3"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#c70f9f5f9d59878d7c68a9c0920f2f38980513e9"
 dependencies = [
  "futures",
  "libc",
@@ -2573,8 +2573,8 @@ dependencies = [
 
 [[package]]
 name = "rdkafka-sys"
-version = "1.3.1"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#7059333050c0b51ab7a1ebb024d9abaf7634d0c3"
+version = "2.0.0+1.4.2"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#c70f9f5f9d59878d7c68a9c0920f2f38980513e9"
 dependencies = [
  "cmake",
  "libc",
