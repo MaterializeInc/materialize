@@ -126,7 +126,6 @@ steps:
     # TODO(benesch): integrate dc.sh into mzcompose, so we don't need to
     # manually track image inputs here.
     inputs: ["#materialized", "#chbenchmark", "#peeker", "#cli"]
-    if: false
     timeout_in_minutes: 30
 
   - id: catalog-compat
