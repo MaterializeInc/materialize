@@ -1,5 +1,7 @@
 ---
 title: "CLI"
+menu: "main"
+weight: 20
 description: "Find out how to start the materialized binary with different configurations"
 ---
 

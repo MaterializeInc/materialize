@@ -1,8 +1,8 @@
 [build]
-base = "www"
+base = "doc/user"
 publish = "public"
-command = "hugo --gc --baseURL $URL"
-ignore = "../ci/www/changed.sh"
+command = "hugo --gc --baseURL $URL/docs"
+ignore = "../ci/doc/changed.sh"
 environment = { HUGO_VERSION = "0.68.3" }
 
 [context.deploy-preview]

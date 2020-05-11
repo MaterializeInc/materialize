@@ -1,9 +1,13 @@
 ---
 title: "Functions + Operators"
 description: "Find all of the great SQL functions you know and love..."
+menu:
+  main:
+    identifier: sql-functions
+    parent: sql
+    weight: 2
 disable_list: true
 disable_toc: true
-weight: 1
 ---
 
 This page details Materialize's supported SQL [functions](#functions) and [operators](#operators).

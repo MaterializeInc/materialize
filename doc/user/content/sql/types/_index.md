@@ -1,6 +1,12 @@
 ---
 title: "SQL Data Types"
 description: "Learn more about the SQL data types you love...."
+menu:
+  main:
+    identifier: sql-types
+    name: Data Types
+    parent: sql
+    weight: 1
 disable_list: true
 disable_toc: true
 ---
