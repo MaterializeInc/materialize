@@ -91,10 +91,12 @@ case "$cmd" in
         )
         if [[ "$(uname -s)" = Linux ]]; then
             # Allow Docker-in-Docker by mounting the Docker socket in the
-            # container.
+            # container. Host networking allows us to see ports created by
+            # containers that we launch.
             args+=(
                 --volume "/var/run/docker.sock:/var/run/docker.sock"
                 --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
+                --network host
             )
 
             # Forward Docker configuration too, if available.
@@ -113,7 +115,9 @@ case "$cmd" in
                 )
             fi
 
-            # Forward the host's Cargo cache.
+            # Forward the host's Cargo cache. Make the directory first, so that
+            # Docker doesn't try to create it as root.
+            mkdir -p ~/.cargo
             args+=(
                 --volume "$HOME/.cargo:/cargo"
                 --env "CARGO_HOME=/cargo"
