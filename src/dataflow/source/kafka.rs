@@ -167,7 +167,7 @@ fn update_consumer_list(
 fn get_next_message_from_consumers(
     name: &str,
     consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
-) -> Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> {
+) -> Option<(DropGuard<MessageParts>, BaseConsumer<GlueConsumerContext>)> {
     let consumer_count = consumers.len();
     let mut attempts = 0;
     while attempts < consumer_count {
@@ -181,12 +181,42 @@ fn get_next_message_from_consumers(
             _ => None,
         };
         if let Some(message) = message {
-            return Some((message, consumer));
+            return Some((DropGuard::new(message), consumer));
         }
         consumers.push_back(consumer);
         attempts += 1;
     }
     None
+}
+
+/// Asserts if it is dropped without explicitly calling
+/// `consume`
+struct DropGuard<T> {
+    inner: Option<T>,
+}
+
+impl<T> DropGuard<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner: Some(inner) }
+    }
+    pub fn consume(mut self) -> T {
+        self.inner.take().unwrap()
+    }
+}
+
+impl<T> Drop for DropGuard<T> {
+    fn drop(&mut self) {
+        if self.inner.is_some() {
+            panic!("Value was dropped!");
+        }
+    }
+}
+
+impl<T> std::ops::Deref for DropGuard<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.inner.as_ref().unwrap()
+    }
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
@@ -264,7 +294,7 @@ where
         // Buffer placeholder for buffering messages for which we did not have a timestamp
         // INVARIANT: consumer is EITHER in consumers or in buffer, but cannot be in both
         // Keeping a handle
-        let mut buffer: Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> = None;
+        let mut buffer: Option<(DropGuard<MessageParts>, BaseConsumer<GlueConsumerContext>)> = None;
 
         // The last timestamp that was closed, or 0 if none has been.
         let mut last_closed_ts: u64 = 0;
@@ -427,6 +457,7 @@ where
                         Some(ts) => {
                             // Note: empty and null payload/keys are currently
                             // treated as the same thing.
+                            let message = message.consume();
                             let key = message.key.unwrap_or_default();
                             let out = message.payload.unwrap_or_default();
                             partition_metadata[partition as usize].0 = offset;
