@@ -1,3 +1,4 @@
+#
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -7,7 +8,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# load-test — entry point to normal running of all our load tests
+# mzconduct.py - Conduct the runtime behavior of mzcompose compositions
 
 import contextlib
 import itertools
