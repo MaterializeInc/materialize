@@ -1,31 +1,62 @@
 # doc/user
 
 This is the root directory of the Materialize user docs, which are rendered by
-the [Hugo](https://gohugo.io/) site in </www> locally or at <https://materialize.io/docs>.
+[Hugo] locally and published by CI to <https://materialize.io/docs>.
 
-Instructions for previewing the documentation locally are contained in </www>.
+## Viewing the docs locally
 
-## Viewing the docs site locally
+1. [Install Hugo](https://gohugo.io/getting-started/installing/).
 
-1.
+1. Launch the site by running:
+
     ```shell
-    cd <path to materialize>/www
-    ```
-
-1.
-    ```shell
+    cd doc/user
     hugo serve -D
     ```
 
-1. Go to <http://localhost:1313/docs>
+    If you're making changes to the site, you might want a more cache-busting
+    version:
 
-If you're making changes to the site, you might want a more cache-busting version:
+    ```shell
+    hugo server --disableFastRender --ignoreCache
+    ```
 
-```shell
-hugo server --disableFastRender --ignoreCache
-```
+1. Open <http://localhost:1313>.
 
-## Railroad diagrams for SQL grammar
+You can also read the documentation in Markdown in the `content` directory,
+though some features like our SQL syntax diagrams will not be readily
+accessible.
+
+## Structure
+
+- `archetypes`: Metadata templates for new docs.
+- `assets`: Content used dynamically, i.e. JavaScript and SCSS.
+- `content`: All of the docs content, though this is mostly content symlinked to
+  `/doc/user`.
+- `data`: Any JSON or YAML files you would want to use as a datastore.
+- `layouts`: All of the HTML templates for the site.
+    - `partials`: Many HTML components, as well as our SQL diagrams.
+- `resources`: The results of dynamically generating content from `assets`.
+- `static`: Static files for the site, such as images and fonts.
+- `util`: Materialize-developed utilities for the site, e.g. the documentation's
+  railroad diagram generator.
+
+## Tasks
+
+### Updating CSS
+
+No CSS is shared with the marketing website to keep the docs CSS maintainable.
+If the marketing website changes, we will need to update the docs CSS to
+visually match.
+
+### General stylesheet updates
+
+You can see how commonly rendered elements look by going to
+[`localhost:1313/stylesheet`](http://localhost:1313/stylesheet).
+
+You can use this as a scratch area by editing `content/stylesheet.md`.
+
+### Railroad diagrams for SQL grammar
 
 Railroad diagrams consist of two parts:
 
@@ -36,10 +67,10 @@ Railroad diagrams consist of two parts:
 
 #### To generate diagrams
 
-1. Modify/create `bnf` files in `/www/layouts/partials/sql-grammar/bnf`.
+1. Modify/create `bnf` files in `layouts/partials/sql-grammar/bnf`.
 1. Ensure your diagram looks like you want using
    <https://www.bottlecaps.de/rr/ui>.
-2. Go to `/www/util/rr-diagram-gen/`
+2. Go to `util/rr-diagram-gen/`
 3. Run `make run`.
 
 You can now include the diagram on a page using:
@@ -50,13 +81,7 @@ You can now include the diagram on a page using:
 
 - Replace `&lt;` with `<` and `&gt;` with `>`.
 - `SOME_DIAGRAM` will be the name of the `bnf` file, and should be an `html`
-  file visible in `/www/layouts/partials/sql-grammar/rr-diagrams`.
-
-**Why is the world like this?**
-
-Because our diagrams rely on Hugo's `partials` features, the diagram files are
-maintained in the `/www` dir (the actual Hugo site), but referenced as if they
-were local (through the magic of symlinks).
+  file visible in `layouts/partials/sql-grammar/rr-diagrams`.
 
 ## Function + Operator docs
 
@@ -154,6 +179,20 @@ docs. Future wants include:
 
 ## Syntax highlighting
 
+We use Hugo's built-in support for syntax highlighting through Chroma. In
+`config.toml`:
+
+```toml
+pygmentsCodeFences = true
+```
+
+This will probably need to be changed at some point in the future to allow for
+highlighting Materialized extensions to the SQL standard, as well as generally
+beautifying the syntax highlighting color scheme––but for right now, what's
+there suffices.
+
+You can adjust the highlight colors as necessary in `assets/_highlight.scss`.
+
 Most code samples contain two components: the SQL query you want to run and the
 expected output.
 
@@ -165,3 +204,20 @@ For SQL blocks, the natural choice is `sql`. For the response blocks, which
 don't need to be/shouldn't be syntax highlighted, you can use _any_
 non-recognized string as the language (i.e. anything that isn't popular
 programming language). For expressivity, we chose `nofmt`.
+
+## Known limitations
+
+- Cannot display formatted text in descriptions or menus (e.g. cannot format
+  page titles in code blocks).
+- Does not support more than 2 levels in menus.
+- Is not "responsive" and makes naive decisions about breakpoints. If someone
+  would like to volunteer their web development expertise to make this more
+  sane, I would be really happy to help them out.
+
+## Miscellany, Trivia, & Footguns
+
+- Headers are automatically hyperlinked using [AnchorJS].
+- Railroad diagrams are managed in `layouts/partials/sql-grammar`.
+
+[AnchorJS]: https://www.bryanbraun.com/anchorjs/
+[Hugo]: https://gohugo.io/

@@ -1,6 +1,10 @@
 ---
 title: "CREATE SOURCE"
 description: "`CREATE SOURCE` connects Materialize to an external data source."
+menu:
+  main:
+    identifier: create-source
+    parent: sql
 disable_list: true
 disable_toc: true
 ---

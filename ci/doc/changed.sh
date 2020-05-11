@@ -27,6 +27,4 @@ fi
 # shellcheck disable=SC2016
 git submodule foreach 'git -C $toplevel submodule deinit $sm_path'
 
-# Netlify doesn't follow symlinks as of 03 Feb 2020, so we need to explicitly
-# check for changes in doc/user too.
-exec git diff --quiet "$spec" -- doc/user www 1>&2
+exec git diff --quiet "$spec" -- doc/user 1>&2

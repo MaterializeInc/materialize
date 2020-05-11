@@ -4,12 +4,6 @@
     <input id="search-input" placeholder="Search">
 
     <ul>
-      <li class="level-1">
-        <a href="{{ "/docs" | relURL }}" class="{{if eq .RelPermalink "/docs/"}}active{{end}}">
-          Docs Home
-        </a>
-      </li>
-
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1 {{if .HasChildren }}has-children{{end}}">
         <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
