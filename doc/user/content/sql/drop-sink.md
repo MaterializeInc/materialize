@@ -14,7 +14,7 @@ menu:
 
 Field | Use
 ------|-----
-_sink&lowbar;name_ | The view you sink to drop. You can find available view names through [`SHOW SINKS`](../show-sinks).
+_sink&lowbar;name_ | The sink you want to drop. You can find available sink names through [`SHOW SINKS`](../show-sinks).
 
 ## Examples
 
