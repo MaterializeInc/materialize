@@ -372,11 +372,6 @@ impl DataEncoding {
             )]),
         };
         Ok(full_desc.concat(desc))
-        // full_desc.add_cols(
-        //     desc.iter()
-        //         .map(|(name, typ)| (name.to_owned(), typ.to_owned())),
-        // );
-        // Ok(full_desc)
     }
 
     pub fn op_name(&self) -> &str {
