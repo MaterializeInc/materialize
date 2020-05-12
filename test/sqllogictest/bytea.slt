@@ -26,6 +26,5 @@ SELECT ord, length(b::bytea) FROM test
 3 0
 4 18
 
-
-query error length expects only one argument when first argument has type bytea, got 2
+statement error
 SELECT length('a'::bytea, 'utf-8')
