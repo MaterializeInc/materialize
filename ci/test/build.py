@@ -86,7 +86,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     bt = bintray.Client(
         "materialize", user="ci@materialize", api_key=os.environ["BINTRAY_API_KEY"]
     )
-    package = bt.repo("apt").package("materialized-unstable")
+    package = bt.repo("apt").package(package)
     try:
         print("Creating Bintray version...")
         commit_hash = git.rev_parse("HEAD")
