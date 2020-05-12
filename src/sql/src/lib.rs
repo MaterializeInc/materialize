@@ -33,6 +33,7 @@ pub mod normalize;
 
 mod explain;
 mod expr;
+mod func;
 mod kafka_util;
 mod names;
 mod pure;

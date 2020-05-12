@@ -26,6 +26,5 @@ SELECT ord, length(b::bytea) FROM test
 3 0
 4 18
 
-
-query error length expects only one argument when first argument has type bytea, got 2
+query error Cannot call function 'length': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT length('a'::bytea, 'utf-8')

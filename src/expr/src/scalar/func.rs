@@ -629,7 +629,11 @@ fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().round())
 }
 
-fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
+fn round_decimal_unary<'a>(a: Datum<'a>, a_scale: u8) -> Datum<'a> {
+    round_decimal_binary(a, Datum::Int64(0), a_scale)
+}
+
+fn round_decimal_binary<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
     let round_to = b.unwrap_int64();
     let decimal = a.unwrap_decimal().with_scale(a_scale);
     Datum::from(decimal.round(round_to).significand())
@@ -1933,7 +1937,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
-            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal, *scale)),
+            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
         }
     }
@@ -2334,6 +2338,7 @@ pub enum UnaryFunc {
     JsonbPretty,
     RoundFloat32,
     RoundFloat64,
+    RoundDecimal(u8),
 }
 
 impl UnaryFunc {
@@ -2498,6 +2503,7 @@ impl UnaryFunc {
             UnaryFunc::JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
+            UnaryFunc::RoundDecimal(scale) => Ok(round_decimal_unary(a, *scale)),
         }
     }
 
@@ -2602,7 +2608,7 @@ impl UnaryFunc {
             CeilFloat64 | FloorFloat64 | RoundFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
-            CeilDecimal(scale) | FloorDecimal(scale) => {
+            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) => {
                 match input_type.scalar_type {
                     ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
                     _ => unreachable!(),
@@ -2824,6 +2830,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
             UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
             UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
+            UnaryFunc::RoundDecimal(_) => f.write_str("roundunary"),
         }
     }
 }
