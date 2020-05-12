@@ -251,7 +251,7 @@ impl PredicatePushdown {
                         } else if let ScalarExpr::Column(col) = &predicate {
                             if *col == group_key.len()
                                 && aggregates.len() == 1
-                                && aggregates[0].func == AggregateFunc::Any
+                                && aggregates[0].func == AggregateFunc::BoolOr
                             {
                                 push_down.push(aggregates[0].expr.clone());
                                 aggregates[0].expr = ScalarExpr::literal_ok(

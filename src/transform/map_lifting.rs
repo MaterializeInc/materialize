@@ -360,13 +360,13 @@ impl LiteralLifting {
                     }
                 }
 
-                // The only literals we think we can lift are those that are
-                // independent of the number of records; things like `Any`, `All`,
-                // `Min`, and `Max`.
+                // The only literals we think we can lift are those that are independent of the
+                // number of records; things like `BoolOr`, `BoolAnd`, `Min`, and `Max`.
                 // TODO(frank): extract non-terminal literals.
                 let mut result = Vec::new();
                 while aggregates.last().map(|a| {
-                    (a.func == expr::AggregateFunc::Any || a.func == expr::AggregateFunc::All)
+                    (a.func == expr::AggregateFunc::BoolOr
+                        || a.func == expr::AggregateFunc::BoolAnd)
                         && a.expr.is_literal_ok()
                 }) == Some(true)
                 {

@@ -369,7 +369,7 @@ where
     Datum::from(x)
 }
 
-fn any<'a, I>(datums: I) -> Datum<'a>
+fn bool_or<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -382,7 +382,7 @@ where
         })
 }
 
-fn all<'a, I>(datums: I) -> Datum<'a>
+fn bool_and<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -437,8 +437,8 @@ pub enum AggregateFunc {
     SumNull,
     Count,
     CountAll, // COUNT(*) counts nulls too
-    Any,
-    All,
+    BoolOr,
+    BoolAnd,
     JsonbAgg,
 }
 
@@ -478,8 +478,8 @@ impl AggregateFunc {
             AggregateFunc::SumNull => sum_null(datums),
             AggregateFunc::Count => count(datums),
             AggregateFunc::CountAll => count_all(datums),
-            AggregateFunc::Any => any(datums),
-            AggregateFunc::All => all(datums),
+            AggregateFunc::BoolOr => bool_or(datums),
+            AggregateFunc::BoolAnd => bool_and(datums),
             AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
         }
     }
@@ -487,8 +487,8 @@ impl AggregateFunc {
     pub fn default(&self) -> Datum<'static> {
         match self {
             AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
-            AggregateFunc::Any => Datum::False,
-            AggregateFunc::All => Datum::True,
+            AggregateFunc::BoolOr => Datum::False,
+            AggregateFunc::BoolAnd => Datum::True,
             _ => Datum::Null,
         }
     }
@@ -502,8 +502,8 @@ impl AggregateFunc {
         let scalar_type = match self {
             AggregateFunc::Count => ScalarType::Int64,
             AggregateFunc::CountAll => ScalarType::Int64,
-            AggregateFunc::Any => ScalarType::Bool,
-            AggregateFunc::All => ScalarType::Bool,
+            AggregateFunc::BoolOr => ScalarType::Bool,
+            AggregateFunc::BoolAnd => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
             _ => input_type.scalar_type,
         };
@@ -604,8 +604,8 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::SumNull => f.write_str("sum"),
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::CountAll => f.write_str("countall"),
-            AggregateFunc::Any => f.write_str("any"),
-            AggregateFunc::All => f.write_str("all"),
+            AggregateFunc::BoolOr => f.write_str("bool_or"),
+            AggregateFunc::BoolAnd => f.write_str("bool_and"),
             AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
         }
     }

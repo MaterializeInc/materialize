@@ -165,3 +165,52 @@ query I rowsort
 select sum(distinct column1) from (values (1), (2), (1), (4)) _;
 ----
 7
+
+statement ok
+CREATE TABLE bools (
+  id INT PRIMARY KEY,
+  allfalse BOOL,
+  mixed BOOL,
+  alltrue BOOL,
+  allfalse_null BOOL,
+  mixed_null BOOL,
+  alltrue_null BOOL
+);
+----
+
+# TODO(justin): support this
+# statement ok
+# INSERT INTO bools VALUES
+#   (1, false, true,  true, false, true,  true),
+#   (2, false, false, true, NULL,  false, true),
+#   (3, false, true,  true, false, NULL,  true),
+#   (4, false, false, true, false, false, NULL),
+#   (5, false, true,  true, false, true,  true),
+#   (6, false, false, true, false, false, true);
+# ----
+#
+# query BBBBBB
+# SELECT
+#   bool_or(allfalse),
+#   bool_or(mixed),
+#   bool_or(alltrue),
+#   bool_and(allfalse),
+#   bool_and(mixed),
+#   bool_and(alltrue)
+# FROM bools
+# ----
+# false  true  true  false  false  true
+#
+# query BBBBBB
+# SELECT
+#   bool_or(allfalse_null),
+#   bool_or(mixed_null),
+#   bool_or(alltrue_null),
+#   bool_and(allfalse_null),
+#   bool_and(mixed_null),
+#   bool_and(alltrue_null)
+# FROM bools
+# ----
+# TODO(justin): our output here with a vanilla transformation to
+# bool_or/bool_and is `NULL  true  true  false  false  NULL`.
+# false  true  true  false  false  true

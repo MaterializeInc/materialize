@@ -1107,7 +1107,7 @@ ORDER BY supplier_cnt DESC
 | Join %4 %5
 | | implementation = Differential %5 %4.()
 | | demand = (#0, #1)
-| Reduce group=(#0) all((#0 != #1))
+| Reduce group=(#0) bool_and((#0 != #1))
 
 %7 =
 | Get %2

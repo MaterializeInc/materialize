@@ -340,17 +340,17 @@ where
                         // Count needs to distinguish nulls from zero.
                         (1, if datum.is_null() { 0 } else { 1 })
                     }
-                    AggregateFunc::Any => match datum {
+                    AggregateFunc::BoolOr => match datum {
                         Datum::True => (1, 0),
                         Datum::Null => (0, 0),
                         Datum::False => (0, 1),
-                        x => panic!("Invalid argument to AggregateFunc::Any: {:?}", x),
+                        x => panic!("Invalid argument to AggregateFunc::BoolOr: {:?}", x),
                     },
-                    AggregateFunc::All => match datum {
+                    AggregateFunc::BoolAnd => match datum {
                         Datum::True => (1, 0),
                         Datum::Null => (0, 0),
                         Datum::False => (0, 1),
-                        x => panic!("Invalid argument to AggregateFunc::All: {:?}", x),
+                        x => panic!("Invalid argument to AggregateFunc::BoolAnd: {:?}", x),
                     },
                     _ => {
                         // Other accumulations need to disentangle the accumulable
@@ -381,7 +381,7 @@ where
 
                 // For most aggregations, the first aggregate is the "data" and the second is the number
                 // of non-null elements (so that we can determine if we should produce 0 or a Null).
-                // For Any and All, the two aggregates are the numbers of true and false records, resp.
+                // For BoolOr and BoolAnd, the two aggregates are the numbers of true and false records, resp.
                 let agg1 = accum.element2.element1;
                 let agg2 = accum.element2.element2;
 
@@ -397,7 +397,7 @@ where
                 let value = match (&aggr, agg2) {
                     (AggregateFunc::Count, _) => Datum::Int64(agg2 as i64),
                     (AggregateFunc::CountAll, _) => Datum::Int64(tot as i64),
-                    (AggregateFunc::All, _) => {
+                    (AggregateFunc::BoolAnd, _) => {
                         // If any false, else if all true, else must be no false and some nulls.
                         if agg2 > 0 {
                             Datum::False
@@ -407,7 +407,7 @@ where
                             Datum::Null
                         }
                     }
-                    (AggregateFunc::Any, _) => {
+                    (AggregateFunc::BoolOr, _) => {
                         // If any true, else if all false, else must be no true and some nulls.
                         if agg1 > 0 {
                             Datum::True
@@ -526,8 +526,8 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::SumNull
         | AggregateFunc::Count
         | AggregateFunc::CountAll
-        | AggregateFunc::Any
-        | AggregateFunc::All => (true, false),
+        | AggregateFunc::BoolOr
+        | AggregateFunc::BoolAnd => (true, false),
         AggregateFunc::MaxInt32
         | AggregateFunc::MaxInt64
         | AggregateFunc::MaxFloat32

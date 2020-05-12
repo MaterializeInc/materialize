@@ -1434,11 +1434,11 @@ fn plan_expr_returning_name<'a>(
                 right,
                 some: _,
             } => (
-                plan_any_or_all(ecx, left, op, right, AggregateFunc::Any)?,
+                plan_any_or_all(ecx, left, op, right, AggregateFunc::BoolOr)?,
                 None,
             ),
             Expr::All { left, op, right } => (
-                plan_any_or_all(ecx, left, op, right, AggregateFunc::All)?,
+                plan_any_or_all(ecx, left, op, right, AggregateFunc::BoolAnd)?,
                 None,
             ),
             Expr::InSubquery {
@@ -1454,14 +1454,14 @@ fn plan_expr_returning_name<'a>(
                     // `<expr> NOT IN (<subquery>)` is equivalent to
                     // `<expr> <> ALL (<subquery>)`.
                     (
-                        plan_any_or_all(ecx, expr, &NotEq, subquery, AggregateFunc::All)?,
+                        plan_any_or_all(ecx, expr, &NotEq, subquery, AggregateFunc::BoolAnd)?,
                         None,
                     )
                 } else {
                     // `<expr> IN (<subquery>)` is equivalent to
                     // `<expr> = ANY (<subquery>)`.
                     (
-                        plan_any_or_all(ecx, expr, &Eq, subquery, AggregateFunc::Any)?,
+                        plan_any_or_all(ecx, expr, &Eq, subquery, AggregateFunc::BoolOr)?,
                         None,
                     )
                 }
@@ -3812,7 +3812,7 @@ fn is_table_func(name: &str) -> bool {
 fn is_aggregate_func(name: &str) -> bool {
     match name {
         // avg is handled by transform::AvgFuncRewriter.
-        "max" | "min" | "sum" | "count" | "jsonb_agg" => true,
+        "max" | "min" | "sum" | "count" | "jsonb_agg" | "bool_or" | "bool_and" => true,
         _ => false,
     }
 }
