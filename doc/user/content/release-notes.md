@@ -59,7 +59,6 @@ Wrap your release notes at the 80 character mark.
 - Add option `WITH (ignore_source_keys = true)` to disable automatically
   respecting primary source information in source formats ([#3012])
 
-
 <span id="0.2.2"></span>
 ## 0.2.1 &rarr; 0.2.2
 
