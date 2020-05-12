@@ -191,32 +191,29 @@ impl SqlAction {
                 } else {
                     let (mut left, mut right) = (0, 0);
                     let mut buf = String::new();
-                    while left < expected_rows.len() && right < actual.len() {
-                        // the ea logic below is complex enough without adding the indirection of Ordering::*
-                        #[allow(clippy::comparison_chain)]
-                        match (expected_rows.get(left), actual.get(right)) {
-                            (Some(e), Some(a)) => {
-                                if e == a {
-                                    left += 1;
-                                    right += 1;
-                                } else if e > a {
-                                    writeln!(buf, "extra row: {:?}", a).unwrap();
-                                    right += 1;
-                                } else if e < a {
-                                    writeln!(buf, "row missing: {:?}", e).unwrap();
-                                    left += 1;
-                                }
-                            }
-                            (None, Some(a)) => {
-                                writeln!(buf, "extra row: {:?}", a).unwrap();
-                                right += 1;
-                            }
-                            (Some(e), None) => {
+                    while let (Some(e), Some(a)) = (expected_rows.get(left), actual.get(right)) {
+                        match e.cmp(a) {
+                            std::cmp::Ordering::Less => {
                                 writeln!(buf, "row missing: {:?}", e).unwrap();
                                 left += 1;
                             }
-                            (None, None) => unreachable!("blocked by while condition"),
+                            std::cmp::Ordering::Equal => {
+                                left += 1;
+                                right += 1;
+                            }
+                            std::cmp::Ordering::Greater => {
+                                writeln!(buf, "extra row: {:?}", a).unwrap();
+                                right += 1;
+                            }
                         }
+                    }
+                    while let Some(e) = expected_rows.get(left) {
+                        writeln!(buf, "row missing: {:?}", e).unwrap();
+                        left += 1;
+                    }
+                    while let Some(a) = actual.get(right) {
+                        writeln!(buf, "extra row: {:?}", a).unwrap();
+                        right += 1;
                     }
                     Err(format!(
                         "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
