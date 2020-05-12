@@ -225,6 +225,11 @@ impl RelationDesc {
         self
     }
 
+    /// Deletes all keys for the relation
+    pub fn clear_keys(&mut self) {
+        self.typ.keys.clear()
+    }
+
     pub fn typ(&self) -> &RelationType {
         &self.typ
     }

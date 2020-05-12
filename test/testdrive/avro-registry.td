@@ -172,3 +172,18 @@ a count
 1 1
 1 1
 2 1
+
+# When ignoring source keys, it should give correct results.
+
+> CREATE MATERIALIZED SOURCE data_v4
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (ignore_source_keys = true)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+
+> SELECT a, count(*) FROM data_v4
+  GROUP BY a
+a count
+-------
+1 2
+2 1

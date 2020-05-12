@@ -1397,6 +1397,14 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             }
 
             let mut desc = encoding.desc(&envelope)?;
+            let ignore_source_keys = match with_options.remove("ignore_source_keys") {
+                None => false,
+                Some(Value::Boolean(b)) => b,
+                Some(_) => bail!("ignore_source_keys must be a boolean"),
+            };
+            if ignore_source_keys {
+                desc.clear_keys();
+            }
 
             let typ = desc.typ();
             if !col_names.is_empty() {
