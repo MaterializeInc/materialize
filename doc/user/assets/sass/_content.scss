@@ -84,7 +84,7 @@ a {
     margin-top: 8px;
   }
 
-  p, li {
+  p, li, pre {
     line-height: 1.5;
   }
 
@@ -140,7 +140,7 @@ a {
     font-size: 15px;
     margin: 16px 0 8px;
     overflow: auto;
-    padding: 10px;
+    padding: 8px 10px;
 
     code {
       color: $off-black;
@@ -158,7 +158,7 @@ a {
   // shell or SQL snippet followed by its (unhighlighted) output.
   .highlight + pre {
     border-top: 0;
-    margin-top: -12px;
+    margin-top: -16px;
     padding-top: 0;
   }
 

@@ -22,19 +22,19 @@
     /// that would otherwise all require scrolling to the very end of the
     /// viewport.
     function headingOffsets() {
+        const SLOP = 100;
         const headings = $(".content h2, .content h3");
         let offsets = headings.toArray().map(h => ({
             id: h.id,
             offset: h.offsetTop,
         }));
-        const scrollMax = $(document).height() - $(window).height();
-        const firstBad = offsets.findIndex(o => o.offset + 50 > scrollMax);
-        if (firstBad === -1)
+        const cutoff = $(document).height() - $(window).height() - SLOP;
+        const firstBad = offsets.findIndex(o => o.offset > cutoff);
+        if (firstBad === -1 || firstBad === offsets.length - 1)
             return offsets;
-        const lastGoodOffset = firstBad > 0 ? offsets[firstBad - 1].offset : 0;
-        const allotment = (scrollMax - lastGoodOffset) / (offsets.length - firstBad);
+        const allotment = SLOP / (offsets.length - firstBad);
         for (var i = firstBad; i < offsets.length; i++)
-            offsets[i].offset = lastGoodOffset + (i - firstBad + 1) * allotment;
+            offsets[i].offset = cutoff + (i - firstBad + 1) * allotment;
         return offsets;
     }
 
@@ -73,4 +73,13 @@
     // Trigger an initial hash change event to handle scrolling to the page's
     // initial hash.
     $(() => $(window).trigger("hashchange"));
+
+    // Prevent double clicking on a TOC link from scrolling the page if we're
+    // already on that TOC link's section, as we won't get a hashchange event
+    // to fix up the scroll offset.
+    $(".toc a").click(function (e) {
+        console.log($(this).attr("href"), window.location.hash);
+        if ($(this).attr("href") == window.location.hash)
+            e.preventDefault();
+    });
 </script>
