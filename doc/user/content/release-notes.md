@@ -59,19 +59,19 @@ Wrap your release notes at the 80 character mark.
 
 - Enable connections to Kafka brokers using either
   [SSL authentication](../sql/create-source/avro-kafka/#ssl-encrypted-kafka-details)
-  or [Kerberos authentication](../sql/create-source/avro-kafka/#kerberized-kafka-details). This includes support for SSL authentication with
-  Confluent Schema Registries.
+  or [Kerberos authentication](../sql/create-source/avro-kafka/#kerberized-kafka-details).
+  This includes support for SSL authentication with Confluent Schema Registries.
 
 - Introduce the [`AS OF`](../sql/tail/#as-of) and
   [`WITH SNAPSHOT`](../sql/tail/#with-snapshot) options for `TAIL` to provide
   more control over what data `TAIL` will produce.
 
-- Improve reliability of Kinesis sources by rate-limiting Kinesis API calls
-  ([#2807]).
+- Improve reliability of Kinesis sources by rate-limiting Kinesis API calls.
+  {{% gh 2807 %}}
 
 - Improve startup speed for Kafka sources with many partitions by fetching from
   partitions evenly, rather than processing partitions sequentially, one after
-  the next ([#2936]).
+  the next. {{% gh 2936 %}}
 
 - Add two [`WITH` options](../sql/create-source/avro-kafka/#with-options)
   to Kafka sources:
@@ -81,45 +81,30 @@ Wrap your release notes at the 80 character mark.
     reports statistics to the logs.
 
 - Improve reliability and performance of Kafka sinks with a smarter buffering
-  and flushing policy ([#2855]) and a faster Avro encoding implementation
-  ([#2907]).
+  and flushing policy {{% gh 2855 %}} and a faster Avro encoding implementation
+  {{% gh 2907 %}}.
 
-- Support decoding enum ([#2923]) and union ([#2943]) values in Avro-formatted
+- Support decoding enum {{% gh 2923 %}} and union {{% gh 2943 %}} values in Avro-formatted
   sources.
 
 - Produce runtime errors when some numeric operations overflow, rather than
-  silently wrapping around ([#2896]).
+  silently wrapping around. {{% gh 2896 %}}
 
 - Humanize the output of [`SHOW CREATE VIEW`] by avoiding quotes around
-  identifiers that do not require them ([#2667]).
+  identifiers that do not require them. {{% gh 2667 %}}
 
-- Add the [`generate_series`](../sql/functions/#table) table function ([#2857]).
+- Add the [`generate_series`](../sql/functions/#table) table function. {{% gh 2857 %}}
 
 - Fix several bugs in the query optimizer that could cause crashes or incorrect
-  query plans ([#2731], [#2724]).
+  query plans. {{% gh 2731 2724 %}}
 
 - Correct output for `LEFT JOIN`s when the same join key appears multiple times
-  in the relation on the left-hand side of the join ([#2724]).
+  in the relation on the left-hand side of the join. {{% gh 2724 %}}
 
 - Disallow trailing commas in `SELECT` lists, so that `SELECT a, b, FROM table`
   results in a syntax error outright, rather than parsing as
   `SELECT a, b, "from" AS table`, which would result in a confusing error about
-  the unknown column `"from"` ([#2893]).
-
-[#2590]: https://github.com/MaterializeInc/materialize/pull/2590
-[#2667]: https://github.com/MaterializeInc/materialize/pull/2667
-[#2724]: https://github.com/MaterializeInc/materialize/issues/2724
-[#2727]: https://github.com/MaterializeInc/materialize/pull/2727
-[#2731]: https://github.com/MaterializeInc/materialize/pull/2731
-[#2807]: https://github.com/MaterializeInc/materialize/pull/2807
-[#2855]: https://github.com/MaterializeInc/materialize/pull/2855
-[#2857]: https://github.com/MaterializeInc/materialize/pull/2857
-[#2893]: https://github.com/MaterializeInc/materialize/pull/2893
-[#2896]: https://github.com/MaterializeInc/materialize/pull/2896
-[#2907]: https://github.com/MaterializeInc/materialize/pull/2907
-[#2923]: https://github.com/MaterializeInc/materialize/pull/2923
-[#2943]: https://github.com/MaterializeInc/materialize/pull/2943
-[#2936]: https://github.com/MaterializeInc/materialize/pull/2936
+  the unknown column `"from"`. {{% gh 2893 %}}
 
 <span id="0.2.1"></span>
 ## 0.2.0 &rarr; 0.2.1
