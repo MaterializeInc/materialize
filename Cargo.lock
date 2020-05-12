@@ -1602,12 +1602,14 @@ dependencies = [
  "log",
  "once_cell",
  "openssl",
+ "openssl-sys",
  "ore",
  "parse_duration",
  "pgwire",
  "postgres",
  "postgres-openssl",
  "prometheus",
+ "rdkafka-sys",
  "rlimit",
  "serde_json",
  "stream-cancel",
@@ -1984,9 +1986,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.55"
+version = "0.9.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7717097d810a0f2e2323f9e5d11e71608355e24828410b55b9d4f18aa5f9a5d8"
+checksum = "f02309a7f127000ed50594f0b50ecc69e7c654e16d41b4e8156d1b3df8e0b52e"
 dependencies = [
  "autocfg",
  "cc",

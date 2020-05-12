@@ -19,6 +19,8 @@ Flag | Default | Modifies
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--threads`](#worker-threads) | 1 | Dataflow worker threads
 [`--w`](#worker-threads) | 1|  Dataflow worker threads
+`-v` | N/A | Print version and exit
+`-vv` | N/A | Print version and additional build information, and exit
 
 ### Data directory
 

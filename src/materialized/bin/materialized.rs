@@ -19,6 +19,7 @@
 
 use std::env;
 use std::env::VarError;
+use std::ffi::CStr;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
@@ -37,8 +38,6 @@ use log::{info, trace};
 use once_cell::sync::OnceCell;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
-use ::materialized::version;
-
 static LOG_FILE: OnceCell<File> = OnceCell::new();
 
 fn main() {
@@ -56,7 +55,11 @@ fn run() -> Result<(), failure::Error> {
 
     // Options that request informational output.
     opts.optflag("h", "help", "show this usage information");
-    opts.optflag("v", "version", "print version and exit");
+    opts.optflagmulti(
+        "v",
+        "version",
+        "print version and exit (use -vv for additional info)",
+    );
 
     // Accidental debug build protection.
     if cfg!(debug_assertions) {
@@ -160,6 +163,9 @@ fn run() -> Result<(), failure::Error> {
             materialized::VERSION,
             materialized::BUILD_SHA
         );
+        if popts.opt_count("v") > 1 {
+            print_build_info();
+        }
         return Ok(());
     }
 
@@ -284,7 +290,7 @@ fn run() -> Result<(), failure::Error> {
         "materialized version: {}
 invoked as: {}
 environment:{}",
-        version(),
+        materialized::version(),
         args.join(" "),
         env_message
     );
@@ -397,6 +403,14 @@ to improve both our software and your queries! Please reach out at:
 =======================================================================
 "
     );
+}
+
+fn print_build_info() {
+    let openssl_version =
+        unsafe { CStr::from_ptr(openssl_sys::OpenSSL_version(openssl_sys::OPENSSL_VERSION)) };
+    let rdkafka_version = unsafe { CStr::from_ptr(rdkafka_sys::bindings::rd_kafka_version_str()) };
+    println!("{}", openssl_version.to_string_lossy());
+    println!("librdkafka v{}", rdkafka_version.to_string_lossy());
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
