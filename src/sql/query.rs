@@ -1319,7 +1319,7 @@ fn expr_has_unknown_type(ecx: &ExprContext, expr: &Expr) -> bool {
     }
 }
 
-fn plan_expr<'a>(
+pub fn plan_expr<'a>(
     ecx: &ExprContext,
     e: &'a Expr,
     type_hint: Option<ScalarType>,
@@ -1596,7 +1596,7 @@ fn plan_expr_returning_name<'a>(
 // When types don't match exactly, SQL has some poorly-documented type promotion
 // rules. For now, just promote integers into decimals or floats, decimals into
 // floats, dates into timestamps, and small Xs into bigger Xs.
-fn plan_homogeneous_exprs(
+pub fn plan_homogeneous_exprs(
     name: &str,
     ecx: &ExprContext,
     exprs: &[impl std::borrow::Borrow<Expr>],
@@ -1845,67 +1845,6 @@ fn plan_function<'a>(
         FunctionArgs::Args(args) => args,
     };
     match ident {
-        "abs" => {
-            if args.len() != 1 {
-                bail!("abs expects one argument, got {}", args.len());
-            }
-            let expr = plan_expr(ecx, &args[0], Some(ScalarType::Float64))?;
-            let typ = ecx.column_type(&expr);
-            let func = match typ.scalar_type {
-                ScalarType::Int32 => UnaryFunc::AbsInt32,
-                ScalarType::Int64 => UnaryFunc::AbsInt64,
-                ScalarType::Float32 => UnaryFunc::AbsFloat32,
-                ScalarType::Float64 => UnaryFunc::AbsFloat64,
-                _ => bail!("abs does not accept arguments of type {:?}", typ),
-            };
-            let expr = ScalarExpr::CallUnary {
-                func,
-                expr: Box::new(expr),
-            };
-            Ok(expr)
-        }
-
-        "ascii" => {
-            if args.len() != 1 {
-                bail!("ascii expects one argument, got {}", args.len());
-            }
-            let expr = plan_expr(ecx, &args[0], Some(ScalarType::String))?;
-            let typ = ecx.column_type(&expr);
-            if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Unknown {
-                bail!("ascii does not accept arguments of type {:?}", typ);
-            }
-            let expr = ScalarExpr::CallUnary {
-                func: UnaryFunc::Ascii,
-                expr: Box::new(expr),
-            };
-            Ok(expr)
-        }
-
-        "ceil" => {
-            if args.len() != 1 {
-                bail!("ceil expects 1 argument, got {}", args.len());
-            }
-            let expr = plan_expr(ecx, &args[0], None)?;
-            let expr = promote_number_floatdec(ecx, "ceil", expr)?;
-            Ok(match ecx.column_type(&expr).scalar_type {
-                ScalarType::Float32 => expr.call_unary(UnaryFunc::CeilFloat32),
-                ScalarType::Float64 => expr.call_unary(UnaryFunc::CeilFloat64),
-                ScalarType::Decimal(_, s) => expr.call_unary(UnaryFunc::CeilDecimal(s)),
-                _ => unreachable!(),
-            })
-        }
-
-        "coalesce" => {
-            if args.is_empty() {
-                bail!("coalesce requires at least one argument");
-            }
-            let expr = ScalarExpr::CallVariadic {
-                func: VariadicFunc::Coalesce,
-                exprs: plan_homogeneous_exprs("coalesce", ecx, &args, Some(ScalarType::String))?,
-            };
-            Ok(expr)
-        }
-
         "concat" => {
             if args.is_empty() {
                 bail!("concat requires at least one argument");
@@ -2302,48 +2241,6 @@ fn plan_function<'a>(
             Ok(expr)
         }
 
-        "replace" => {
-            if args.len() != 3 {
-                bail!(
-                    "replace expects exactly three arguments, got {:?}",
-                    args.len()
-                )
-            }
-
-            let mut exprs = Vec::new();
-            let original_string = plan_expr(ecx, &args[0], Some(ScalarType::String))?;
-            let original_string_typ = ecx.column_type(&original_string);
-            // todo: function that will do these steps for us?
-            if original_string_typ.scalar_type != ScalarType::String {
-                bail!(
-                    "replace first argument has non-string type {:?}",
-                    original_string_typ
-                );
-            }
-            exprs.push(original_string);
-
-            let from = plan_expr(ecx, &args[1], Some(ScalarType::String))?;
-            let from_typ = ecx.column_type(&from);
-            if from_typ.scalar_type != ScalarType::String {
-                bail!("replace second argument has non-string type {:?}", from_typ);
-            }
-            exprs.push(from);
-
-            let to = plan_expr(ecx, &args[2], Some(ScalarType::String))?;
-            let to_typ = ecx.column_type(&to);
-            if to_typ.scalar_type != ScalarType::String {
-                bail!("replace third argument has non-string type {:?}", to_typ);
-            }
-            exprs.push(to);
-
-            let expr = ScalarExpr::CallVariadic {
-                func: VariadicFunc::Replace,
-                exprs,
-            };
-
-            Ok(expr)
-        }
-
         "to_char" => {
             if args.len() != 2 {
                 bail!("to_char requires exactly two arguments");
@@ -2406,36 +2303,6 @@ fn plan_function<'a>(
             Ok(expr.call_unary(UnaryFunc::ToTimestamp))
         }
 
-        "convert_from" => {
-            if args.len() != 2 {
-                bail!("convert_from requires exactly two arguments");
-            }
-
-            let str_expr = plan_expr(ecx, &args[0], Some(ScalarType::Bytes))?;
-            let str_type = ecx.column_type(&str_expr);
-            if str_type.scalar_type != ScalarType::Bytes {
-                bail!(
-                    "convert_from requires a bytea value as its first argument, but got: {}",
-                    str_type.scalar_type
-                );
-            }
-
-            let enc_expr = plan_expr(ecx, &args[1], Some(ScalarType::String))?;
-            let enc_type = ecx.column_type(&enc_expr);
-            if enc_type.scalar_type != ScalarType::String {
-                bail!(
-                    "convert_from requires a string as its second argument, but got: {}",
-                    enc_type.scalar_type
-                );
-            }
-
-            Ok(ScalarExpr::CallBinary {
-                func: BinaryFunc::ConvertFrom,
-                expr1: Box::new(str_expr),
-                expr2: Box::new(enc_expr),
-            })
-        }
-
         _ => {
             if is_table_func(&name) {
                 bail!(
@@ -2443,7 +2310,7 @@ fn plan_function<'a>(
                     ident
                 )
             } else {
-                bail!("unsupported function: {}", ident)
+                super::func::select_function(ecx, ident, args)
             }
         }
     }
@@ -3366,7 +3233,7 @@ fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<Scalar
         })
 }
 
-enum CastContext<'a> {
+pub enum CastContext<'a> {
     Explicit,
     Implicit(&'a str),
 }
@@ -3385,7 +3252,7 @@ impl<'a> fmt::Display for CastContext<'a> {
 ///
 /// Note that `plan_cast_internal` only understands [`ScalarType`]s. If you need
 /// to cast between SQL [`DataType`]s, see [`Planner::plan_cast`].
-fn plan_cast_internal<'a>(
+pub fn plan_cast_internal<'a>(
     ecx: &ExprContext<'a>,
     ccx: CastContext<'a>,
     expr: ScalarExpr,
@@ -3739,11 +3606,15 @@ impl<'a> QueryContext<'a> {
     fn relation_type(&self, expr: &RelationExpr) -> RelationType {
         expr.typ(&self.outer_relation_types, &self.param_types.borrow())
     }
+
+    fn remove_param(&self, n: usize) -> Option<ScalarType> {
+        self.param_types.borrow_mut().remove(&n)
+    }
 }
 
 /// A bundle of unrelated things that we need for planning `Expr`s.
 #[derive(Debug, Clone)]
-struct ExprContext<'a> {
+pub struct ExprContext<'a> {
     qcx: &'a QueryContext<'a>,
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
     name: &'static str,
@@ -3766,7 +3637,7 @@ impl<'a> ExprContext<'a> {
         ecx
     }
 
-    fn column_type(&self, expr: &ScalarExpr) -> ColumnType {
+    pub fn column_type(&self, expr: &ScalarExpr) -> ColumnType {
         expr.typ(
             &self.qcx.outer_relation_types,
             &self.relation_type,
@@ -3774,7 +3645,7 @@ impl<'a> ExprContext<'a> {
         )
     }
 
-    fn scalar_type(&self, expr: &ScalarExpr) -> ScalarType {
+    pub fn scalar_type(&self, expr: &ScalarExpr) -> ScalarType {
         self.column_type(expr).scalar_type
     }
 
@@ -3792,6 +3663,10 @@ impl<'a> ExprContext<'a> {
                 .collect(),
             param_types: self.qcx.param_types.clone(),
         }
+    }
+
+    pub fn remove_param(&self, n: usize) -> Option<ScalarType> {
+        self.qcx.remove_param(n)
     }
 }
 
