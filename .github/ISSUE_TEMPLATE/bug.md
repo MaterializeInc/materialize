@@ -2,19 +2,42 @@
 name: Bug
 about: >
   A defect in an existing feature. For example, "consistency is violated if
-  Kafka Connect restarts." If in doubt about whether an issue is a bug or
-  feature, choose feature.
+  Kafka Connect restarts."
 labels: C-bug
 ---
 
-Please make sure you follow the labeling rules for this bug!
+<!--
+Thanks for your feedback on Materialize! Please include the following
+information in your bug report.
+-->
 
-1. Assign at least one area label, or more if the bug touches multiple areas.
+### What version of Materialize are you using?
 
-   Don't worry about being exact with the area labels. If a bug is 90% a problem
-   with the dataflow layer, but will require some small changes in the SQL layer
-   and the glue layer, feel free to just assign **A-dataflow**.
+```
+$ materialized -v
 
-2. Assign **good first issue** if the issue would make a good starter project
-   for a new employee. You will be soundly thanked for this when the next
-   employee starts!
+```
+
+### How did you acquire Materialize?
+
+<!-- Choose one. -->
+
+* [ ] Docker image
+* [ ] Linux release tarball
+* [ ] APT package
+* [ ] macOS release tarball
+* [ ] Homebrew tap
+* [ ] Built from source
+
+### What was the issue?
+
+### Is the issue reproducible? If so, please provide reproduction instructions.
+
+### Please attach any applicable log files.
+
+<!--
+Consider including:
+    * mzdata/materialized.log
+    * Kafka logs, if using Kafka sources or sinks
+    * Kinesis logs, if using Kinesis sources
+-->
