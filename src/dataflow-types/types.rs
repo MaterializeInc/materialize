@@ -280,7 +280,7 @@ pub enum DataEncoding {
 
 impl DataEncoding {
     pub fn desc(&self, envelope: &Envelope) -> Result<RelationDesc, failure::Error> {
-        let mut full_desc = if let Envelope::Upsert(key_encoding) = envelope {
+        let full_desc = if let Envelope::Upsert(key_encoding) = envelope {
             let key_desc = key_encoding.desc(&Envelope::None)?;
             //rename key columns to "key" something if the encoding is not Avro
             let key_desc = match key_encoding {
@@ -371,11 +371,12 @@ impl DataEncoding {
                 Some("text".to_owned()),
             )]),
         };
-        full_desc.add_cols(
-            desc.iter()
-                .map(|(name, typ)| (name.to_owned(), typ.to_owned())),
-        );
-        Ok(full_desc)
+        Ok(full_desc.concat(desc))
+        // full_desc.add_cols(
+        //     desc.iter()
+        //         .map(|(name, typ)| (name.to_owned(), typ.to_owned())),
+        // );
+        // Ok(full_desc)
     }
 
     pub fn op_name(&self) -> &str {

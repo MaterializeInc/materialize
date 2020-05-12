@@ -187,6 +187,17 @@ impl RelationDesc {
         )
     }
 
+    pub fn concat(mut self, other: Self) -> Self {
+        let self_len = self.typ.column_types.len();
+        self.names.extend(other.names);
+        self.typ.column_types.extend(other.typ.column_types);
+        for k in other.typ.keys {
+            let k = k.into_iter().map(|idx| idx + self_len).collect();
+            self = self.add_keys(k);
+        }
+        self
+    }
+
     pub fn add_cols<I, N>(&mut self, cols: I)
     where
         I: IntoIterator<Item = (Option<N>, ColumnType)>,
