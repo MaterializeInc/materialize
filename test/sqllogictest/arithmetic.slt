@@ -464,13 +464,13 @@ SELECT round((SELECT * FROM nums));
 ----
 NULL
 
-query error first round argument has non-integer type Float64
+statement error
 SELECT round((SELECT * FROM nums), 2)
 
-query error first round argument has non-integer type Float64
+statement error
 SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
 
-query error second round argument has non-integer type Float64
+statement error
 SELECT round(5.0, (SELECT * FROM nums))
 
 query R
@@ -478,22 +478,22 @@ SELECT round(5.0, CAST ((SELECT * FROM nums) AS integer))
 ----
 NULL
 
-query error first round argument has non-integer type Float64
+statement error
 SELECT round(CAST (5.0 AS double precision), 3)
 
-query error first round argument has non-integer type Float64
+statement error
 SELECT round(CAST (5.0 AS float), 3)
 
-query error first round argument has non-integer type Bool
+statement error
 SELECT round(true, 3)
 
-query error round argument has non-numeric type Bool
+statement error
 SELECT round(true)
 
-query error first round argument has non-integer type Float64
+statement error
 SELECT round(CAST (5.0 AS float), 3.0)
 
-query error first round argument has non-integer type Float64
+statement error
 SELECT round(CAST (5.0 AS float), CAST (3.0 AS float))
 
 query I
