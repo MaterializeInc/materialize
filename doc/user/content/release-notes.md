@@ -45,21 +45,81 @@ Use relative links (../path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+<span id="0.2.3"></span>
+## 0.2.2 &rarr; 0.2.3 (Unreleased)
+
+
 <span id="0.2.2"></span>
-## 0.2.1 (Unreleased) &rarr; 0.2.2 (Unreleased)
+## 0.2.1 &rarr; 0.2.2
 
-- Allow Avro enums and unions in value types.
-
-- Support Kafka topics with key-value messages. ([`CREATE SOURCE ... ENVELOPE
-  UPSERT  ...`](../overview/api-components/#envelopes))
+- Introduce an "upsert" envelope for sources that follow the Kafka key–value
+  convention for representing inserts, upserts, and deletes. See the [Upsert
+  envelope](../sql/create-source/avro-kafka/#upsert-envelope-details) section of
+  the `CREATE SOURCE` docs for details.
 
 - Enable connections to Kafka brokers using either
-  [SSL authentication](../sql/create-source/avro-kafka/#ssl-encrypted-kafka-details) or
-  [Kerberos](../sql/create-source/avro-kafka/#kerberized-kafka-details).
+  [SSL authentication](../sql/create-source/avro-kafka/#ssl-encrypted-kafka-details)
+  or [Kerberos authentication](../sql/create-source/avro-kafka/#kerberized-kafka-details). This includes support for SSL authentication with
+  Confluent Schema Registries.
 
-  Includes support for SSL authentication on Confluent Schema Registries.
+- Introduce the [`AS OF`](../sql/tail/#as-of) and
+  [`WITH SNAPSHOT`](../sql/tail/#with-snapshot) options for `TAIL` to provide
+  more control over what data `TAIL` will produce.
 
-- Support creating Kinesis sources from streams with more than one shard
+- Improve reliability of Kinesis sources by rate-limiting Kinesis API calls
+  ([#2807]).
+
+- Improve startup speed for Kafka sources with many partitions by fetching from
+  partitions evenly, rather than processing partitions sequentially, one after
+  the next ([#2936]).
+
+- Add two [`WITH` options](../sql/create-source/avro-kafka/#with-options)
+  to Kafka sources:
+  - The `group_id_prefix` option affords some control over the consumer group
+    ID Materialize uses when consuming from Kafka.
+  - The `statistics_interval_ms` controls how often the underlying Kafka library
+    reports statistics to the logs.
+
+- Improve reliability and performance of Kafka sinks with a smarter buffering
+  and flushing policy ([#2855]) and a faster Avro encoding implementation
+  ([#2907]).
+
+- Support decoding enum ([#2923]) and union ([#2943]) values in Avro-formatted
+  sources.
+
+- Produce runtime errors when some numeric operations overflow, rather than
+  silently wrapping around ([#2896]).
+
+- Humanize the output of [`SHOW CREATE VIEW`] by avoiding quotes around
+  identifiers that do not require them ([#2667]).
+
+- Add the [`generate_series`](../sql/functions/#table) table function ([#2857]).
+
+- Fix several bugs in the query optimizer that could cause crashes or incorrect
+  query plans ([#2731], [#2724]).
+
+- Correct output for `LEFT JOIN`s when the same join key appears multiple times
+  in the relation on the left-hand side of the join ([#2724]).
+
+- Disallow trailing commas in `SELECT` lists, so that `SELECT a, b, FROM table`
+  results in a syntax error outright, rather than parsing as
+  `SELECT a, b, "from" AS table`, which would result in a confusing error about
+  the unknown column `"from"` ([#2893]).
+
+[#2590]: https://github.com/MaterializeInc/materialize/pull/2590
+[#2667]: https://github.com/MaterializeInc/materialize/pull/2667
+[#2724]: https://github.com/MaterializeInc/materialize/issues/2724
+[#2727]: https://github.com/MaterializeInc/materialize/pull/2727
+[#2731]: https://github.com/MaterializeInc/materialize/pull/2731
+[#2807]: https://github.com/MaterializeInc/materialize/pull/2807
+[#2855]: https://github.com/MaterializeInc/materialize/pull/2855
+[#2857]: https://github.com/MaterializeInc/materialize/pull/2857
+[#2893]: https://github.com/MaterializeInc/materialize/pull/2893
+[#2896]: https://github.com/MaterializeInc/materialize/pull/2896
+[#2907]: https://github.com/MaterializeInc/materialize/pull/2907
+[#2923]: https://github.com/MaterializeInc/materialize/pull/2923
+[#2943]: https://github.com/MaterializeInc/materialize/pull/2943
+[#2936]: https://github.com/MaterializeInc/materialize/pull/2936
 
 <span id="0.2.1"></span>
 ## 0.2.0 &rarr; 0.2.1
