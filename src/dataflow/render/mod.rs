@@ -189,7 +189,7 @@ pub(crate) fn build_local_input<A: Allocate>(
     });
 }
 
-struct BuildExternalSourceState<G>
+struct BuildExternalSourceState<'a, G>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -201,6 +201,9 @@ where
     encoding: DataEncoding,
     envelope: Envelope,
     err_collection: Collection<G, DataflowError, Diff>,
+    fast_forwarded: bool,
+    debug_name: String,
+    region: &'a G,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -308,6 +311,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         encoding,
                         envelope,
                         err_collection,
+                        fast_forwarded,
+                        debug_name: dataflow.debug_name.clone(),
+                        region,
                     };
 
                     let capability = if let Envelope::Upsert(key_encoding) = state.envelope.clone()
@@ -318,54 +324,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             if let ExternalSourceConnector::AvroOcf(c) = state.connector.clone() {
                                 context.build_avro_ocf_source(&mut state, source_config, c)
                             } else {
-                                let ((ok_source, err_source), capability) = match state.connector {
-                                    ExternalSourceConnector::Kafka(kc) => {
-                                        let (source, capability) = source::kafka(source_config, kc);
-                                        (
-                                            (
-                                                source.map(|(_key, (payload, aux_num))| {
-                                                    (payload, aux_num)
-                                                }),
-                                                operator::empty(region),
-                                            ),
-                                            capability,
-                                        )
-                                    }
-                                    ExternalSourceConnector::Kinesis(kc) => {
-                                        let (ok_source, cap) = source::kinesis(source_config, kc);
-                                        ((ok_source, operator::empty(region)), cap)
-                                    }
-                                    ExternalSourceConnector::File(c) => {
-                                        let read_style = if c.tail {
-                                            FileReadStyle::TailFollowFd
-                                        } else {
-                                            FileReadStyle::ReadOnce
-                                        };
-                                        let ctor =
-                                            |file| Ok(std::io::BufReader::new(file).split(b'\n'));
-                                        source::file(source_config, c.path, read_style, ctor)
-                                    }
-                                    ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-                                };
-                                state.err_collection = state.err_collection.concat(
-                                    &err_source
-                                        .map(DataflowError::SourceError)
-                                        .pass_through("source-errors")
-                                        .as_collection(),
-                                );
-
-                                // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
-                                // a hypothetical future avro_extract, protobuf_extract, etc.
-                                let stream = decode_values(
-                                    &ok_source,
-                                    state.encoding,
-                                    &dataflow.debug_name,
-                                    &state.envelope,
-                                    &mut state.src.operators,
-                                    fast_forwarded,
-                                );
-
-                                (stream, capability)
+                                context.build_simple_source(&mut state, source_config)
                             };
 
                         let mut collection = match state.envelope {
@@ -1068,5 +1027,57 @@ where
             decode_avro_values(&source, &state.envelope, reader_schema),
             capability,
         )
+    }
+
+    fn build_simple_source(
+        &mut self,
+        state: &mut BuildExternalSourceState<G>,
+        source_config: SourceConfig<G>,
+    ) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SourceToken>) {
+        let ((ok_source, err_source), capability) = match state.connector.clone() {
+            ExternalSourceConnector::Kafka(kc) => {
+                let (source, capability) = source::kafka(source_config, kc);
+                (
+                    (
+                        source.map(|(_key, (payload, aux_num))| (payload, aux_num)),
+                        operator::empty(state.region),
+                    ),
+                    capability,
+                )
+            }
+            ExternalSourceConnector::Kinesis(kc) => {
+                let (ok_source, cap) = source::kinesis(source_config, kc);
+                ((ok_source, operator::empty(state.region)), cap)
+            }
+            ExternalSourceConnector::File(c) => {
+                let read_style = if c.tail {
+                    FileReadStyle::TailFollowFd
+                } else {
+                    FileReadStyle::ReadOnce
+                };
+                let ctor = |file| Ok(std::io::BufReader::new(file).split(b'\n'));
+                source::file(source_config, c.path, read_style, ctor)
+            }
+            ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+        };
+        state.err_collection = state.err_collection.concat(
+            &err_source
+                .map(DataflowError::SourceError)
+                .pass_through("source-errors")
+                .as_collection(),
+        );
+
+        // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+        // a hypothetical future avro_extract, protobuf_extract, etc.
+        let stream = decode_values(
+            &ok_source,
+            state.encoding.clone(),
+            &state.debug_name,
+            &state.envelope,
+            &mut state.src.operators,
+            state.fast_forwarded,
+        );
+
+        (stream, capability)
     }
 }
