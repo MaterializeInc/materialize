@@ -1712,7 +1712,11 @@ where
                 // This can occur in SINK and TAIL at the moment. Their behaviors are fluid enough
                 // that we just correct to avoid producing incorrect output updates, but we should
                 // fix the root of the problem in a more principled manner.
-                log::error!("Requested as_of ({:?}) not >= since ({:?}); correcting", as_of, since);
+                log::error!(
+                    "Requested as_of ({:?}) not >= since ({:?}); correcting",
+                    as_of,
+                    since
+                );
                 as_of.join_assign(&since);
             }
         } else {
