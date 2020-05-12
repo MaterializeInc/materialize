@@ -50,6 +50,10 @@ Wrap your release notes at the 80 character mark.
 
 - Support [TLS encryption](../cli/#tls-encryption) for SQL and HTTP connections.
 
+- Automatically refresh
+  [AWS credentials for Kinesis sources](../sql/create-source/json-kinesis/#with-options)
+  when credentials are sourced from an IAM instance or container profile.
+
 <span id="0.2.2"></span>
 ## 0.2.1 &rarr; 0.2.2
 
