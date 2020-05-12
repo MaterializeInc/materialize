@@ -1698,8 +1698,15 @@ where
         //     self.sink_info[global_id].valid_from(&since);
         // }
 
-        // Bind the since frontier to the dataflow description.
-        dataflow.set_as_of(since);
+        // Ensure that the dataflow's `as_of` is at least `since`.
+        if let Some(as_of) = &dataflow.as_of {
+            // If we have requested a specific time that is invalid .. someone errored.
+            use timely::order::PartialOrder;
+            assert!(<_ as PartialOrder>::less_equal(&since, &as_of));
+        } else {
+            // Bind the since frontier to the dataflow description.
+            dataflow.set_as_of(since);
+        }
     }
 
     fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
