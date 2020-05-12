@@ -1,5 +1,17 @@
-`access_key_id` | `text` | _(Required)_ A valid [access key ID](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
-`secret_access_key` | `text` | _(Required)_ A valid [secret access key](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
+`access_key_id` | `text` | A valid [access key ID](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
+`secret_access_key` | `text` | A valid [secret access key](https://docs.aws.amazon.com/streams/latest/dev/controlling-access.html) to the Kinesis stream.
+`token` | `text` | The session token associated with the credentials, if the credentials are temporary
 
 For details about the IAM account whose details you provide, see [Kinesis source
 details](#kinesis-source-details).
+
+If you do not explicitly provide AWS credentials, Materialize will attempt to
+fetch credentials by reading standard environment variables, filesystem paths,
+and, if running on AWS ECS or EC2, the container or instance profile. Consult the
+[Rusoto credentials documentation](https://github.com/rusoto/rusoto/blob/master/AWS-CREDENTIALS.md#usage)
+for details.
+
+Credentials fetched from a container or instance profile expire on a fixed
+schedule. Materialize will attempt to refresh the credentials automatically
+before they expire, but the source will become inoperable if the refresh
+operation fails.
