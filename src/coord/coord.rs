@@ -1276,7 +1276,11 @@ where
                 },
                 PeekWhen::AtTimestamp(ts),
             )?)
-        } else if let Some(Some((index_id, _))) = self
+        }
+        // TODO: The logic that follows is at variance from PEEK logic which consults the
+        // "queryable" state of its inputs. We might want those to line up, but it is only
+        // a "might".
+        else if let Some(Some((index_id, _))) = self
             .views
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
@@ -1286,6 +1290,8 @@ where
                 .expect("name missing at coordinator")
                 .to_owned()
         } else {
+            // TODO: This should more carefully consider `since` frontiers of its input.
+            // This will be forcibly corrected if any inputs are compacted.
             Antichain::from_elem(0)
         };
 
@@ -1656,8 +1662,74 @@ where
         self.import_source_or_view(id, &index.on, &mut dataflow);
         dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
-        self.broadcast_dataflow_creation(dataflow);
         self.insert_index(*id, &index, self.logical_compaction_window_ms);
+        self.validate_dataflow(&mut dataflow);
+        self.broadcast_dataflow_creation(dataflow);
+    }
+
+    /// Performs some sanity checking on the dataflow before shipping it.
+    ///
+    /// In particular, there are requirement on the `as_of` field for the dataflow
+    /// and the `since` frontiers of created arrangements, as a function of the `since`
+    /// frontiers of dataflow inputs (sources and imported arrangements).
+    fn validate_dataflow(&mut self, dataflow: &mut DataflowDesc) {
+        use differential_dataflow::lattice::Lattice;
+        use timely::progress::timestamp::Timestamp;
+
+        // The identity for `join` is the minimum element.
+        let mut since = Antichain::from_elem(Timestamp::minimum());
+
+        // TODO: Populate "valid from" information for each source.
+        // For each source, ... do nothing because we don't track `since` for sources.
+        // for (instance_id, _description) in dataflow.source_imports.iter() {
+        //     // TODO: Extract `since` information about each source and apply here. E.g.
+        //     since.join_assign(&self.source_info[instance_id].since);
+        // }
+
+        // For each imported arrangement, lower bound `since` by its own frontier.
+        for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
+            since.join_assign(
+                self.indexes
+                    .since_of(global_id)
+                    .expect("global id missing at coordinator"),
+            );
+        }
+
+        // For each produced arrangement, force its compaction frontier to be at least `since`.
+        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
+            self.indexes
+                .get_mut(global_id)
+                .expect("global id missing at coordinator")
+                .advance_since(&since);
+        }
+
+        // TODO: Produce "valid from" information for each sink.
+        // For each sink, ... do nothing because we don't yield `since` for sinks.
+        // for (global_id, _description) in dataflow.sink_exports.iter() {
+        //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
+        //     self.sink_info[global_id].valid_from(&since);
+        // }
+
+        // Ensure that the dataflow's `as_of` is at least `since`.
+        if let Some(as_of) = &mut dataflow.as_of {
+            // If we have requested a specific time that is invalid .. someone errored.
+            use timely::order::PartialOrder;
+            if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
+                // This can occur in SINK and TAIL at the moment. Their behaviors are fluid enough
+                // that we just correct to avoid producing incorrect output updates, but we should
+                // fix the root of the problem in a more principled manner.
+                log::error!(
+                    "Dataflow {} requested as_of ({:?}) not >= since ({:?}); correcting",
+                    dataflow.debug_name,
+                    as_of,
+                    since
+                );
+                as_of.join_assign(&since);
+            }
+        } else {
+            // Bind the since frontier to the dataflow description.
+            dataflow.set_as_of(since);
+        }
     }
 
     fn create_index_dataflow(&mut self, name: String, id: GlobalId, index: catalog::Index) {
@@ -1694,7 +1766,8 @@ where
             .expect("replacing a sink cannot fail");
 
         // Create the sink dataflow.
-        // TODO(justin): this should be picking a more reasonable frontier, see #2803.
+        // TODO: The frontier should be more intentionally chosen based on `since` frontiers.
+        // The current choice will likely be overwritten by dataflow validation.
         self.create_sink_dataflow(
             name.to_string(),
             id,
@@ -1741,6 +1814,7 @@ where
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
+        self.validate_dataflow(&mut dataflow);
         self.broadcast_dataflow_creation(dataflow);
     }
 
@@ -2043,12 +2117,11 @@ where
                     // reduce the volume of the collection, but we don't have that
                     // information here.
                     if !index_state.upper.frontier().is_empty() {
-                        index_state.since.clear();
+                        let mut compaction_frontier = Antichain::new();
                         for time in index_state.upper.frontier().iter() {
-                            index_state
-                                .since
-                                .insert(time.saturating_sub(compaction_latency_ms));
+                            compaction_frontier.insert(time.saturating_sub(compaction_latency_ms));
                         }
+                        index_state.advance_since(&compaction_frontier);
                         self.since_updates
                             .push((name.clone(), index_state.since.clone()));
                     }
@@ -2557,6 +2630,17 @@ pub mod arrangement_state {
         #[allow(dead_code)]
         pub fn set_compaction_latency(&mut self, latency_ms: Option<T>) {
             self.compaction_latency_ms = latency_ms;
+        }
+
+        /// Advances `since` to the least upper bound of itself and `frontier`.
+        ///
+        /// It is important that we only ever advance `since`, as winding it backwards
+        /// does not make the data backing the arrangement any more valid.
+        pub fn advance_since(&mut self, frontier: &Antichain<T>)
+        where
+            T: Lattice,
+        {
+            self.since.join_assign(frontier);
         }
     }
 }
