@@ -191,9 +191,7 @@ impl SqlAction {
                 } else {
                     let (mut left, mut right) = (0, 0);
                     let mut buf = String::new();
-                    while left < expected_rows.len() && right < actual.len() {
-                        let e = &expected_rows[left];
-                        let a = &actual[right];
+                    while let (Some(e), Some(a)) = (expected_rows.get(left), actual.get(right)) {
                         match e.cmp(a) {
                             std::cmp::Ordering::Less => {
                                 writeln!(buf, "row missing: {:?}", e).unwrap();
@@ -209,13 +207,11 @@ impl SqlAction {
                             }
                         }
                     }
-                    while left < expected_rows.len() {
-                        let e = &expected_rows[left];
+                    while let Some(e) = expected_rows.get(left) {
                         writeln!(buf, "row missing: {:?}", e).unwrap();
                         left += 1;
                     }
-                    while right < actual.len() {
-                        let a = &actual[right];
+                    while let Some(a) = actual.get(right) {
                         writeln!(buf, "extra row: {:?}", a).unwrap();
                         right += 1;
                     }
