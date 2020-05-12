@@ -189,6 +189,21 @@ pub(crate) fn build_local_input<A: Allocate>(
     });
 }
 
+struct BuildExternalSourceState<G>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    src_id: SourceInstanceId,
+    src: SourceDesc,
+    get_expr: RelationExpr,
+    as_of_frontier: Antichain<Timestamp>,
+    connector: ExternalSourceConnector,
+    encoding: DataEncoding,
+    envelope: Envelope,
+    consistency: Consistency,
+    err_collection: Collection<G, Timestamp, Diff>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
@@ -251,10 +266,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     encoding,
                     envelope,
                     consistency,
-                } = src.connector
+                } = src.clone().connector
                 {
-                    let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
-
                     // This uid must be unique across all different instantiations of a source
                     let uid = SourceInstanceId {
                         sid: src_id.sid,
@@ -286,43 +299,21 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         consistency,
                     };
 
-                    let capability = if let Envelope::Upsert(key_encoding) = envelope {
-                        match connector {
-                            ExternalSourceConnector::Kafka(kc) => {
-                                use timely::dataflow::operators::delay::Delay;
+                    let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
+                    let mut state = BuildExternalSourceState {
+                        src_id,
+                        src,
+                        get_expr,
+                        as_of_frontier: as_of_frontier.clone(),
+                        connector,
+                        encoding,
+                        envelope,
+                        consistency,
+                        err_collection,
+                    };
 
-                                let (source, capability) = source::kafka(source_config, kc);
-                                // Advance the time component of each timely message,
-                                // to implement the `as_of` frontier compaction.
-                                let source = source.delay({
-                                    let as_of_frontier = as_of_frontier.clone();
-                                    move |_datum, time| {
-                                        let mut time = time.clone();
-                                        time.advance_by(as_of_frontier.borrow());
-                                        time
-                                    }
-                                });
-                                let arranged = arrange_from_upsert(
-                                    &decode_upsert(
-                                        &prepare_upsert_by_max_offset(&source),
-                                        encoding,
-                                        key_encoding,
-                                    ),
-                                    &format!("UpsertArrange: {}", src_id.to_string()),
-                                );
-                                let keys = src.desc.typ().keys[0]
-                                    .iter()
-                                    .map(|k| ScalarExpr::Column(*k))
-                                    .collect::<Vec<_>>();
-                                context.set_local(
-                                    &get_expr,
-                                    &keys,
-                                    (arranged, err_collection.arrange()),
-                                );
-                                capability
-                            }
-                            _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
-                        }
+                    let capability = if let Envelope::Upsert(key_encoding) = state.envelope {
+                        context.build_upsert_source(&mut state, source_config, key_encoding)
                     } else {
                         let (stream, capability) =
                             if let ExternalSourceConnector::AvroOcf(c) = connector {
@@ -404,7 +395,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     encoding,
                                     &dataflow.debug_name,
                                     &envelope,
-                                    &mut src.operators,
+                                    &mut state.src.operators,
                                     fast_forwarded,
                                 );
 
@@ -427,9 +418,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         // Implement source filtering and projection.
                         // At the moment this is strictly optional, but we perform it anyhow
                         // to demonstrate the intended use.
-                        if let Some(operators) = src.operators.clone() {
+                        if let Some(operators) = state.src.operators.clone() {
                             // Determine replacement values for unused columns.
-                            let source_type = src.desc.typ();
+                            let source_type = state.src.desc.typ();
                             let position_or = (0..source_type.arity())
                                 .map(|col| {
                                     if operators.projection.contains(&col) {
@@ -504,7 +495,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                         // Introduce the stream by name, as an unarranged collection.
                         context.collections.insert(
-                            RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
+                            RelationExpr::global_get(src_id.sid, state.src.desc.typ().clone()),
                             (collection, err_collection),
                         );
                         capability
@@ -1024,6 +1015,50 @@ where
                     self.render_arrangeby(relation_expr, None);
                 }
             };
+        }
+    }
+
+    fn build_upsert_source(
+        &mut self,
+        state: &mut BuildExternalSourceState<G>,
+        source_config: SourceConfig<G>,
+        key_encoding: DataEncoding,
+    ) -> Option<SourceToken> {
+        match state.connector {
+            ExternalSourceConnector::Kafka(kc) => {
+                use timely::dataflow::operators::delay::Delay;
+
+                let (source, capability) = source::kafka(source_config, kc);
+                // Advance the time component of each timely message,
+                // to implement the `as_of` frontier compaction.
+                let as_of_frontier = state.as_of_frontier.clone();
+                let source = source.delay({
+                    move |_datum, time| {
+                        let mut time = time.clone();
+                        time.advance_by(as_of_frontier.borrow());
+                        time
+                    }
+                });
+                let arranged = arrange_from_upsert(
+                    &decode_upsert(
+                        &prepare_upsert_by_max_offset(&source),
+                        state.encoding,
+                        key_encoding,
+                    ),
+                    &format!("UpsertArrange: {}", state.src_id.to_string()),
+                );
+                let keys = state.src.desc.typ().keys[0]
+                    .iter()
+                    .map(|k| ScalarExpr::Column(*k))
+                    .collect::<Vec<_>>();
+                self.set_local(
+                    &state.get_expr,
+                    &keys,
+                    (arranged, state.err_collection.arrange()),
+                );
+                capability
+            }
+            _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
         }
     }
 }
