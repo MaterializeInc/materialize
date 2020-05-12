@@ -48,6 +48,7 @@ Wrap your release notes at the 80 character mark.
 <span id="0.2.3"></span>
 ## 0.2.2 &rarr; 0.2.3 (Unreleased)
 
+- Support [TLS encryption](../cli/#tls-encryption) for SQL and HTTP connections.
 
 <span id="0.2.2"></span>
 ## 0.2.1 &rarr; 0.2.2

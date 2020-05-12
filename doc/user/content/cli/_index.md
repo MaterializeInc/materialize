@@ -11,14 +11,16 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`--address-file`](#horizontally-scaled-clusters) | N/A|  Address of all coordinating Materialize nodes
+[`--address-file`](#horizontally-scaled-clusters) | N/A |  Address of all coordinating Materialize nodes
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
+[`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
+[`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
 [`--threads`](#worker-threads) | 1 | Dataflow worker threads
-[`--w`](#worker-threads) | 1|  Dataflow worker threads
+[`--w`](#worker-threads) | 1 |  Dataflow worker threads
 `-v` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
 
@@ -96,3 +98,63 @@ responsibility of the network firewall to limit incoming connections. If you
 wish to configure `materialized` to only listen to, e.g. localhost connections,
 you can set `--listen-addr` to `localhost:6875`. You can also use this to change
 the port that Materialize listens on from the default `6875`.
+
+### TLS encryption
+
+Materialize can use Transport Layer Security (TLS) to encrypt traffic between
+SQL and HTTP clients and the `materialized` server.
+
+#### Configuration
+
+To enable TLS, you will need to supply two files, one containing a TLS
+certificate and one containing the corresponding private key. Point
+`materialized` at these files using the `--tls-cert` and `--tls-key` options,
+respectively:
+
+```shell
+$ materialized -w1 --tls-cert=server.crt --tls-key=server.key
+```
+
+When TLS is enabled, Materialize serves both unencrypted and encrypted traffic
+over the same TCP port, as specified by [`--listen-addr`](#listen-address). The
+web UI will be served over HTTPS in addition to HTTP. Incoming SQL connections
+can negotiate TLS encryption at the client's option; consult your SQL client's
+documentation for details.
+
+It is not currently possible to configure Materialize to reject unencrypted
+connections.
+
+Materialize statically links against a vendored copy of [OpenSSL]. It does *not*
+use any SSL library that may be provided by your system. To see the version of
+OpenSSL used by a particular `materialized` binary, inquire with the `-vv` flag:
+
+```shell
+$ materialize -vv
+```
+```nofmt
+materialized v0.2.3-dev (c62c988e8167875b92122719eee5709cf81cdac4)
+OpenSSL 1.1.1g  21 Apr 2020
+librdkafka v1.4.2
+```
+
+Materialize configures OpenSSL according to Mozilla's [Modern
+compatibility][moz-modern] level, which requires TLS v1.3 and modern cipher
+suites. Using weaker cipher suites or older TLS protocol versions is not
+supported.
+
+[moz-modern]: https://wiki.mozilla.org/Security/Server_Side_TLS#Modern_compatibility
+
+#### Generating TLS certificates
+
+You can generate a self-signed certificate for development use with the
+`openssl` command-line tool:
+
+```shell
+$ openssl req -new -x509 -days 365 -nodes -text \
+    -out server.crt -keyout server.key -subj "/CN=<SERVER-HOSTNAME>"
+```
+
+Production deployments typically should not use self-signed certificates.
+Acquire a certificate from a proper certificate authority (CA) instead.
+
+[OpenSSL]: https://www.openssl.org
