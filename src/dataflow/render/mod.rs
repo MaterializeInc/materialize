@@ -200,8 +200,7 @@ where
     connector: ExternalSourceConnector,
     encoding: DataEncoding,
     envelope: Envelope,
-    consistency: Consistency,
-    err_collection: Collection<G, Timestamp, Diff>,
+    err_collection: Collection<G, DataflowError, Diff>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -308,51 +307,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         connector,
                         encoding,
                         envelope,
-                        consistency,
                         err_collection,
                     };
 
-                    let capability = if let Envelope::Upsert(key_encoding) = state.envelope {
+                    let capability = if let Envelope::Upsert(key_encoding) = state.envelope.clone()
+                    {
                         context.build_upsert_source(&mut state, source_config, key_encoding)
                     } else {
                         let (stream, capability) =
-                            if let ExternalSourceConnector::AvroOcf(c) = connector {
-                                // Distribute read responsibility among workers.
-                                let read_style = if c.tail {
-                                    FileReadStyle::TailFollowFd
-                                } else {
-                                    FileReadStyle::ReadOnce
-                                };
-
-                                let reader_schema = match &encoding {
-                                    DataEncoding::AvroOcf { reader_schema } => reader_schema,
-                                    _ => unreachable!(
-                                        "Internal error: \
-                                         Avro OCF schema should have already been resolved.\n\
-                                        Encoding is: {:?}",
-                                        encoding
-                                    ),
-                                };
-                                let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                                let ctor = {
-                                    let reader_schema = reader_schema.clone();
-                                    move |file| avro::Reader::with_schema(&reader_schema, file)
-                                };
-
-                                let ((source, err_source), capability) =
-                                    source::file(source_config, c.path, read_style, ctor);
-                                err_collection = err_collection.concat(
-                                    &err_source
-                                        .map(DataflowError::SourceError)
-                                        .pass_through("AvroOCF-errors")
-                                        .as_collection(),
-                                );
-                                (
-                                    decode_avro_values(&source, &envelope, reader_schema),
-                                    capability,
-                                )
+                            if let ExternalSourceConnector::AvroOcf(c) = state.connector.clone() {
+                                context.build_avro_ocf_source(&mut state, source_config, c)
                             } else {
-                                let ((ok_source, err_source), capability) = match connector {
+                                let ((ok_source, err_source), capability) = match state.connector {
                                     ExternalSourceConnector::Kafka(kc) => {
                                         let (source, capability) = source::kafka(source_config, kc);
                                         (
@@ -381,7 +347,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     }
                                     ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                                 };
-                                err_collection = err_collection.concat(
+                                state.err_collection = state.err_collection.concat(
                                     &err_source
                                         .map(DataflowError::SourceError)
                                         .pass_through("source-errors")
@@ -392,9 +358,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 // a hypothetical future avro_extract, protobuf_extract, etc.
                                 let stream = decode_values(
                                     &ok_source,
-                                    encoding,
+                                    state.encoding,
                                     &dataflow.debug_name,
-                                    &envelope,
+                                    &state.envelope,
                                     &mut state.src.operators,
                                     fast_forwarded,
                                 );
@@ -402,7 +368,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 (stream, capability)
                             };
 
-                        let mut collection = match envelope {
+                        let mut collection = match state.envelope {
                             Envelope::None => stream.as_collection(),
                             Envelope::Debezium => {
                                 // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
@@ -472,7 +438,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 });
 
                             collection = collection2;
-                            err_collection = err_collection.concat(&errors);
+                            state.err_collection = state.err_collection.concat(&errors);
                         }
 
                         // Apply `as_of` to each timestamp
@@ -484,7 +450,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 time
                             }
                         });
-                        err_collection = err_collection.delay({
+                        state.err_collection = state.err_collection.delay({
                             let as_of_frontier = as_of_frontier.clone();
                             move |time| {
                                 let mut time = time.clone();
@@ -496,7 +462,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         // Introduce the stream by name, as an unarranged collection.
                         context.collections.insert(
                             RelationExpr::global_get(src_id.sid, state.src.desc.typ().clone()),
-                            (collection, err_collection),
+                            (collection, state.err_collection),
                         );
                         capability
                     };
@@ -1024,11 +990,11 @@ where
         source_config: SourceConfig<G>,
         key_encoding: DataEncoding,
     ) -> Option<SourceToken> {
-        match state.connector {
+        match &state.connector {
             ExternalSourceConnector::Kafka(kc) => {
                 use timely::dataflow::operators::delay::Delay;
 
-                let (source, capability) = source::kafka(source_config, kc);
+                let (source, capability) = source::kafka(source_config, kc.clone());
                 // Advance the time component of each timely message,
                 // to implement the `as_of` frontier compaction.
                 let as_of_frontier = state.as_of_frontier.clone();
@@ -1042,7 +1008,7 @@ where
                 let arranged = arrange_from_upsert(
                     &decode_upsert(
                         &prepare_upsert_by_max_offset(&source),
-                        state.encoding,
+                        state.encoding.clone(),
                         key_encoding,
                     ),
                     &format!("UpsertArrange: {}", state.src_id.to_string()),
@@ -1060,5 +1026,47 @@ where
             }
             _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
         }
+    }
+
+    fn build_avro_ocf_source(
+        &mut self,
+        state: &mut BuildExternalSourceState<G>,
+        source_config: SourceConfig<G>,
+        c: FileSourceConnector,
+    ) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SourceToken>) {
+        // Distribute read responsibility among workers.
+        let read_style = if c.tail {
+            FileReadStyle::TailFollowFd
+        } else {
+            FileReadStyle::ReadOnce
+        };
+
+        let reader_schema = match &state.encoding {
+            DataEncoding::AvroOcf { reader_schema } => reader_schema,
+            _ => unreachable!(
+                "Internal error: \
+                                         Avro OCF schema should have already been resolved.\n\
+                                        Encoding is: {:?}",
+                state.encoding
+            ),
+        };
+        let reader_schema = Schema::parse_str(reader_schema).unwrap();
+        let ctor = {
+            let reader_schema = reader_schema.clone();
+            move |file| avro::Reader::with_schema(&reader_schema, file)
+        };
+
+        let ((source, err_source), capability) =
+            source::file(source_config, c.path, read_style, ctor);
+        state.err_collection = state.err_collection.concat(
+            &err_source
+                .map(DataflowError::SourceError)
+                .pass_through("AvroOCF-errors")
+                .as_collection(),
+        );
+        (
+            decode_avro_values(&source, &state.envelope, reader_schema),
+            capability,
+        )
     }
 }
