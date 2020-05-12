@@ -1713,7 +1713,8 @@ where
                 // that we just correct to avoid producing incorrect output updates, but we should
                 // fix the root of the problem in a more principled manner.
                 log::error!(
-                    "Requested as_of ({:?}) not >= since ({:?}); correcting",
+                    "Dataflow {} requested as_of ({:?}) not >= since ({:?}); correcting",
+                    dataflow.debug_name,
                     as_of,
                     since
                 );
