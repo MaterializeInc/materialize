@@ -2,9 +2,13 @@
 
 ## Checklist
 
-In addition to the mechanics of our branching strategy, described here, we have a
-[release checklist](./release-checklist.md) which should be followed (and possibly
-updated) at every release.
+In addition to the mechanics of our branching strategy, described here, we have
+a release checklist which should be followed (and possibly updated) at every
+release.
+
+To view the release checklist, create a new issue using the release template:
+
+  <https://github.com/MaterializeInc/materialize/issues/new?template=release.md&title=release:+v0.#.#>
 
 ## Basic git workflow
 
