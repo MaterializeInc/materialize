@@ -1079,11 +1079,11 @@ ORDER BY
 ----
 %0 =
 | Get materialize.public.supplier (u8)
-| ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.revenue (u27)
 | Filter !(isnull(#1))
+| ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.revenue (u27)
@@ -1093,7 +1093,7 @@ ORDER BY
 
 %3 =
 | Join %0 %1 %2 (= #0 #7) (= #8 #9)
-| | implementation = Differential %1 %0.(#0) %2.(#0)
+| | implementation = Differential %0 %1.(#0) %2.(#0)
 | | demand = (#0..#2, #4, #8)
 | Project (#0..#2, #4, #8)
 

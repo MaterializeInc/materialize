@@ -947,11 +947,17 @@ where
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
         let view_id = self.catalog.allocate_id()?;
+        // Optimize the expression so that we can form an accurately typed description.
+        let optimized_expr = self.optimizer.optimize(view.expr, self.catalog.indexes())?;
+        let desc = RelationDesc::new(
+            optimized_expr.as_ref().typ(),
+            view.desc.iter_names().map(|c| c.cloned()),
+        );
         let view = catalog::View {
             create_sql: view.create_sql,
             plan_cx: pcx,
-            optimized_expr: self.optimizer.optimize(view.expr, self.catalog.indexes())?,
-            desc: view.desc,
+            optimized_expr,
+            desc,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2370,13 +2376,19 @@ fn open_catalog(
                         assert!(replace.is_none());
                         assert!(!if_not_exists);
                         assert!(materialize);
+                        // Optimize the expression so that we can form an accurately typed description.
+                        let optimized_expr = optimizer
+                            .optimize(view.expr, catalog.indexes())
+                            .expect("failed to optimize bootstrap sql");
+                        let desc = RelationDesc::new(
+                            optimized_expr.as_ref().typ(),
+                            view.desc.iter_names().map(|c| c.cloned()),
+                        );
                         let view = catalog::View {
                             create_sql: view.create_sql,
                             plan_cx: pcx,
-                            optimized_expr: optimizer
-                                .optimize(view.expr, catalog.indexes())
-                                .expect("failed to optimize bootstrap sql"),
-                            desc: view.desc,
+                            optimized_expr,
+                            desc,
                         };
                         let view_name = FullName {
                             database: DatabaseSpecifier::Ambient,
