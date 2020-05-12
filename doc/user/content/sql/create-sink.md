@@ -36,7 +36,16 @@ Field | Use
 ------|-----
 **KAFKA BROKER** _host_ | The Kafka broker's host name.
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
+**WITH OPTIONS (** _option&lowbar;_ **)** | Options affecting sink creation. For more details see [`WITH` options](#with-options).
 **CONFLUENT SCHEMA REGISTRY** _url_ | The URL of the Confluent schema registry to get schema information from.
+
+### `WITH` options
+
+The following options are valid within the `WITH` clause.
+
+Field | Value type | Description
+------|------------|------------
+`replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
 
 ## Detail
 
