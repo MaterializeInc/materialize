@@ -63,7 +63,8 @@ const MIGRATIONS: &[&str] = &[
      INSERT INTO schemas VALUES
          (1, NULL, 'mz_catalog'),
          (2, NULL, 'pg_catalog'),
-         (3, 1, 'public');",
+         (3, 1, 'public'),
+         (4, 1, 'mz_temp');",
     // Adjusts timestamp table to support multi-partition Kafka topics.
     //
     // Introduced for v0.1.4.

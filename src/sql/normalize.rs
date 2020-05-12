@@ -88,7 +88,9 @@ pub fn create_statement(
     mut stmt: Statement,
 ) -> Result<String, failure::Error> {
     let allocate_name = |name: &ObjectName| -> Result<_, failure::Error> {
-        Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
+        Ok(unresolve(
+            scx.allocate_name(object_name(name.clone())?, false),
+        ))
     };
 
     let resolve_name = |name: &ObjectName| -> Result<_, failure::Error> {
@@ -196,6 +198,7 @@ pub fn create_statement(
             name,
             columns: _,
             query,
+            temporary: _,
             materialized,
             if_exists,
             with_options: _,
@@ -208,6 +211,7 @@ pub fn create_statement(
                     return Err(err);
                 }
             }
+            // todo: not sure what to do here...
             *materialized = false;
             *if_exists = IfExistsBehavior::Error;
         }

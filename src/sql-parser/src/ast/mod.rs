@@ -911,6 +911,7 @@ pub enum Statement {
         columns: Vec<Ident>,
         query: Box<Query>,
         if_exists: IfExistsBehavior,
+        temporary: bool,
         materialized: bool,
         with_options: Vec<SqlOption>,
     },
@@ -1228,6 +1229,7 @@ impl AstDisplay for Statement {
                 name,
                 columns,
                 query,
+                temporary,
                 materialized,
                 if_exists,
                 with_options,
@@ -1235,6 +1237,9 @@ impl AstDisplay for Statement {
                 f.write_str("CREATE");
                 if *if_exists == IfExistsBehavior::Replace {
                     f.write_str(" OR REPLACE");
+                }
+                if *temporary {
+                    f.write_str(" TEMPORARY");
                 }
                 if *materialized {
                     f.write_str(" MATERIALIZED");

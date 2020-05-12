@@ -440,6 +440,7 @@ define_keywords!(
     TABLES,
     TABLESAMPLE,
     TAIL,
+    TEMPORARY,
     TEXT,
     THEN,
     TIES,

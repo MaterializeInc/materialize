@@ -766,7 +766,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         _ => unreachable!(),
     };
 
-    let name = scx.allocate_name(normalize::object_name(name)?);
+    let name = scx.allocate_name(normalize::object_name(name)?, false);
     let from = scx.catalog.get(&scx.resolve_name(from)?)?;
     let suffix = format!(
         "{}-{}",
@@ -882,21 +882,30 @@ fn handle_create_view(
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, columns, query, materialized, if_exists, with_options) = match &mut stmt {
+    let (name, columns, query, temporary, materialized, if_exists, with_options) = match &mut stmt {
         Statement::CreateView {
             name,
             columns,
             query,
+            temporary,
             materialized,
             if_exists,
             with_options,
-        } => (name, columns, query, materialized, if_exists, with_options),
+        } => (
+            name,
+            columns,
+            query,
+            temporary,
+            materialized,
+            if_exists,
+            with_options,
+        ),
         _ => unreachable!(),
     };
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }
-    let name = scx.allocate_name(normalize::object_name(name.to_owned())?);
+    let name = scx.allocate_name(normalize::object_name(name.to_owned())?, *temporary);
     let replace = if *if_exists == IfExistsBehavior::Replace {
         let if_exists = true;
         let cascade = false;
@@ -1426,7 +1435,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
             let if_not_exists = *if_not_exists;
             let materialized = *materialized;
-            let name = scx.allocate_name(normalize::object_name(name.clone())?);
+            let name = scx.allocate_name(normalize::object_name(name.clone())?, false);
             let create_sql = normalize::create_statement(&scx, stmt)?;
 
             let source = Source {
@@ -1615,6 +1624,7 @@ fn handle_select(
     query: Query,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
+    // check that the session's connection id is the same if it's temporary?
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     Ok(Plan::Peek {
         source: relation_expr,
@@ -1769,13 +1779,16 @@ pub struct StatementContext<'a> {
 }
 
 impl<'a> StatementContext<'a> {
-    pub fn allocate_name(&self, name: PartialName) -> FullName {
+    pub fn allocate_name(&self, name: PartialName, temporary: bool) -> FullName {
         FullName {
             database: match name.database {
                 Some(name) => DatabaseSpecifier::Name(name),
                 None => self.session.database(),
             },
-            schema: name.schema.unwrap_or_else(|| "public".into()),
+            schema: match temporary {
+                true => "mz_temp".into(),
+                false => name.schema.unwrap_or_else(|| "public".into()),
+            },
             item: name.item,
         }
     }

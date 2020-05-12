@@ -732,8 +732,12 @@ where
         let ops = vec![
             catalog::Op::CreateDatabase { name: name.clone() },
             catalog::Op::CreateSchema {
-                database_name: DatabaseSpecifier::Name(name),
+                database_name: DatabaseSpecifier::Name(name.clone()),
                 schema_name: "public".into(),
+            },
+            catalog::Op::CreateSchema {
+                database_name: DatabaseSpecifier::Name(name),
+                schema_name: "mz_temp".into(),
             },
         ];
         match self.catalog_transact(ops) {
