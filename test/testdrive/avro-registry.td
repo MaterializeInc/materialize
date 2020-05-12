@@ -159,3 +159,16 @@ a
 1 42
 1 42
 2 -1
+
+# Make sure this query gives WRONG results,
+# which should prove that we are respecting primary
+# key information (and optimizing by transforming
+# a reduce on a primary key to a map)
+
+> SELECT a, count(*) FROM data_v3
+  GROUP BY a
+a count
+-------
+1 1
+1 1
+2 1
