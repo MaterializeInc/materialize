@@ -1270,7 +1270,11 @@ where
                 },
                 PeekWhen::AtTimestamp(ts),
             )?)
-        } else if let Some(Some((index_id, _))) = self
+        }
+        // TODO: The logic that follows is at variance from PEEK logic which consults the
+        // "queryable" state of its inputs. We might want those to line up, but it is only
+        // a "might".
+        else if let Some(Some((index_id, _))) = self
             .views
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
@@ -1280,6 +1284,8 @@ where
                 .expect("name missing at coordinator")
                 .to_owned()
         } else {
+            // TODO: This should more carefully consider `since` frontiers of its input.
+            // This will be forcibly corrected if any inputs are compacted.
             Antichain::from_elem(0)
         };
 
@@ -1699,10 +1705,16 @@ where
         // }
 
         // Ensure that the dataflow's `as_of` is at least `since`.
-        if let Some(as_of) = &dataflow.as_of {
+        if let Some(as_of) = &mut dataflow.as_of {
             // If we have requested a specific time that is invalid .. someone errored.
             use timely::order::PartialOrder;
-            assert!(<_ as PartialOrder>::less_equal(&since, &as_of));
+            if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
+                // This can occur in SINK and TAIL at the moment. Their behaviors are fluid enough
+                // that we just correct to avoid producing incorrect output updates, but we should
+                // fix the root of the problem in a more principled manner.
+                log::error!("Requested as_of ({:?}) not >= since ({:?}); correcting", as_of, since);
+                as_of.join_assign(&since);
+            }
         } else {
             // Bind the since frontier to the dataflow description.
             dataflow.set_as_of(since);
@@ -1743,7 +1755,8 @@ where
             .expect("replacing a sink cannot fail");
 
         // Create the sink dataflow.
-        // TODO(justin): this should be picking a more reasonable frontier, see #2803.
+        // TODO: The frontier should be more intentionally chosen based on `since` frontiers.
+        // The current choice will likely be overwritten by dataflow validation.
         self.create_sink_dataflow(
             name.to_string(),
             id,
