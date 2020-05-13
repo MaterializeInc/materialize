@@ -25,6 +25,7 @@ use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::{Activator, SyncActivator};
+use url::Url;
 
 use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
 use expr::{MzOffset, PartitionId, SourceInstanceId};
@@ -218,6 +219,32 @@ fn get_next_message_from_consumers(
     None
 }
 
+/// Creates a Kafka config
+fn create_kafka_config(name: &str, url: &Url, group_id_prefix: Option<String>, config_options: &HashMap<String,String>) -> ClientConfig {
+    let mut kafka_config = ClientConfig::new();
+    let group_id_prefix = group_id_prefix.unwrap_or_else(String::new);
+    kafka_config.set(
+        "group.id",
+        &format!("{}materialize-{}", group_id_prefix, name),
+    );
+    kafka_config
+        .set("enable.auto.commit", "false")
+        .set("enable.partition.eof", "false")
+        .set("auto.offset.reset", "earliest")
+        .set("session.timeout.ms", "6000")
+        .set("max.poll.interval.ms", "300000") // 5 minutes
+        .set("fetch.message.max.bytes", "134217728")
+        .set("enable.sparse.connections", "true")
+        .set("bootstrap.servers", &url.to_string())
+        .set("partition.assignment.strategy", "roundrobin");
+
+    for (k, v) in config_options {
+        kafka_config.set(k, v);
+    }
+
+    kafka_config
+}
+
 /// Consistency information
 #[derive(Copy, Clone)]
 struct ConsInfo {
@@ -272,28 +299,11 @@ where
     } = config;
 
     let (stream, capability) = source(config.id, ts, scope, &name.clone(), move |info| {
+
         let activator = scope.activator_for(&info.address[..]);
 
-        let mut kafka_config = ClientConfig::new();
-        let group_id_prefix = group_id_prefix.unwrap_or_else(String::new);
-        kafka_config.set(
-            "group.id",
-            &format!("{}materialize-{}", group_id_prefix, name),
-        );
-        kafka_config
-            .set("enable.auto.commit", "false")
-            .set("enable.partition.eof", "false")
-            .set("auto.offset.reset", "earliest")
-            .set("session.timeout.ms", "6000")
-            .set("max.poll.interval.ms", "300000") // 5 minutes
-            .set("fetch.message.max.bytes", "134217728")
-            .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &url.to_string())
-            .set("partition.assignment.strategy", "roundrobin");
+        let kafka_config = create_kafka_config(&name,&url, group_id_prefix, &config_options);
 
-        for (k, v) in &config_options {
-            kafka_config.set(k, v);
-        }
 
         let mut consumers: Option<VecDeque<BaseConsumer<GlueConsumerContext>>> =
             if active { Some(VecDeque::new()) } else { None };
