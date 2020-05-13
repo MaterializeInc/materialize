@@ -61,7 +61,8 @@ services:
           --materialized-host materialized \
           --kafka-host kafka \
           --schema-registry-url http://schema-registry:8081 \
-          --csv-file-name /share/billing-demo/data/prices.csv"
+          --csv-file-name /share/billing-demo/data/prices.csv \
+          --partitions 10
     depends_on: [kafka, schema-registry, materialized]
   dashboard:
     mzbuild: dashboard
