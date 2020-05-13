@@ -58,6 +58,8 @@ use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
 
+const CONNECTION_ID: u32 = 0;
+
 #[derive(Debug)]
 pub enum Outcome<'a> {
     Unsupported {
@@ -429,7 +431,7 @@ impl State {
             _dataflow_workers: Box::new(dataflow_workers),
             _coord_thread: coord_thread,
             _runtime: runtime,
-            session: Session::default(),
+            session: Session::new(CONNECTION_ID),
             conn_id: 1,
         })
     }
@@ -742,7 +744,7 @@ impl State {
                 .unbounded_send(coord::Command::Describe {
                     name: statement_name.clone(),
                     stmt: Some(stmt),
-                    session: mem::take(&mut self.session),
+                    session: mem::replace(&mut self.session, Session::new(CONNECTION_ID)),
                     tx,
                 })
                 .expect("futures channel should not fail");
@@ -767,7 +769,7 @@ impl State {
             self.cmd_tx
                 .unbounded_send(coord::Command::Execute {
                     portal_name,
-                    session: mem::take(&mut self.session),
+                    session: mem::replace(&mut self.session, Session::new(CONNECTION_ID)),
                     conn_id: self.conn_id,
                     tx,
                 })

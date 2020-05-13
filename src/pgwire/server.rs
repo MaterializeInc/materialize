@@ -68,7 +68,7 @@ impl Server {
                         secret_key: self.secrets.get(conn_id).unwrap(),
                         cmdq_tx: self.cmdq_tx.clone(),
                     };
-                    let res = machine.start(Session::default(), version, params).await;
+                    let res = machine.start(Session::new(conn_id), version, params).await;
 
                     // Clean up state tied to this specific connection.
                     self.cmdq_tx

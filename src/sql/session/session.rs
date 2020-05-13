@@ -91,6 +91,7 @@ const TIMEZONE: ServerVar<&str> = ServerVar {
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
+    connection_id: u32,
     application_name: SessionVar<str>,
     client_encoding: ServerVar<&'static str>,
     database: SessionVar<str>,
@@ -130,10 +131,11 @@ impl fmt::Debug for Session {
     }
 }
 
-impl Default for Session {
-    /// Constructs a new `Session` with default values.
-    fn default() -> Session {
+impl Session {
+    /// Given a connection id, provides a new session with default values.
+    pub fn new(connection_id: u32) -> Session {
         Session {
+            connection_id,
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
             database: SessionVar::new(&DATABASE),
@@ -148,9 +150,12 @@ impl Default for Session {
             portals: HashMap::new(),
         }
     }
-}
 
-impl Session {
+    /// Returns the connection id of a session
+    pub fn connection_id(&self) -> u32 {
+        self.connection_id
+    }
+
     /// Returns all configuration parameters and their current values for this
     /// session.
     pub fn vars(&self) -> Vec<&dyn Var> {

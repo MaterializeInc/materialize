@@ -323,6 +323,8 @@ where
                     if self.catalog.database_resolver(session.database()).is_err() {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
+                    self.catalog
+                        .create_temporary_schema(session.connection_id());
                     ClientTransmitter::new(tx).send(Ok(messages), session)
                 }
                 Message::Command(Command::Execute {

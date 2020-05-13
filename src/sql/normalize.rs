@@ -247,7 +247,7 @@ mod tests {
     fn normalized_create() {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
-            session: &Session::default(),
+            session: &Session::new(0),
             catalog: &DummyCatalog,
         };
 
