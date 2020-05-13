@@ -1582,6 +1582,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "materialized"
 version = "0.2.3-dev"
 dependencies = [
+ "assert_cmd",
  "async-trait",
  "backtrace",
  "chrono",
@@ -1608,6 +1609,7 @@ dependencies = [
  "pgwire",
  "postgres",
  "postgres-openssl",
+ "predicates",
  "prometheus",
  "rdkafka-sys",
  "rlimit",
