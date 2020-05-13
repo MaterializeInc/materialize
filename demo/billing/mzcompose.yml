@@ -109,6 +109,7 @@ mzconduct:
           --kafka-host kafka
           --schema-registry-url http://schema-registry:8081
           --csv-file-name /share/billing-demo/data/prices.csv
+          --partitions 10
           "
       - step: down
         destroy_volumes: true
