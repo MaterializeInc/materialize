@@ -9,9 +9,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# pycheck — runs a simple python syntax check on files
+# pycheck — an attempt to get something equivalent to cargo check for python
 #
-# Provides better errors than mypy for some syntax errors
+# * Compiles python in our officially support version of pyth
+# * Run mypy to check types
 
 set -euo pipefail
 
@@ -20,7 +21,28 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck source=SCRIPTDIR/../misc/shlib/shlib.bash
 . "$root"/misc/shlib/shlib.bash
 
-py_dirs=
-mapfile_shim py_dirs < <(git ls-files "ci/*.py" "misc/python/*.py" | xargs dirname | sort -u)
+failed=false
 
-exec "$root"/bin/pyactivate --dev -m compileall -q -l "${py_dirs[@]}"
+try() {
+    last_failed=false
+    if ! "$@"; then
+        failed=true
+        last_failed=true
+    fi
+}
+
+py_files=
+mapfile_shim py_files < <(git ls-files "ci/*.py" "misc/python/*.py")
+py_dirs=
+mapfile_shim py_dirs < <(echo "${py_files[@]}" | xargs -n 1 dirname | sort -u)
+
+try "$root"/bin/pyactivate --dev -m compileall -q -l "${py_dirs[@]}"
+if $last_failed; then
+    echo "$(uw Error): python syntax errors, this may cause nonsensical errors to follow"
+fi
+
+try "$root"/bin/pyactivate --dev -m mypy --pretty "${py_files[@]}"
+
+if $failed; then
+    exit 1
+fi

@@ -96,7 +96,6 @@ if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
 fi
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
-    try bin/mypy
     try bin/pycheck
     try bin/pyfmt --diff --check
     if $last_failed; then

@@ -134,6 +134,11 @@ mapfile_shim() {
 ########################################
 # Text-Coloring commands
 
+# [m]essage-[s]uccess: message to the user that something went well
+ms() {
+    echo -ne "\e[32m$*\e[0m"
+}
+
 # [u]sage-[s]ubcommand: Paint the argument as a subcmd
 #
 # In usage text, write: "usage: $0 `us CMD`"
