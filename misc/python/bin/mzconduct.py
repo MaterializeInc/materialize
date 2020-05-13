@@ -18,8 +18,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from materialize import spawn
-from materialize import ui
 from materialize.errors import UnknownItem, BadSpec, Failed, error_handler
 from pathlib import Path
 from typing import (
@@ -42,6 +40,10 @@ import click
 import pg8000  # type: ignore
 import pymysql
 import yaml
+
+from materialize import spawn
+from materialize import ui
+
 
 T = TypeVar("T")
 
@@ -573,24 +575,24 @@ class DownStep(WorkflowStep):
 
 def mzcompose_up(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "up", "-d"]
-    return spawn.runv(cmd + services, capture_output=True)
+    return spawn.runv(cmd + services)
 
 
 def mzcompose_run(command: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "run"]
-    return spawn.runv(cmd + command, capture_output=True)
+    return spawn.runv(cmd + command)
 
 
 def mzcompose_stop(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "stop"]
-    return spawn.runv(cmd + services, capture_output=True)
+    return spawn.runv(cmd + services)
 
 
 def mzcompose_down(destroy_volumes: bool = False) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "down"]
     if destroy_volumes:
         cmd.append("-v")
-    return spawn.runv(cmd, capture_output=True)
+    return spawn.runv(cmd)
 
 
 # Helpers
