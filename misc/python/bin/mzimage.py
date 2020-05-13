@@ -22,6 +22,7 @@ from materialize import ui
 
 def main() -> int:
     args = parse_args()
+    ui.Verbosity.init_from_env(explicit=None)
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
 

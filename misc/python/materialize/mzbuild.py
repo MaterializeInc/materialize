@@ -17,9 +17,6 @@ documentation][user-docs].
 
 from collections import OrderedDict
 from functools import lru_cache
-from materialize import cargo
-from materialize import git
-from materialize import spawn
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
@@ -48,7 +45,15 @@ import shutil
 import stat
 import subprocess
 import sys
+
 import yaml
+
+from materialize import cargo
+from materialize import git
+from materialize import spawn
+from materialize import ui
+
+announce = ui.speaker("==>")
 
 
 class Fingerprint(bytes):
@@ -585,13 +590,13 @@ class DependencySet:
             spec = d.spec()
             if spec not in known_images:
                 if force_build:
-                    print(f"==> Force-building {spec}")
+                    announce(f"Force-building {spec}")
                     d.build()
                 else:
-                    print(f"==> Acquiring {spec}")
+                    announce(f"Acquiring {spec}")
                     acquired_from = d.acquire()
             else:
-                print(f"==> Already built {spec}")
+                announce(f"Already built {spec}")
 
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self.dependencies.values())
