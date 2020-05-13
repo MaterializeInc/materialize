@@ -228,7 +228,7 @@ mzconduct:
       - step: down
         destroy_volumes: true
 
-    demo-load:
+    demo:
       steps:
       - step: workflow
         workflow: bring-up-source-data
