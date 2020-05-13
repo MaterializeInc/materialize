@@ -109,6 +109,7 @@ def trim_pipeline(pipeline: Any) -> None:
                         step.image_dependencies.update(
                             find_compose_images(images, plugin_config["config"])
                         )
+                        step.manual_inputs.add(plugin_config["config"])
         steps[step.id] = step
 
     # Make sure we have an up to date view of master.
@@ -129,7 +130,7 @@ def trim_pipeline(pipeline: Any) -> None:
             # not "diff nothing", so explicitly skip.
             continue
         diff = subprocess.run(
-            ["git", "diff", "--no-patch", "--quiet", "origin/master...", "--", *inputs,]
+            ["git", "diff", "--no-patch", "--quiet", "origin/master...", "--", *inputs]
         )
         if diff.returncode != 0:
             changed.add(step.id)
