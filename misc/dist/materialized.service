@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 [Unit]
-Description=Materialize streaming data warehouse
+Description=Materialize streaming database
 After=network.target
 
 [Service]

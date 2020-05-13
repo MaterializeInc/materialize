@@ -8,9 +8,9 @@ disable_list: true
 weight: 1
 ---
 
-Materialize is a streaming data warehouse. Materialize accepts input data from a
-variety of streaming sources (e.g. Kafka) and files (e.g. CSVs), and lets you
-query them using SQL.
+Materialize is a streaming database for real-time applications. Materialize
+accepts input data from a variety of streaming sources (e.g. Kafka) and files
+(e.g. CSVs), and lets you query them using SQL.
 
 ## What does Materialize do?
 
