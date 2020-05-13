@@ -180,15 +180,6 @@ fn run() -> Result<(), failure::Error> {
 
     // Configure Timely and Differential workers.
     let threads = match popts.opt_get::<usize>("threads")? {
-        Some(val) if val == 0 => {
-            bail!(
-                "'--threads' must be specified and greater than 0\n\
-                 hint: As a starting point, set the number of threads to half of the number of\n\
-                 cores on your system. Then, further adjust based on your performance needs.\n\
-                 hint: You may also set the environment variable MZ_THREADS to the desired number\n\
-                 of threads."
-            );
-        }
         Some(val) => val,
         None => match env::var("MZ_THREADS") {
             Ok(val) => val.parse()?,
@@ -196,6 +187,15 @@ fn run() -> Result<(), failure::Error> {
             Err(VarError::NotPresent) => 0,
         },
     };
+    if threads == 0 {
+        bail!(
+            "'--threads' must be specified and greater than 0\n\
+            hint: As a starting point, set the number of threads to half of the number of\n\
+            cores on your system. Then, further adjust based on your performance needs.\n\
+            hint: You may also set the environment variable MZ_THREADS to the desired number\n\
+            of threads."
+        );
+    }
     let process = popts.opt_get_default("process", 0)?;
     let processes = popts.opt_get_default("processes", 1)?;
     let address_file = popts.opt_str("address-file");
