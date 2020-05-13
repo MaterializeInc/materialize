@@ -144,7 +144,10 @@ class Composition:
 
     def run(self) -> None:
         with cd(self._path):
-            mzcompose_up([])
+            try:
+                mzcompose_up([])
+            except subprocess.CalledProcessError:
+                raise Failed("error when bringing up all services")
 
     def down(self) -> None:
         with cd(self._path):
@@ -307,13 +310,11 @@ class StartServicesStep(WorkflowStep):
             raise BadSpec(f"services should be a list, got: {self._services}")
 
     def run(self, comp: Composition) -> None:
-        proc = mzcompose_up(self._services)
-        if proc.returncode != 0:
-            say(
-                "ERROR: processes didn't come up cleanly: {}".format(
-                    ", ".join(self._services)
-                )
-            )
+        try:
+            proc = mzcompose_up(self._services)
+        except subprocess.CalledProcessError:
+            services = ", ".join(self._services)
+            raise Failed(f"ERROR: services didn't come up cleanly: {services}")
 
 
 @Steps.register("wait-for-postgres")
@@ -526,7 +527,10 @@ class RunStep(WorkflowStep):
         self._command = cmd
 
     def run(self, comp: Composition) -> None:
-        mzcompose_run(self._command)
+        try:
+            mzcompose_run(self._command)
+        except subprocess.CalledProcessError:
+            raise Failed("giving up: {}".format(ui.shell_quote(self._command)))
 
 
 @Steps.register("ensure-stays-up")
