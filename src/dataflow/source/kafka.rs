@@ -385,10 +385,12 @@ where
         move |info| {
             // Create activator for source
             let activator = scope.activator_for(&info.address[..]);
+
             // Create control plane information (Consistency-related information)
             let mut cp_info = ControlPlaneInfo::new(MzOffset {
                 offset: start_offset,
             });
+
             // Create dataplane information (Kafka-related information)
             let mut dp_info = if active {
                 Some(DataPlaneInfo::new(
@@ -533,10 +535,9 @@ where
                         }
 
                         let last_offset = cp_info.partition_metadata[partition as usize].offset;
-
                         if offset <= last_offset {
                             let next_offset =
-                                Offset::Offset(Into::<KafkaOffset>::into(offset).offset + 1);
+                                Offset::Offset(Into::<KafkaOffset>::into(last_offset).offset + 1);
                             warn!(
                                 "Kafka message before expected offset: \
                              source {} (reading topic {}, partition {}) \
@@ -557,10 +558,23 @@ where
                                 Duration::from_secs(1),
                             );
                             match res {
-                                Ok(_) => warn!(
-                                    "Fast-forwarded consumer on partition {} to Kafka offset {:?}",
-                                    partition, next_offset
-                                ),
+                                Ok(_) => {
+                                    let res =
+                                        consumer.position().unwrap_or_default().to_topic_map();
+                                    let position =
+                                        res.get(&(dp_info.topic_name.clone(), partition));
+                                    if let Some(position) = position {
+                                        warn!(
+                                            "Tried to fast-forward consumer on partition {} to Kafka offset {:?}. Consumer is now at position {:?}",
+                                            partition, next_offset, position);
+                                        if *position != next_offset {
+                                            warn!("We did not seek to the expected offset.");
+                                        }
+                                    } else {
+                                        warn!("Tried to fast-forward consumer on partition{} to Kafka offset {:?}. Could not obtain new consumer position",
+                                            partition, next_offset);
+                                    }
+                                }
                                 Err(e) => error!("Failed to fast-forward consumer: {}", e),
                             }
                             // Message has been discarded, we return the consumer to the consumer queue
@@ -614,7 +628,7 @@ where
                                     .set(offset.offset);
 
                                 if downgrade_capability(
-                                    &db_info.topic_name,
+                                    &dp_info.topic_name,
                                     &id,
                                     cap,
                                     &mut cp_info.partition_metadata,
