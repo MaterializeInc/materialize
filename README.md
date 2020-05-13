@@ -4,7 +4,7 @@
 
 [<img src="https://materialize.io/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.io)
 
-Materialize is the streaming data warehouse.
+Materialize is a streaming database for real-time applications.
 
 Materialize lets you ask questions of your live data, which it answers and then maintains for you as your data continue to change. The moment you need a refreshed answer, you can get it in milliseconds. Materialize is designed to help you interactively explore your streaming data, perform data warehousing analytics against live relational data, or just increase the freshness *and* reduce the load of your dashboard and monitoring tasks.
 

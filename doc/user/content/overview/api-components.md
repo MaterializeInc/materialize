@@ -7,8 +7,8 @@ menu:
     weight: 3
 ---
 
-Materialize is a streaming data warehouse with a SQL API. However, despite the
-fact that Materialize uses SQL idioms and can process data from databases, it
+Materialize is a streaming database with a SQL API. However, despite the fact
+that Materialize uses SQL idioms and can process data from databases, it
 actually has very little in common with "databases" as most users think of them.
 
 In this document, we'll sketch a conceptual framework expressed by Materialize's
