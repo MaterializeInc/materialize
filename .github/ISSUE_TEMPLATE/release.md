@@ -1,8 +1,7 @@
 ---
-name: Release checklist
+name: "Internal: release checklist"
 about: >
-  Creates the tracking issue for a new release of Materialize. Internal use
-  only.
+  A tracking issue for a new release of Materialize. Contributor use only.
 ---
 
 ## Release candidate
