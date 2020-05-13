@@ -9,7 +9,10 @@
 
 """Git utilities."""
 
+from functools import lru_cache
 from materialize import spawn
+from pathlib import Path
+from typing import Set, Union
 
 
 def rev_count(rev: str) -> int:
@@ -38,3 +41,23 @@ def rev_parse(rev: str) -> str:
             named revision in Git's object database.
     """
     return spawn.capture(["git", "rev-parse", "--verify", rev], unicode=True).strip()
+
+
+@lru_cache(maxsize=None)
+def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
+    """Find unignored files within the specified paths."""
+    # The goal here is to find all files in the working tree that are not
+    # ignored by .gitignore. `git ls-files` doesn't work, because it reports
+    # files that have been deleted in the working tree if they are still present
+    # in the index. Using `os.walkdir` doesn't work because there is no good way
+    # to evaluate .gitignore rules from Python. So we use `git diff` against the
+    # empty tree, which appears to have the desired semantics.
+    empty_tree = (
+        "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git hash-object -t tree /dev/null
+    )
+    files = spawn.capture(
+        ["git", "diff", "--name-only", "-z", empty_tree, "--", *specs],
+        cwd=root,
+        unicode=True,
+    ).split("\0")
+    return set(f for f in files if f.strip() != "")

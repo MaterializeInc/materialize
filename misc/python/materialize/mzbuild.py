@@ -18,6 +18,7 @@ documentation][user-docs].
 from collections import OrderedDict
 from functools import lru_cache
 from materialize import cargo
+from materialize import git
 from materialize import spawn
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -118,23 +119,6 @@ def docker_images() -> Set[str]:
     )
 
 
-def ls_files(root: Path, *specs: Union[Path, str]) -> Set[bytes]:
-    """Find unignored files within the specified paths."""
-    # The goal here is to find all files in the working tree that are not
-    # ignored by .gitignore. `git ls-files` doesn't work, because it reports
-    # files that have been deleted in the working tree if they are still present
-    # in the index. Using `os.walkdir` doesn't work because there is no good way
-    # to evaluate .gitignore rules from Python. So we use `git diff` against the
-    # empty tree, which appears to have the desired semantics.
-    empty_tree = (
-        "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git hash-object -t tree /dev/null
-    )
-    files = spawn.capture(
-        ["git", "diff", "--name-only", "-z", empty_tree, "--", *specs], cwd=root,
-    ).split(b"\0")
-    return set(f for f in files if f.strip() != b"")
-
-
 def chmod_x(path: Path) -> None:
     """Set the executable bit on a file or directory."""
     # https://stackoverflow.com/a/30463972/1122351
@@ -160,7 +144,7 @@ class PreImage:
         spawn.runv(["git", "clean", "-ffdX", self.path])
 
     def inputs(self) -> Set[str]:
-        """Return the globs which are considered inputs to the action."""
+        """Return the files which are considered inputs to the action."""
 
 
 class CargoPreImage(PreImage):
@@ -176,11 +160,6 @@ class CargoPreImage(PreImage):
             # *lot* of work.
             "Cargo.lock",
             ".cargo/config",
-            # Crate roots can contain mzcompose files, but mzcompose should
-            # never impact the Rust build process, so exclude them from the
-            # fingerprint (#2940).
-            ":(exclude)**/mzcompose",
-            ":(exclude)**/mzcompose.yml",
         }
 
 
@@ -244,9 +223,7 @@ class CargoBuild(CargoPreImage):
     def inputs(self) -> Set[str]:
         crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
         deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
-        return super().inputs() | set(
-            str(dep.path.relative_to(self.rd.root)) for dep in deps
-        )
+        return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
 
 
 # TODO(benesch): make this less hardcoded and custom.
@@ -317,9 +294,8 @@ class CargoTest(CargoPreImage):
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
     def inputs(self) -> Set[str]:
-        return super().inputs() | set(
-            str(crate.path) for crate in self.rd.cargo_workspace.crates.values()
-        )
+        crates = self.rd.cargo_workspace.crates.values()
+        return super().inputs() | set(inp for crate in crates for inp in crate.inputs())
 
 
 class Image:
@@ -511,16 +487,16 @@ class ResolvedImage:
         return out
 
     def inputs(self, transitive: bool = False) -> Set[str]:
-        """List the globs tracked as inputs to the image.
+        """List the files tracked as inputs to the image.
 
-        Files matching these globs are used to compute the fingerprint for the
-        image. See `ResolvedImage.fingerprint` for details.
+        These files are used to compute the fingerprint for the image. See
+        `ResolvedImage.fingerprint` for details.
 
         Returns:
-            inputs: A list of input globs, relative to the root of the
+            inputs: A list of input files, relative to the root of the
                 repository.
         """
-        paths = {str(self.image.path.relative_to(self.image.rd.root))}
+        paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
         if self.image.pre_image is not None:
             paths |= self.image.pre_image.inputs()
         if transitive:
@@ -541,8 +517,10 @@ class ResolvedImage:
         inputs via `PreImage.inputs`.
         """
         self_hash = hashlib.sha1()
-        for rel_path in sorted(set(ls_files(self.image.rd.root, *self.inputs()))):
-            abs_path = self.image.rd.root / rel_path.decode()
+        for rel_path in sorted(
+            set(git.expand_globs(self.image.rd.root, *self.inputs()))
+        ):
+            abs_path = self.image.rd.root / rel_path
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
             # Compute a simplified file mode using the same rules as Git.
@@ -556,7 +534,7 @@ class ResolvedImage:
             with open(abs_path, "rb") as f:
                 file_hash.update(f.read())
             self_hash.update(file_mode.to_bytes(2, byteorder="big"))
-            self_hash.update(rel_path)
+            self_hash.update(rel_path.encode())
             self_hash.update(file_hash.digest())
             self_hash.update(b"\0")
 

@@ -10,6 +10,7 @@
 # mzimage.py — builds Materialize-specific Docker images.
 
 from materialize import mzbuild
+from materialize import git
 from pathlib import Path
 from typing import Any, List
 import argparse
@@ -78,11 +79,6 @@ def main() -> int:
         action="store_true",
         help="compute transitive inputs and dependencies",
     )
-    describe_parser.add_argument(
-        "--resolve-inputs",
-        action="store_true",
-        help="resolve input patterns (by running `git ls-files`)",
-    )
 
     args = parser.parse_args()
 
@@ -121,14 +117,9 @@ def main() -> int:
             print(f"Image: {rimage.name}")
             print(f"Fingerprint: {rimage.fingerprint()}")
 
-            print("Input patterns:")
+            print("Input files:")
             for inp in inputs:
                 print(f"    {inp}")
-
-            if args.resolve_inputs:
-                print("Resolved inputs:")
-                for path in sorted(mzbuild.ls_files(root, *inputs)):
-                    print(f"    {path.decode()}")
 
             print("Dependencies:")
             for d in dependencies:
