@@ -10,9 +10,9 @@
 //! Fuses Project operators with parent operators when possible.
 
 // TODO(frank): evaluate for redundancy with projection hoisting.
-use std::collections::HashMap;
 
-use expr::{GlobalId, RelationExpr, ScalarExpr};
+use crate::TransformArgs;
+use expr::RelationExpr;
 
 /// Fuses Project operators with parent operators when possible.
 #[derive(Debug)]
@@ -22,7 +22,7 @@ impl crate::Transform for Project {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        _: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
             self.action(e);

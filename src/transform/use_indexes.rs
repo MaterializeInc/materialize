@@ -20,7 +20,8 @@ use std::collections::HashMap;
 
 use repr::RelationType;
 
-use crate::{BinaryFunc, EvalEnv, GlobalId, Id, RelationExpr, ScalarExpr};
+use crate::{GlobalId, Id, RelationExpr, ScalarExpr, TransformArgs, TransformError};
+use expr::BinaryFunc;
 
 /// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
 /// which an index exists, with a
@@ -38,21 +39,17 @@ impl crate::Transform for FilterEqualLiteral {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
+        args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.transform(relation, indexes);
+        self.transform(relation, args);
         Ok(())
     }
 }
 
 impl FilterEqualLiteral {
-    pub fn transform(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
+    pub fn transform(&self, relation: &mut RelationExpr, args: TransformArgs) {
         relation.visit_mut(&mut |e| {
-            self.action(e, indexes);
+            self.action(e, args.indexes);
         });
     }
 
@@ -153,28 +150,21 @@ impl crate::Transform for FilterLifting {
     fn transform(
         &self,
         relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
-        self.transform(relation, indexes);
+        args: TransformArgs,
+    ) -> Result<(), TransformError> {
+        self.transform(relation, args);
+        Ok(())
     }
 }
 
 impl FilterLifting {
-    pub fn transform(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
+    pub fn transform(&self, relation: &mut RelationExpr, args: TransformArgs) {
         relation.visit_mut(&mut |e| {
-            self.action(e, indexes);
+            self.action(e, args);
         });
     }
 
-    pub fn action(
-        &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ) {
+    pub fn action(&self, relation: &mut RelationExpr, args: TransformArgs) {
         if let RelationExpr::Join {
             inputs, variables, ..
         } = relation
@@ -205,7 +195,7 @@ impl FilterLifting {
                     }) {
                         add_matching_index_by_input(
                             &**input,
-                            indexes,
+                            args.indexes,
                             input_num,
                             join_keys,
                             &mut matching_index_by_input,
@@ -214,7 +204,7 @@ impl FilterLifting {
                 } else {
                     add_matching_index_by_input(
                         join_input,
-                        indexes,
+                        args.indexes,
                         input_num,
                         join_keys,
                         &mut matching_index_by_input,
