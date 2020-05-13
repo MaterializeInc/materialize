@@ -268,7 +268,12 @@ where
 /// the first offset >= `x`.
 pub type TimestampHistories =
     Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<(i32, Timestamp, MzOffset)>>>>>;
-/// TODO(ncrooks)
+
+/// List of sources that need to start being timestamped or have been dropped and no longer require
+/// timestamping.
+///
+/// A source inserts an ADD request to this vector on source creation, and adds a
+/// DELETE request once the operator for the source is dropped.
 pub type TimestampChanges = Rc<
     RefCell<
         Vec<(
