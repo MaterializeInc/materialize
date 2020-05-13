@@ -279,6 +279,8 @@ mzconduct:
       - step: ensure-stays-up
         container: peeker
         seconds: 10
+      - step: start-services
+        services: [dashboard]
       - step: ensure-stays-up
         container: dashboard
         seconds: 1
