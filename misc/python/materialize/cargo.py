@@ -15,6 +15,7 @@ necessary to support this repository are implemented.
 [Cargo]: https://doc.rust-lang.org/cargo/
 """
 
+from materialize import git
 from pathlib import Path
 from typing import Set
 import semver
@@ -28,6 +29,7 @@ class Crate:
     `package.version` keys.
 
     Args:
+        root: The path to the root of the workspace.
         path: The path to the crate directory.
 
     Attributes:
@@ -35,7 +37,8 @@ class Crate:
         version: The version of the crate.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, root: Path, path: Path):
+        self.root = root
         with open(path / "Cargo.toml") as f:
             config = toml.load(f)
         self.name = config["package"]["name"]
@@ -54,6 +57,33 @@ class Crate:
         if (path / "src" / "main.rs").exists():
             self.bins.append(self.name)
 
+    def inputs(self) -> Set[str]:
+        """Compute the files that can impact the compilation of this crate.
+
+        Note that the returned list may have false positives (i.e., include
+        files that do not in fact impact the compilation of this crate), but it
+        is not believed to have false negatives.
+
+        Returns:
+            inputs: A list of input files, relative to the root of the
+                Cargo workspace.
+        """
+        # NOTE(benesch): it would be nice to have fine-grained tracking of only
+        # exactly the files that go into a Rust crate, but doing this properly
+        # requires parsing Rust code, and we don't want to force a dependency on
+        # a Rust toolchain for users running demos. Instead, we assume that all†
+        # files in a crate's directory are inputs to that crate.
+        #
+        # † As a development convenience, we omit mzcompose and mzcompose.yml
+        # files within a crate. This is technically incorrect if someone writes
+        # `include!("mzcompose.yml")`, but that seems like a crazy thing to do.
+        return git.expand_globs(
+            self.root,
+            f"{self.path}/**",
+            f":(exclude){self.path}/mzcompose",
+            f":(exclude){self.path}/mzcompose.yml",
+        )
+
 
 class Workspace:
     """A Cargo workspace.
@@ -71,7 +101,7 @@ class Workspace:
 
         self.crates = {}
         for path in config["workspace"]["members"]:
-            crate = Crate(root / path)
+            crate = Crate(root, root / path)
             self.crates[crate.name] = crate
 
     def crate_for_bin(self, bin: str) -> Crate:
