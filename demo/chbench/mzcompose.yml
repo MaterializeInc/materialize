@@ -228,6 +228,13 @@ mzconduct:
       - step: down
         destroy_volumes: true
 
+    # Temporary migration workflow in case folks look at the docs before the next version
+    # has been released
+    demo-load:
+      steps:
+      - step: workflow
+        workflow: demo
+
     demo:
       steps:
       - step: workflow

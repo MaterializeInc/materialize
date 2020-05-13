@@ -124,7 +124,7 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     quite a bit of time (up to 10 minutes, even on very fast connections).
 
     ```shell
-    bin/mzconduct run chbench --workflow demo
+    bin/mzconduct run chbench --workflow demo-load
     ```
 
     you can also find the demo's code on
