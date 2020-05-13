@@ -200,7 +200,6 @@ impl Default for Optimizer {
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
             Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::reduction::NegatePredicate),
             Box::new(crate::reduction::DeMorgans),
             Box::new(crate::reduction::UndistributeAnd),
             Box::new(crate::split_predicates::SplitPredicates),
@@ -228,6 +227,7 @@ impl Default for Optimizer {
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
+                    Box::new(crate::reduction::NegatePredicate),
                 ],
             }),
             // As a final logical action, convert any constant expression to a constant.
