@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, VecDeque};
+use std::convert::From;
+use std::convert::Into;
 use std::convert::TryInto;
 use std::iter;
 use std::sync::{Arc, Mutex};
@@ -18,14 +20,14 @@ use log::{error, info, warn};
 use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
-use rdkafka::topic_partition_list::Offset;
+use rdkafka::topic_partition_list::{Offset, TopicPartitionListElem};
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
-use expr::{PartitionId, SourceInstanceId};
+use expr::{MzOffset, PartitionId, SourceInstanceId};
 
 use super::util::source;
 use super::{SourceConfig, SourceStatus, SourceToken};
@@ -64,12 +66,17 @@ lazy_static! {
     .unwrap();
 }
 
+#[derive(Clone, Copy)]
+struct KafkaOffset {
+    offset: i64,
+}
+
 // There is other stuff in librdkafka messages, e.g. headers.
 // But this struct only contains what we actually use, to avoid unnecessary cloning.
 struct MessageParts {
     payload: Option<Vec<u8>>,
     partition: i32,
-    offset: i64,
+    offset: KafkaOffset,
     key: Option<Vec<u8>>,
 }
 
@@ -78,8 +85,28 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
         Self {
             payload: msg.payload().map(|p| p.to_vec()),
             partition: msg.partition(),
-            offset: msg.offset(),
+            offset: KafkaOffset {
+                offset: msg.offset(),
+            },
             key: msg.key().map(|k| k.to_vec()),
+        }
+    }
+}
+
+/// Convert from KafkaOffset to MzOffset (1-indexed)
+impl From<KafkaOffset> for MzOffset {
+    fn from(kafka_offset: KafkaOffset) -> Self {
+        MzOffset {
+            offset: kafka_offset.offset + 1,
+        }
+    }
+}
+
+/// Convert from MzOffset (1-indexed) to KafkaOffset (0-indexed)
+impl Into<KafkaOffset> for MzOffset {
+    fn into(self) -> KafkaOffset {
+        KafkaOffset {
+            offset: self.offset - 1,
         }
     }
 }
@@ -126,6 +153,8 @@ fn refresh_kafka_metadata(
     if !result {
         warn!("Descheduling for 1s to wait for Kafka metadata to catch up");
         activator.activate_after(Duration::from_secs(1));
+    } else {
+        warn!("Successfully refreshed metadata for {} {}", topic, expected_partitions)
     }
     result
 }
@@ -187,6 +216,13 @@ fn get_next_message_from_consumers(
         attempts += 1;
     }
     None
+}
+
+/// Consistency information
+#[derive(Copy, Clone)]
+struct ConsInfo {
+    pub ts: Timestamp,
+    pub offset: MzOffset,
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
@@ -265,15 +301,23 @@ where
         // INVARIANT: consumer is EITHER in consumers or in buffer, but cannot be in both
         // Keeping a handle
         let mut buffer: Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> = None;
-
         // The last timestamp that was closed, or 0 if none has been.
         let mut last_closed_ts: u64 = 0;
         // For each partition, the next offset to process, and the smallest still-open timestamp.
-        let mut partition_metadata: Vec<(i64, u64)> = vec![(start_offset, 0)];
+        let mut partition_metadata: Vec<ConsInfo> = vec![ConsInfo {
+            offset: MzOffset {
+                offset: start_offset,
+            },
+            ts: 0,
+        }];
         // Whether the Kafka metadata should be refreshed the next time this operator is scheduled.
         let mut needs_refresh: bool = true;
         // Activator shared across consumers
         let consumer_activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
+        // Optional: Materialize Offset from which stream should start reading
+        let start_offset = MzOffset {
+            offset: start_offset,
+        };
 
         move |cap, output| {
             // Accumulate updates to BYTES_READ_COUNTER;
@@ -353,8 +397,11 @@ where
                 };
 
                 while let Some((message, consumer)) = next_message {
+
+                    assert!(buffer.is_none());
+
                     let partition = message.partition;
-                    let offset = message.offset + 1;
+                    let offset = MzOffset::from(message.offset);
 
                     // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
                     // a network issue or a new partition added, at which point the consumer may
@@ -366,12 +413,15 @@ where
 
                     KAFKA_PARTITION_OFFSET_RECEIVED
                         .with_label_values(&[&topic, &id.to_string(), &partition.to_string()])
-                        .set(offset);
+                        .set(offset.offset);
 
                     if partition as usize >= partition_metadata.len() {
                         partition_metadata.extend(
-                            iter::repeat((start_offset, last_closed_ts))
-                                .take(1 + partition as usize - partition_metadata.len()),
+                            iter::repeat(ConsInfo {
+                                offset: start_offset,
+                                ts: last_closed_ts,
+                            })
+                            .take(1 + partition as usize - partition_metadata.len()),
                         );
                         //  When updating the consumer list to the required number of consumers, we
                         // have to include the consumer that we currently hold
@@ -394,24 +444,25 @@ where
                         }
                     }
 
-                    let next_offset = partition_metadata[partition as usize].0;
+                    let last_offset = partition_metadata[partition as usize].offset;
 
-                    if offset <= next_offset {
+                    if offset <= last_offset {
+                        let next_offset =
+                            Offset::Offset(Into::<KafkaOffset>::into(offset).offset + 1);
                         warn!(
                             "Kafka message before expected offset: \
                              source {} (reading topic {}, partition {}) \
-                             received offset {} expected offset {}",
-                            name, topic, partition, offset, next_offset
+                             received mz offset {} expected mz offset {:?}",
+                            name, topic, partition, offset, last_offset.offset + 1
                         );
-                        let res = consumer.seek(
-                            &topic,
-                            partition,
-                            Offset::Offset(next_offset),
-                            Duration::from_secs(1),
-                        );
+                        // Seek to the *next* offset (ak offset + 1) that we have not yet processed
+                        // This code assumes that if the offset has been GC-ed, Kafka will seek
+                        // to the next non-compacted offset
+                        let res =
+                            consumer.seek(&topic, partition, next_offset, Duration::from_secs(1));
                         match res {
                             Ok(_) => warn!(
-                                "Fast-forwarding consumer on partition {} to offset {}",
+                                "Fast-forwarded consumer on partition {} to Kafka offset {:?}",
                                 partition, next_offset
                             ),
                             Err(e) => error!("Failed to fast-forward consumer: {}", e),
@@ -429,6 +480,7 @@ where
                             // We have not yet decided on a timestamp for this message,
                             // we need to buffer the message
                             buffer = Some((message, consumer));
+                            assert_eq!(consumers.len()+1, partition_metadata.len());
                             activator.activate();
                             return SourceStatus::Alive;
                         }
@@ -437,20 +489,25 @@ where
                             // treated as the same thing.
                             let key = message.key.unwrap_or_default();
                             let out = message.payload.unwrap_or_default();
-                            partition_metadata[partition as usize].0 = offset;
+                            partition_metadata[partition as usize].offset = offset;
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
                             let ts_cap = cap.delayed(&ts);
-                            output.session(&ts_cap).give((key, (out, Some(offset - 1))));
+                            output
+                                .session(&ts_cap)
+                                .give((key, (out, Some(Into::<KafkaOffset>::into(offset).offset))));
                             // Message processed, return the consumer
                             consumers.push_back(consumer);
+
+                            assert_eq!(consumers.len(), partition_metadata.len());
+
                             KAFKA_PARTITION_OFFSET_INGESTED
                                 .with_label_values(&[
                                     &topic,
                                     &id.to_string(),
                                     &partition.to_string(),
                                 ])
-                                .set(offset);
+                                .set(offset.offset);
 
                             if downgrade_capability(
                                 &topic,
@@ -520,7 +577,7 @@ where
 fn find_matching_timestamp(
     id: &SourceInstanceId,
     partition: i32,
-    offset: i64,
+    offset: MzOffset,
     timestamp_histories: &TimestampHistories,
 ) -> Option<Timestamp> {
     match timestamp_histories.borrow().get(id) {
@@ -561,9 +618,9 @@ fn downgrade_capability(
     topic: &str,
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
-    partition_metadata: &mut Vec<(i64, u64)>,
+    partition_metadata: &mut Vec<ConsInfo>,
     timestamp_histories: &TimestampHistories,
-    start_offset: i64,
+    start_offset: MzOffset,
     last_closed_ts: &mut u64,
 ) -> bool {
     let mut changed = false;
@@ -586,12 +643,16 @@ fn downgrade_capability(
             };
             if pid as usize >= partition_metadata.len() {
                 partition_metadata.extend(
-                    iter::repeat((start_offset, *last_closed_ts))
-                        .take(1 + pid as usize - partition_metadata.len()),
+                    iter::repeat(ConsInfo {
+                        offset: start_offset,
+                        ts: *last_closed_ts,
+                    })
+                    .take(1 + pid as usize - partition_metadata.len()),
                 );
                 needs_md_refresh = true;
             }
-            let last_offset = partition_metadata[pid as usize].0;
+            let last_offset = partition_metadata[pid as usize].offset;
+
             // Check whether timestamps can be closed on this partition
             while let Some((partition_count, ts, offset)) = entries.first() {
                 assert!(
@@ -604,29 +665,33 @@ fn downgrade_capability(
                     *ts > 0,
                     "Internal error! Received a zero-timestamp. Materialize will crash now."
                 );
+
                 if *partition_count as usize > partition_metadata.len() {
                     // A new partition has been added, we need to update the appropriate
                     // entries before we continue.
                     partition_metadata.extend(
-                        iter::repeat((start_offset, *last_closed_ts))
-                            .take(*partition_count as usize - partition_metadata.len()),
+                        iter::repeat(ConsInfo {
+                            offset: start_offset,
+                            ts: *last_closed_ts,
+                        })
+                        .take(*partition_count as usize - partition_metadata.len()),
                     );
                     needs_md_refresh = true;
                 }
                 // This assertion makes sure that if we ever fast-forwarded the empty stream
                 // (any message of the form "PID,TS,0"), we have correctly removed the (_,_,0) entry
                 // even if data has subsequently been added to the stream
-                assert!(*offset != 0 || last_offset == 0);
+                assert!(offset.offset != 0 || last_offset.offset == 0);
 
                 KAFKA_PARTITION_CLOSED_TS
                     .with_label_values(&[&topic, &id.to_string(), &pid.to_string()])
-                    .set((partition_metadata[pid as usize].1).try_into().unwrap());
+                    .set((partition_metadata[pid as usize].ts).try_into().unwrap());
 
                 if last_offset >= *offset {
                     // We have now seen all messages corresponding to this timestamp for this
                     // partition. We
                     // can close the timestamp (on this partition) and remove the associated metadata
-                    partition_metadata[pid as usize].1 = *ts;
+                    partition_metadata[pid as usize].ts = *ts;
                     entries.remove(0);
                     changed = true;
                 } else {
@@ -641,7 +706,7 @@ fn downgrade_capability(
     //  timestamp across partitions.
     let min = partition_metadata
         .iter()
-        .map(|(_, ts)| *ts)
+        .map(|cons_info| cons_info.ts)
         .min()
         .expect("There should never be 0 partitions!");
     // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).

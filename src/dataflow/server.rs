@@ -45,7 +45,7 @@ use dataflow_types::{
     Consistency, DataflowDesc, DataflowError, Diff, ExternalSourceConnector, IndexDesc,
     PeekResponse, Timestamp, Update,
 };
-use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, MzOffset, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
@@ -168,7 +168,7 @@ pub enum SequencedCommand {
         /// TODO(ncrooks)
         timestamp: Timestamp,
         /// TODO(ncrooks)
-        offset: i64,
+        offset: MzOffset,
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
@@ -267,7 +267,7 @@ where
 /// where the correct timestamp for a given offset `x` is the highest timestamp value for
 /// the first offset >= `x`.
 pub type TimestampHistories =
-    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<(i32, Timestamp, i64)>>>>>;
+    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<(i32, Timestamp, MzOffset)>>>>>;
 /// TODO(ncrooks)
 pub type TimestampChanges = Rc<
     RefCell<
@@ -729,7 +729,8 @@ where
                 let mut timestamps = self.ts_histories.borrow_mut();
                 if let Some(entries) = timestamps.get_mut(&id) {
                     let ts = entries.entry(pid).or_insert_with(Vec::new);
-                    let (_, last_ts, last_offset) = ts.last().unwrap_or(&(0, 0, 0));
+                    let (_, last_ts, last_offset) =
+                        ts.last().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
                     assert!(
                         offset >= *last_offset,
                         "offset should not go backwards, but {} < {}",

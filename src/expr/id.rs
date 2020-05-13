@@ -7,9 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`RelationExpr::Get`](crate::RelationExpr::Get).
@@ -142,6 +141,19 @@ impl PartitionId {
             PartitionId::Kafka(id) => Some(*id),
             _ => None,
         }
+    }
+}
+
+/// Offsets in Materialize are 1-indexed to indicate that a
+/// stream at offset 0 corresponds to the empty stream
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
+pub struct MzOffset {
+    pub offset: i64,
+}
+
+impl fmt::Display for MzOffset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.offset)
     }
 }
 

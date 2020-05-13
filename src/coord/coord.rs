@@ -39,8 +39,8 @@ use dataflow_types::{
     SinkConnector, TailSinkConnector, Timestamp, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
-    SourceInstanceId,
+    GlobalId, Id, IdHumanizer, MzOffset, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing,
+    ScalarExpr, SourceInstanceId,
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
@@ -67,7 +67,7 @@ pub enum Message {
         partition_count: i32,
         pid: PartitionId,
         timestamp: u64,
-        offset: i64,
+        offset: MzOffset,
     },
     StatementReady {
         conn_id: u32,

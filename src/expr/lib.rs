@@ -19,7 +19,9 @@ mod scalar;
 
 pub mod explain;
 
-pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, PartitionId, SourceInstanceId};
+pub use id::{
+    DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId, MzOffset, PartitionId, SourceInstanceId,
+};
 pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::{
