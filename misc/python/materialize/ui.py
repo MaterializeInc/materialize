@@ -10,9 +10,10 @@
 """Utilities for interacting with humans
 """
 
+import shlex
 import sys
 import time
-from typing import Callable, Generator, Optional
+from typing import Any, Callable, Generator, Iterable, Optional
 
 
 def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
@@ -63,3 +64,14 @@ def timeout_loop(timeout: int, tick: int = 1) -> Generator[float, None, None]:
         if after - before < tick:
             if tick > 0:
                 time.sleep(tick - (after - before))
+
+
+def shell_quote(args: Iterable[Any]) -> str:
+    """Return shell-escaped string of all the parameters
+
+    ::
+
+        >>> shell_quote(["one", "two three"])
+        "one 'two three'"
+    """
+    return " ".join(shlex.quote(str(arg)) for arg in args)
