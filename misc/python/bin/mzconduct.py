@@ -18,8 +18,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from materialize import spawn
-from materialize import ui
 from materialize.errors import UnknownItem, BadSpec, Failed, error_handler
 from pathlib import Path
 from typing import (
@@ -42,6 +40,10 @@ import click
 import pg8000  # type: ignore
 import pymysql
 import yaml
+
+from materialize import spawn
+from materialize import ui
+
 
 T = TypeVar("T")
 
@@ -142,7 +144,10 @@ class Composition:
 
     def run(self) -> None:
         with cd(self._path):
-            mzcompose_up([])
+            try:
+                mzcompose_up([])
+            except subprocess.CalledProcessError:
+                raise Failed("error when bringing up all services")
 
     def down(self) -> None:
         with cd(self._path):
@@ -305,13 +310,11 @@ class StartServicesStep(WorkflowStep):
             raise BadSpec(f"services should be a list, got: {self._services}")
 
     def run(self, comp: Composition) -> None:
-        proc = mzcompose_up(self._services)
-        if proc.returncode != 0:
-            say(
-                "ERROR: processes didn't come up cleanly: {}".format(
-                    ", ".join(self._services)
-                )
-            )
+        try:
+            proc = mzcompose_up(self._services)
+        except subprocess.CalledProcessError:
+            services = ", ".join(self._services)
+            raise Failed(f"ERROR: services didn't come up cleanly: {services}")
 
 
 @Steps.register("wait-for-postgres")
@@ -524,7 +527,10 @@ class RunStep(WorkflowStep):
         self._command = cmd
 
     def run(self, comp: Composition) -> None:
-        mzcompose_run(self._command)
+        try:
+            mzcompose_run(self._command)
+        except subprocess.CalledProcessError:
+            raise Failed("giving up: {}".format(ui.shell_quote(self._command)))
 
 
 @Steps.register("ensure-stays-up")
@@ -573,24 +579,24 @@ class DownStep(WorkflowStep):
 
 def mzcompose_up(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "up", "-d"]
-    return spawn.runv(cmd + services, capture_output=True)
+    return spawn.runv(cmd + services)
 
 
 def mzcompose_run(command: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "run"]
-    return spawn.runv(cmd + command, capture_output=True)
+    return spawn.runv(cmd + command)
 
 
 def mzcompose_stop(services: List[str]) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "stop"]
-    return spawn.runv(cmd + services, capture_output=True)
+    return spawn.runv(cmd + services)
 
 
 def mzcompose_down(destroy_volumes: bool = False) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "down"]
     if destroy_volumes:
         cmd.append("-v")
-    return spawn.runv(cmd, capture_output=True)
+    return spawn.runv(cmd)
 
 
 # Helpers

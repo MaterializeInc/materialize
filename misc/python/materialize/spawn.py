@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Iterable, Sequence, Union, Optional, IO, overload
 from typing_extensions import Literal
 import subprocess
-import shlex
+
+from materialize import ui
 
 CalledProcessError = subprocess.CalledProcessError
 
@@ -54,7 +55,7 @@ def runv(
             program does not exist.
         CalledProcessError: The process exited with a non-zero exit status.
     """
-    print("$", " ".join(shlex.quote(str(arg)) for arg in args))
+    print("$", ui.shell_quote(args))
     stderr = None
     if capture_output:
         stdout = subprocess.PIPE
