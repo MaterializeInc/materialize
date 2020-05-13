@@ -10,14 +10,35 @@
 """Utilities for interacting with humans
 """
 
+import os
 import shlex
 import sys
 import time
 from typing import Any, Callable, Generator, Iterable, Optional
 
 
+class Verbosity:
+    """How noisy logs should be"""
+
+    quiet: bool = False
+
+    @classmethod
+    def init_from_env(cls, explicit: Optional[bool]) -> None:
+        """Set to quiet based on MZ_QUIET being set to almost any value
+
+        The only values that this gets set to false for are the empty string, 0, or no
+        """
+        env = os.getenv("MZ_QUIET")
+        if env is not None:
+            cls.quiet = env not in ("", "0", "no")
+        if explicit is not None:
+            cls.quiet = explicit
+
+
 def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
     """Create a function that will log with a prefix to stderr
+
+    Obeys `Verbosity.quiet`_
 
     Example::
 
@@ -27,7 +48,8 @@ def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
     """
 
     def say(msg: str, *fmt: str) -> None:
-        print("{}> {}".format(prefix, msg.format(*fmt)), file=sys.stderr)
+        if not Verbosity.quiet:
+            print("{} {}".format(prefix, msg.format(*fmt)), file=sys.stderr)
 
     return say
 
