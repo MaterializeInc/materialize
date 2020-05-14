@@ -627,6 +627,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "datadriven"
+version = "0.1.0"
+source = "git+https://github.com/justinj/datadriven.git#81f6186d13160810c50661595681e31edb67d963"
+dependencies = [
+ "failure",
+]
+
+[[package]]
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
@@ -3741,6 +3749,8 @@ dependencies = [
 name = "transform"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "datadriven",
  "dataflow-types",
  "expr",
  "repr",

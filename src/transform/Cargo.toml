@@ -12,3 +12,5 @@ path = "lib.rs"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 repr = { path = "../repr" }
+datadriven = { git = "https://github.com/justinj/datadriven.git" }
+anyhow = "1.0.28"
