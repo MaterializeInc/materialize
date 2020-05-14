@@ -14,6 +14,7 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use timely::progress::frontier::Antichain;
 
@@ -500,6 +501,43 @@ impl ExternalSourceConnector {
 pub enum Consistency {
     BringYourOwn(String),
     RealTime,
+}
+
+/// Universal language for describing message positions in Materialize, in a source independent
+/// way. Invidual sources like Kafka or File sources should explicitly implement their own offset
+/// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
+pub struct MzOffset {
+    pub offset: i64,
+}
+
+impl fmt::Display for MzOffset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.offset)
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct KafkaOffset {
+    pub offset: i64,
+}
+/// Convert from KafkaOffset to MzOffset (1-indexed)
+impl From<KafkaOffset> for MzOffset {
+    fn from(kafka_offset: KafkaOffset) -> Self {
+        MzOffset {
+            offset: kafka_offset.offset + 1,
+        }
+    }
+}
+
+/// Convert from MzOffset to Kafka::Offset as long as
+/// the offset is not negative
+impl Into<KafkaOffset> for MzOffset {
+    fn into(self) -> KafkaOffset {
+        KafkaOffset {
+            offset: self.offset - 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
