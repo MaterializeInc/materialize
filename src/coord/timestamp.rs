@@ -302,6 +302,7 @@ struct RtKafkaConnector {
 }
 
 use std::{fmt::Display, time::Instant};
+use crate::timestamp::RtTimestampConnector::Kafka;
 
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
@@ -703,30 +704,30 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
 /// This function determines the next maximum offset to timestamp.
 /// This offset should be no greater than max_increment_size
 /// entries since last_processed_offset
-/// Ex: last processed offset was 0 (we processed one record total). The current max kafka offset is 5
+/// Ex: last processed offset was 1 (we processed one record total). The current max kafka offset is 5
 /// For a batch size of 10, the function will return offset 5.
-/// For a batch size of 1, the function will return 1
+/// For a batch size of 1, the function will return 2
 ///
-/// Ex: last processed offset is -1 (ak, no records have been timestamped yet)
-/// The current max kafka offset is -1 (ak, the stream is empty). The function will return
-/// -1.
+/// Ex: last processed offset is 0 (ak, no records have been timestamped yet)
+/// The current max kafka offset is 0 (ak, the stream is empty). The function will return
+/// 0.
 fn determine_next_offset(
     // The last offset which we have assigned a timestamp for
-    last_processed_offset: KafkaOffset,
-    // The next available offset
-    current_max_kafka_offset: KafkaOffset,
+    last_processed_offset: MzOffset,
+    // The current max offset that exists
+    current_max_kafka_offset: MzOffset,
     // The max size of the batch
     max_increment_size: i64,
-) -> KafkaOffset {
+) -> MzOffset {
     // Bound the next timestamp to be no more than max_increment_size in the future
     if (current_max_kafka_offset.offset - last_processed_offset.offset) > max_increment_size {
-        KafkaOffset {
+        MzOffset {
             offset: (last_processed_offset.offset + max_increment_size),
         }
     } else {
         // We take the max of the last offset which we have already timestamped
         // and the highest offset for this Kafka topic
-        KafkaOffset {
+        MzOffset {
             offset: (std::cmp::max(
                 last_processed_offset.offset,
                 current_max_kafka_offset.offset,
@@ -1691,9 +1692,10 @@ impl Timestamper {
                                 // a stream with one record (written at offset 0) will return a high of 1
                                 // high - 1 corresponds the Kafka Offset of the last *currently* available
                                 // message
+                                let current_max_kafka_offset = KafkaOffset{offset:high-1};
                                 *current_p_offset = determine_next_offset(
-                                    Into::<KafkaOffset>::into(*current_p_offset),
-                                    KafkaOffset { offset: high - 1 },
+                                    *current_p_offset,
+                                    current_max_kafka_offset.into() ,
                                     self.max_increment_size,
                                 )
                                 .into();
