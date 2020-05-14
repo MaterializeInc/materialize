@@ -89,6 +89,8 @@ const TIMEZONE: ServerVar<&str> = ServerVar {
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
+const DUMMY_CONNECTION_ID: u32 = 0;
+
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
     application_name: SessionVar<str>,
@@ -134,6 +136,7 @@ impl fmt::Debug for Session {
 impl Session {
     /// Given a connection id, provides a new session with default values.
     pub fn new(conn_id: u32) -> Session {
+        assert_ne!(conn_id, DUMMY_CONNECTION_ID);
         Session {
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
@@ -153,7 +156,7 @@ impl Session {
 
     /// Returns a Session containing a dummy connection id.
     pub fn dummy() -> Session {
-        Session::new(0)
+        Session::new(DUMMY_CONNECTION_ID)
     }
 
     /// Returns the connection id of a session
