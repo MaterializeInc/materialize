@@ -35,12 +35,12 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
-    SinkConnector, TailSinkConnector, Timestamp, Update,
+    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, MzOffset, PeekResponse,
+    PeekWhen, SinkConnector, TailSinkConnector, Timestamp, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, MzOffset, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing,
-    ScalarExpr, SourceInstanceId,
+    GlobalId, Id, IdHumanizer, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
+    SourceInstanceId,
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;

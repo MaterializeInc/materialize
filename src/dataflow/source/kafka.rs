@@ -25,8 +25,10 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::{Activator, SyncActivator};
 use url::Url;
 
-use dataflow_types::{ExternalSourceConnector, KafkaSourceConnector, Timestamp};
-use expr::{MzOffset, PartitionId, SourceInstanceId};
+use dataflow_types::{
+    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
+};
+use expr::{PartitionId, SourceInstanceId};
 
 use super::util::source;
 use super::{SourceConfig, SourceStatus, SourceToken};
@@ -65,11 +67,6 @@ lazy_static! {
     .unwrap();
 }
 
-#[derive(Clone, Copy)]
-struct KafkaOffset {
-    offset: i64,
-}
-
 // There is other stuff in librdkafka messages, e.g. headers.
 // But this struct only contains what we actually use, to avoid unnecessary cloning.
 struct MessageParts {
@@ -88,24 +85,6 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
                 offset: msg.offset(),
             },
             key: msg.key().map(|k| k.to_vec()),
-        }
-    }
-}
-
-/// Convert from KafkaOffset to MzOffset (1-indexed)
-impl From<KafkaOffset> for MzOffset {
-    fn from(kafka_offset: KafkaOffset) -> Self {
-        MzOffset {
-            offset: kafka_offset.offset + 1,
-        }
-    }
-}
-
-/// Convert from MzOffset (1-indexed) to KafkaOffset (0-indexed)
-impl Into<KafkaOffset> for MzOffset {
-    fn into(self) -> KafkaOffset {
-        KafkaOffset {
-            offset: self.offset - 1,
         }
     }
 }

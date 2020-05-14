@@ -37,10 +37,10 @@ use aws_util;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
-    KafkaSourceConnector, KinesisSourceConnector, SourceConnector,
+    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector, KafkaOffset,
+    KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
 };
-use expr::{MzOffset, PartitionId, SourceInstanceId};
+use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
 
 use crate::catalog::sql::SqlVal;
@@ -302,37 +302,12 @@ struct RtKafkaConnector {
 }
 
 use std::{fmt::Display, time::Instant};
-use crate::timestamp::RtTimestampConnector::Kafka;
 
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
     consumer: BaseConsumer,
     /// Used to track if we should update watermark metrics
     last_watermark_update: Instant,
-}
-
-// A 0-index offset wrapper for Kafka connectors
-struct KafkaOffset {
-    pub offset: i64,
-}
-
-/// Convert from KafkaOffset to MzOffset (1-indexed)
-impl From<KafkaOffset> for MzOffset {
-    fn from(kafka_offset: KafkaOffset) -> Self {
-        MzOffset {
-            offset: kafka_offset.offset + 1,
-        }
-    }
-}
-
-/// Convert from MzOffset to Kafka::Offset as long as
-/// the offset is not negative
-impl Into<KafkaOffset> for MzOffset {
-    fn into(self) -> KafkaOffset {
-        KafkaOffset {
-            offset: self.offset - 1,
-        }
-    }
 }
 
 impl ByoKafkaConnector {
@@ -1692,10 +1667,10 @@ impl Timestamper {
                                 // a stream with one record (written at offset 0) will return a high of 1
                                 // high - 1 corresponds the Kafka Offset of the last *currently* available
                                 // message
-                                let current_max_kafka_offset = KafkaOffset{offset:high-1};
+                                let current_max_kafka_offset = KafkaOffset { offset: high - 1 };
                                 *current_p_offset = determine_next_offset(
                                     *current_p_offset,
-                                    current_max_kafka_offset.into() ,
+                                    current_max_kafka_offset.into(),
                                     self.max_increment_size,
                                 )
                                 .into();

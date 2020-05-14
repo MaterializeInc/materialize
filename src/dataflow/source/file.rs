@@ -24,8 +24,10 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{ExternalSourceConnector, FileSourceConnector, SourceError, Timestamp};
-use expr::{MzOffset, PartitionId, SourceInstanceId};
+use dataflow_types::{
+    ExternalSourceConnector, FileSourceConnector, MzOffset, SourceError, Timestamp,
+};
+use expr::{PartitionId, SourceInstanceId};
 
 use crate::operator::StreamExt;
 use crate::server::TimestampHistories;

@@ -144,19 +144,6 @@ impl PartitionId {
     }
 }
 
-/// Offsets in Materialize are 1-indexed to indicate that a
-/// stream at offset 0 corresponds to the empty stream
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
-pub struct MzOffset {
-    pub offset: i64,
-}
-
-impl fmt::Display for MzOffset {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.offset)
-    }
-}
-
 /// Humanizer that provides no additional information.
 #[derive(Debug)]
 pub struct DummyHumanizer;
