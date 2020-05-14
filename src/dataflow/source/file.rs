@@ -325,9 +325,9 @@ where
     // Buffer placeholder for buffering messages for which we did not have a timestamp
     let mut buffer: Option<Result<Out, failure::Error>> = None;
     // Index of the last offset that we have already processed (and assigned a timestamp to)
-    let mut last_processed_offset: MzOffset = MzOffset { offset: 0 };
+    let mut last_processed_offset = MzOffset { offset: 0 };
     // Index of the current message's offset
-    let mut current_msg_offset: MzOffset = MzOffset { offset: 0 };
+    let mut current_msg_offset = MzOffset { offset: 0 };
     // Records closed timestamps. It corresponds to the smallest timestamp that is still
     // open
     let mut last_closed_ts: u64 = 0;

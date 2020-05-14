@@ -167,6 +167,7 @@ fn update_consumer_list(
     activator: Arc<Mutex<SyncActivator>>,
     kafka_config: &ClientConfig,
 ) {
+    // Save conversion as number of partition count can never exceed i32
     let to_add: i32 = to_add.try_into().unwrap();
     let next_pid = current_max_pid + 1i32;
     for i in 0..to_add {
@@ -243,7 +244,9 @@ fn create_kafka_config(
 /// 2) the last processed offset
 #[derive(Copy, Clone)]
 struct ConsInfo {
+    /// the last closed timestamp for this partition
     pub ts: Timestamp,
+    /// the last processed offset
     pub offset: MzOffset,
 }
 
@@ -329,7 +332,7 @@ impl ControlPlaneInfo {
 /// 1) it inserts an entry in the timestamp_history datastructure
 /// 2) it notifies the coordinator that timestamping should begin by inserting an entry in the
 /// timestamp_tx channel
-fn activate_source_timestamping<G>(config: &mut SourceConfig<G>, connector: KafkaSourceConnector) {
+fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSourceConnector) {
     let prev = config
         .timestamp_histories
         .borrow_mut()
@@ -347,7 +350,7 @@ fn activate_source_timestamping<G>(config: &mut SourceConfig<G>, connector: Kafk
 
 /// Creates a Kafka-based timely dataflow source operator.
 pub fn kafka<G>(
-    mut config: SourceConfig<G>,
+    config: SourceConfig<G>,
     connector: KafkaSourceConnector,
 ) -> (
     Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
@@ -364,7 +367,7 @@ where
         group_id_prefix,
     } = connector.clone();
 
-    activate_source_timestamping(&mut config, connector);
+    activate_source_timestamping(&config, connector);
 
     let SourceConfig {
         name,
@@ -638,8 +641,8 @@ where
                                     cp_info.start_offset,
                                     &mut cp_info.last_closed_ts,
                                 ) {
-                                    // We have just returned the consumer to the consumer queue, so no
-                                    // need for maths
+                                    // We have just returned the consumer to the consumer queue,
+                                    // buffer is empty
                                     let update_count =
                                         cp_info.partition_metadata.len() - dp_info.consumers.len();
 

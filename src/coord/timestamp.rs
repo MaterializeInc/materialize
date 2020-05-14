@@ -1672,8 +1672,7 @@ impl Timestamper {
                                     *current_p_offset,
                                     current_max_kafka_offset.into(),
                                     self.max_increment_size,
-                                )
-                                .into();
+                                );
                                 result.push((
                                     *id,
                                     partition_count,
