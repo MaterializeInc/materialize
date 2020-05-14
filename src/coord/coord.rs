@@ -70,7 +70,6 @@ pub enum Message {
         offset: i64,
     },
     StatementReady {
-        conn_id: u32,
         session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
         result: Result<sql::Statement, failure::Error>,
@@ -329,7 +328,6 @@ where
                 Message::Command(Command::Execute {
                     portal_name,
                     session,
-                    conn_id,
                     tx,
                 }) => {
                     let result = session
@@ -367,7 +365,6 @@ where
                                         session,
                                         tx: ClientTransmitter::new(tx),
                                         result,
-                                        conn_id,
                                         params,
                                     })
                                     .await
@@ -384,15 +381,12 @@ where
                 }
 
                 Message::StatementReady {
-                    conn_id,
                     session,
                     tx,
                     result,
                     params,
                 } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
-                    Ok((pcx, plan)) => {
-                        self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan, conn_id)
-                    }
+                    Ok((pcx, plan)) => self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan),
                     Err(e) => tx.send(Err(e), session),
                 },
 
@@ -556,7 +550,6 @@ where
         mut session: Session,
         pcx: PlanContext,
         plan: Plan,
-        conn_id: u32,
     ) {
         match plan {
             Plan::CreateDatabase {
@@ -672,7 +665,7 @@ where
                 finishing,
                 materialize,
             } => tx.send(
-                self.sequence_peek(conn_id, source, when, finishing, materialize),
+                self.sequence_peek(session.conn_id(), source, when, finishing, materialize),
                 session,
             ),
 
@@ -680,7 +673,10 @@ where
                 id,
                 ts,
                 with_snapshot,
-            } => tx.send(self.sequence_tail(conn_id, id, with_snapshot, ts), session),
+            } => tx.send(
+                self.sequence_tail(session.conn_id(), id, with_snapshot, ts),
+                session,
+            ),
 
             Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 

@@ -324,7 +324,6 @@ where
             .send(coord::Command::Execute {
                 portal_name: portal_name.clone(),
                 session,
-                conn_id: self.conn_id,
                 tx,
             })
             .await?;
@@ -535,7 +534,6 @@ where
             .send(coord::Command::Execute {
                 portal_name: portal_name.clone(),
                 session,
-                conn_id: self.conn_id,
                 tx,
             })
             .await?;

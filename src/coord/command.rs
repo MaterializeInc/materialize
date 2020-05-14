@@ -39,7 +39,6 @@ pub enum Command {
     Execute {
         portal_name: String,
         session: Session,
-        conn_id: u32,
         tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
     },
 
