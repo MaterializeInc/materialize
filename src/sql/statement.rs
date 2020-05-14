@@ -882,17 +882,29 @@ fn handle_create_view(
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, columns, query, materialized, if_exists, with_options) = match &mut stmt {
+    let (name, columns, query, temporary, materialized, if_exists, with_options) = match &mut stmt {
         Statement::CreateView {
             name,
             columns,
             query,
+            temporary,
             materialized,
             if_exists,
             with_options,
-        } => (name, columns, query, materialized, if_exists, with_options),
+        } => (
+            name,
+            columns,
+            query,
+            temporary,
+            materialized,
+            if_exists,
+            with_options,
+        ),
         _ => unreachable!(),
     };
+    if *temporary {
+        bail!("TEMPORARY views are not yet supported");
+    }
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }

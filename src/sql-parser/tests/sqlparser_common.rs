@@ -2829,6 +2829,7 @@ fn parse_create_view() {
             name,
             columns,
             query,
+            temporary: _,
             materialized,
             if_exists,
             with_options,
@@ -2906,6 +2907,7 @@ fn parse_create_view_with_columns() {
             columns,
             with_options,
             query,
+            temporary: _,
             materialized,
             if_exists,
         } => {
@@ -2928,6 +2930,7 @@ fn parse_create_materialized_view() {
             name,
             columns,
             query,
+            temporary: _,
             materialized,
             if_exists,
             with_options,
