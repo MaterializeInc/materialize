@@ -8,8 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, HashSet};
-use std::convert::From;
-use std::convert::Into;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::io::BufRead;

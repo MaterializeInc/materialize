@@ -261,13 +261,20 @@ where
     })
 }
 
+/// A type wrapper for the number of partitions associated with a source
+pub type PartitionCount = i32;
+
+/// A type wrapper for a timestamp update that consists of a PartititionCount, a Timestamp,
+/// and a MzOffset
+pub type TimestampUpdate = (PartitionCount, Timestamp, MzOffset);
+
 /// Map of source ID to per-partition timestamp history.
 ///
 /// Timestamp history is a vector of tuples (partition_count, timestamp, offset),
 /// where the correct timestamp for a given offset `x` is the highest timestamp value for
 /// the first offset >= `x`.
 pub type TimestampHistories =
-    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<(i32, Timestamp, MzOffset)>>>>>;
+    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<TimestampUpdate>>>>>;
 
 /// List of sources that need to start being timestamped or have been dropped and no longer require
 /// timestamping.

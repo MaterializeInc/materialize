@@ -8,8 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, VecDeque};
-use std::convert::From;
-use std::convert::Into;
 use std::convert::TryInto;
 use std::iter;
 use std::sync::{Arc, Mutex};
@@ -348,9 +346,29 @@ impl ControlPlaneInfo {
     }
 }
 
+/// This function activates the necessary timestamping information when a source is first created
+/// 1) it inserts an entry in the timestamp_history datastructure
+/// 2) it notifies the coordinator that timestamping should begin by inserting an entry in the
+/// timestamp_tx channel
+fn activate_source_timestamping<G>(config: &mut SourceConfig<G>, connector: KafkaSourceConnector) {
+    let prev = config
+        .timestamp_histories
+        .borrow_mut()
+        .insert(config.id.clone(), HashMap::new());
+    // Check that this is the first time this source id is registered
+    assert!(prev.is_none());
+    config.timestamp_tx.as_ref().borrow_mut().push((
+        config.id,
+        Some((
+            ExternalSourceConnector::Kafka(connector),
+            config.consistency.clone(),
+        )),
+    ));
+}
+
 /// Creates a Kafka-based timely dataflow source operator.
 pub fn kafka<G>(
-    config: SourceConfig<G>,
+    mut config: SourceConfig<G>,
     connector: KafkaSourceConnector,
 ) -> (
     Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
@@ -367,26 +385,7 @@ where
         group_id_prefix,
     } = connector.clone();
 
-    // Create a timestamp add/drop channel for this source. This is is the channel through which
-    // workers communicate back to the coordinator that a source has been added/dropped
-    let timestamp_channel = if config.active {
-        let prev = config
-            .timestamp_histories
-            .borrow_mut()
-            .insert(config.id.clone(), HashMap::new());
-        // Check that this is the first time this source id is registered
-        assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::Kafka(connector),
-                config.consistency,
-            )),
-        ));
-        Some(config.timestamp_tx)
-    } else {
-        None
-    };
+    activate_source_timestamping(&mut config, connector);
 
     let SourceConfig {
         name,
@@ -394,12 +393,13 @@ where
         scope,
         active,
         timestamp_histories,
+        timestamp_tx,
         ..
     } = config;
 
     let (stream, capability) = source(
-        config.id,
-        timestamp_channel,
+        id,
+        if active { Some(timestamp_tx) } else { None },
         scope,
         &name.clone(),
         move |info| {
