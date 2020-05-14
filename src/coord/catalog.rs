@@ -63,6 +63,7 @@ pub struct Catalog {
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ambient_schemas: Schemas,
+    temporary_schemas: HashMap<u32, Schemas>,
     storage: Arc<Mutex<sql::Connection>>,
     creation_time: SystemTime,
     nonce: u64,
@@ -245,6 +246,7 @@ impl Catalog {
             by_id: BTreeMap::new(),
             indexes: HashMap::new(),
             ambient_schemas: Schemas(BTreeMap::new()),
+            temporary_schemas: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             creation_time: SystemTime::now(),
             nonce: rand::random(),
@@ -427,6 +429,13 @@ impl Catalog {
                 None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
             },
         }
+    }
+
+    /// Creates a new schema in the `Catalog` for temporary items
+    /// indicated by the TEMPORARY or TEMP keywords.
+    pub fn create_temporary_schema(&mut self, connection_id: u32) {
+        self.temporary_schemas
+            .insert(connection_id, Schemas(BTreeMap::new()));
     }
 
     /// Gets the schema map for the database matching `database_spec`.

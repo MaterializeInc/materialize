@@ -89,6 +89,8 @@ const TIMEZONE: ServerVar<&str> = ServerVar {
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
+const DUMMY_CONNECTION_ID: u32 = 0;
+
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
     application_name: SessionVar<str>,
@@ -100,6 +102,7 @@ pub struct Session {
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     timezone: ServerVar<&'static str>,
+    conn_id: u32,
     /// The current state of the the session's transaction
     transaction: TransactionStatus,
     /// A map from statement names to SQL queries
@@ -130,9 +133,10 @@ impl fmt::Debug for Session {
     }
 }
 
-impl Default for Session {
-    /// Constructs a new `Session` with default values.
-    fn default() -> Session {
+impl Session {
+    /// Given a connection id, provides a new session with default values.
+    pub fn new(conn_id: u32) -> Session {
+        assert_ne!(conn_id, DUMMY_CONNECTION_ID);
         Session {
             application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
@@ -143,14 +147,38 @@ impl Default for Session {
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             timezone: TIMEZONE,
+            conn_id,
             transaction: TransactionStatus::Idle,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
         }
     }
-}
 
-impl Session {
+    /// Returns a Session using a DUMMY_CONNECTION_ID.
+    /// NOTE: Keep this in sync with ::new()
+    pub fn dummy() -> Session {
+        Session {
+            application_name: SessionVar::new(&APPLICATION_NAME),
+            client_encoding: CLIENT_ENCODING,
+            database: SessionVar::new(&DATABASE),
+            date_style: DATE_STYLE,
+            extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
+            search_path: SEARCH_PATH,
+            server_version: SERVER_VERSION,
+            sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            timezone: TIMEZONE,
+            conn_id: DUMMY_CONNECTION_ID,
+            transaction: TransactionStatus::Idle,
+            prepared_statements: HashMap::new(),
+            portals: HashMap::new(),
+        }
+    }
+
+    /// Returns the connection id of a session
+    pub fn conn_id(&self) -> u32 {
+        self.conn_id
+    }
+
     /// Returns all configuration parameters and their current values for this
     /// session.
     pub fn vars(&self) -> Vec<&dyn Var> {

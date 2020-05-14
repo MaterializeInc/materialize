@@ -282,7 +282,6 @@ pub(crate) struct State {
     _coord_thread: JoinOnDropHandle<()>,
     _runtime: tokio::runtime::Runtime,
     session: Session,
-    conn_id: u32,
 }
 
 fn format_row(
@@ -429,8 +428,7 @@ impl State {
             _dataflow_workers: Box::new(dataflow_workers),
             _coord_thread: coord_thread,
             _runtime: runtime,
-            session: Session::default(),
-            conn_id: 1,
+            session: Session::dummy(),
         })
     }
 
@@ -742,7 +740,7 @@ impl State {
                 .unbounded_send(coord::Command::Describe {
                     name: statement_name.clone(),
                     stmt: Some(stmt),
-                    session: mem::take(&mut self.session),
+                    session: mem::replace(&mut self.session, Session::dummy()),
                     tx,
                 })
                 .expect("futures channel should not fail");
@@ -767,8 +765,7 @@ impl State {
             self.cmd_tx
                 .unbounded_send(coord::Command::Execute {
                     portal_name,
-                    session: mem::take(&mut self.session),
-                    conn_id: self.conn_id,
+                    session: mem::replace(&mut self.session, Session::dummy()),
                     tx,
                 })
                 .expect("futures channel should not fail");

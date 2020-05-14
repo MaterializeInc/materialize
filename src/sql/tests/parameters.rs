@@ -17,7 +17,7 @@ use sql::Session;
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     let catalog = DummyCatalog;
-    let session = Session::default();
+    let session = Session::dummy();
     let test_cases = vec![
         (
             "SELECT $1, $2, $3",
