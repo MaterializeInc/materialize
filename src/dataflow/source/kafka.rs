@@ -350,7 +350,7 @@ fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSou
 
 /// Creates a Kafka-based timely dataflow source operator.
 pub fn kafka<G>(
-    mut config: SourceConfig<G>,
+    config: SourceConfig<G>,
     connector: KafkaSourceConnector,
 ) -> (
     Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
@@ -367,7 +367,7 @@ where
         group_id_prefix,
     } = connector.clone();
 
-    activate_source_timestamping(&mut config, connector);
+    activate_source_timestamping(&config, connector);
 
     let SourceConfig {
         name,
