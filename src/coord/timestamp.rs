@@ -1691,11 +1691,14 @@ impl Timestamper {
                                 // high here corresponds to the next available Kafka offset.
                                 // Ex: a stream with 0 records will return a high of 0
                                 // a stream with one record (written at offset 0) will return a high of 1
-                                *current_p_offset = MzOffset::from(determine_next_offset(
+                                // high - 1 corresponds the Kafka Offset of the last *currently* available
+                                // message
+                                *current_p_offset = determine_next_offset(
                                     Into::<KafkaOffset>::into(*current_p_offset),
                                     KafkaOffset { offset: high - 1 },
                                     self.max_increment_size,
-                                ));
+                                )
+                                .into();
                                 result.push((
                                     *id,
                                     partition_count,

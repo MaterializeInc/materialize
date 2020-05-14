@@ -152,10 +152,10 @@ fn refresh_kafka_metadata(
     }
 
     if !result {
-        warn!("Descheduling for 1s to wait for Kafka metadata to catch up");
+        info!("Descheduling for 1s to wait for Kafka metadata to catch up");
         activator.activate_after(Duration::from_secs(1));
     } else {
-        warn!(
+        info!(
             "Successfully refreshed metadata for {} {}",
             topic, expected_partitions
         )
@@ -186,10 +186,11 @@ fn update_consumer_list(
     current_max_pid: i32,
     consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
     topic: &str,
-    to_add: i32,
+    to_add: usize,
     activator: Arc<Mutex<SyncActivator>>,
     kafka_config: &ClientConfig,
 ) {
+    let to_add: i32 = to_add.try_into().unwrap();
     let next_pid = current_max_pid + 1i32;
     for i in 0..to_add {
         let pid: i32 = next_pid + i;
@@ -436,7 +437,7 @@ where
                             dp_info.max_partition_id(),
                             &mut dp_info.consumers,
                             &dp_info.topic_name,
-                            to_create.try_into().unwrap(),
+                            to_create,
                             dp_info.consumer_activator.clone(),
                             &dp_info.kafka_config,
                         );
@@ -476,7 +477,7 @@ where
                             dp_info.max_partition_id(),
                             &mut dp_info.consumers,
                             &dp_info.topic_name,
-                            to_create.try_into().unwrap(),
+                            to_create,
                             dp_info.consumer_activator.clone(),
                             &dp_info.kafka_config,
                         );
@@ -540,7 +541,7 @@ where
                                 dp_info.max_partition_id(),
                                 &mut dp_info.consumers,
                                 &dp_info.topic_name,
-                                update_count.try_into().unwrap(),
+                                update_count,
                                 dp_info.consumer_activator.clone(),
                                 &dp_info.kafka_config,
                             );
@@ -667,7 +668,7 @@ where
                                         dp_info.max_partition_id(),
                                         &mut dp_info.consumers,
                                         &dp_info.topic_name,
-                                        update_count.try_into().unwrap(),
+                                        update_count,
                                         dp_info.consumer_activator.clone(),
                                         &dp_info.kafka_config,
                                     );
