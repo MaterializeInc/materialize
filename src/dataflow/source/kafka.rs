@@ -20,8 +20,8 @@ use log::{error, info, warn};
 use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
-use rdkafka::topic_partition_list::{Offset, TopicPartitionListElem};
-use rdkafka::{ClientConfig, ClientContext, Message, Statistics};
+use rdkafka::topic_partition_list::Offset;
+use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::{Activator, SyncActivator};
@@ -167,29 +167,36 @@ fn refresh_kafka_metadata(
 fn create_kafka_consumer(
     activator: Arc<Mutex<SyncActivator>>,
     topic: &str,
+    partition_id: i32,
     kafka_config: &ClientConfig,
 ) -> BaseConsumer<GlueConsumerContext> {
     let cx = GlueConsumerContext(activator);
     let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
         .create_with_context(cx)
         .expect("Failed to create Kafka Consumer");
-    consumer.subscribe(&[topic]).unwrap();
+    let mut partition_list = TopicPartitionList::with_capacity(1);
+    partition_list.add_partition(topic, partition_id);
+    consumer.assign(&partition_list).unwrap();
     consumer
 }
 
 /// Update the list of Kafka consumers to match the number of partitions
 /// We currently create one consumer per partition
 fn update_consumer_list(
+    current_max_pid: i32,
     consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
     topic: &str,
-    to_add: usize,
+    to_add: i32,
     activator: Arc<Mutex<SyncActivator>>,
     kafka_config: &ClientConfig,
 ) {
-    for _ in 0..to_add {
+    let next_pid = current_max_pid + 1i32;
+    for i in 0..to_add {
+        let pid: i32 = next_pid + i;
         consumers.push_front(create_kafka_consumer(
             activator.clone(),
             topic,
+            pid,
             kafka_config,
         ));
     }
@@ -300,6 +307,18 @@ impl DataPlaneInfo {
             needs_refresh: true,
             consumer_activator,
         }
+    }
+
+    /// Returns the current max initialised partition id (or -1 if none)
+    /// Pids in Kafka are assumed to be contiguous and monotonically increasing
+    /// The current PID therefore corresponds to count(consumers) - 1
+    fn max_partition_id(&self) -> i32 {
+        let consumer_count: i32 = if self.buffer.is_some() {
+            (self.consumers.len() + 1).try_into().unwrap()
+        } else {
+            self.consumers.len().try_into().unwrap()
+        };
+        consumer_count - 1
     }
 }
 
@@ -414,9 +433,10 @@ where
                             cp_info.partition_metadata.len() - dp_info.consumers.len()
                         };
                         update_consumer_list(
+                            dp_info.max_partition_id(),
                             &mut dp_info.consumers,
                             &dp_info.topic_name,
-                            to_create,
+                            to_create.try_into().unwrap(),
                             dp_info.consumer_activator.clone(),
                             &dp_info.kafka_config,
                         );
@@ -453,9 +473,10 @@ where
                             cp_info.partition_metadata.len() - dp_info.consumers.len()
                         };
                         update_consumer_list(
+                            dp_info.max_partition_id(),
                             &mut dp_info.consumers,
                             &dp_info.topic_name,
-                            to_create,
+                            to_create.try_into().unwrap(),
                             dp_info.consumer_activator.clone(),
                             &dp_info.kafka_config,
                         );
@@ -478,7 +499,7 @@ where
                         Some(message)
                     } else {
                         // No currently buffered message, poll from stream
-                        get_next_message_from_consumers(&name, &mut dp_info.consumers)
+                        get_next_message_from_consumers(&dp_info.topic_name, &mut dp_info.consumers)
                     };
 
                     while let Some((message, consumer)) = next_message {
@@ -516,9 +537,10 @@ where
                             let update_count =
                                 cp_info.partition_metadata.len() - (dp_info.consumers.len() + 1);
                             update_consumer_list(
+                                dp_info.max_partition_id(),
                                 &mut dp_info.consumers,
                                 &dp_info.topic_name,
-                                update_count,
+                                update_count.try_into().unwrap(),
                                 dp_info.consumer_activator.clone(),
                                 &dp_info.kafka_config,
                             );
@@ -568,7 +590,7 @@ where
                                             "Tried to fast-forward consumer on partition {} to Kafka offset {:?}. Consumer is now at position {:?}",
                                             partition, next_offset, position);
                                         if *position != next_offset {
-                                            warn!("We did not seek to the expected offset.");
+                                            warn!("We did not seek to the expected offset. Current: {:?} Expected: {:?}", position, next_offset);
                                         }
                                     } else {
                                         warn!("Tried to fast-forward consumer on partition{} to Kafka offset {:?}. Could not obtain new consumer position",
@@ -642,9 +664,10 @@ where
                                         cp_info.partition_metadata.len() - dp_info.consumers.len();
 
                                     update_consumer_list(
+                                        dp_info.max_partition_id(),
                                         &mut dp_info.consumers,
                                         &dp_info.topic_name,
-                                        update_count,
+                                        update_count.try_into().unwrap(),
                                         dp_info.consumer_activator.clone(),
                                         &dp_info.kafka_config,
                                     );
@@ -671,9 +694,10 @@ where
                             return SourceStatus::Alive;
                         }
 
+                        assert_eq!(cp_info.partition_metadata.len(), dp_info.consumers.len());
                         // Try and poll for next message
                         next_message = get_next_message_from_consumers(
-                            &dp_info.source_name,
+                            &dp_info.topic_name,
                             &mut dp_info.consumers,
                         );
                     }
