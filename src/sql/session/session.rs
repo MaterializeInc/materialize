@@ -154,9 +154,24 @@ impl Session {
         }
     }
 
-    /// Returns a Session containing a dummy connection id.
+    /// Returns a Session using a DUMMY_CONNECTION_ID.
+    /// NOTE: Keep this in sync with ::new()
     pub fn dummy() -> Session {
-        Session::new(DUMMY_CONNECTION_ID)
+        Session {
+            application_name: SessionVar::new(&APPLICATION_NAME),
+            client_encoding: CLIENT_ENCODING,
+            database: SessionVar::new(&DATABASE),
+            date_style: DATE_STYLE,
+            extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
+            search_path: SEARCH_PATH,
+            server_version: SERVER_VERSION,
+            sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            timezone: TIMEZONE,
+            conn_id: DUMMY_CONNECTION_ID,
+            transaction: TransactionStatus::Idle,
+            prepared_statements: HashMap::new(),
+            portals: HashMap::new(),
+        }
     }
 
     /// Returns the connection id of a session
