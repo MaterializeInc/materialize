@@ -13,105 +13,126 @@ with Docker, although many steps are the same between the three.
 
 ## Docker
 
-### Starting the Docker containers and loading data
+We use [`mzcompose`](./mzbuild.md) and [`mzconduct`](./mzbuild.md) to conduct our demos.
 
-First, we use [this script](https://github.com/MaterializeInc/materialize/blob/master/demo/chbench/dc.sh)
-to pull the necessary Docker images, bring containers up with Docker compose, and
-load an initial set of data. To do that, we run:
+### Quickstart
 
-```console
-$ ./dc.sh up :init:
-$ ./dc.sh up :demo:
-```
-
-Note: Running `up :init:` loads an initial set of TPC-CH data into Materialize.
-Running `up :demo:` will  load that same data in Materialize again. In the future,
-we should find a way to load data/initialize tables without creating these duplicates.
-
-Now that the data is loaded into Materialize, we want to create sources
-with it. Enter a psql shell connected to Materialize:
+The quickest way to get started is to run the demo workflow:
 
 ```console
-psql -h localhost -p 6875 materialize
+$ bin/mzconduct run chbench -w demo
 ```
 
-Next, you will need to set the database, create the sources,
-and materialize all of the sources into views:
+This will start up materialized, a mysql source, kafka, grafana, and metabase. Metabase
+will be running on port 3030.
+
+### Individual Steps
+
+If you want to perform all the steps that the demo workflow above does by hand you can.
+
+To get a clean working environment with no load generator you can use the
+`bring-up-source-data` workflow:
 
 ```console
-CREATE SOURCE src_customer
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.customer'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_district
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.district'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_history
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.history'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_item
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.item'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_nation
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.nation'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_neworder
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.neworder'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_order
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.order'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_orderline
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_region
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.region'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_stock
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.stock'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_supplier
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.supplier'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE SOURCE src_warehouse
-FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.warehouse'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE DEBEZIUM;
-
-CREATE MATERIALIZED VIEW tpcch_customer AS SELECT * FROM src_customer;
-CREATE MATERIALIZED VIEW tpcch_district AS SELECT * FROM src_district;
-CREATE MATERIALIZED VIEW tpcch_history AS SELECT * FROM src_history;
-CREATE MATERIALIZED VIEW tpcch_item AS SELECT * FROM src_item;
-CREATE MATERIALIZED VIEW tpcch_nation AS SELECT * FROM src_nation;
-CREATE MATERIALIZED VIEW tpcch_neworder AS SELECT * FROM src_neworder;
-CREATE MATERIALIZED VIEW tpcch_order AS SELECT * FROM src_order;
-CREATE MATERIALIZED VIEW tpcch_orderline AS SELECT * FROM src_orderline;
-CREATE MATERIALIZED VIEW tpcch_region AS SELECT * FROM src_region;
-CREATE MATERIALIZED VIEW tpcch_stock AS SELECT * FROM src_stock;
-CREATE MATERIALIZED VIEW tpcch_supplier AS SELECT * FROM src_supplier;
-CREATE MATERIALIZED VIEW tpcch_warehouse AS SELECT * FROM src_warehouse;
+$ bin/mzconduct run chbench -w bring-up-source-data
 ```
+
+Now that the data is loaded into MySQL and Kafka, we want to create sources with it.
+There are two options, either use peeker to initialize our default load test views or
+create the views manually.
+
+* Use peeker to create a collection of materialized views:
+
+  ```console
+  $ ./mzcompose --mz-quiet run \
+      peeker --only-initialize \
+      -c /etc/peeker/materialized-sources.toml \
+      -q loadtest
+  ```
+
+* Or enter a psql shell connected to Materialize:
+
+  ```console
+  psql -h localhost -p 6875 materialize
+  ```
+
+  Next, you will need to set the database, create the sources,
+  and materialize all of the sources into views:
+
+  ```console
+  CREATE SOURCE src_customer
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.customer'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_district
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.district'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_history
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.history'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_item
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.item'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_nation
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.nation'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_neworder
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.neworder'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_order
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.order'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_orderline
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_region
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.region'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_stock
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.stock'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_supplier
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.supplier'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE SOURCE src_warehouse
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.warehouse'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+  ENVELOPE DEBEZIUM;
+
+  CREATE MATERIALIZED VIEW tpcch_customer AS SELECT * FROM src_customer;
+  CREATE MATERIALIZED VIEW tpcch_district AS SELECT * FROM src_district;
+  CREATE MATERIALIZED VIEW tpcch_history AS SELECT * FROM src_history;
+  CREATE MATERIALIZED VIEW tpcch_item AS SELECT * FROM src_item;
+  CREATE MATERIALIZED VIEW tpcch_nation AS SELECT * FROM src_nation;
+  CREATE MATERIALIZED VIEW tpcch_neworder AS SELECT * FROM src_neworder;
+  CREATE MATERIALIZED VIEW tpcch_order AS SELECT * FROM src_order;
+  CREATE MATERIALIZED VIEW tpcch_orderline AS SELECT * FROM src_orderline;
+  CREATE MATERIALIZED VIEW tpcch_region AS SELECT * FROM src_region;
+  CREATE MATERIALIZED VIEW tpcch_stock AS SELECT * FROM src_stock;
+  CREATE MATERIALIZED VIEW tpcch_supplier AS SELECT * FROM src_supplier;
+  CREATE MATERIALIZED VIEW tpcch_warehouse AS SELECT * FROM src_warehouse;
+  ```
 
 ### Connecting Metabase to Materialize
 

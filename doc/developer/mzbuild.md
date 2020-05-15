@@ -2,7 +2,10 @@
 
 mzbuild is an build and orchestration system for [Docker] containers.
 
-As a user or developer, you'll interact with mzbuild through two commands:
+As a user or developer, you'll interact with mzbuild through three commands:
+
+  * [**`mzconduct`**](#mzconduct) is a layer on top of `mzcompose` which adds the ability
+    to run complex workflows on top of [Docker Compose].
 
   * [**`mzcompose`**](#mzcompose) is a thin layer on top of [Docker Compose]
     that automatically downloads cached images from Docker Hub if available, or
@@ -286,6 +289,12 @@ services:
   zookeeper:
     image: zookeeper:3.4.13
 ```
+
+### `mzconduct`
+
+The primary feature that mzconduct provides is set of actions that can be configured
+inside of mzcompose.yml files. While docs are coming soon, see the [chbench demo
+mzcompose](../../demo/chbench/mzcompose.yml) for an example.
 
 ## Input addressability
 

@@ -118,28 +118,17 @@ Metabase](/images/demos/bi_architecture_diagram.png)
     git clone git@github.com:MaterializeInc/materialize.git
     ```
 
-1. Move to the `demo/chbench` dir:
-
-    ```shell
-    cd <path to materialize>/demo/chbench
-    ```
-
-    You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/chbench).
-
 1. Deploy and start all of the components we've listed above.
 
     Note that pulling down all of the Docker images necessary for the demo takes
-    quite a bit of time (upwards of 10 minutes, even on very fast connections).
+    quite a bit of time (up to 10 minutes, even on very fast connections).
 
     ```shell
-    # Deploy MySQL, Debezium, Kafka et. al., Metabase, and Materialize.
-    # Initialize MySQL with some chBench data.
-    ./dc.sh up :init:
-    ./dc.sh up :demo:
-    # Run the chBench workload generator.
-    ./dc.sh demo-load
+    bin/mzconduct run chbench --workflow demo-load
     ```
+
+    you can also find the demo's code on
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/{{< version >}}/demo/chbench).
 
 ### Define sources & views
 
