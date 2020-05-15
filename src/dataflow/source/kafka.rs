@@ -229,7 +229,6 @@ impl DataPlaneInfo {
 
     /// Create a new kafka consumer and adds it to the list of existing consumers
     fn create_kafka_consumer(&mut self, partition_id: i32) {
-        println!("Creating Consumer: {} {}", self.source_name, partition_id);
         let cx = GlueConsumerContext(self.consumer_activator.clone());
         let consumer: BaseConsumer<GlueConsumerContext> = self
             .kafka_config
@@ -267,6 +266,45 @@ impl DataPlaneInfo {
                 attempts += 1;
             }
             None
+        }
+    }
+
+    /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
+    /// Assumption: if offset does not exist (for instance, because of compaction), will seek
+    /// to the next available offset
+    fn fast_forward_consumer(
+        &self,
+        consumer: &BaseConsumer<GlueConsumerContext>,
+        pid: i32,
+        next_offset: KafkaOffset,
+    ) {
+        let res = consumer.seek(
+            &self.topic_name,
+            pid,
+            Offset::Offset(next_offset.offset),
+            Duration::from_secs(1),
+        );
+        match res {
+            Ok(_) => {
+                let res = consumer.position().unwrap_or_default().to_topic_map();
+                let position = res.get(&(self.topic_name.clone(), pid));
+                if let Some(position) = position {
+                    let position = position.to_raw();
+                    info!(
+                        "Tried to fast-forward consumer on partition PID: {} to Kafka offset {}. Consumer is now at position {}",
+                        pid, next_offset.offset, position);
+                    if position != next_offset.offset {
+                        warn!("We did not seek to the expected Kafka offset. Current offset: {} Expected offset: {}", position, next_offset.offset);
+                    }
+                } else {
+                    warn!("Tried to fast-forward consumer on partition PID:{} to Kafka offset {}. Could not obtain new consumer position",
+                          pid, next_offset.offset);
+                }
+            }
+            Err(e) => error!(
+                "Failed to fast-forward consumer for source:{}, Error:{}",
+                self.source_name, e
+            ),
         }
     }
 }
@@ -448,10 +486,9 @@ where
                         // for a partition for which we have no metadata
                         assert!(cp_info.knows_of(partition));
 
-                        let last_offset = cp_info.partition_metadata[partition as usize].offset;
+                        let mut last_offset = cp_info.partition_metadata[partition as usize].offset;
+
                         if offset <= last_offset {
-                            let next_offset =
-                                Offset::Offset(Into::<KafkaOffset>::into(last_offset).offset + 1);
                             warn!(
                                 "Kafka message before expected offset: \
                              source {} (reading topic {}, partition {}) \
@@ -462,92 +499,71 @@ where
                                 offset,
                                 last_offset.offset + 1
                             );
-                            // Seek to the *next* offset (ak offset + 1) that we have not yet processed
-                            // This code assumes that if the offset has been GC-ed, Kafka will seek
-                            // to the next non-compacted offset
-                            let res = consumer.seek(
-                                &topic,
-                                partition,
-                                next_offset,
-                                Duration::from_secs(1),
-                            );
-                            match res {
-                                Ok(_) => {
-                                    let res =
-                                        consumer.position().unwrap_or_default().to_topic_map();
-                                    let position =
-                                        res.get(&(dp_info.topic_name.clone(), partition));
-                                    if let Some(position) = position {
-                                        warn!(
-                                            "Tried to fast-forward consumer on partition {} to Kafka offset {:?}. Consumer is now at position {:?}",
-                                            partition, next_offset, position);
-                                        if *position != next_offset {
-                                            warn!("We did not seek to the expected offset. Current: {:?} Expected: {:?}", position, next_offset);
-                                        }
-                                    } else {
-                                        warn!("Tried to fast-forward consumer on partition{} to Kafka offset {:?}. Could not obtain new consumer position",
-                                            partition, next_offset);
-                                    }
-                                }
-                                Err(e) => error!("Failed to fast-forward consumer: {}", e),
-                            }
-                            // Message has been discarded, we return the consumer to the consumer queue
+
+                            // Seek to the *next* offset (ak last_offset + 1) that we have not yet processed
+                            last_offset.offset += 1;
+                            dp_info.fast_forward_consumer(&consumer, partition, last_offset.into());
+                            // We explicitly should not consume the message as we have already processed it,
+                            // so we simply return the consumer
                             dp_info.consumers.push_back(consumer);
-                            activator.activate();
-                            return SourceStatus::Alive;
-                        }
+                            assert_eq!(dp_info.get_consumer_count(), cp_info.get_partition_count(),);
+                        } else {
+                            // Determine the timestamp to which we need to assign this message
+                            let ts = find_matching_timestamp(
+                                &id,
+                                partition,
+                                offset,
+                                &timestamp_histories,
+                            );
+                            match ts {
+                                None => {
+                                    // We have not yet decided on a timestamp for this message,
+                                    // we need to buffer the message
+                                    dp_info.buffer = Some((message, consumer));
+                                    assert_eq!(
+                                        dp_info.get_consumer_count(),
+                                        cp_info.get_partition_count(),
+                                    );
+                                    activator.activate();
+                                    return SourceStatus::Alive;
+                                }
+                                Some(ts) => {
+                                    // Note: empty and null payload/keys are currently
+                                    // treated as the same thing.
+                                    let key = message.key.unwrap_or_default();
+                                    let out = message.payload.unwrap_or_default();
+                                    cp_info.partition_metadata[partition as usize].offset = offset;
+                                    bytes_read += key.len() as i64;
+                                    bytes_read += out.len() as i64;
+                                    let ts_cap = cap.delayed(&ts);
+                                    output.session(&ts_cap).give((
+                                        key,
+                                        (out, Some(Into::<KafkaOffset>::into(offset).offset)),
+                                    ));
+                                    // Message processed, return the consumer
+                                    dp_info.consumers.push_back(consumer);
 
-                        // Determine the timestamp to which we need to assign this message
-                        let ts =
-                            find_matching_timestamp(&id, partition, offset, &timestamp_histories);
-                        match ts {
-                            None => {
-                                // We have not yet decided on a timestamp for this message,
-                                // we need to buffer the message
-                                dp_info.buffer = Some((message, consumer));
-                                assert_eq!(
-                                    dp_info.get_consumer_count(),
-                                    cp_info.get_partition_count(),
-                                );
-                                activator.activate();
-                                return SourceStatus::Alive;
-                            }
-                            Some(ts) => {
-                                // Note: empty and null payload/keys are currently
-                                // treated as the same thing.
-                                let key = message.key.unwrap_or_default();
-                                let out = message.payload.unwrap_or_default();
-                                cp_info.partition_metadata[partition as usize].offset = offset;
-                                bytes_read += key.len() as i64;
-                                bytes_read += out.len() as i64;
-                                let ts_cap = cap.delayed(&ts);
-                                output.session(&ts_cap).give((
-                                    key,
-                                    (out, Some(Into::<KafkaOffset>::into(offset).offset)),
-                                ));
-                                // Message processed, return the consumer
-                                dp_info.consumers.push_back(consumer);
+                                    assert_eq!(
+                                        dp_info.get_consumer_count(),
+                                        cp_info.get_partition_count(),
+                                    );
 
-                                assert_eq!(
-                                    dp_info.get_consumer_count(),
-                                    cp_info.get_partition_count(),
-                                );
+                                    KAFKA_PARTITION_OFFSET_INGESTED
+                                        .with_label_values(&[
+                                            &dp_info.topic_name,
+                                            &id.to_string(),
+                                            &partition.to_string(),
+                                        ])
+                                        .set(offset.offset);
 
-                                KAFKA_PARTITION_OFFSET_INGESTED
-                                    .with_label_values(&[
-                                        &dp_info.topic_name,
-                                        &id.to_string(),
-                                        &partition.to_string(),
-                                    ])
-                                    .set(offset.offset);
-
-                                downgrade_capability(
-                                    &id,
-                                    cap,
-                                    &mut cp_info,
-                                    &mut dp_info,
-                                    &timestamp_histories,
-                                );
+                                    downgrade_capability(
+                                        &id,
+                                        cap,
+                                        &mut cp_info,
+                                        &mut dp_info,
+                                        &timestamp_histories,
+                                    );
+                                }
                             }
                         }
 
