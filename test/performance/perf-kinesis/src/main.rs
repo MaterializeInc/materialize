@@ -41,8 +41,6 @@ use rusoto_core::Region;
 use structopt::StructOpt;
 use tokio_postgres::NoTls;
 
-use aws_util;
-
 mod kinesis;
 mod mz;
 
