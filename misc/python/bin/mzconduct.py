@@ -79,6 +79,13 @@ def down(composition: str) -> None:
     comp.down()
 
 
+@cli.command()
+@click.argument("composition")
+def ps(composition: str) -> None:
+    comp = Composition.find(composition)
+    comp.ps()
+
+
 # Non-mzcompose commands
 
 
@@ -141,6 +148,10 @@ class Composition:
     def down(self) -> None:
         with cd(self._path):
             mzcompose_down()
+
+    def ps(self) -> None:
+        with cd(self._path):
+            spawn.runv(["./mzcompose", "--mz-quiet", "ps"])
 
     def run_workflow(self, workflow: str) -> None:
         with cd(self._path):
