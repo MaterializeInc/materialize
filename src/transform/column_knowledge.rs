@@ -144,6 +144,21 @@ impl ColumnKnowledge {
                             }
                         }
                     }
+                    if let ScalarExpr::CallUnary {
+                        func: UnaryFunc::Not,
+                        expr,
+                    } = predicate
+                    {
+                        if let ScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull,
+                            expr,
+                        } = &**expr
+                        {
+                            if let ScalarExpr::Column(c) = &**expr {
+                                input_knowledge[*c].nullable = false;
+                            }
+                        }
+                    }
                 }
 
                 input_knowledge
