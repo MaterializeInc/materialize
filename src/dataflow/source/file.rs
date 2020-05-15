@@ -24,7 +24,9 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{ExternalSourceConnector, FileSourceConnector, SourceError, Timestamp};
+use dataflow_types::{
+    ExternalSourceConnector, FileSourceConnector, MzOffset, SourceError, Timestamp,
+};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::operator::StreamExt;
@@ -218,7 +220,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
 fn downgrade_capability(
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
-    last_processed_offset: &mut i64,
+    last_processed_offset: &mut MzOffset,
     last_closed_ts: &mut u64,
     timestamp_histories: &TimestampHistories,
 ) {
@@ -257,7 +259,7 @@ fn downgrade_capability(
 /// for which offset>=x.
 fn find_matching_timestamp(
     id: &SourceInstanceId,
-    offset: i64,
+    offset: MzOffset,
     timestamp_histories: &TimestampHistories,
 ) -> Option<Timestamp> {
     match timestamp_histories.borrow().get(id) {
@@ -323,9 +325,9 @@ where
     // Buffer placeholder for buffering messages for which we did not have a timestamp
     let mut buffer: Option<Result<Out, failure::Error>> = None;
     // Index of the last offset that we have already processed (and assigned a timestamp to)
-    let mut last_processed_offset: i64 = 0;
+    let mut last_processed_offset = MzOffset { offset: 0 };
     // Index of the current message's offset
-    let mut current_msg_offset: i64 = 0;
+    let mut current_msg_offset = MzOffset { offset: 0 };
     // Records closed timestamps. It corresponds to the smallest timestamp that is still
     // open
     let mut last_closed_ts: u64 = 0;
@@ -375,7 +377,7 @@ where
                     match rx.try_recv() {
                         Ok(result) => {
                             records_read += 1;
-                            current_msg_offset += 1;
+                            current_msg_offset.offset += 1;
                             buffer = Some(result);
                         }
                         Err(TryRecvError::Empty) => {
@@ -410,7 +412,7 @@ where
                             let ts_cap = cap.delayed(&ts);
                             output
                                 .session(&ts_cap)
-                                .give(Ok((message, Some(last_processed_offset))));
+                                .give(Ok((message, Some(last_processed_offset.offset))));
                             downgrade_capability(
                                 &id,
                                 cap,
@@ -429,7 +431,7 @@ where
                     buffer = match rx.try_recv() {
                         Ok(record) => {
                             records_read += 1;
-                            current_msg_offset += 1;
+                            current_msg_offset.offset += 1;
                             Some(record)
                         }
                         Err(TryRecvError::Empty) => None,

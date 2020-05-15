@@ -42,7 +42,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, Diff, ExternalSourceConnector, IndexDesc,
+    Consistency, DataflowDesc, DataflowError, Diff, ExternalSourceConnector, IndexDesc, MzOffset,
     PeekResponse, Timestamp, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
@@ -168,7 +168,7 @@ pub enum SequencedCommand {
         /// TODO(ncrooks)
         timestamp: Timestamp,
         /// TODO(ncrooks)
-        offset: i64,
+        offset: MzOffset,
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
@@ -261,14 +261,26 @@ where
     })
 }
 
+/// A type wrapper for the number of partitions associated with a source
+pub type PartitionCount = i32;
+
+/// A type wrapper for a timestamp update that consists of a PartititionCount, a Timestamp,
+/// and a MzOffset
+pub type TimestampUpdate = (PartitionCount, Timestamp, MzOffset);
+
 /// Map of source ID to per-partition timestamp history.
 ///
 /// Timestamp history is a vector of tuples (partition_count, timestamp, offset),
 /// where the correct timestamp for a given offset `x` is the highest timestamp value for
 /// the first offset >= `x`.
 pub type TimestampHistories =
-    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<(i32, Timestamp, i64)>>>>>;
-/// TODO(ncrooks)
+    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<TimestampUpdate>>>>>;
+
+/// List of sources that need to start being timestamped or have been dropped and no longer require
+/// timestamping.
+///
+/// A source inserts an ADD request to this vector on source creation, and adds a
+/// DELETE request once the operator for the source is dropped.
 pub type TimestampChanges = Rc<
     RefCell<
         Vec<(
@@ -729,7 +741,8 @@ where
                 let mut timestamps = self.ts_histories.borrow_mut();
                 if let Some(entries) = timestamps.get_mut(&id) {
                     let ts = entries.entry(pid).or_insert_with(Vec::new);
-                    let (_, last_ts, last_offset) = ts.last().unwrap_or(&(0, 0, 0));
+                    let (_, last_ts, last_offset) =
+                        ts.last().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
                     assert!(
                         offset >= *last_offset,
                         "offset should not go backwards, but {} < {}",
