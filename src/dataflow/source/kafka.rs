@@ -385,13 +385,13 @@ impl ControlPlaneInfo {
     fn get_partition_count(&self) -> i32 {
         // The number of partitions is always guaranteed to be smaller or equal than
         // expected_partition_count (i32)
-        return self.partition_metadata.len().try_into().unwrap();
+        self.partition_metadata.len().try_into().unwrap()
     }
 
     /// Returns true if we currently know of particular partition. We know (and have updated the
     /// metadata for this partition) if there is an entry for it
     fn knows_of(&self, pid: i32) -> bool {
-        return pid < self.get_partition_count();
+        pid < self.get_partition_count()
     }
 
     /// Updates the underlying partition metadata structure ot the expected partition count.
