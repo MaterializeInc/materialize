@@ -210,8 +210,7 @@ impl PredicateKnowledge {
             }
         };
 
-        predicates.sort();
-        predicates.dedup();
+        normalize_predicates(&mut predicates);
         if predicates
             .iter()
             .any(|p| p.is_literal_false() || p.is_literal_null())
@@ -220,6 +219,101 @@ impl PredicateKnowledge {
         }
         Ok(predicates)
     }
+}
+
+fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
+    // Remove duplicates
+    predicates.sort();
+    predicates.dedup();
+
+    // Establish equivalence classes of expressions, where we choose a representative
+    // that is the "simplest", ideally a literal, then a column reference, and then
+    // more complicated stuff from there. We then replace all expressions in the class
+    // with the simplest representative. Folks looking up expressions should also use
+    // an expression with substitutions performed.
+
+    let mut classes = Vec::new();
+    for predicate in predicates.iter() {
+        if let ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::Eq,
+        } = predicate
+        {
+            let mut class = Vec::new();
+            class.extend(
+                classes
+                    .iter()
+                    .position(|c: &Vec<ScalarExpr>| c.contains(&**expr1))
+                    .map(|p| classes.remove(p))
+                    .unwrap_or_else(|| vec![(**expr1).clone()]),
+            );
+            class.extend(
+                classes
+                    .iter()
+                    .position(|c: &Vec<ScalarExpr>| c.contains(&**expr2))
+                    .map(|p| classes.remove(p))
+                    .unwrap_or_else(|| vec![(**expr2).clone()]),
+            );
+            classes.push(class);
+        }
+    }
+
+    // Order each class so that literals come first, then column references, then weird things.
+    for class in classes.iter_mut() {
+        use std::cmp::Ordering;
+        class.sort_by(|x, y| match (x, y) {
+            (ScalarExpr::Literal { .. }, ScalarExpr::Literal { .. }) => x.cmp(y),
+            (ScalarExpr::Literal { .. }, _) => Ordering::Less,
+            (_, ScalarExpr::Literal { .. }) => Ordering::Greater,
+            (ScalarExpr::Column(_), ScalarExpr::Column(_)) => x.cmp(y),
+            (ScalarExpr::Column(_), _) => Ordering::Less,
+            (_, ScalarExpr::Column(_)) => Ordering::Greater,
+            _ => x.cmp(y),
+        });
+        class.dedup();
+        // If we have a second literal, not equal to the first, we have a contradiction and can
+        // just replaces everything with false.
+        if let Some(second) = class.get(1) {
+            if second.is_literal_ok() {
+                predicates.push(ScalarExpr::literal_ok(
+                    Datum::False,
+                    ColumnType::new(ScalarType::Bool),
+                ));
+            }
+        }
+    }
+    // TODO: Sort by complexity of representative, and perform substitutions within predicates.
+    classes.sort();
+
+    // Visit each predicate and rewrite using the representative from each class.
+    // Feel welcome to remove all equality tests and re-introduce canonical tests.
+    for predicate in predicates.iter_mut() {
+        if let ScalarExpr::CallBinary {
+            expr1: _,
+            expr2: _,
+            func: BinaryFunc::Eq,
+        } = predicate
+        {
+            *predicate = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
+        } else {
+            predicate.visit_mut(&mut |e| {
+                if let Some(class) = classes.iter().find(|c| c.contains(e)) {
+                    *e = class[0].clone();
+                }
+            });
+        }
+    }
+    // Re-introduce equality constraints using the representative.
+    for class in classes.iter() {
+        for expr in class[1..].iter() {
+            predicates.push(class[0].clone().call_binary(expr.clone(), BinaryFunc::Eq));
+        }
+    }
+
+    predicates.sort();
+    predicates.dedup();
+    predicates.retain(|p| !p.is_literal_true());
 }
 
 /// Attempts to optimize
