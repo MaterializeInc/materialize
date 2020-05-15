@@ -64,15 +64,22 @@ def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> N
     With the --workflow flag, perform all the steps in the workflow together.
     """
     comp = Composition.find(composition)
-    if comp is not None:
-        if workflow is not None:
-            say(f"Executing {comp.name} -> {workflow}")
-            comp.run_workflow(workflow)
-        else:
-            say(f"Starting {comp.name}")
-            comp.run()
+    if workflow is not None:
+        say(f"Executing {comp.name} -> {workflow}")
+        comp.run_workflow(workflow)
     else:
-        raise UnknownItem("composition", composition, Composition.known_compositions())
+        say(f"Starting {comp.name}")
+        comp.run()
+
+
+@cli.command()
+@click.argument("composition")
+def down(composition: str) -> None:
+    comp = Composition.find(composition)
+    comp.down()
+
+
+# Non-mzcompose commands
 
 
 @cli.command()
@@ -80,24 +87,9 @@ def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> N
 def help_workflows(composition: str) -> None:
     """Help on available workflows in DEMO"""
     comp = Composition.find(composition)
-    if comp is not None:
-        print("Workflows available:")
-        for workflow in comp.workflows():
-            print(f"    {workflow.name}")
-    else:
-        print(f"Unknown comp {comp}, available demos:")
-        for comp_ in Composition.known_compositions():
-            print(f"    {comp_}")
-
-
-@cli.command()
-@click.argument("composition")
-def down(composition: str) -> None:
-    comp = Composition.find(composition)
-    if comp is not None:
-        comp.down()
-    else:
-        raise UnknownItem("composition", comp, Composition.known_compositions())
+    print("Workflows available:")
+    for workflow in comp.workflows():
+        print(f"    {workflow.name}")
 
 
 @cli.command()
@@ -105,13 +97,10 @@ def down(composition: str) -> None:
 def nuke(composition: str) -> None:
     """Destroy everything docker, stopping composition before trying"""
     comp = Composition.find(composition)
-    if comp is not None:
-        comp.down()
-        cmds = ["docker system prune -af".split(), "docker volume prune -f".split()]
-        for cmd in cmds:
-            spawn.runv(cmd, capture_output=True)
-    else:
-        raise UnknownItem("composition", comp, Composition.known_compositions())
+    comp.down()
+    cmds = ["docker system prune -af".split(), "docker volume prune -f".split()]
+    for cmd in cmds:
+        spawn.runv(cmd, capture_output=True)
 
 
 # Composition Discovery
@@ -162,11 +151,18 @@ class Composition:
             workflow_.run(self)
 
     @classmethod
-    def find(cls, comp: str) -> Optional["Composition"]:
-        """Try to find a configured comp"""
+    def find(cls, comp: str) -> "Composition":
+        """Try to find a configured comp
+
+        Raises:
+            `UnknownItem`: if the composition cannot be discovered
+        """
         if cls._demos is None:
             cls._demos = cls.load()
-        return cls._demos.get(comp)
+        try:
+            return cls._demos[comp]
+        except KeyError:
+            raise UnknownItem("composition", comp, Composition.known_compositions())
 
     @classmethod
     def known_compositions(cls) -> Collection[str]:
