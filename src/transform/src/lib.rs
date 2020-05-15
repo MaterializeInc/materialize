@@ -39,6 +39,7 @@ pub mod join_implementation;
 pub mod map_lifting;
 pub mod nonnull_requirements;
 pub mod nonnullable;
+pub mod predicate_propagation;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
@@ -255,7 +256,13 @@ impl Optimizer {
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
                     Box::new(crate::column_knowledge::ColumnKnowledge),
-                    // Lifts the information `col1 = col2`
+
+                    Box::new(crate::predicate_propagation::PredicateKnowledge),
+                    Box::new(crate::reduction_pushdown::ReductionPushdown),
+                    Box::new(crate::redundant_join::RedundantJoin),
+                    Box::new(crate::topk_elision::TopKElision),
+                    Box::new(crate::reduction::NegatePredicate),
+
                     Box::new(crate::demand::Demand),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
