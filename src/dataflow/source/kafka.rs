@@ -89,33 +89,6 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
     }
 }
 
-/// Poll from the next consumer for which a message is available. This function polls the set
-/// round-robin: when a consumer is polled, it is placed at the back of the queue.
-fn get_next_message_from_consumers(
-    name: &str,
-    consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
-) -> Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> {
-    let consumer_count = consumers.len();
-    let mut attempts = 0;
-    while attempts < consumer_count {
-        let consumer = consumers.pop_front().unwrap();
-        let message = match consumer.poll(Duration::from_millis(0)) {
-            Some(Ok(msg)) => Some(MessageParts::from(&msg)),
-            Some(Err(err)) => {
-                error!("kafka error: {}: {}", name, err);
-                None
-            }
-            _ => None,
-        };
-        if let Some(message) = message {
-            return Some((message, consumer));
-        }
-        consumers.push_back(consumer);
-        attempts += 1;
-    }
-    None
-}
-
 /// Creates a Kafka config
 fn create_kafka_config(
     name: &str,
@@ -217,7 +190,6 @@ impl DataPlaneInfo {
     /// 1) creates new consumers and assigns each to an individual partition
     /// 2) creates appropriate source metadata
     pub fn refresh_source_information(&mut self, cp_info: &mut ControlPlaneInfo) {
-
         if self.needs_refresh {
             info!(
                 "Refreshing Source Metadata for Source {} Partition Count: {}",
@@ -230,10 +202,7 @@ impl DataPlaneInfo {
 
         // Verify that invariants hold
         assert!(!self.needs_refresh);
-        assert_eq!(
-            cp_info.get_partition_count(),
-            self.expected_partition_count
-        );
+        assert_eq!(cp_info.get_partition_count(), self.expected_partition_count);
 
         assert_eq!(self.get_consumer_count(), self.expected_partition_count);
     }
@@ -248,7 +217,7 @@ impl DataPlaneInfo {
     /// We currently create one consumer per partition
     fn update_consumer_list(&mut self) {
         let next_pid = self.get_consumer_count();
-        let to_add  = self.expected_partition_count - next_pid;
+        let to_add = self.expected_partition_count - next_pid;
         // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
         // starting from 0
         for i in 0..to_add {
@@ -270,6 +239,35 @@ impl DataPlaneInfo {
         partition_list.add_partition(&self.topic_name, partition_id);
         consumer.assign(&partition_list).unwrap();
         self.consumers.push_front(consumer)
+    }
+
+    /// This function checks whether any messages have been buffered. If yes, returns the buffered
+    /// message. Otherwise, polls from the next consumer for which a message is available. This function polls the set
+    /// round-robin: when a consumer is polled, it is placed at the back of the queue.
+    fn get_next_message(&mut self) -> Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> {
+        if self.buffer.is_some() {
+            self.buffer.take()
+        } else {
+            let consumer_count = self.get_consumer_count();
+            let mut attempts = 0;
+            while attempts < consumer_count {
+                let consumer = self.consumers.pop_front().unwrap();
+                let message = match consumer.poll(Duration::from_millis(0)) {
+                    Some(Ok(msg)) => Some(MessageParts::from(&msg)),
+                    Some(Err(err)) => {
+                        error!("kafka error: {}: {}", self.source_name, err);
+                        None
+                    }
+                    _ => None,
+                };
+                if let Some(message) = message {
+                    return Some((message, consumer));
+                }
+                self.consumers.push_back(consumer);
+                attempts += 1;
+            }
+            None
+        }
     }
 }
 
@@ -320,7 +318,7 @@ impl ControlPlaneInfo {
                 offset: self.start_offset,
                 ts: self.last_closed_ts,
             })
-                .take((expected_pcount - self.get_partition_count()) as usize),
+            .take((expected_pcount - self.get_partition_count()) as usize),
         );
         assert_eq!(expected_pcount, self.get_partition_count());
     }
@@ -423,17 +421,8 @@ where
                         &mut dp_info,
                         &timestamp_histories,
                     );
-                    // Check if there was a message buffered and if we can now process it
-                    // If we can now process it, clear the buffer and proceed to poll from
-                    // consumer. Else, exit the function
-                    let mut next_message = if let Some(message) = dp_info.buffer.take() {
-                        Some(message)
-                    } else {
-                        // No currently buffered message, poll from stream
-                        get_next_message_from_consumers(&dp_info.topic_name, &mut dp_info.consumers)
-                    };
 
-                    while let Some((message, consumer)) = next_message {
+                    while let Some((message, consumer)) = dp_info.get_next_message() {
                         assert!(dp_info.buffer.is_none());
 
                         let partition = message.partition;
@@ -517,8 +506,8 @@ where
                                 // we need to buffer the message
                                 dp_info.buffer = Some((message, consumer));
                                 assert_eq!(
-                                    dp_info.consumers.len() + 1,
-                                    cp_info.partition_metadata.len()
+                                    dp_info.get_consumer_count(),
+                                    cp_info.get_partition_count(),
                                 );
                                 activator.activate();
                                 return SourceStatus::Alive;
@@ -540,8 +529,8 @@ where
                                 dp_info.consumers.push_back(consumer);
 
                                 assert_eq!(
-                                    dp_info.consumers.len(),
-                                    cp_info.partition_metadata.len()
+                                    dp_info.get_consumer_count(),
+                                    cp_info.get_partition_count(),
                                 );
 
                                 KAFKA_PARTITION_OFFSET_INGESTED
@@ -571,13 +560,6 @@ where
                             activator.activate();
                             return SourceStatus::Alive;
                         }
-
-
-                        // Try and poll for next message
-                        next_message = get_next_message_from_consumers(
-                            &dp_info.topic_name,
-                            &mut dp_info.consumers,
-                        );
                     }
                 }
                 // Ensure that we poll kafka more often than the eviction timeout
@@ -645,7 +627,6 @@ fn downgrade_capability(
     dp_info: &mut DataPlaneInfo,
     timestamp_histories: &TimestampHistories,
 ) {
-
     let mut changed = false;
 
     // Determine which timestamps have been closed. A timestamp is closed once we have processed
@@ -704,7 +685,11 @@ fn downgrade_capability(
 
                 KAFKA_PARTITION_CLOSED_TS
                     .with_label_values(&[&dp_info.topic_name, &id.to_string(), &pid.to_string()])
-                    .set((cp_info.partition_metadata[pid as usize].ts).try_into().unwrap());
+                    .set(
+                        (cp_info.partition_metadata[pid as usize].ts)
+                            .try_into()
+                            .unwrap(),
+                    );
 
                 if last_offset >= *offset {
                     // We have now seen all messages corresponding to this timestamp for this
@@ -723,7 +708,8 @@ fn downgrade_capability(
 
     //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
     //  timestamp across partitions.
-    let min = cp_info.partition_metadata
+    let min = cp_info
+        .partition_metadata
         .iter()
         .map(|cons_info| cons_info.ts)
         .min()
