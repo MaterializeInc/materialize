@@ -470,9 +470,9 @@ where
                             &dp_info.topic_name,
                             &activator,
                         ) {
+                            dp_info.needs_refresh = true;
                             return SourceStatus::Alive;
                         }
-                        dp_info.needs_refresh = false;
                     }
 
                     // Check if there was a message buffered and if we can now process it
