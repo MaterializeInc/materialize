@@ -17,8 +17,8 @@ import socket
 import subprocess
 import sys
 import time
+import webbrowser
 from datetime import datetime, timezone
-from materialize.errors import UnknownItem, BadSpec, Failed, error_handler
 from pathlib import Path
 from typing import (
     Any,
@@ -43,6 +43,13 @@ import yaml
 
 from materialize import spawn
 from materialize import ui
+from materialize.errors import (
+    BadSpec,
+    Failed,
+    MzRuntimeError,
+    UnknownItem,
+    error_handler,
+)
 
 
 T = TypeVar("T")
@@ -131,6 +138,20 @@ def nuke(composition: str) -> None:
         spawn.runv(cmd, capture_output=True)
 
 
+@cli.command()
+@click.argument("composition")
+@click.argument("service")
+def web(composition: str, service: str) -> None:
+    """
+    Attempt to open a service in a web browser
+
+    This parses the output of `mzconduct ps` and tries to find the right way to open a
+    web browser for you.
+    """
+    comp = Composition.find(composition)
+    comp.web(service)
+
+
 # Composition Discovery
 
 
@@ -188,6 +209,33 @@ class Composition:
             except KeyError:
                 raise UnknownItem("workflow", workflow, self._workflows.names())
             workflow_.run(self)
+
+    def web(self, service: str) -> None:
+        """Best effort attempt to open the service in a web browser"""
+        with cd(self._path):
+            ps = spawn.capture(["./mzcompose", "--mz-quiet", "ps"], unicode=True,)
+        # technically 'docker-compose ps' has a `--filter` flag but...
+        # https://github.com/docker/compose/issues/5996
+        service_lines = [
+            l.strip() for l in ps.splitlines() if service in l and "Up" in l
+        ]
+        if len(service_lines) == 1:
+            *_, port_config = service_lines[0].split()
+            if "," in port_config or " " in port_config or "->" not in port_config:
+                raise MzRuntimeError(
+                    "Unable to unambiguously determine listening port for service:"
+                    "\n{}".format(service_lines[0])
+                )
+            port = port_config.split(":")[1].split("-")[0]
+            webbrowser.open(f"http://localhost:{port}")
+        elif not service_lines:
+            raise MzRuntimeError(f"No running services matched {service}")
+        else:
+            raise MzRuntimeError(
+                "Too many services matched {}:\n{}".format(
+                    service, "\n".join(service_lines)
+                )
+            )
 
     @classmethod
     def find(cls, comp: str) -> "Composition":
