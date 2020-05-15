@@ -22,7 +22,7 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
-use timely::scheduling::activate::{Activator, SyncActivator};
+use timely::scheduling::activate::SyncActivator;
 use url::Url;
 
 use dataflow_types::{
@@ -86,98 +86,6 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
             },
             key: msg.key().map(|k| k.to_vec()),
         }
-    }
-}
-
-// Refresh our metadata from Kafka, which is necessary in order to start receiving messages
-// for new partitions. Return whether the check succeeded and returned expectedly many partitions.
-#[must_use]
-fn refresh_kafka_metadata(
-    consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
-    expected_partitions: usize,
-    topic: &str,
-    activator: &Activator,
-) -> bool {
-    let mut result = true;
-
-    for c in consumers {
-        match c.fetch_metadata(Some(topic), Duration::from_secs(1)) {
-            Ok(md) => match md.topics().iter().find(|mdt| mdt.name() == topic) {
-                None => {
-                    warn!("Topic {} not found in Kafka metadata", topic);
-                    result = false;
-                    break;
-                }
-                Some(mdt) => {
-                    let partitions = mdt.partitions().len();
-                    if partitions < expected_partitions {
-                        warn!(
-                            "Topic {} does not have as many partitions as expected ({} < {})",
-                            topic, partitions, expected_partitions
-                        );
-                        result = false;
-                        break;
-                    }
-                }
-            },
-            Err(e) => {
-                warn!("Error refreshing Kafka metadata: {}", e);
-                result = false;
-                break;
-            }
-        }
-    }
-
-    if !result {
-        info!("Descheduling for 1s to wait for Kafka metadata to catch up");
-        activator.activate_after(Duration::from_secs(1));
-    } else {
-        info!(
-            "Successfully refreshed metadata for {} {}",
-            topic, expected_partitions
-        )
-    }
-    result
-}
-
-/// Create a new kafka consumer
-fn create_kafka_consumer(
-    activator: Arc<Mutex<SyncActivator>>,
-    topic: &str,
-    partition_id: i32,
-    kafka_config: &ClientConfig,
-) -> BaseConsumer<GlueConsumerContext> {
-    let cx = GlueConsumerContext(activator);
-    let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
-        .create_with_context(cx)
-        .expect("Failed to create Kafka Consumer");
-    let mut partition_list = TopicPartitionList::with_capacity(1);
-    partition_list.add_partition(topic, partition_id);
-    consumer.assign(&partition_list).unwrap();
-    consumer
-}
-
-/// Update the list of Kafka consumers to match the number of partitions
-/// We currently create one consumer per partition
-fn update_consumer_list(
-    current_max_pid: i32,
-    consumers: &mut VecDeque<BaseConsumer<GlueConsumerContext>>,
-    topic: &str,
-    to_add: usize,
-    activator: Arc<Mutex<SyncActivator>>,
-    kafka_config: &ClientConfig,
-) {
-    // Save conversion as number of partition count can never exceed i32
-    let to_add: i32 = to_add.try_into().unwrap();
-    let next_pid = current_max_pid + 1i32;
-    for i in 0..to_add {
-        let pid: i32 = next_pid + i;
-        consumers.push_front(create_kafka_consumer(
-            activator.clone(),
-            topic,
-            pid,
-            kafka_config,
-        ));
     }
 }
 
@@ -264,6 +172,9 @@ struct DataPlaneInfo {
     /// INVARIANT: consumer is EITHER in consumers or in buffer, but cannot be in both
     /// TODO(ncrooks): make buffer per partition
     buffer: Option<(MessageParts, BaseConsumer<GlueConsumerContext>)>,
+    /// The expected number of partitions. If needs_refresh is set to false, then
+    /// expected_partition_count == consumers.len() == partition_metadata.len()
+    expected_partition_count: i32,
     /// Field is set to true when we have detected that metadata is out-of-date and needs
     /// to be refreshed
     needs_refresh: bool,
@@ -286,20 +197,69 @@ impl DataPlaneInfo {
             consumers: VecDeque::new(),
             buffer: None,
             needs_refresh: true,
+            expected_partition_count: 1,
             consumer_activator,
         }
     }
 
-    /// Returns the current max initialised partition id (or -1 if none)
-    /// Pids in Kafka are assumed to be contiguous and monotonically increasing
-    /// The current PID therefore corresponds to count(consumers) - 1
-    fn max_partition_id(&self) -> i32 {
-        let consumer_count: i32 = if self.buffer.is_some() {
+    /// Returns a count of total number of consumers for this source
+    fn get_consumer_count(&self) -> i32 {
+        // Note: the number of consumers is guaranteed to always be smaller than
+        // expected_partition_count (i32)
+        if self.buffer.is_some() {
             (self.consumers.len() + 1).try_into().unwrap()
         } else {
             self.consumers.len().try_into().unwrap()
-        };
-        consumer_count - 1
+        }
+    }
+
+    pub fn refresh_source_information(&mut self, cp_info: &mut ControlPlaneInfo) {
+
+        if self.needs_refresh {
+            info!(
+                "Refreshing Source Metadata for Source {} Partition Count: {}",
+                self.source_name, self.expected_partition_count
+            );
+            self.update_consumer_list();
+            cp_info.update_partition_metadata(self.expected_partition_count);
+            self.needs_refresh = false;
+        } // else take no action
+
+        // Verify that invariants hold
+        assert!(!self.needs_refresh);
+        assert_eq!(
+            cp_info.get_partition_count(),
+            self.expected_partition_count
+        );
+
+        assert_eq!(self.get_consumer_count(), self.expected_partition_count);
+    }
+
+    /// Update the list of Kafka consumers to match the number of partitions
+    /// We currently create one consumer per partition
+    fn update_consumer_list(&mut self) {
+        let next_pid = self.get_consumer_count();
+        let to_add  = self.expected_partition_count - next_pid;
+        // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
+        // starting from 0
+        for i in 0..to_add {
+            let pid: i32 = next_pid + i;
+            self.create_kafka_consumer(pid);
+        }
+        assert_eq!(self.expected_partition_count, self.get_consumer_count());
+    }
+
+    /// Create a new kafka consumer and adds it to the list of existing consumers
+    fn create_kafka_consumer(&mut self, partition_id: i32) {
+        let cx = GlueConsumerContext(self.consumer_activator.clone());
+        let consumer: BaseConsumer<GlueConsumerContext> = self
+            .kafka_config
+            .create_with_context(cx)
+            .expect("Failed to create Kafka Consumer");
+        let mut partition_list = TopicPartitionList::with_capacity(1);
+        partition_list.add_partition(&self.topic_name, partition_id);
+        consumer.assign(&partition_list).unwrap();
+        self.consumers.push_front(consumer)
     }
 }
 
@@ -325,6 +285,34 @@ impl ControlPlaneInfo {
             }],
             start_offset,
         }
+    }
+
+    /// Returns the current number of partitions for which we have metadata entries
+    fn get_partition_count(&self) -> i32 {
+        // The number of partitions is always guaranteed to be smaller or equal than
+        // expected_partition_count (i32)
+        return self.partition_metadata.len().try_into().unwrap();
+    }
+
+    /// Returns true if we currently know of particular partition. We know (and have updated the
+    /// metadata for this partition) if there is an entry for it
+    fn knows_of(&self, pid: i32) -> bool {
+        return pid < self.get_partition_count();
+    }
+
+    /// Updates the underlying partition metadata structure ot the expected partition count.
+    /// New partitions must always be added with a minimum closed offset of (last_closed_ts)
+    /// They are guaranteed to only receive timestamp update greater than last_closed_ts (this
+    /// is enforced in [coord::timestamp::is_ts_valid]
+    fn update_partition_metadata(&mut self, expected_pcount: i32) {
+        self.partition_metadata.extend(
+            iter::repeat(ConsInfo {
+                offset: self.start_offset,
+                ts: self.last_closed_ts,
+            })
+                .take((expected_pcount - self.get_partition_count()) as usize),
+        );
+        assert_eq!(expected_pcount, self.get_partition_count());
     }
 }
 
@@ -409,31 +397,9 @@ where
                 // Accumulate updates to BYTES_READ_COUNTER;
                 let mut bytes_read = 0;
                 if let Some(mut dp_info) = dp_info.as_mut() {
-                    if dp_info.needs_refresh {
-                        let to_create = if dp_info.buffer.is_some() {
-                            cp_info.partition_metadata.len() - (dp_info.consumers.len() + 1)
-                        } else {
-                            cp_info.partition_metadata.len() - dp_info.consumers.len()
-                        };
-                        update_consumer_list(
-                            dp_info.max_partition_id(),
-                            &mut dp_info.consumers,
-                            &dp_info.topic_name,
-                            to_create,
-                            dp_info.consumer_activator.clone(),
-                            &dp_info.kafka_config,
-                        );
-                        // Attempt to pick up new partitions.
-                        if !refresh_kafka_metadata(
-                            &mut dp_info.consumers,
-                            cp_info.partition_metadata.len(),
-                            &dp_info.topic_name,
-                            &activator,
-                        ) {
-                            return SourceStatus::Alive;
-                        }
-                        dp_info.needs_refresh = false;
-                    }
+                    // Refresh metadata for this source
+                    dp_info.refresh_source_information(&mut cp_info);
+
                     // Repeatedly interrogate Kafka for messages. Cease when
                     // Kafka stops returning new data, or after 10 milliseconds.
                     let timer = std::time::Instant::now();
@@ -450,29 +416,7 @@ where
                         cp_info.start_offset,
                         &mut cp_info.last_closed_ts,
                     ) {
-                        let to_create = if dp_info.buffer.is_some() {
-                            cp_info.partition_metadata.len() - (dp_info.consumers.len() + 1)
-                        } else {
-                            cp_info.partition_metadata.len() - dp_info.consumers.len()
-                        };
-                        update_consumer_list(
-                            dp_info.max_partition_id(),
-                            &mut dp_info.consumers,
-                            &dp_info.topic_name,
-                            to_create,
-                            dp_info.consumer_activator.clone(),
-                            &dp_info.kafka_config,
-                        );
-                        // Attempt to pick up new partitions.
-                        if !refresh_kafka_metadata(
-                            &mut dp_info.consumers,
-                            cp_info.partition_metadata.len(),
-                            &dp_info.topic_name,
-                            &activator,
-                        ) {
-                            dp_info.needs_refresh = true;
-                            return SourceStatus::Alive;
-                        }
+                        dp_info.refresh_source_information(&mut cp_info);
                     }
 
                     // Check if there was a message buffered and if we can now process it
@@ -507,37 +451,9 @@ where
                             ])
                             .set(offset.offset);
 
-                        if partition as usize >= cp_info.partition_metadata.len() {
-                            cp_info.partition_metadata.extend(
-                                iter::repeat(ConsInfo {
-                                    offset: cp_info.start_offset,
-                                    ts: cp_info.last_closed_ts,
-                                })
-                                .take(1 + partition as usize - cp_info.partition_metadata.len()),
-                            );
-                            //  When updating the consumer list to the required number of consumers, we
-                            // have to include the consumer that we currently hold
-                            let update_count =
-                                cp_info.partition_metadata.len() - (dp_info.consumers.len() + 1);
-                            update_consumer_list(
-                                dp_info.max_partition_id(),
-                                &mut dp_info.consumers,
-                                &dp_info.topic_name,
-                                update_count,
-                                dp_info.consumer_activator.clone(),
-                                &dp_info.kafka_config,
-                            );
-                            if !refresh_kafka_metadata(
-                                &mut dp_info.consumers,
-                                cp_info.partition_metadata.len(),
-                                &dp_info.topic_name,
-                                &activator,
-                            ) {
-                                dp_info.needs_refresh = true;
-                                dp_info.buffer = Some((message, consumer));
-                                return SourceStatus::Alive;
-                            }
-                        }
+                        // Given the explicit consumer to partition assignment, we should never receive a message
+                        // for a partition for which we have no metadata
+                        assert!(cp_info.knows_of(partition));
 
                         let last_offset = cp_info.partition_metadata[partition as usize].offset;
                         if offset <= last_offset {
@@ -641,28 +557,7 @@ where
                                     cp_info.start_offset,
                                     &mut cp_info.last_closed_ts,
                                 ) {
-                                    // We have just returned the consumer to the consumer queue,
-                                    // buffer is empty
-                                    let update_count =
-                                        cp_info.partition_metadata.len() - dp_info.consumers.len();
-
-                                    update_consumer_list(
-                                        dp_info.max_partition_id(),
-                                        &mut dp_info.consumers,
-                                        &dp_info.topic_name,
-                                        update_count,
-                                        dp_info.consumer_activator.clone(),
-                                        &dp_info.kafka_config,
-                                    );
-                                    if !refresh_kafka_metadata(
-                                        &mut dp_info.consumers,
-                                        cp_info.partition_metadata.len(),
-                                        &dp_info.topic_name,
-                                        &activator,
-                                    ) {
-                                        dp_info.needs_refresh = true;
-                                        return SourceStatus::Alive;
-                                    }
+                                    dp_info.refresh_source_information(&mut cp_info);
                                 }
                             }
                         }
@@ -677,7 +572,6 @@ where
                             return SourceStatus::Alive;
                         }
 
-                        assert_eq!(cp_info.partition_metadata.len(), dp_info.consumers.len());
                         // Try and poll for next message
                         next_message = get_next_message_from_consumers(
                             &dp_info.topic_name,
@@ -756,7 +650,6 @@ fn downgrade_capability(
     last_closed_ts: &mut u64,
 ) -> bool {
     let mut changed = false;
-    let mut needs_md_refresh = false;
 
     // Determine which timestamps have been closed. A timestamp is closed once we have processed
     // all messages that we are going to process for this timestamp across all partitions
@@ -774,15 +667,10 @@ fn downgrade_capability(
                 ),
             };
             if pid as usize >= partition_metadata.len() {
-                partition_metadata.extend(
-                    iter::repeat(ConsInfo {
-                        offset: start_offset,
-                        ts: *last_closed_ts,
-                    })
-                    .take(1 + pid as usize - partition_metadata.len()),
-                );
-                needs_md_refresh = true;
+                // Need refresh
+                return true;
             }
+
             let last_offset = partition_metadata[pid as usize].offset;
 
             // Check whether timestamps can be closed on this partition
@@ -799,16 +687,9 @@ fn downgrade_capability(
                 );
 
                 if *partition_count as usize > partition_metadata.len() {
-                    // A new partition has been added, we need to update the appropriate
-                    // entries before we continue.
-                    partition_metadata.extend(
-                        iter::repeat(ConsInfo {
-                            offset: start_offset,
-                            ts: *last_closed_ts,
-                        })
-                        .take(*partition_count as usize - partition_metadata.len()),
-                    );
-                    needs_md_refresh = true;
+                    // New partition has been added, skip trying to downgrade capability and
+                    // mark source has needing refreshing
+                    return true;
                 }
                 // This assertion makes sure that if we ever fast-forwarded the empty stream
                 // (any message of the form "PID,TS,0"), we have correctly removed the (_,_,0) entry
@@ -850,7 +731,7 @@ fn downgrade_capability(
         *last_closed_ts = min;
     }
 
-    needs_md_refresh
+    return false;
 }
 
 /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
