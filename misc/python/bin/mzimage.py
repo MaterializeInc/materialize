@@ -9,16 +9,67 @@
 #
 # mzimage.py — builds Materialize-specific Docker images.
 
-from materialize import mzbuild
-from materialize import git
-from pathlib import Path
-from typing import Any, List
 import argparse
 import os
 import sys
+from pathlib import Path
+from typing import Any, List
+
+from materialize import git
+from materialize import mzbuild
+from materialize import ui
 
 
 def main() -> int:
+    args = parse_args()
+    ui.Verbosity.init_from_env(explicit=None)
+    root = Path(os.environ["MZ_ROOT"])
+    repo = mzbuild.Repository(root)
+
+    if args.command == "list":
+        for image in repo:
+            print(image.name)
+    else:
+        if args.image not in repo.images:
+            print(f"fatal: unknown image: {args.image}", file=sys.stderr)
+            return 1
+        deps = repo.resolve_dependencies([repo.images[args.image]])
+        rimage = deps[args.image]
+        if args.command == "build":
+            deps.acquire(force_build=True)
+        elif args.command == "run":
+            deps.acquire()
+            rimage.run(args.image_args)
+        elif args.command == "acquire":
+            deps.acquire()
+        elif args.command == "fingerprint":
+            print(rimage.fingerprint())
+        elif args.command == "spec":
+            print(rimage.spec())
+        elif args.command == "describe":
+            inputs = sorted(rimage.inputs(args.transitive))
+            dependencies = sorted(rimage.list_dependencies(args.transitive))
+
+            print(f"Image: {rimage.name}")
+            print(f"Fingerprint: {rimage.fingerprint()}")
+
+            print("Input files:")
+            for inp in inputs:
+                print(f"    {inp}")
+
+            print("Dependencies:")
+            for d in dependencies:
+                print(f"    {d}")
+            if not dependencies:
+                print("    (none)")
+        else:
+            raise RuntimeError("unreachable")
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse known args, or exit the program
+    """
     parser = argparse.ArgumentParser(
         prog="mzimage",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -81,54 +132,12 @@ def main() -> int:
     )
 
     args = parser.parse_args()
-
-    root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(root)
-
     if args.command is None:
         # TODO(benesch): we can set `required=True` in the call to
         # `add_subparsers` when we upgrade to Python v3.7+.
         parser.print_help(file=sys.stderr)
-        return 1
-    elif args.command == "list":
-        for image in repo:
-            print(image.name)
-    else:
-        if args.image not in repo.images:
-            print(f"fatal: unknown image: {args.image}", file=sys.stderr)
-            return 1
-        deps = repo.resolve_dependencies([repo.images[args.image]])
-        rimage = deps[args.image]
-        if args.command == "build":
-            deps.acquire(force_build=True)
-        elif args.command == "run":
-            deps.acquire()
-            rimage.run(args.image_args)
-        elif args.command == "acquire":
-            deps.acquire()
-        elif args.command == "fingerprint":
-            print(rimage.fingerprint())
-        elif args.command == "spec":
-            print(rimage.spec())
-        elif args.command == "describe":
-            inputs = sorted(rimage.inputs(args.transitive))
-            dependencies = sorted(rimage.list_dependencies(args.transitive))
-
-            print(f"Image: {rimage.name}")
-            print(f"Fingerprint: {rimage.fingerprint()}")
-
-            print("Input files:")
-            for inp in inputs:
-                print(f"    {inp}")
-
-            print("Dependencies:")
-            for d in dependencies:
-                print(f"    {d}")
-            if not dependencies:
-                print("    (none)")
-        else:
-            raise RuntimeError("unreachable")
-    return 0
+        sys.exit(1)
+    return args
 
 
 if __name__ == "__main__":

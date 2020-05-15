@@ -46,6 +46,7 @@ from materialize import ui
 
 
 T = TypeVar("T")
+say = ui.speaker("C>")
 
 
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]))
@@ -600,9 +601,6 @@ def mzcompose_down(destroy_volumes: bool = False) -> subprocess.CompletedProcess
 
 
 # Helpers
-
-
-say = ui.speaker("C")
 
 
 def print_docker_logs(pattern: str, tail: int = 0) -> None:

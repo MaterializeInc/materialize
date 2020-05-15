@@ -9,7 +9,6 @@
 #
 # mzcompose.py — runs Docker Compose with Materialize customizations.
 
-from materialize import mzbuild
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import List, Tuple, Text, Optional, Sequence
@@ -19,6 +18,13 @@ import os
 import subprocess
 import sys
 import yaml
+
+from materialize import ui
+from materialize import mzbuild
+
+
+announce = ui.speaker("==>")
+say = ui.speaker("")
 
 
 def main(argv: List[str]) -> int:
@@ -35,9 +41,10 @@ def main(argv: List[str]) -> int:
     else:
         config_file = args.file[0]
 
-    def say(s: str) -> None:
-        if not args.mz_quiet:
-            print(s)
+    ui.Verbosity.init_from_env(args.mz_quiet)
+    # TODO: we should propagate this down to subprocesses by explicit command-line flags, probably
+    if ui.Verbosity.quiet:
+        os.environ["MZ_QUIET"] = "yes"
 
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
@@ -46,7 +53,7 @@ def main(argv: List[str]) -> int:
         return gen_shortcuts(repo)
 
     # Determine what images this particular compose file depends upon.
-    say("==> Collecting mzbuild dependencies")
+    announce("Collecting mzbuild dependencies")
     images = []
     with open(config_file) as f:
         compose = yaml.safe_load(f)
@@ -104,7 +111,7 @@ def main(argv: List[str]) -> int:
     tempfile.seek(0)
 
     # Hand over control to Docker Compose.
-    say("==> Delegating to Docker Compose")
+    announce("Delegating to Docker Compose")
     dc_args = [
         "docker-compose",
         "-f",
@@ -148,7 +155,7 @@ exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
 class ArgumentParser(argparse.ArgumentParser):
     def __init__(self) -> None:
         super().__init__(add_help=False)
-        self.add_argument("--mz-quiet", action="store_true")
+        self.add_argument("--mz-quiet", action="store_true", default=None)
         self.add_argument("-f", "--file", action="append")
         self.add_argument("--project-directory")
         self.add_argument("command", nargs="?")
