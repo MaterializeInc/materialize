@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
         https://dev.mysql.com/get/Downloads/Connector-ODBC/8.0/mysql-connector-odbc-8.0.17-linux-ubuntu18.04-x86-64bit.tar.gz \
         > mysql-odbc.tar.gz \
     && curl -fsSL \
-        "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-8.0.17-linux-ubuntu18.04-x86-64bit.tar.gz&p=10" \
+        "https://downloads.mysql.com/archives/gpg/?file=mysql-connector-odbc-8.0.17-linux-ubuntu18.04-x86-64bit.tar.gz&p=10" \
         > mysql-odbc.asc \
     && gpg --verify mysql-odbc.asc mysql-odbc.tar.gz \
     && tar -xzf mysql-odbc.tar.gz -C /usr/local --strip-components=1 --wildcards '*/bin' '*/lib' \
