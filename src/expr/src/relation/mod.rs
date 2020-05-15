@@ -455,6 +455,162 @@ impl RelationExpr {
         self.typ().column_types.len()
     }
 
+    /// Recursively descend two expressions until differences are found.
+    ///
+    /// The resulting sequence contains the first moments at which differences were observed.
+    /// There may be multiple elements in the list as the differences may only be observed
+    /// when descending independent tree paths.
+    pub fn tree_differences(&self, other: &RelationExpr) -> Vec<(RelationExpr, RelationExpr)> {
+        match (self, other) {
+            (RelationExpr::Constant { .. }, RelationExpr::Constant { .. }) if self == other => {
+                Vec::new()
+            }
+            (RelationExpr::Get { .. }, RelationExpr::Get { .. }) if self == other => Vec::new(),
+            (
+                RelationExpr::Let {
+                    id: i1,
+                    value: v1,
+                    body: b1,
+                },
+                RelationExpr::Let {
+                    id: i2,
+                    value: v2,
+                    body: b2,
+                },
+            ) if i1 == i2 => {
+                let mut result = Vec::new();
+                result.extend(v1.tree_differences(v2));
+                result.extend(b1.tree_differences(b2));
+                result
+            }
+            (
+                RelationExpr::Project {
+                    input: i1,
+                    outputs: o1,
+                },
+                RelationExpr::Project {
+                    input: i2,
+                    outputs: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            (
+                RelationExpr::Map {
+                    input: i1,
+                    scalars: o1,
+                },
+                RelationExpr::Map {
+                    input: i2,
+                    scalars: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            (
+                RelationExpr::Filter {
+                    input: i1,
+                    predicates: o1,
+                },
+                RelationExpr::Filter {
+                    input: i2,
+                    predicates: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            (
+                RelationExpr::FlatMap {
+                    input: i1,
+                    func: f1,
+                    exprs: e1,
+                    demand: d1,
+                },
+                RelationExpr::FlatMap {
+                    input: i2,
+                    func: f2,
+                    exprs: e2,
+                    demand: d2,
+                },
+            ) if (f1, e1, d1) == (f2, e2, d2) => i1.tree_differences(i2),
+            (
+                RelationExpr::Join {
+                    inputs: i1,
+                    equivalences: e1,
+                    demand: d1,
+                    implementation: m1,
+                },
+                RelationExpr::Join {
+                    inputs: i2,
+                    equivalences: e2,
+                    demand: d2,
+                    implementation: m2,
+                },
+            ) if (i1.len(), e1, d1, m1) == (i2.len(), e2, d2, m2) => {
+                let mut result = Vec::new();
+                for (i1, i2) in i1.iter().zip(i2) {
+                    result.extend(i1.tree_differences(i2));
+                }
+                result
+            }
+            (
+                RelationExpr::Reduce {
+                    input: i1,
+                    group_key: k1,
+                    aggregates: a1,
+                },
+                RelationExpr::Reduce {
+                    input: i2,
+                    group_key: k2,
+                    aggregates: a2,
+                },
+            ) if (k1, a1) == (k2, a2) => i1.tree_differences(i2),
+            (
+                RelationExpr::TopK {
+                    input: i1,
+                    group_key: k1,
+                    order_key: o1,
+                    limit: l1,
+                    offset: f1,
+                },
+                RelationExpr::TopK {
+                    input: i2,
+                    group_key: k2,
+                    order_key: o2,
+                    limit: l2,
+                    offset: f2,
+                },
+            ) if (k1, o1, l1, f1) == (k2, o2, l2, f2) => i1.tree_differences(i2),
+
+            (RelationExpr::Negate { input: i1 }, RelationExpr::Negate { input: i2 }) => {
+                i1.tree_differences(i2)
+            }
+            (RelationExpr::Threshold { input: i1 }, RelationExpr::Threshold { input: i2 }) => {
+                i1.tree_differences(i2)
+            }
+            (
+                RelationExpr::Union {
+                    left: l1,
+                    right: r1,
+                },
+                RelationExpr::Union {
+                    left: l2,
+                    right: r2,
+                },
+            ) => {
+                let mut result = Vec::new();
+                result.extend(l1.tree_differences(l2));
+                result.extend(r1.tree_differences(r2));
+                result
+            }
+            (
+                RelationExpr::ArrangeBy {
+                    input: i1,
+                    keys: o1,
+                },
+                RelationExpr::ArrangeBy {
+                    input: i2,
+                    keys: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            _ => vec![(self.clone(), other.clone())],
+        }
+    }
+
     /// Constructs a constant collection from specific rows and schema, where
     /// each row will have a multiplicity of one.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {

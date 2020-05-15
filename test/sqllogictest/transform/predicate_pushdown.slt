@@ -73,9 +73,6 @@ EXPLAIN PLAN FOR
 WHERE b = 3 AND c = 3
 ----
 %0 =
-| Get materialize.public.y (u3)
-| Filter (3 = (#0 + 1))
-| Map (#0 + 1), (#1 + 1)
-| Filter (#2 = 3)
+| Constant
 
 EOF

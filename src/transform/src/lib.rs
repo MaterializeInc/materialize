@@ -38,6 +38,7 @@ pub mod join_implementation;
 pub mod map_lifting;
 pub mod nonnull_requirements;
 pub mod nonnullable;
+pub mod predicate_propagation;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
@@ -222,6 +223,7 @@ impl Default for Optimizer {
                     Box::new(crate::map_lifting::LiteralLifting),
                     Box::new(crate::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
+                    Box::new(crate::predicate_propagation::PredicateKnowledge),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
