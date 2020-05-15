@@ -68,7 +68,6 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
     && apt-get autoremove -y \
     ;
 
-COPY ./flush-tables /usr/local/bin/flush-tables
 COPY ./mz-default.cfg /etc/chbenchmark/mz-default.cfg
 
 ENTRYPOINT ["chBenchmark"]
