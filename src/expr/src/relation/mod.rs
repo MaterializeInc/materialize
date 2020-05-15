@@ -695,6 +695,174 @@ impl MirRelationExpr {
         count
     }
 
+    /// Recursively descend two expressions until differences are found.
+    ///
+    /// The resulting sequence contains the first moments at which differences were observed.
+    /// There may be multiple elements in the list as the differences may only be observed
+    /// when descending independent tree paths.
+    pub fn tree_differences(
+        &self,
+        other: &MirRelationExpr,
+    ) -> Vec<(MirRelationExpr, MirRelationExpr)> {
+        match (self, other) {
+            (MirRelationExpr::Constant { .. }, MirRelationExpr::Constant { .. })
+                if self == other =>
+            {
+                Vec::new()
+            }
+            (MirRelationExpr::Get { .. }, MirRelationExpr::Get { .. }) if self == other => {
+                Vec::new()
+            }
+            (
+                MirRelationExpr::Let {
+                    id: i1,
+                    value: v1,
+                    body: b1,
+                },
+                MirRelationExpr::Let {
+                    id: i2,
+                    value: v2,
+                    body: b2,
+                },
+            ) if i1 == i2 => {
+                let mut result = Vec::new();
+                result.extend(v1.tree_differences(v2));
+                result.extend(b1.tree_differences(b2));
+                result
+            }
+            (
+                MirRelationExpr::Project {
+                    input: i1,
+                    outputs: o1,
+                },
+                MirRelationExpr::Project {
+                    input: i2,
+                    outputs: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            (
+                MirRelationExpr::Map {
+                    input: i1,
+                    scalars: o1,
+                },
+                MirRelationExpr::Map {
+                    input: i2,
+                    scalars: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            (
+                MirRelationExpr::Filter {
+                    input: i1,
+                    predicates: o1,
+                },
+                MirRelationExpr::Filter {
+                    input: i2,
+                    predicates: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            (
+                MirRelationExpr::FlatMap {
+                    input: i1,
+                    func: f1,
+                    exprs: e1,
+                },
+                MirRelationExpr::FlatMap {
+                    input: i2,
+                    func: f2,
+                    exprs: e2,
+                },
+            ) if (f1, e1) == (f2, e2) => i1.tree_differences(i2),
+            (
+                MirRelationExpr::Join {
+                    inputs: i1,
+                    equivalences: e1,
+                    implementation: m1,
+                },
+                MirRelationExpr::Join {
+                    inputs: i2,
+                    equivalences: e2,
+                    implementation: m2,
+                },
+            ) if (i1.len(), e1, m1) == (i2.len(), e2, m2) => {
+                let mut result = Vec::new();
+                for (i1, i2) in i1.iter().zip(i2) {
+                    result.extend(i1.tree_differences(i2));
+                }
+                result
+            }
+            (
+                MirRelationExpr::Reduce {
+                    input: i1,
+                    group_key: k1,
+                    aggregates: a1,
+                    monotonic: m1,
+                    expected_group_size: e1,
+                },
+                MirRelationExpr::Reduce {
+                    input: i2,
+                    group_key: k2,
+                    aggregates: a2,
+                    monotonic: m2,
+                    expected_group_size: e2,
+                },
+            ) if (k1, a1, m1, e1) == (k2, a2, m2, e2) => i1.tree_differences(i2),
+            (
+                MirRelationExpr::TopK {
+                    input: i1,
+                    group_key: k1,
+                    order_key: o1,
+                    limit: l1,
+                    offset: f1,
+                    monotonic: m1,
+                },
+                MirRelationExpr::TopK {
+                    input: i2,
+                    group_key: k2,
+                    order_key: o2,
+                    limit: l2,
+                    offset: f2,
+                    monotonic: m2,
+                },
+            ) if (k1, o1, l1, f1, m1) == (k2, o2, l2, f2, m2) => i1.tree_differences(i2),
+
+            (MirRelationExpr::Negate { input: i1 }, MirRelationExpr::Negate { input: i2 }) => {
+                i1.tree_differences(i2)
+            }
+            (
+                MirRelationExpr::Threshold { input: i1 },
+                MirRelationExpr::Threshold { input: i2 },
+            ) => i1.tree_differences(i2),
+            (
+                MirRelationExpr::Union {
+                    base: b1,
+                    inputs: i1,
+                },
+                MirRelationExpr::Union {
+                    base: b2,
+                    inputs: i2,
+                },
+            ) => {
+                let mut result = Vec::new();
+                result.extend(b1.tree_differences(b2));
+                for (i1, i2) in i1.iter().zip(i2.iter()) {
+                    result.extend(i1.tree_differences(i2));
+                }
+                result
+            }
+            (
+                MirRelationExpr::ArrangeBy {
+                    input: i1,
+                    keys: o1,
+                },
+                MirRelationExpr::ArrangeBy {
+                    input: i2,
+                    keys: o2,
+                },
+            ) if o1 == o2 => i1.tree_differences(i2),
+            _ => vec![(self.clone(), other.clone())],
+        }
+    }
+
     /// Constructs a constant collection from specific rows and schema, where
     /// each row will have a multiplicity of one.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
@@ -1736,31 +1904,77 @@ impl AggregateExpr {
 
     /// Returns whether the expression has a constant result.
     pub fn is_constant(&self) -> bool {
-        match self.func {
-            AggregateFunc::MaxInt16
-            | AggregateFunc::MaxInt32
-            | AggregateFunc::MaxInt64
-            | AggregateFunc::MaxFloat32
-            | AggregateFunc::MaxFloat64
-            | AggregateFunc::MaxBool
-            | AggregateFunc::MaxString
-            | AggregateFunc::MaxDate
-            | AggregateFunc::MaxTimestamp
-            | AggregateFunc::MaxTimestampTz
-            | AggregateFunc::MinInt16
-            | AggregateFunc::MinInt32
-            | AggregateFunc::MinInt64
-            | AggregateFunc::MinFloat32
-            | AggregateFunc::MinFloat64
-            | AggregateFunc::MinBool
-            | AggregateFunc::MinString
-            | AggregateFunc::MinDate
-            | AggregateFunc::MinTimestamp
-            | AggregateFunc::MinTimestampTz
-            | AggregateFunc::Any
-            | AggregateFunc::All => self.expr.is_literal(),
-            AggregateFunc::Count => self.expr.is_literal_null(),
-            _ => self.expr.is_literal_err(),
+        self.as_literal().is_some()
+    }
+
+    /// A literal, if we are certain the aggregate evaluates to one.
+    ///
+    /// All aggregates require their expression to be a literal
+    pub fn as_literal(&self) -> Option<Result<Datum, &EvalError>> {
+        if let Some(literal) = self.expr.as_literal() {
+            match literal {
+                Err(err) => Some(Err(err)),
+                Ok(literal) => {
+                    match self.func {
+                        // These aggregates always return an input datum.
+                        AggregateFunc::MaxInt16
+                        | AggregateFunc::MaxInt32
+                        | AggregateFunc::MaxInt64
+                        | AggregateFunc::MaxFloat32
+                        | AggregateFunc::MaxFloat64
+                        | AggregateFunc::MaxBool
+                        | AggregateFunc::MaxString
+                        | AggregateFunc::MaxDate
+                        | AggregateFunc::MaxTimestamp
+                        | AggregateFunc::MaxTimestampTz
+                        | AggregateFunc::MinInt16
+                        | AggregateFunc::MinInt32
+                        | AggregateFunc::MinInt64
+                        | AggregateFunc::MinFloat32
+                        | AggregateFunc::MinFloat64
+                        | AggregateFunc::MinBool
+                        | AggregateFunc::MinString
+                        | AggregateFunc::MinDate
+                        | AggregateFunc::MinTimestamp
+                        | AggregateFunc::MinTimestampTz => Some(Ok(literal)),
+                        // Any maps non-Booleans to `Datum::False`.
+                        AggregateFunc::Any => match literal {
+                            Datum::True | Datum::Null => Some(Ok(literal)),
+                            _ => Some(Ok(Datum::False)),
+                        },
+                        // All maps non-Booleans to `Datum::True`.
+                        AggregateFunc::All => match literal {
+                            Datum::False | Datum::Null => Some(Ok(literal)),
+                            _ => Some(Ok(Datum::True)),
+                        },
+                        // These aggregates map all nulls to null.
+                        // They also map all zeros to zero, but not there yet.
+                        AggregateFunc::SumInt16
+                        | AggregateFunc::SumInt32
+                        | AggregateFunc::SumInt64
+                        | AggregateFunc::SumFloat32
+                        | AggregateFunc::SumFloat64
+                        | AggregateFunc::SumNumeric => {
+                            match literal {
+                                Datum::Null => Some(Ok(Datum::Null)),
+                                // We could match appropriate zeros here, to produce zero.
+                                _ => None,
+                            }
+                        }
+                        // Count maps all nulls to zero, and nothing else to a literal.
+                        AggregateFunc::Count => {
+                            if literal == Datum::Null {
+                                Some(Ok(Datum::Int64(0)))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+            }
+        } else {
+            None
         }
     }
 
