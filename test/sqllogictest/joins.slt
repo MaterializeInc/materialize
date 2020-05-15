@@ -127,6 +127,7 @@ EOF
 # because subquery planning re-uses the relation it wraps.
 # It is perfectly acceptable for this plan to change, esp
 # if it improves (i.e. the cross join is removed).
+
 query T multiline
 EXPLAIN PLAN FOR
 SELECT l1.la, l1.lb
