@@ -22,7 +22,7 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
-use timely::scheduling::activate::SyncActivator;
+use timely::scheduling::activate::{Activator, SyncActivator};
 use url::Url;
 
 use dataflow_types::{
@@ -144,7 +144,7 @@ struct DataPlaneInfo {
     /// A buffer for a message that the source has ingested but cannot yet timestamp
     /// INVARIANT: consumer is EITHER in consumers or in buffer, but cannot be in both
     /// TODO(ncrooks): make buffer per partition
-    buffer: Option<(MessageParts, BaseConsumer<GlueConsumerContext>)>,
+    buffer: Option<MessageParts>,
     /// The expected number of partitions. If needs_refresh is set to false, then
     /// expected_partition_count == consumers.len() == partition_metadata.len()
     expected_partition_count: i32,
@@ -179,11 +179,7 @@ impl DataPlaneInfo {
     fn get_consumer_count(&self) -> i32 {
         // Note: the number of consumers is guaranteed to always be smaller than
         // expected_partition_count (i32)
-        if self.buffer.is_some() {
-            (self.consumers.len() + 1).try_into().unwrap()
-        } else {
-            self.consumers.len().try_into().unwrap()
-        }
+        self.consumers.len().try_into().unwrap()
     }
 
     /// Refreshes source information for the expected partition count
@@ -243,9 +239,18 @@ impl DataPlaneInfo {
     /// This function checks whether any messages have been buffered. If yes, returns the buffered
     /// message. Otherwise, polls from the next consumer for which a message is available. This function polls the set
     /// round-robin: when a consumer is polled, it is placed at the back of the queue.
-    fn get_next_message(&mut self) -> Option<(MessageParts, BaseConsumer<GlueConsumerContext>)> {
+    ///
+    /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
+    /// we skip this message, and seek to the appropriate offset
+    fn get_next_message(
+        &mut self,
+        cp_info: &ControlPlaneInfo,
+        activator: &Activator,
+    ) -> Option<MessageParts> {
+        assert_eq!(self.get_consumer_count(), self.expected_partition_count);
+        let mut next_message = None;
         if self.buffer.is_some() {
-            self.buffer.take()
+            next_message = self.buffer.take()
         } else {
             let consumer_count = self.get_consumer_count();
             let mut attempts = 0;
@@ -260,13 +265,56 @@ impl DataPlaneInfo {
                     _ => None,
                 };
                 if let Some(message) = message {
-                    return Some((message, consumer));
+                    let partition = message.partition;
+                    let offset = MzOffset::from(message.offset);
+                    // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
+                    // a network issue or a new partition added, at which point the consumer may
+                    // start processing the topic from the beginning, or we may see duplicate offsets
+                    // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
+                    // that we are ever going to see holds.
+                    // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
+                    // is enabled, there may be gaps in the sequence.
+                    // If we see an "old" offset, we fast-forward the consumer and skip that message
+
+                    // Given the explicit consumer to partition assignment, we should never receive a message
+                    // for a partition for which we have no metadata
+                    assert!(cp_info.knows_of(partition));
+
+                    let mut last_offset = cp_info.partition_metadata[partition as usize].offset;
+
+                    if offset <= last_offset {
+                        warn!(
+                            "Kafka message before expected offset: \
+                             source {} (reading topic {}, partition {}) \
+                             received Mz offset {} expected Mz offset {:?}",
+                            self.source_name,
+                            self.topic_name,
+                            partition,
+                            offset,
+                            last_offset.offset + 1
+                        );
+                        // Seek to the *next* offset (ak last_offset + 1) that we have not yet processed
+                        last_offset.offset += 1;
+                        self.fast_forward_consumer(&consumer, partition, last_offset.into());
+                        // We explicitly should not consume the message as we have already processed it
+                        // However, we make sure to activate the source to make sure that we get a chance
+                        // to read from this consumer again (even if no new data arrives)
+                        activator.activate();
+                    } else {
+                        next_message = Some(message);
+                    }
                 }
                 self.consumers.push_back(consumer);
-                attempts += 1;
+                if next_message.is_some() {
+                    // Found a message, exit the loop and return message
+                    break;
+                } else {
+                    attempts += 1;
+                }
             }
-            None
         }
+        assert_eq!(self.get_consumer_count(), self.expected_partition_count);
+        next_message
     }
 
     /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
@@ -294,7 +342,7 @@ impl DataPlaneInfo {
                         "Tried to fast-forward consumer on partition PID: {} to Kafka offset {}. Consumer is now at position {}",
                         pid, next_offset.offset, position);
                     if position != next_offset.offset {
-                        warn!("We did not seek to the expected Kafka offset. Current offset: {} Expected offset: {}", position, next_offset.offset);
+                        warn!("We did not seek to the expected Kafka offset. Current Kafka offset: {} Expected Kafka offset: {}", position, next_offset.offset);
                     }
                 } else {
                     warn!("Tried to fast-forward consumer on partition PID:{} to Kafka offset {}. Could not obtain new consumer position",
@@ -460,19 +508,11 @@ where
                         &timestamp_histories,
                     );
 
-                    while let Some((message, consumer)) = dp_info.get_next_message() {
+                    while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                         assert!(dp_info.buffer.is_none());
 
                         let partition = message.partition;
                         let offset = MzOffset::from(message.offset);
-
-                        // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
-                        // a network issue or a new partition added, at which point the consumer may
-                        // start processing the topic from the beginning, or we may see duplicate offsets
-                        // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
-                        // that we are ever going to see holds.
-                        // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
-                        // is enabled, there may be gaps in the sequence.
 
                         KAFKA_PARTITION_OFFSET_RECEIVED
                             .with_label_values(&[
@@ -482,88 +522,46 @@ where
                             ])
                             .set(offset.offset);
 
-                        // Given the explicit consumer to partition assignment, we should never receive a message
-                        // for a partition for which we have no metadata
-                        assert!(cp_info.knows_of(partition));
+                        // Determine the timestamp to which we need to assign this message
+                        let ts =
+                            find_matching_timestamp(&id, partition, offset, &timestamp_histories);
+                        match ts {
+                            None => {
+                                // We have not yet decided on a timestamp for this message,
+                                // we need to buffer the message
+                                dp_info.buffer = Some(message);
+                                activator.activate();
+                                return SourceStatus::Alive;
+                            }
+                            Some(ts) => {
+                                // Note: empty and null payload/keys are currently
+                                // treated as the same thing.
+                                let key = message.key.unwrap_or_default();
+                                let out = message.payload.unwrap_or_default();
+                                cp_info.partition_metadata[partition as usize].offset = offset;
+                                bytes_read += key.len() as i64;
+                                bytes_read += out.len() as i64;
+                                let ts_cap = cap.delayed(&ts);
+                                output.session(&ts_cap).give((
+                                    key,
+                                    (out, Some(Into::<KafkaOffset>::into(offset).offset)),
+                                ));
 
-                        let mut last_offset = cp_info.partition_metadata[partition as usize].offset;
+                                KAFKA_PARTITION_OFFSET_INGESTED
+                                    .with_label_values(&[
+                                        &dp_info.topic_name,
+                                        &id.to_string(),
+                                        &partition.to_string(),
+                                    ])
+                                    .set(offset.offset);
 
-                        if offset <= last_offset {
-                            warn!(
-                                "Kafka message before expected offset: \
-                             source {} (reading topic {}, partition {}) \
-                             received mz offset {} expected mz offset {:?}",
-                                dp_info.source_name,
-                                dp_info.topic_name,
-                                partition,
-                                offset,
-                                last_offset.offset + 1
-                            );
-
-                            // Seek to the *next* offset (ak last_offset + 1) that we have not yet processed
-                            last_offset.offset += 1;
-                            dp_info.fast_forward_consumer(&consumer, partition, last_offset.into());
-                            // We explicitly should not consume the message as we have already processed it,
-                            // so we simply return the consumer
-                            dp_info.consumers.push_back(consumer);
-                            assert_eq!(dp_info.get_consumer_count(), cp_info.get_partition_count(),);
-                        } else {
-                            // Determine the timestamp to which we need to assign this message
-                            let ts = find_matching_timestamp(
-                                &id,
-                                partition,
-                                offset,
-                                &timestamp_histories,
-                            );
-                            match ts {
-                                None => {
-                                    // We have not yet decided on a timestamp for this message,
-                                    // we need to buffer the message
-                                    dp_info.buffer = Some((message, consumer));
-                                    assert_eq!(
-                                        dp_info.get_consumer_count(),
-                                        cp_info.get_partition_count(),
-                                    );
-                                    activator.activate();
-                                    return SourceStatus::Alive;
-                                }
-                                Some(ts) => {
-                                    // Note: empty and null payload/keys are currently
-                                    // treated as the same thing.
-                                    let key = message.key.unwrap_or_default();
-                                    let out = message.payload.unwrap_or_default();
-                                    cp_info.partition_metadata[partition as usize].offset = offset;
-                                    bytes_read += key.len() as i64;
-                                    bytes_read += out.len() as i64;
-                                    let ts_cap = cap.delayed(&ts);
-                                    output.session(&ts_cap).give((
-                                        key,
-                                        (out, Some(Into::<KafkaOffset>::into(offset).offset)),
-                                    ));
-                                    // Message processed, return the consumer
-                                    dp_info.consumers.push_back(consumer);
-
-                                    assert_eq!(
-                                        dp_info.get_consumer_count(),
-                                        cp_info.get_partition_count(),
-                                    );
-
-                                    KAFKA_PARTITION_OFFSET_INGESTED
-                                        .with_label_values(&[
-                                            &dp_info.topic_name,
-                                            &id.to_string(),
-                                            &partition.to_string(),
-                                        ])
-                                        .set(offset.offset);
-
-                                    downgrade_capability(
-                                        &id,
-                                        cap,
-                                        &mut cp_info,
-                                        &mut dp_info,
-                                        &timestamp_histories,
-                                    );
-                                }
+                                downgrade_capability(
+                                    &id,
+                                    cap,
+                                    &mut cp_info,
+                                    &mut dp_info,
+                                    &timestamp_histories,
+                                );
                             }
                         }
 
