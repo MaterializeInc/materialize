@@ -54,11 +54,10 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("-d", "--duration-seconds", "duration", default=60 * 5)
-@click.option("--tag", help="Which tag to launch for docker processes")
 @click.option("-w", "--workflow", help="The name of a workflow to run")
 @click.argument("composition")
-def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> None:
+@click.argument("services", nargs=-1)
+def up(composition: str, workflow: Optional[str], services: Iterable[str],) -> None:
     """Conduct a docker-composed set of services
 
     With the --workflow flag, perform all the steps in the workflow together.
@@ -66,10 +65,32 @@ def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> N
     comp = Composition.find(composition)
     if workflow is not None:
         say(f"Executing {comp.name} -> {workflow}")
+        if services:
+            serv = " ".join(services)
+            say(f"WARNING: services list specified with -w, ignoring: {serv}")
         comp.run_workflow(workflow)
     else:
-        say(f"Starting {comp.name}")
-        comp.run()
+        comp.up(list(services))
+
+
+@cli.command()
+@click.option("-w", "--workflow", help="The name of a workflow to run")
+@click.argument("composition")
+@click.argument("services", nargs=-1)
+def run(composition: str, workflow: Optional[str], services: Iterable[str],) -> None:
+    """Conduct a docker-composed set of services
+
+    With the --workflow flag, perform all the steps in the workflow together.
+    """
+    comp = Composition.find(composition)
+    if workflow is not None:
+        say(f"Executing {comp.name} -> {workflow}")
+        if services:
+            serv = " ".join(services)
+            say(f"WARNING: services list specified with -w, ignoring: {serv}")
+        comp.run_workflow(workflow)
+    else:
+        comp.run(list(services))
 
 
 @cli.command()
@@ -138,10 +159,17 @@ class Composition:
     def workflows(self) -> Collection["Workflow"]:
         return self._workflows.all_workflows()
 
-    def run(self) -> None:
+    def up(self, services: List[str]) -> None:
         with cd(self._path):
             try:
-                mzcompose_up([])
+                mzcompose_up(services)
+            except subprocess.CalledProcessError:
+                raise Failed("error when bringing up all services")
+
+    def run(self, services: List[str]) -> None:
+        with cd(self._path):
+            try:
+                mzcompose_run(services)
             except subprocess.CalledProcessError:
                 raise Failed("error when bringing up all services")
 
