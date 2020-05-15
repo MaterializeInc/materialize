@@ -44,12 +44,10 @@ impl ColumnKnowledge {
     ) -> Result<Vec<DatumKnowledge>, crate::TransformError> {
         Ok(match expr {
             RelationExpr::ArrangeBy { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
-            RelationExpr::Get { id, typ } => knowledge.get(id).cloned().unwrap_or_else(|| {
-                typ.column_types
-                    .iter()
-                    .map(|ct| DatumKnowledge::from(ct))
-                    .collect()
-            }),
+            RelationExpr::Get { id, typ } => knowledge
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| typ.column_types.iter().map(DatumKnowledge::from).collect()),
             RelationExpr::Constant { rows, typ } => {
                 if rows.len() == 1 {
                     rows[0]
@@ -62,10 +60,7 @@ impl ColumnKnowledge {
                         })
                         .collect()
                 } else {
-                    typ.column_types
-                        .iter()
-                        .map(|ct| DatumKnowledge::from(ct))
-                        .collect()
+                    typ.column_types.iter().map(DatumKnowledge::from).collect()
                 }
             }
             RelationExpr::Let { id, value, body } => {
@@ -105,12 +100,7 @@ impl ColumnKnowledge {
                     optimize(expr, &input.typ(), &input_knowledge[..])?;
                 }
                 let func_typ = func.output_type();
-                input_knowledge.extend(
-                    func_typ
-                        .column_types
-                        .iter()
-                        .map(|typ| DatumKnowledge::from(typ)),
-                );
+                input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
                 input_knowledge
             }
             RelationExpr::Filter { input, predicates } => {
