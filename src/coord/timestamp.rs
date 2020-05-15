@@ -33,7 +33,6 @@ use rdkafka::ClientConfig;
 use rusoto_kinesis::KinesisClient;
 use rusqlite::{params, NO_PARAMS};
 
-use aws_util;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{

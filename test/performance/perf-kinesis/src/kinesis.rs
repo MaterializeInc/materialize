@@ -22,7 +22,6 @@ use rusoto_kinesis::{
     PutRecordsError, PutRecordsInput, PutRecordsRequestEntry,
 };
 
-use aws_util;
 use ore::retry;
 
 const DUMMY_PARTITION_KEY: &str = "dummy";

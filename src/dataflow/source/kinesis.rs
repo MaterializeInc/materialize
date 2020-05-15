@@ -10,7 +10,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{error, warn};

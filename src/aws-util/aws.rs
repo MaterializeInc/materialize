@@ -11,7 +11,6 @@
 
 use std::time::Duration;
 
-use anyhow;
 use rusoto_core::Region;
 use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
