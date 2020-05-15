@@ -16,7 +16,9 @@
 
 set -euo pipefail
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+# work from the root of the repo, even if being executed from somewhere else
+cd "$(dirname "$0")/.."
+root=$(pwd)
 
 # shellcheck source=SCRIPTDIR/../misc/shlib/shlib.bash
 . "$root"/misc/shlib/shlib.bash
@@ -38,7 +40,7 @@ mapfile_shim py_dirs < <(echo "${py_files[@]}" | xargs -n 1 dirname | sort -u)
 
 try "$root"/bin/pyactivate --dev -m compileall -q -l "${py_dirs[@]}"
 if $last_failed; then
-    echo "$(uw Error): python syntax errors, this may cause nonsensical errors to follow"
+    echo "$(uw Error): python syntax errors found"
 fi
 
 try "$root"/bin/pyactivate --dev -m mypy --pretty "${py_files[@]}"
