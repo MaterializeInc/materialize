@@ -919,7 +919,6 @@ FROM t2, t3
 | | implementation = DeltaQuery
 | |   delta %4 %5.(#0)
 | |   delta %5 %4.(#0)
-| Filter !(isnull(#0))
 | Project (#0, #1)
 
 %7 =
@@ -928,11 +927,13 @@ FROM t2, t3
 
 %8 =
 | Get %6 (l2)
-| Reduce group=(#0, #1)
+| Project (#0)
+| Reduce group=(#0)
 | | agg count(true)
-| Filter (#2 > 1)
-| Project (#0, #1)
+| Filter (#1 > 1)
+| Project (#0)
 | Map (err: more than one record produced in subquery)
+| Project (#0, #0, #1)
 
 %9 = Let l3 =
 | Union %7 %8
@@ -943,9 +944,10 @@ FROM t2, t3
 
 %11 =
 | Get %9 (l3)
-| Project (#0, #1)
-| Distinct group=(#0, #1)
+| Project (#0)
+| Distinct group=(#0)
 | Negate
+| Project (#0, #0)
 
 %12 =
 | Union %11 %3
