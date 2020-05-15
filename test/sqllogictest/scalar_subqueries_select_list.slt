@@ -928,11 +928,13 @@ FROM t2, t3
 
 %8 =
 | Get %6 (l2)
-| Reduce group=(#0, #1)
+| Project (#0)
+| Reduce group=(#0)
 | | agg count(true)
-| Filter (#2 > 1)
-| Project (#0, #1)
+| Filter (#1 > 1)
+| Project (#0)
 | Map (err: more than one record produced in subquery)
+| Project (#0, #0, #1)
 
 %9 = Let l3 =
 | Union %7 %8
