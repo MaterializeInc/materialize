@@ -221,3 +221,20 @@ NULL  NULL  4  r4
 NULL  NULL  4  r4
 1     l1    1  r1
 3     l3    3  r3
+
+
+# Test that outer joins work correctly in correlated subqueries (#3047)
+
+query IT rowsort
+SELECT * FROM l WHERE EXISTS (SELECT * from l as l2 LEFT JOIN r ON l.la = r.ra)
+----
+1  l1
+2  l2
+3  l3
+
+query IT rowsort
+SELECT * FROM r WHERE EXISTS (SELECT * from l RIGHT JOIN r as r2 ON l.la = r.ra)
+----
+4  r4
+1  r1
+3  r3
