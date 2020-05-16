@@ -1010,6 +1010,7 @@ pub mod decorrelation {
                                         get_join.clone(),
                                         rt.column_types
                                             .into_iter()
+                                            .skip(oa)
                                             .map(|typ| (Datum::Null, typ.nullable(true)))
                                             .collect(),
                                     );
@@ -1030,6 +1031,7 @@ pub mod decorrelation {
                                                 ),
                                             lt.column_types
                                                 .into_iter()
+                                                .skip(oa)
                                                 .map(|typ| (Datum::Null, typ.nullable(true)))
                                                 .collect(),
                                         )
