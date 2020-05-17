@@ -442,7 +442,6 @@ pub struct DiffPair<T> {
 pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
-    fast_row_schema: Option<Schema>,
     envelope: EnvelopeType,
 }
 
@@ -458,7 +457,6 @@ impl fmt::Debug for Decoder {
                     &"none"
                 },
             )
-            .field("fast_row_schema", &self.fast_row_schema)
             .finish()
     }
 }
@@ -481,28 +479,9 @@ impl Decoder {
         let writer_schemas =
             schema_registry.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
 
-        let fast_row_schema = match reader_schema.top_node().inner {
-            // If the first two fields in the record are `before` and `after`,
-            // we don't need to decode the whole record. This can yield a
-            // substantial performance win when there is additional heavyweight
-            // metadata at the end of each record which would be immediately
-            // discarded.
-            SchemaPiece::Record { fields, .. }
-                if fields[0].name == "before" && fields[1].name == "after" =>
-            {
-                let node = SchemaNodeOrNamed {
-                    root: &reader_schema,
-                    inner: fields[0].schema.as_ref(),
-                };
-                Some(node.to_schema())
-            }
-            _ => None,
-        };
-
         Decoder {
             reader_schema,
             writer_schemas,
-            fast_row_schema,
             envelope,
         }
     }
@@ -543,24 +522,8 @@ impl Decoder {
         };
 
         let result = if self.envelope == EnvelopeType::Debezium {
-            if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
-                // The record is laid out such that we can extract the `before` and
-                // `after` fields without decoding the entire record.
-                let before = extract_nullable_row(
-                    avro::from_avro_datum(&schema, &mut bytes)?,
-                    iter::once(Datum::Int64(-1)),
-                    schema.top_node(),
-                )?;
-                let after = extract_nullable_row(
-                    avro::from_avro_datum(&schema, &mut bytes)?,
-                    iter::once(Datum::Int64(1)),
-                    schema.top_node(),
-                )?;
-                DiffPair { before, after }
-            } else {
-                let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-                extract_debezium_slow(val, self.reader_schema.top_node())?
-            }
+            let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
+            extract_debezium_slow(val, self.reader_schema.top_node())?
         } else {
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
             let row = extract_row(val, iter::empty(), self.reader_schema.top_node())?;
