@@ -21,5 +21,5 @@ rusoto_credential = "0.43.0-beta.1"
 rusoto_kinesis = "0.43.0-beta.1"
 structopt = "0.3.11"
 thiserror = "1.0.18"
-tokio = { version = "0.2.13", features = ["full"] }
+tokio = { version = "0.2.21", features = ["full"] }
 tokio-postgres = "0.5.1"
