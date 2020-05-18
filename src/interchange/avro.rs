@@ -22,8 +22,8 @@ use serde_json::json;
 use sha2::Sha256;
 
 use avro::schema::{
-    resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaNodeOrNamed,
-    SchemaPiece, SchemaPieceOrNamed,
+    resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaPiece,
+    SchemaPieceOrNamed,
 };
 use avro::types::{DecimalValue, Value};
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
@@ -505,7 +505,6 @@ impl DebeziumDecodeState {
         let before_idx = *top_indices.get("before")?;
         let after_idx = *top_indices.get("after")?;
         let binlog_schema_indices = BinlogSchemaIndices::new_from_schema(top_node);
-        let fields = unwrap_record_fields(top_node);
 
         Some(Self {
             before_idx,
@@ -530,10 +529,10 @@ impl DebeziumDecodeState {
                         "snapshot",
                         &mut source_fields,
                     )?
-                    .into_bool()
+                    .into_nullable_bool()
                     .ok_or_else(|| format_err!("\"snapshot\" is not a boolean"))?;
 
-                    if snapshot_val {
+                    if !snapshot_val {
                         let file_val = take_field_by_index(
                             schema_indices.source_file_idx,
                             "file",
@@ -570,7 +569,7 @@ impl DebeziumDecodeState {
                                 }
                                 oe.insert((pos, row));
                             }
-                            Entry::Vacant(mut ve) => {
+                            Entry::Vacant(ve) => {
                                 ve.insert((pos as usize, row as usize));
                             }
                         }
@@ -674,18 +673,18 @@ impl Decoder {
             bail!("wrong avro serialization magic: expected 0, got {}", magic);
         }
 
-        let (resolved_schema, reader_schema) = match &mut self.writer_schemas {
+        let resolved_schema = match &mut self.writer_schemas {
             Some(cache) => match cache.get(schema_id, &self.reader_schema).await? {
                 // If we get a schema back, the writer schema differs from our
                 // schema, so we need to perform schema resolution. If not,
                 // the schemas are identical, so we can skip schema resolution.
-                Some(writer_schema) => (writer_schema, Some(&self.reader_schema)),
-                None => (&self.reader_schema, None),
+                Some(writer_schema) => writer_schema,
+                None => &self.reader_schema,
             },
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
-            None => (&self.reader_schema, None),
+            None => &self.reader_schema,
         };
 
         let result = if self.envelope == EnvelopeType::Debezium {

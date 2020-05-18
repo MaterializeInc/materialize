@@ -350,9 +350,10 @@ impl Value {
         }
     }
 
-    pub fn into_bool(self) -> Option<bool> {
+    pub fn into_nullable_bool(self) -> Option<bool> {
         match self {
             Value::Boolean(b) => Some(b),
+            Value::Union(_, v) => v.into_nullable_bool(),
             _ => None,
         }
     }
