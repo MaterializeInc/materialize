@@ -17,7 +17,7 @@ use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::{bail, format_err};
 use itertools::Itertools;
-use log::{error, warn};
+use log::warn;
 use serde_json::json;
 use sha2::Sha256;
 
@@ -490,7 +490,7 @@ fn take_field_by_index(
     })?;
     if name != expected_name {
         bail!(
-            "Value doe snot match schema: expected \"{}\", found \"{}\"",
+            "Value does not match schema: expected \"{}\", found \"{}\"",
             expected_name,
             name
         );
@@ -626,7 +626,7 @@ impl Decoder {
         reader_schema: &str,
         schema_registry: Option<ccsr::ClientConfig>,
         envelope: EnvelopeType,
-    ) -> Decoder {
+    ) -> Result<Decoder> {
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
         let reader_schema = parse_schema(reader_schema).unwrap();
@@ -634,22 +634,19 @@ impl Decoder {
             schema_registry.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
 
         let debezium = if envelope == EnvelopeType::Debezium {
-            DebeziumDecodeState::new_from_schema(&reader_schema)
+            Some(
+                DebeziumDecodeState::new_from_schema(&reader_schema)
+                    .ok_or_else(|| format_err!("Failed to extract Debezium schema information!"))?,
+            )
         } else {
             None
         };
-        // TODO - This should really cause `new` to fail, as the decoder is basically useless in this state.
-        // But before we can make `Decoder::new` return a `Result`, we first need to pipe the runtime errors
-        // stuff through and make avro decoding fallible.
-        if envelope == EnvelopeType::Debezium && debezium.is_none() {
-            error!("Couldn't extract Debezium schema information! No records will be decoded with this schema!");
-        }
-        Decoder {
+        Ok(Decoder {
             reader_schema,
             writer_schemas,
             envelope,
             debezium,
-        }
+        })
     }
 
     /// Decodes Avro-encoded `bytes` into a `DiffPair`.
@@ -674,13 +671,10 @@ impl Decoder {
         }
 
         let resolved_schema = match &mut self.writer_schemas {
-            Some(cache) => match cache.get(schema_id, &self.reader_schema).await? {
-                // If we get a schema back, the writer schema differs from our
-                // schema, so we need to perform schema resolution. If not,
-                // the schemas are identical, so we can skip schema resolution.
-                Some(writer_schema) => writer_schema,
-                None => &self.reader_schema,
-            },
+            Some(cache) => cache
+                .get(schema_id, &self.reader_schema)
+                .await?
+                .unwrap_or(&self.reader_schema),
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
@@ -968,6 +962,8 @@ impl SchemaCache {
                 if schema.fingerprint::<Sha256>().bytes == self.reader_fingerprint.bytes {
                     Ok(v.insert(None).as_ref())
                 } else {
+                    // the writer schema differs from the reader schema,
+                    // so we need to perform schema resolution.
                     let resolved = resolve_schemas(&schema, reader_schema)?;
                     Ok(v.insert(Some(resolved)).as_ref())
                 }

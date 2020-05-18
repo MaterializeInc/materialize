@@ -87,8 +87,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"a": 1, "b": 1, "json": "null", "c": "True", "d": "False"}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": false}}
 {"before": null, "after": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound"}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": false}}
 {"before": null, "after": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True"}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": false}}
-{"before": null, "after": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound"}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": false}}
-{"before": null, "after": {"a": 42, "b": 19, "json": "[4, 5, 6]", "c": "FileNotFound", "d": "True"}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": false}}
 
 # Create a source using an inline schema.
 
@@ -108,7 +106,6 @@ a  b  json                     c            d
 1  1  null                     True         False
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound
 -1  7 "[1.0,2.0,3.0]"          FileNotFound True
-42 19 "[4.0,5.0,6.0]"          FileNotFound True
 
 > CREATE MATERIALIZED SOURCE fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -120,6 +117,18 @@ a  b  json                     c            d
 a  b  json            c            d
 ---------------------------------------
 -1  7 "[1.0,2.0,3.0]" FileNotFound True
+
+# Check that repeated Debezium messages are skipped.
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"before": null, "after": {"a": 2, "b": 3, "json": "{\"hello\": \"world\"}", "c": "False", "d": "FileNotFound"}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": false}}
+{"before": null, "after": {"a": 42, "b": 19, "json": "[4, 5, 6]", "c": "FileNotFound", "d": "True"}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": false}}
+
+> SELECT * FROM data_schema_inline
+a  b  json                     c            d
+--------------------------------------------------------
+1  1  null                     True         False
+2  3  "{\"hello\":\"world\"}"  False        FileNotFound
+-1  7 "[1.0,2.0,3.0]"          FileNotFound True
 42 19 "[4.0,5.0,6.0]"          FileNotFound True
 
 # Create a source using a file schema. This should fail if the named schema file
