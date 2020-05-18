@@ -766,7 +766,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         _ => unreachable!(),
     };
 
-    let name = scx.allocate_name(normalize::object_name(name)?);
+    let name = scx.allocate_name(normalize::object_name(name)?, false);
     let from = scx.catalog.get(&scx.resolve_name(from)?)?;
     let suffix = format!(
         "{}-{}",
@@ -902,13 +902,10 @@ fn handle_create_view(
         ),
         _ => unreachable!(),
     };
-    if *temporary {
-        bail!("TEMPORARY views are not yet supported");
-    }
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }
-    let name = scx.allocate_name(normalize::object_name(name.to_owned())?);
+    let name = scx.allocate_name(normalize::object_name(name.to_owned())?, *temporary);
     let replace = if *if_exists == IfExistsBehavior::Replace {
         let if_exists = true;
         let cascade = false;
@@ -935,6 +932,11 @@ fn handle_create_view(
         for (i, name) in columns.iter().enumerate() {
             desc.set_name(i, Some(normalize::column_name(name.clone())));
         }
+    }
+    // todo: move back above "!with_options.is_empty()"
+    // temporarily moved down to slowly phase in temporary view support
+    if *temporary {
+        bail!("TEMPORARY views are not yet supported");
     }
     let materialize = *materialized; // Normalize for `raw_sql` below.
     let if_not_exists = *if_exists == IfExistsBehavior::Skip;
@@ -1446,7 +1448,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
             let if_not_exists = *if_not_exists;
             let materialized = *materialized;
-            let name = scx.allocate_name(normalize::object_name(name.clone())?);
+            let name = scx.allocate_name(normalize::object_name(name.clone())?, false);
             let create_sql = normalize::create_statement(&scx, stmt)?;
 
             let source = Source {
@@ -1789,13 +1791,25 @@ pub struct StatementContext<'a> {
 }
 
 impl<'a> StatementContext<'a> {
-    pub fn allocate_name(&self, name: PartialName) -> FullName {
+    pub fn allocate_name(&self, name: PartialName, temporary: bool) -> FullName {
+        if temporary {
+            return self.allocate_temporary_name(name);
+        }
+
         FullName {
             database: match name.database {
                 Some(name) => DatabaseSpecifier::Name(name),
                 None => self.session.database(),
             },
             schema: name.schema.unwrap_or_else(|| "public".into()),
+            item: name.item,
+        }
+    }
+
+    fn allocate_temporary_name(&self, name: PartialName) -> FullName {
+        FullName {
+            database: DatabaseSpecifier::Temporary,
+            schema: "mz_temp".to_owned(),
             item: name.item,
         }
     }

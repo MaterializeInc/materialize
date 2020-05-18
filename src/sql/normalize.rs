@@ -87,8 +87,10 @@ pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement,
 ) -> Result<String, failure::Error> {
-    let allocate_name = |name: &ObjectName| -> Result<_, failure::Error> {
-        Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
+    let allocate_name = |name: &ObjectName, temporary: bool| -> Result<_, failure::Error> {
+        Ok(unresolve(
+            scx.allocate_name(object_name(name.clone())?, temporary),
+        ))
     };
 
     let resolve_name = |name: &ObjectName| -> Result<_, failure::Error> {
@@ -174,7 +176,7 @@ pub fn create_statement(
             if_not_exists,
             materialized,
         } => {
-            *name = allocate_name(name)?;
+            *name = allocate_name(name, false)?;
             *if_not_exists = false;
             *materialized = false;
         }
@@ -187,7 +189,7 @@ pub fn create_statement(
             format: _,
             if_not_exists,
         } => {
-            *name = allocate_name(name)?;
+            *name = allocate_name(name, false)?;
             *from = resolve_name(from)?;
             *if_not_exists = false;
         }
@@ -196,12 +198,12 @@ pub fn create_statement(
             name,
             columns: _,
             query,
-            temporary: _,
+            temporary,
             materialized,
             if_exists,
             with_options: _,
         } => {
-            *name = allocate_name(name)?;
+            *name = allocate_name(name, *temporary)?;
             {
                 let mut normalizer = QueryNormalizer { scx, err: None };
                 normalizer.visit_query(query);

@@ -420,6 +420,12 @@ impl Catalog {
                 database: &EMPTY_DATABASE,
                 ambient_schemas: &self.ambient_schemas,
             }),
+            DatabaseSpecifier::Temporary => {
+                // todo: this match should return temporary schemas.
+                Err(Error::new(ErrorKind::UnknownDatabase(
+                    "mz_temp".to_owned(),
+                )))
+            }
             DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
                 Some(database) => Ok(DatabaseResolver {
                     database_spec,
@@ -443,6 +449,7 @@ impl Catalog {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
             DatabaseSpecifier::Ambient => Some(&self.ambient_schemas),
+            DatabaseSpecifier::Temporary => None,
             DatabaseSpecifier::Name(name) => self.by_name.get(name).map(|db| &db.schemas),
         }
     }
@@ -452,6 +459,7 @@ impl Catalog {
         // Keep in sync with `get_schemas`.
         match database_spec {
             DatabaseSpecifier::Ambient => Some(&mut self.ambient_schemas),
+            DatabaseSpecifier::Temporary => None,
             DatabaseSpecifier::Name(name) => self.by_name.get_mut(name).map(|db| &mut db.schemas),
         }
     }
@@ -610,7 +618,7 @@ impl Catalog {
                     }
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
-                        DatabaseSpecifier::Ambient => {
+                        DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary => {
                             return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
@@ -623,7 +631,8 @@ impl Catalog {
                 Op::CreateItem { id, name, item } => {
                     let database_id = match &name.database {
                         DatabaseSpecifier::Name(name) => tx.load_database_id(&name)?,
-                        DatabaseSpecifier::Ambient => {
+                        DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary => {
+                            // todo: Should be able to CreateItems if Temporary
                             return Err(Error::new(ErrorKind::ReadOnlySystemSchema(
                                 name.to_string(),
                             )));
@@ -644,7 +653,7 @@ impl Catalog {
                 } => {
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
-                        DatabaseSpecifier::Ambient => {
+                        DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary => {
                             return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
