@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::thread;
 use std::time::Duration;
 
 use rand::Rng;
-use rdkafka::util::duration_to_millis;
 
 use crate::action::{State, SyncAction};
 use crate::parser::BuiltinCommand;
@@ -32,9 +32,9 @@ impl SyncAction for SleepAction {
 
     fn redo(&self, _: &mut State) -> Result<(), String> {
         let mut rng = rand::thread_rng();
-        let sleep = Duration::from_millis(rng.gen_range(0, duration_to_millis(self.time)));
+        let sleep = rng.gen_range(Duration::from_secs(0), self.time);
         println!("Sleeping for {:?}", sleep);
-        std::thread::sleep(sleep);
+        thread::sleep(sleep);
         Ok(())
     }
 }

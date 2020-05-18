@@ -81,7 +81,7 @@ impl KafkaClient {
         let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic)
             .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
-        if let Err((e, _message)) = self.producer.send(record, 500).await? {
+        if let Err((e, _message)) = self.producer.send(record, Duration::from_millis(500)).await {
             return Err(e.into());
         }
 

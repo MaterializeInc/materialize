@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::io::{BufRead, Read};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use byteorder::{NetworkEndian, WriteBytesExt};
-use futures::stream::{FuturesUnordered, TryStreamExt};
+use futures::stream::{FuturesUnordered, StreamExt};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 
@@ -217,7 +218,7 @@ impl Action for IngestAction {
             Some(f) => Some(make_transcoder(f, "key").await?),
         };
 
-        let futs = FuturesUnordered::new();
+        let mut futs = FuturesUnordered::new();
         for row in &self.rows {
             let mut row = row.as_bytes();
             let key = match &key_transcoder {
@@ -225,27 +226,25 @@ impl Action for IngestAction {
                 Some(kt) => kt.transcode(&mut row)?,
             };
             let value = value_transcoder.transcode(&mut row)?;
-
-            let mut record: FutureRecord<_, _> =
-                FutureRecord::to(topic_name).partition(self.partition);
-            if let Some(key) = &key {
-                record = record.key(key);
-            }
-            if let Some(value) = &value {
-                record = record.payload(value);
-            }
-            if let Some(timestamp) = self.timestamp {
-                record = record.timestamp(timestamp);
-            }
-            futs.push(state.kafka_producer.send(record, 1000 /* block_ms */));
-        }
-        futs.map_err(|e| e.to_string())
-            .try_for_each(|r| async {
-                match r {
-                    Ok(_) => Ok(()),
-                    Err((e, _)) => Err(e.to_string()),
+            let producer = &state.kafka_producer;
+            futs.push(async move {
+                let mut record: FutureRecord<_, _> =
+                    FutureRecord::to(topic_name).partition(self.partition);
+                if let Some(key) = &key {
+                    record = record.key(key);
                 }
-            })
-            .await
+                if let Some(value) = &value {
+                    record = record.payload(value);
+                }
+                if let Some(timestamp) = self.timestamp {
+                    record = record.timestamp(timestamp);
+                }
+                producer.send(record, Duration::from_secs(1)).await
+            });
+        }
+        while let Some(res) = futs.next().await {
+            res.map_err(|(e, _message)| e.to_string())?;
+        }
+        Ok(())
     }
 }
