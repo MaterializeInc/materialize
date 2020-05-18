@@ -577,7 +577,7 @@ impl DebeziumDecodeState {
                 }
                 let before_val = take_field_by_index(self.before_idx, "before", &mut fields)?;
                 let after_val = take_field_by_index(self.after_idx, "after", &mut fields)?;
-                // XXX(btv) - something sensible here?
+                // we will not have gotten this far if before/after aren't records, so the unwrap is okay.
                 let before_node = n.step(&unwrap_record_fields(n)[self.before_idx].schema);
                 let after_node = n.step(&unwrap_record_fields(n)[self.after_idx].schema);
                 let before =
