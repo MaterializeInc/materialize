@@ -1,6 +1,6 @@
 ---
-title: "CREATE SOURCE: JSON over Kinesis"
-description: "Learn how to connect Materialize to an Avro-formatted Kafka topic"
+title: "CREATE SOURCE: JSON over Kinesis (Beta)"
+description: "Learn how to connect Materialize to JSON-formatted Kinesis streams"
 menu:
   main:
     parent: 'create-source'
@@ -12,6 +12,9 @@ aliases:
 {{% create-source/intro %}}
 This document details how to connect Materialize to JSON-formatted Kinesis
 streams.
+
+Because this source is still in Beta status, please be sure to test
+functionality prior to releasing it to production.
 {{% /create-source/intro %}}
 
 ## Syntax

@@ -28,7 +28,7 @@ documentation for the type of data you are trying to load into Materialize:
 - [Text or bytes over Kafka](./text-kafka)
 - [Avro from local file](./avro-file)
 - [Protobuf over Kafka](./protobuf-kafka)
-- [JSON over Kinesis](./json-kinesis)
+- [JSON over Kinesis](./json-kinesis) (Beta)
 - [Local CSV files](./csv-file)
 - [Other local files (e.g. text, JSON)](./text-file)
 
