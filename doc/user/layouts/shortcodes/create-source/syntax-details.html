@@ -4,6 +4,7 @@
 
 Field | Use
 ------|-----
+**MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. For more information, see [Materialized source details](#materialized-source-details).
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
 _col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
 {{ partial (printf "create-source/connector/%s/syntax" $connector ) . -}}
@@ -20,6 +21,26 @@ Field | Value type | Description
 {{ partial (printf "create-source/connector/%s/with-options" $connector ) . -}}
 
 ## Details
+
+### Materialized source details
+
+By default, sources in Materialize do not retain data from the external
+components to which they connect. Instead, [materialized
+views](../../overview/api-components/#materialized-views) and their attendant
+[indexes](../../overview/api-components/#indexes) retain and manage data. The
+presence of these indexes is necessary to make the views `SELECT`-able; the
+absence of indexes are why sources are not `SELECT`-able by default.
+
+However, you can choose to "materialize" a source, which creates an index that
+stores _all_ of the data the source receives. This has the benefit of making the
+source `SELECT`-able, but that must be weighed against the cost of retaining all
+of the source's data for the source's lifetime.
+
+Unlike materialized views, which can innately filter data that is no longer
+pertinent, materialized sources do not offer an equivalent mechanism. Because
+this can lead to materialized sources consuming an unbounded amount of memory,
+they're often best suited for testing and exploratory phases of a Materialize
+deployment.
 
 {{ partial (printf "create-source/connector/%s/details" $connector ) (dict "context" . "envelopes" $envelopes) -}}
 

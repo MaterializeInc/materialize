@@ -1,5 +1,5 @@
 create_source_kinesis ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'BYTES'
