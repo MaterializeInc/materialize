@@ -17,7 +17,7 @@ name = "materialized"
 path = "bin/materialized.rs"
 
 [dependencies]
-async-trait = "0.1.30"
+async-trait = "0.1.31"
 backtrace = { version = "0.3.46", features = ["coresymbolication"] }
 comm = { path = "../comm" }
 compile-time-run = "0.2.8"
