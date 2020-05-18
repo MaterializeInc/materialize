@@ -933,7 +933,7 @@ fn handle_create_view(
             desc.set_name(i, Some(normalize::column_name(name.clone())));
         }
     }
-    // todo: remove! 
+    // todo: remove!
     if *temporary {
         bail!("TEMPORARY views are not yet supported");
     }
