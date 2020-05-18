@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use log::{error, info, log_enabled, warn};
 use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
@@ -231,6 +231,10 @@ fn create_kafka_config(
         .set("enable.sparse.connections", "true")
         .set("bootstrap.servers", &url.to_string())
         .set("partition.assignment.strategy", "roundrobin");
+
+    if log_enabled!(target: "librdkafka", log::Level::Debug) {
+        kafka_config.set("debug", "all");
+    }
 
     for (k, v) in config_options {
         kafka_config.set(k, v);
