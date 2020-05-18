@@ -2879,12 +2879,8 @@ fn parse_create_temporary_view() {
 #[test]
 fn parse_create_temp_view() {
     let sql = "CREATE TEMP VIEW myview AS SELECT foo FROM bar";
-    let stmt = unverified_stmt(sql);
-    assert_eq!(
-        "CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar",
-        stmt.to_string()
-    );
-    match stmt {
+    let expected = "CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar";
+    match one_statement_parses_to(sql, expected) {
         Statement::CreateView {
             name,
             columns,
