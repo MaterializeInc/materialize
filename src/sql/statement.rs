@@ -933,8 +933,7 @@ fn handle_create_view(
             desc.set_name(i, Some(normalize::column_name(name.clone())));
         }
     }
-    // todo: move back above "!with_options.is_empty()"
-    // temporarily moved down to slowly phase in temporary view support
+    // todo: remove! 
     if *temporary {
         bail!("TEMPORARY views are not yet supported");
     }
