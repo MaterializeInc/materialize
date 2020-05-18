@@ -9,6 +9,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::iter;
 
@@ -16,12 +17,13 @@ use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::{bail, format_err};
 use itertools::Itertools;
+use log::{error, warn};
 use serde_json::json;
 use sha2::Sha256;
 
 use avro::schema::{
-    resolve_schemas, Schema, SchemaFingerprint, SchemaNode, SchemaNodeOrNamed, SchemaPiece,
-    SchemaPieceOrNamed,
+    resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaNodeOrNamed,
+    SchemaPiece, SchemaPieceOrNamed,
 };
 use avro::types::{DecimalValue, Value};
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
@@ -393,43 +395,13 @@ where
 /// Extract a debezium-format Avro object by parsing it fully,
 /// i.e., when the record isn't laid out such that we can extract the `before` and
 /// `after` fields without decoding the entire record.
-pub fn extract_debezium_slow(v: Value, n: SchemaNode) -> Result<DiffPair<Row>> {
-    let mut before = None;
-    let mut after = None;
-    match v {
-        Value::Record(fields) => {
-            if let SchemaPiece::Record {
-                fields: schema_fields,
-                ..
-            } = n.inner
-            {
-                for (i, (_, val)) in fields.into_iter().enumerate() {
-                    // TODO - We shouldn't need to do these comparisons every time.
-                    // Just precompute them once per source, since the schema isn't changing.
-                    let name = &schema_fields[i].name;
-                    if name == "before" {
-                        before = extract_nullable_row(
-                            val,
-                            iter::once(Datum::Int64(-1)),
-                            n.step(&schema_fields[i].schema),
-                        )?;
-                    } else if name == "after" {
-                        after = extract_nullable_row(
-                            val,
-                            iter::once(Datum::Int64(1)),
-                            n.step(&schema_fields[i].schema),
-                        )?;
-                    } else {
-                        // Intentionally ignore other fields.
-                    }
-                }
-            } else {
-                unreachable!("Avro value out of sync with schema");
-            }
-        }
-        _ => bail!("avro envelope had unexpected type: {:?}", v),
-    };
-    Ok(DiffPair { before, after })
+
+fn unwrap_record_fields(n: SchemaNode) -> &[RecordField] {
+    if let SchemaPiece::Record { fields, .. } = n.inner {
+        fields
+    } else {
+        panic!("node is not a record!");
+    }
 }
 
 #[derive(Debug)]
@@ -438,11 +410,194 @@ pub struct DiffPair<T> {
     pub after: Option<T>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct BinlogSchemaIndices {
+    /// Index of the "source" field in the payload schema
+    source_idx: usize,
+    /// Index of the "file" field in the source schema
+    source_file_idx: usize,
+    /// Index of the "pos" field in the source schema
+    source_pos_idx: usize,
+    /// Index of the "row" field in the source schema
+    source_row_idx: usize,
+    /// Index of the "snapshot" field in the source schema
+    source_snapshot_idx: usize,
+}
+
+impl BinlogSchemaIndices {
+    pub fn new_from_schema(top_node: SchemaNode) -> Option<Self> {
+        let top_indices = field_indices(top_node)?;
+        let source_idx = *top_indices.get("source")?;
+        let source_node = top_node.step(&unwrap_record_fields(top_node)[source_idx].schema);
+        let source_indices = field_indices(source_node)?;
+        let source_file_idx = *source_indices.get("file")?;
+        let source_pos_idx = *source_indices.get("pos")?;
+        let source_row_idx = *source_indices.get("row")?;
+        let source_snapshot_idx = *source_indices.get("snapshot")?;
+
+        Some(Self {
+            source_idx,
+            source_file_idx,
+            source_pos_idx,
+            source_row_idx,
+            source_snapshot_idx,
+        })
+    }
+}
+
+/// Additional context needed for decoding
+/// Debezium-formatted data.
+#[derive(Debug)]
+pub struct DebeziumDecodeState {
+    /// Index of the "before" field in the payload schema
+    before_idx: usize,
+    /// Index of the "after" field in the payload schema
+    after_idx: usize,
+    // TODO - this is not a complete fix for #3026.
+    // In particular, it doesn't help us with non-MySQL connectors,
+    // nor with the initial scan.
+    /// Last recorded offset (pos, row) for each MySQL binlog file.
+    /// Messages that are not ahead of the last recorded offset will be skipped.
+    binlog_offsets: HashMap<String, (usize, usize)>,
+    binlog_schema_indices: Option<BinlogSchemaIndices>,
+}
+
+fn field_indices(node: SchemaNode) -> Option<HashMap<String, usize>> {
+    if let SchemaPiece::Record { fields, .. } = node.inner {
+        Some(
+            fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.name.clone(), i))
+                .collect(),
+        )
+    } else {
+        None
+    }
+}
+
+fn take_field_by_index(
+    idx: usize,
+    expected_name: &str,
+    fields: &mut [(String, Value)],
+) -> Result<Value> {
+    let (name, value) = fields.get_mut(idx).ok_or_else(|| {
+        format_err!(
+            "Value does not match schema: \"{}\" field not at index {}",
+            expected_name,
+            idx
+        )
+    })?;
+    if name != expected_name {
+        bail!(
+            "Value doe snot match schema: expected \"{}\", found \"{}\"",
+            expected_name,
+            name
+        );
+    }
+    Ok(std::mem::replace(value, Value::Null))
+}
+
+impl DebeziumDecodeState {
+    pub fn new_from_schema(schema: &Schema) -> Option<Self> {
+        let top_node = schema.top_node();
+        let top_indices = field_indices(top_node)?;
+        let before_idx = *top_indices.get("before")?;
+        let after_idx = *top_indices.get("after")?;
+        let binlog_schema_indices = BinlogSchemaIndices::new_from_schema(top_node);
+        let fields = unwrap_record_fields(top_node);
+
+        Some(Self {
+            before_idx,
+            after_idx,
+            binlog_offsets: Default::default(),
+            binlog_schema_indices,
+        })
+    }
+
+    pub fn extract(&mut self, v: Value, n: SchemaNode) -> Result<DiffPair<Row>> {
+        match v {
+            Value::Record(mut fields) => {
+                if let Some(schema_indices) = self.binlog_schema_indices {
+                    let source_val =
+                        take_field_by_index(schema_indices.source_idx, "source", &mut fields)?;
+                    let mut source_fields = match source_val {
+                        Value::Record(fields) => fields,
+                        _ => bail!("\"source\" is not a record: {:?}", source_val),
+                    };
+                    let snapshot_val = take_field_by_index(
+                        schema_indices.source_snapshot_idx,
+                        "snapshot",
+                        &mut source_fields,
+                    )?
+                    .into_bool()
+                    .ok_or_else(|| format_err!("\"snapshot\" is not a boolean"))?;
+
+                    if snapshot_val {
+                        let file_val = take_field_by_index(
+                            schema_indices.source_file_idx,
+                            "file",
+                            &mut source_fields,
+                        )?
+                        .into_string()
+                        .ok_or_else(|| format_err!("\"file\" is not a string"))?;
+                        let pos_val = take_field_by_index(
+                            schema_indices.source_pos_idx,
+                            "pos",
+                            &mut source_fields,
+                        )?
+                        .into_integral()
+                        .ok_or_else(|| format_err!("\"pos\" is not an integer"))?;
+                        let row_val = take_field_by_index(
+                            schema_indices.source_row_idx,
+                            "row",
+                            &mut source_fields,
+                        )?
+                        .into_integral()
+                        .ok_or_else(|| format_err!("\"row\" is not an integer"))?;
+                        let pos = usize::try_from(pos_val)?;
+                        let row = usize::try_from(row_val)?;
+                        match self.binlog_offsets.entry(file_val) {
+                            Entry::Occupied(mut oe) => {
+                                let (old_max_pos, old_max_row) = *oe.get();
+                                if old_max_pos > pos || (old_max_pos == pos && old_max_row >= row) {
+                                    warn!("Debezium did not advance: previously read ({}, {}), now read ({}, {}). Skipping record.",
+                                      old_max_pos, old_max_row, pos, row);
+                                    return Ok(DiffPair {
+                                        before: None,
+                                        after: None,
+                                    });
+                                }
+                                oe.insert((pos, row));
+                            }
+                            Entry::Vacant(mut ve) => {
+                                ve.insert((pos as usize, row as usize));
+                            }
+                        }
+                    }
+                }
+                let before_val = take_field_by_index(self.before_idx, "before", &mut fields)?;
+                let after_val = take_field_by_index(self.after_idx, "after", &mut fields)?;
+                // XXX(btv) - something sensible here?
+                let before_node = n.step(&unwrap_record_fields(n)[self.before_idx].schema);
+                let after_node = n.step(&unwrap_record_fields(n)[self.after_idx].schema);
+                let before =
+                    extract_nullable_row(before_val, iter::once(Datum::Int64(-1)), before_node)?;
+                let after =
+                    extract_nullable_row(after_val, iter::once(Datum::Int64(1)), after_node)?;
+                Ok(DiffPair { before, after })
+            }
+            _ => bail!("avro envelope had unexpected type: {:?}", v),
+        }
+    }
+}
+
 /// Manages decoding of Avro-encoded bytes.
 pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     envelope: EnvelopeType,
+    debezium: Option<DebeziumDecodeState>,
 }
 
 impl fmt::Debug for Decoder {
@@ -479,10 +634,22 @@ impl Decoder {
         let writer_schemas =
             schema_registry.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
 
+        let debezium = if envelope == EnvelopeType::Debezium {
+            DebeziumDecodeState::new_from_schema(&reader_schema)
+        } else {
+            None
+        };
+        // TODO - This should really cause `new` to fail, as the decoder is basically useless in this state.
+        // But before we can make `Decoder::new` return a `Result`, we first need to pipe the runtime errors
+        // stuff through and make avro decoding fallible.
+        if envelope == EnvelopeType::Debezium && debezium.is_none() {
+            error!("Couldn't extract Debezium schema information! No records will be decoded with this schema!");
+        }
         Decoder {
             reader_schema,
             writer_schemas,
             envelope,
+            debezium,
         }
     }
 
@@ -522,8 +689,11 @@ impl Decoder {
         };
 
         let result = if self.envelope == EnvelopeType::Debezium {
+            let dbz_state = self.debezium.as_mut().ok_or_else(|| {
+                format_err!("Debezium schema extraction failed; can't decode message.")
+            })?;
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            extract_debezium_slow(val, self.reader_schema.top_node())?
+            dbz_state.extract(val, self.reader_schema.top_node())?
         } else {
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
             let row = extract_row(val, iter::empty(), self.reader_schema.top_node())?;

@@ -341,6 +341,29 @@ impl Value {
             _ => false,
         }
     }
+
+    // TODO - `into_` functions for all possible Value variants (perhaps generate this using a macro?)
+    pub fn into_string(self) -> Option<String> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn into_bool(self) -> Option<bool> {
+        match self {
+            Value::Boolean(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub fn into_integral(self) -> Option<i64> {
+        match self {
+            Value::Int(i) => Some(i as i64),
+            Value::Long(l) => Some(l),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

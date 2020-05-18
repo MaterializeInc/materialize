@@ -33,8 +33,9 @@ use self::csv::csv;
 use self::regex::regex as regex_fn;
 use crate::operator::StreamExt;
 use ::avro::{types::Value, Schema};
-use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
+use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair, EnvelopeType};
 
+use failure::format_err;
 use log::error;
 use std::iter;
 
@@ -51,6 +52,11 @@ where
     // so that we can spread the decoding among all the workers.
     // See #2133
     let envelope = envelope.clone();
+    let mut dbz_state = if envelope.get_avro_envelope_type() == EnvelopeType::Debezium {
+        DebeziumDecodeState::new_from_schema(&schema)
+    } else {
+        None
+    };
     stream
         .pass_through("AvroValues")
         .flat_map(move |((value, index), r, d)| {
@@ -62,7 +68,15 @@ where
                         after: r,
                     })
                 }
-                Envelope::Debezium => extract_debezium_slow(value, top_node),
+                Envelope::Debezium => {
+                    if let Some(dbz_state) = dbz_state.as_mut() {
+                        dbz_state.extract(value, top_node)
+                    } else {
+                        Err(format_err!(
+                            "No debezium schema information -- could not decode row"
+                        ))
+                    }
+                }
                 Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
