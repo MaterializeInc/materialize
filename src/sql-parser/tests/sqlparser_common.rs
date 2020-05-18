@@ -2879,8 +2879,7 @@ fn parse_create_temporary_view() {
 #[test]
 fn parse_create_temp_view() {
     let sql = "CREATE TEMP VIEW myview AS SELECT foo FROM bar";
-    let expected = "CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar";
-    let stmt = verified_stmt_alt(sql, expected);
+    let stmt = unverified_stmt(sql);
     assert_eq!(
         "CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar",
         stmt.to_string()
@@ -5040,12 +5039,6 @@ fn one_statement_parses_to(sql: &str, canonical: &str) -> Statement {
 
 fn verified_stmt(query: &str) -> Statement {
     one_statement_parses_to(query, query)
-}
-
-/// Instead of expecting `query` to parse to `query`, expect it to parse
-/// to an alternate string: `expected_query`.
-fn verified_stmt_alt(query: &str, expected_query: &str) -> Statement {
-    one_statement_parses_to(query, expected_query)
 }
 
 fn unverified_stmt(query: &str) -> Statement {
