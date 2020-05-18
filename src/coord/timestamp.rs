@@ -25,7 +25,7 @@ use avro::types::Value;
 use failure::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use log::{error, info, log_enabled, warn};
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
@@ -1350,6 +1350,10 @@ impl Timestamper {
             "group.id",
             &format!("{}materialize-rt-{}-{}", group_id_prefix, &kc.topic, id),
         );
+
+        if log_enabled!(target: "librdkafka", log::Level::Debug) {
+            config.set("debug", "all");
+        }
 
         for (k, v) in &kc.config_options {
             config.set(k, v);
