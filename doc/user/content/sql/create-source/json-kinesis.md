@@ -1,5 +1,5 @@
 ---
-title: "CREATE SOURCE: JSON over Kinesis (Beta)"
+title: "CREATE SOURCE: JSON over Kinesis"
 description: "Learn how to connect Materialize to JSON-formatted Kinesis streams"
 menu:
   main:
@@ -13,8 +13,11 @@ aliases:
 This document details how to connect Materialize to JSON-formatted Kinesis
 streams.
 
-Because this source is still in Beta status, please be sure to test
-functionality prior to releasing it to production.
+{{< warning >}}
+
+Kinesis support is still undergoing active development. If you run into any issues with it, please let us know with a [GitHub issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=bug.md).
+
+{{< /warning >}}
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -31,7 +34,7 @@ FROM KINESIS ARN ... WITH (
     access_key_id = ...,
     secret_access_key = ...
 )
-FORMAT BYES;
+FORMAT BYTES;
 ```
 
 This creates a source that...
