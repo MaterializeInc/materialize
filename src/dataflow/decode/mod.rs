@@ -33,8 +33,9 @@ use self::csv::csv;
 use self::regex::regex as regex_fn;
 use crate::operator::StreamExt;
 use ::avro::{types::Value, Schema};
-use interchange::avro::{extract_debezium_slow, extract_row, DiffPair};
+use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair, EnvelopeType};
 
+use failure::format_err;
 use log::error;
 use std::iter;
 
@@ -51,6 +52,11 @@ where
     // so that we can spread the decoding among all the workers.
     // See #2133
     let envelope = envelope.clone();
+    let mut dbz_state = if envelope.get_avro_envelope_type() == EnvelopeType::Debezium {
+        DebeziumDecodeState::new_from_schema(&schema)
+    } else {
+        None
+    };
     stream
         .pass_through("AvroValues")
         .flat_map(move |((value, index), r, d)| {
@@ -62,7 +68,15 @@ where
                         after: r,
                     })
                 }
-                Envelope::Debezium => extract_debezium_slow(value, top_node),
+                Envelope::Debezium => {
+                    if let Some(dbz_state) = dbz_state.as_mut() {
+                        dbz_state.extract(value, top_node)
+                    } else {
+                        Err(format_err!(
+                            "No debezium schema information -- could not decode row"
+                        ))
+                    }
+                }
                 Envelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
@@ -243,6 +257,7 @@ where
         key_encoding.op_name(),
         value_encoding.op_name()
     );
+    let avro_err = "Failed to create Avro decoder";
     let decoded_stream = match (key_encoding, value_encoding) {
         (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
@@ -254,7 +269,8 @@ where
                 val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
-            ),
+            )
+            .expect(avro_err),
             &op_name,
         ),
         (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
@@ -267,7 +283,8 @@ where
                 val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
-            ),
+            )
+            .expect(avro_err),
             &op_name,
         ),
         (DataEncoding::Avro(key_enc), DataEncoding::Avro(val_enc)) => decode_upsert_inner(
@@ -277,13 +294,15 @@ where
                 key_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::None,
                 false,
-            ),
+            )
+            .expect(avro_err),
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
-            ),
+            )
+            .expect(avro_err),
             &op_name,
         ),
         (DataEncoding::Text, DataEncoding::Bytes) => decode_upsert_inner(
@@ -394,7 +413,8 @@ where
                 enc.schema_registry_config,
                 envelope.get_avro_envelope_type(),
                 fast_forwarded,
-            ),
+            )
+            .expect("Failed to create Avro decoder"),
             &op_name,
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
