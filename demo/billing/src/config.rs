@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use structopt::StructOpt;
 
-pub static KAFKA_SOURCE_NAME: &str = "billing_source";
+pub static KAFKA_SOURCE_NAME: &str = "upsert_text_source";
 pub static CSV_SOURCE_NAME: &str = "price_source";
 pub static KAFKA_SINK_NAME: &str = "billing_sink";
 pub static KAFKA_SINK_TOPIC_NAME: &str = "billing_monthly_statements";
@@ -51,10 +51,10 @@ pub struct Args {
     #[structopt(long, default_value = "9092")]
     pub kafka_port: u16,
 
-    #[structopt(long, default_value = "billing")]
+    #[structopt(long, default_value = "upsert-text")]
     pub kafka_topic: String,
 
-    #[structopt(long)]
+    #[structopt(long, default_value = "none")]
     pub csv_file_name: String,
 
     /// The schema-registry URL
