@@ -32,7 +32,6 @@ impl fmt::Display for FullName {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum DatabaseSpecifier {
     Ambient,
-    Temporary,
     Name(String),
 }
 
@@ -40,17 +39,13 @@ impl fmt::Display for DatabaseSpecifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             DatabaseSpecifier::Ambient => f.write_str("<none>"),
-            DatabaseSpecifier::Temporary => f.write_str("mz_temp"),
             DatabaseSpecifier::Name(name) => f.write_str(name),
         }
     }
 }
 
-impl DatabaseSpecifier {
-    // Since this function is only used to load items from the Catalog database,
-    // nothing has to map to DatabaseSpecifier::Temporary.
-    // (temporary items are not stored in the database)
-    pub fn ambient_or_named(s: Option<String>) -> DatabaseSpecifier {
+impl From<Option<String>> for DatabaseSpecifier {
+    fn from(s: Option<String>) -> DatabaseSpecifier {
         match s {
             None => DatabaseSpecifier::Ambient,
             Some(name) => DatabaseSpecifier::Name(name),
@@ -97,7 +92,6 @@ impl From<FullName> for PartialName {
         PartialName {
             database: match n.database {
                 DatabaseSpecifier::Ambient => None,
-                DatabaseSpecifier::Temporary => Some("mz_temp".to_owned()),
                 DatabaseSpecifier::Name(name) => Some(name),
             },
             schema: Some(n.schema),

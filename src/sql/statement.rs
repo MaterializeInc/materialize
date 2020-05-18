@@ -1807,7 +1807,7 @@ impl<'a> StatementContext<'a> {
 
     pub fn allocate_temporary_name(&self, name: PartialName) -> FullName {
         FullName {
-            database: DatabaseSpecifier::Temporary,
+            database: DatabaseSpecifier::Ambient,
             schema: "mz_temp".to_owned(),
             item: name.item,
         }
