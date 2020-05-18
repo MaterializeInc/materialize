@@ -1,5 +1,5 @@
 ---
-title: "[BETA] CREATE SOURCE: JSON over Kinesis"
+title: "CREATE SOURCE: JSON over Kinesis (Beta)"
 description: "Learn how to connect Materialize to JSON-formatted Kinesis streams"
 menu:
   main:
