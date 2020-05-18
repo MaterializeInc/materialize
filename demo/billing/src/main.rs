@@ -26,6 +26,7 @@ use structopt::StructOpt;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
 use crate::error::Result;
+use crate::mz_client::MzClient;
 
 mod config;
 mod error;
@@ -64,6 +65,8 @@ async fn run() -> Result<()> {
 
     let k_config = config.kafka_config();
     let mz_config = config.mz_config();
+    let mz_client = MzClient::new(&mz_config.host, mz_config.port).await?;
+    let check_sink = mz_config.check_sink;
 
     let k = tokio::spawn(async move { create_kafka_messages(k_config).await });
 
@@ -71,6 +74,16 @@ async fn run() -> Result<()> {
     let (k_res, mz_res) = futures::join!(k, mz);
     k_res??;
     mz_res??;
+
+    if check_sink {
+        mz_client
+            .validate_sink(
+                "check_sink",
+                "billing_monthly_statement",
+                "invalid_sink_rows",
+            )
+            .await?;
+    }
     Ok(())
 }
 
@@ -116,13 +129,16 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
 }
 
 async fn create_materialized_source(config: MzConfig) -> Result<()> {
-    let client = mz_client::MzClient::new(&config.host, config.port).await?;
+    let client = MzClient::new(&config.host, config.port).await?;
 
     if !config.preserve_source {
         let sources = client.show_sources().await?;
         if any_matches(&sources, config::KAFKA_SOURCE_NAME) {
             client.drop_source(config::KAFKA_SOURCE_NAME).await?;
             client.drop_source(config::CSV_SOURCE_NAME).await?;
+            client
+                .drop_source(config::REINGESTED_SINK_SOURCE_NAME)
+                .await?;
         }
     }
 
@@ -161,7 +177,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             exec_query!(client, "drop_index_billing_records");
         }
 
-        client
+        let sink_global_id = client
             .create_kafka_sink(
                 &config.kafka_url,
                 config::KAFKA_SINK_TOPIC_NAME,
@@ -169,6 +185,18 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                 &config.schema_registry_url,
             )
             .await?;
+        if config.check_sink {
+            client
+                .reingest_sink(
+                    &config.kafka_url,
+                    &config.schema_registry_url,
+                    config::REINGESTED_SINK_SOURCE_NAME,
+                    sink_global_id,
+                )
+                .await?;
+            exec_query!(client, "check_sink");
+            exec_query!(client, "invalid_sink_rows");
+        }
     } else {
         log::info!(
             "source '{}' already exists, not recreating",
