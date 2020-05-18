@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-anyhow = "1.0.28"
+anyhow = "1.0.31"
 log = "0.4"
 rusoto_core = "0.43.0-beta.1"
 rusoto_credential = "0.43.0-beta.1"

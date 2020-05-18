@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-anyhow = "1.0.28"
+anyhow = "1.0.31"
 async-trait = "0.1.31"
 avro = { path = "../avro" }
 aws-util = { path = "../aws-util" }
