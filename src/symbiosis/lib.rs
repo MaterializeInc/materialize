@@ -202,7 +202,7 @@ END $$;
                     }
                 }
 
-                let name = scx.allocate_name(normalize::object_name(name.clone())?, false);
+                let name = scx.allocate_name(normalize::object_name(name.clone())?);
                 let desc = RelationDesc::new(typ, names);
                 self.table_types
                     .insert(name.clone(), (sql_types, desc.clone()));

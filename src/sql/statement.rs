@@ -766,7 +766,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         _ => unreachable!(),
     };
 
-    let name = scx.allocate_name(normalize::object_name(name)?, false);
+    let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.catalog.get(&scx.resolve_name(from)?)?;
     let suffix = format!(
         "{}-{}",
@@ -905,7 +905,11 @@ fn handle_create_view(
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }
-    let name = scx.allocate_name(normalize::object_name(name.to_owned())?, *temporary);
+    let name = if *temporary {
+        scx.allocate_temporary_name(normalize::object_name(name.to_owned())?)
+    } else {
+        scx.allocate_name(normalize::object_name(name.to_owned())?)
+    };
     let replace = if *if_exists == IfExistsBehavior::Replace {
         let if_exists = true;
         let cascade = false;
@@ -1447,7 +1451,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
             let if_not_exists = *if_not_exists;
             let materialized = *materialized;
-            let name = scx.allocate_name(normalize::object_name(name.clone())?, false);
+            let name = scx.allocate_name(normalize::object_name(name.clone())?);
             let create_sql = normalize::create_statement(&scx, stmt)?;
 
             let source = Source {
@@ -1790,11 +1794,7 @@ pub struct StatementContext<'a> {
 }
 
 impl<'a> StatementContext<'a> {
-    pub fn allocate_name(&self, name: PartialName, temporary: bool) -> FullName {
-        if temporary {
-            return self.allocate_temporary_name(name);
-        }
-
+    pub fn allocate_name(&self, name: PartialName) -> FullName {
         FullName {
             database: match name.database {
                 Some(name) => DatabaseSpecifier::Name(name),
@@ -1805,7 +1805,7 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    fn allocate_temporary_name(&self, name: PartialName) -> FullName {
+    pub fn allocate_temporary_name(&self, name: PartialName) -> FullName {
         FullName {
             database: DatabaseSpecifier::Temporary,
             schema: "mz_temp".to_owned(),
