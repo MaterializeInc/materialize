@@ -131,6 +131,51 @@ struct ConsInfo {
     pub offset: MzOffset,
 }
 
+/// Wrapper around a partition containing both a buffer and the underlying consumer
+/// To read from this partition consumer 1) first check whether the buffer is empty. If not,
+/// read from buffer. 2) If buffer is empty, poll consumer to get a new message
+struct PartitionConsumer {
+    /// the partition id with which this consumer is associated
+    pid: i32,
+    /// A buffer to store messages that cannot be timestamped yet
+    buffer: Option<MessageParts>,
+    /// The underlying Kafka consumer. This consumer is assigned to read from one partition
+    /// exclusively
+    consumer: BaseConsumer<GlueConsumerContext>,
+}
+
+impl PartitionConsumer {
+    /// Creates a new partition consumer from underlying Kafka consumer
+    fn new(pid: i32, consumer: BaseConsumer<GlueConsumerContext>) -> Self {
+        PartitionConsumer {
+            pid,
+            buffer: None,
+            consumer,
+        }
+    }
+
+    /// Returns the next message to process for this partition (if any).
+    /// Either reads from the buffer or polls from the consumer
+    fn get_next_message(&mut self) -> Option<MessageParts> {
+        if let Some(message) = self.buffer.take() {
+            assert_eq!(message.partition, self.pid);
+            Some(message)
+        } else {
+            match self.consumer.poll(Duration::from_millis(0)) {
+                Some(Ok(msg)) => {
+                    let result = MessageParts::from(&msg);
+                    assert_eq!(result.partition, self.pid);
+                    Some(result)
+                }
+                Some(Err(err)) => {
+                    error!("kafka error: {}", err);
+                    None
+                }
+                _ => None,
+            }
+        }
+    }
+}
 /// Contains all information necessary to ingest data from Kafka
 struct DataPlaneInfo {
     /// Name of the topic on which this source is backed on
@@ -140,11 +185,7 @@ struct DataPlaneInfo {
     /// Kafka Configuration Parameters
     kafka_config: ClientConfig,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
-    consumers: VecDeque<BaseConsumer<GlueConsumerContext>>,
-    /// A buffer for a message that the source has ingested but cannot yet timestamp
-    /// INVARIANT: consumer is EITHER in consumers or in buffer, but cannot be in both
-    /// TODO(ncrooks): make buffer per partition
-    buffer: Option<MessageParts>,
+    consumers: VecDeque<PartitionConsumer>,
     /// The expected number of partitions. If needs_refresh is set to false, then
     /// expected_partition_count == consumers.len() == partition_metadata.len()
     expected_partition_count: i32,
@@ -168,7 +209,6 @@ impl DataPlaneInfo {
             source_name,
             kafka_config,
             consumers: VecDeque::new(),
-            buffer: None,
             needs_refresh: true,
             expected_partition_count: 1,
             consumer_activator,
@@ -218,13 +258,13 @@ impl DataPlaneInfo {
         // starting from 0
         for i in 0..to_add {
             let pid: i32 = next_pid + i;
-            self.create_kafka_consumer(pid);
+            self.create_partition_consumer(pid);
         }
         assert_eq!(self.expected_partition_count, self.get_consumer_count());
     }
 
     /// Create a new kafka consumer and adds it to the list of existing consumers
-    fn create_kafka_consumer(&mut self, partition_id: i32) {
+    fn create_partition_consumer(&mut self, partition_id: i32) {
         let cx = GlueConsumerContext(self.consumer_activator.clone());
         let consumer: BaseConsumer<GlueConsumerContext> = self
             .kafka_config
@@ -233,7 +273,8 @@ impl DataPlaneInfo {
         let mut partition_list = TopicPartitionList::with_capacity(1);
         partition_list.add_partition(&self.topic_name, partition_id);
         consumer.assign(&partition_list).unwrap();
-        self.consumers.push_front(consumer)
+        self.consumers
+            .push_front(PartitionConsumer::new(partition_id, consumer))
     }
 
     /// This function checks whether any messages have been buffered. If yes, returns the buffered
@@ -249,72 +290,71 @@ impl DataPlaneInfo {
     ) -> Option<MessageParts> {
         assert_eq!(self.get_consumer_count(), self.expected_partition_count);
         let mut next_message = None;
-        if self.buffer.is_some() {
-            next_message = self.buffer.take()
-        } else {
-            let consumer_count = self.get_consumer_count();
-            let mut attempts = 0;
-            while attempts < consumer_count {
-                let consumer = self.consumers.pop_front().unwrap();
-                let message = match consumer.poll(Duration::from_millis(0)) {
-                    Some(Ok(msg)) => Some(MessageParts::from(&msg)),
-                    Some(Err(err)) => {
-                        error!("kafka error: {}: {}", self.source_name, err);
-                        None
-                    }
-                    _ => None,
-                };
-                if let Some(message) = message {
-                    let partition = message.partition;
-                    let offset = MzOffset::from(message.offset);
-                    // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
-                    // a network issue or a new partition added, at which point the consumer may
-                    // start processing the topic from the beginning, or we may see duplicate offsets
-                    // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
-                    // that we are ever going to see holds.
-                    // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
-                    // is enabled, there may be gaps in the sequence.
-                    // If we see an "old" offset, we fast-forward the consumer and skip that message
+        let consumer_count = self.get_consumer_count();
+        let mut attempts = 0;
+        while attempts < consumer_count {
+            let mut consumer = self.consumers.pop_front().unwrap();
+            let message = consumer.get_next_message();
+            if let Some(message) = message {
+                let partition = message.partition;
+                let offset = MzOffset::from(message.offset);
+                // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
+                // a network issue or a new partition added, at which point the consumer may
+                // start processing the topic from the beginning, or we may see duplicate offsets
+                // At all times, the guarantee : if we see offset x, we have seen all offsets [0,x-1]
+                // that we are ever going to see holds.
+                // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
+                // is enabled, there may be gaps in the sequence.
+                // If we see an "old" offset, we fast-forward the consumer and skip that message
 
-                    // Given the explicit consumer to partition assignment, we should never receive a message
-                    // for a partition for which we have no metadata
-                    assert!(cp_info.knows_of(partition));
+                // Given the explicit consumer to partition assignment, we should never receive a message
+                // for a partition for which we have no metadata
+                assert!(cp_info.knows_of(partition));
 
-                    let mut last_offset = cp_info.partition_metadata[partition as usize].offset;
+                let mut last_offset = cp_info.partition_metadata[partition as usize].offset;
 
-                    if offset <= last_offset {
-                        warn!(
-                            "Kafka message before expected offset: \
+                if offset <= last_offset {
+                    warn!(
+                        "Kafka message before expected offset: \
                              source {} (reading topic {}, partition {}) \
                              received Mz offset {} expected Mz offset {:?}",
-                            self.source_name,
-                            self.topic_name,
-                            partition,
-                            offset,
-                            last_offset.offset + 1
-                        );
-                        // Seek to the *next* offset (ak last_offset + 1) that we have not yet processed
-                        last_offset.offset += 1;
-                        self.fast_forward_consumer(&consumer, partition, last_offset.into());
-                        // We explicitly should not consume the message as we have already processed it
-                        // However, we make sure to activate the source to make sure that we get a chance
-                        // to read from this consumer again (even if no new data arrives)
-                        activator.activate();
-                    } else {
-                        next_message = Some(message);
-                    }
-                }
-                self.consumers.push_back(consumer);
-                if next_message.is_some() {
-                    // Found a message, exit the loop and return message
-                    break;
+                        self.source_name,
+                        self.topic_name,
+                        partition,
+                        offset,
+                        last_offset.offset + 1
+                    );
+                    // Seek to the *next* offset (ak last_offset + 1) that we have not yet processed
+                    last_offset.offset += 1;
+                    self.fast_forward_consumer(&consumer, partition, last_offset.into());
+                    // We explicitly should not consume the message as we have already processed it
+                    // However, we make sure to activate the source to make sure that we get a chance
+                    // to read from this consumer again (even if no new data arrives)
+                    activator.activate();
                 } else {
-                    attempts += 1;
+                    next_message = Some(message);
                 }
+            }
+            self.consumers.push_back(consumer);
+            if next_message.is_some() {
+                // Found a message, exit the loop and return message
+                break;
+            } else {
+                attempts += 1;
             }
         }
         assert_eq!(self.get_consumer_count(), self.expected_partition_count);
         next_message
+    }
+
+    /// Buffer message that could not be timestamped
+    /// Assumption: this message necessarily belongs to the last consumer that we tried to
+    /// read from.
+    fn buffer_message(&mut self, msg: MessageParts) {
+        // Guaranteed to exist as we just read from this consumer
+        let mut consumer = self.consumers.back_mut().unwrap();
+        assert_eq!(msg.partition, consumer.pid);
+        consumer.buffer = Some(msg);
     }
 
     /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
@@ -322,11 +362,11 @@ impl DataPlaneInfo {
     /// to the next available offset
     fn fast_forward_consumer(
         &self,
-        consumer: &BaseConsumer<GlueConsumerContext>,
+        consumer: &PartitionConsumer,
         pid: i32,
         next_offset: KafkaOffset,
     ) {
-        let res = consumer.seek(
+        let res = consumer.consumer.seek(
             &self.topic_name,
             pid,
             Offset::Offset(next_offset.offset),
@@ -334,7 +374,11 @@ impl DataPlaneInfo {
         );
         match res {
             Ok(_) => {
-                let res = consumer.position().unwrap_or_default().to_topic_map();
+                let res = consumer
+                    .consumer
+                    .position()
+                    .unwrap_or_default()
+                    .to_topic_map();
                 let position = res.get(&(self.topic_name.clone(), pid));
                 if let Some(position) = position {
                     let position = position.to_raw();
@@ -509,8 +553,6 @@ where
                     );
 
                     while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
-                        assert!(dp_info.buffer.is_none());
-
                         let partition = message.partition;
                         let offset = MzOffset::from(message.offset);
 
@@ -529,7 +571,7 @@ where
                             None => {
                                 // We have not yet decided on a timestamp for this message,
                                 // we need to buffer the message
-                                dp_info.buffer = Some(message);
+                                dp_info.buffer_message(message);
                                 activator.activate();
                                 return SourceStatus::Alive;
                             }
