@@ -1,5 +1,5 @@
 create_source ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')

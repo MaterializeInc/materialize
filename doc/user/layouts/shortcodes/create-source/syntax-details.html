@@ -4,6 +4,7 @@
 
 Field | Use
 ------|-----
+**MATERIALIZED** | Materializes the source's data, which retains all data in memory and makes sources directly selectable. For more information, see [Materialized source details](#materialized-source-details).
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
 _col&lowbar;name_ | Override default column name with the provided [identifier](../../identifiers). If used, a _col&lowbar;name_ must be provided for each column in the created source.
 {{ partial (printf "create-source/connector/%s/syntax" $connector ) . -}}
@@ -20,6 +21,31 @@ Field | Value type | Description
 {{ partial (printf "create-source/connector/%s/with-options" $connector ) . -}}
 
 ## Details
+
+### Materialized source details
+
+Materializing a source keeps data it receives in an in-memory
+[index](../../overview/api-components/#indexes), the presence of which makes the
+source directly queryable. In contrast, non-materialized sources cannot process
+`SELECT`s directly; to access the data the source receives, you need to create
+[materialized views](../../create-materialized-view) that `SELECT` from the
+source.
+
+For a mental model, materializing the source is approximately equivalent to
+creating a non-materialized source, and then creating a materialized view from
+all of the source's columns:
+
+```sql
+CREATE SOURCE src ...;
+CREATE MATERIALIZED VIEW src_view AS SELECT * FROM src;
+```
+
+The actual implementation of materialized sources differs, though, by letting
+you refer to the source's name directly in `SELECT` statements.
+
+For more details about the impact of materializing sources (and implicitly
+creating an index), see [`CREATE INDEX`: Details &mdash; Memory
+footprint](../../create-index/#memory-footprint).
 
 {{ partial (printf "create-source/connector/%s/details" $connector ) (dict "context" . "envelopes" $envelopes) -}}
 
