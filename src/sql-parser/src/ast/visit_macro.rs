@@ -435,11 +435,12 @@ macro_rules! make_visitor {
                 name: &'ast $($mut)* ObjectName,
                 columns: &'ast $($mut)* [Ident],
                 query: &'ast $($mut)* Query,
+                temporary: bool,
                 materialized: bool,
                 if_exists: IfExistsBehavior,
                 with_options: &'ast $($mut)* [SqlOption],
             ) {
-                visit_create_view(self, name, columns, query, materialized, if_exists, with_options)
+                visit_create_view(self, name, columns, query, temporary, materialized, if_exists, with_options)
             }
 
             fn visit_create_index(
@@ -710,10 +711,11 @@ macro_rules! make_visitor {
                     name,
                     columns,
                     query,
+                    temporary,
                     materialized,
                     if_exists,
                     with_options,
-                } => visitor.visit_create_view(name, columns, query, *materialized, *if_exists, with_options),
+                } => visitor.visit_create_view(name, columns, query, *temporary, *materialized, *if_exists, with_options),
                 Statement::CreateIndex {
                     name,
                     on_name,
@@ -1510,6 +1512,7 @@ macro_rules! make_visitor {
             name: &'ast $($mut)* ObjectName,
             columns: &'ast $($mut)* [Ident],
             query: &'ast $($mut)* Query,
+            _temporary: bool,
             _materialized: bool,
             _if_exists: IfExistsBehavior,
             with_options: &'ast $($mut)* [SqlOption],

@@ -196,6 +196,7 @@ pub fn create_statement(
             name,
             columns: _,
             query,
+            temporary: _,
             materialized,
             if_exists,
             with_options: _,

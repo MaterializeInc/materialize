@@ -2829,6 +2829,7 @@ fn parse_create_view() {
             name,
             columns,
             query,
+            temporary,
             materialized,
             if_exists,
             with_options,
@@ -2836,6 +2837,67 @@ fn parse_create_view() {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
+            assert!(!temporary);
+            assert!(!materialized);
+            assert_eq!(if_exists, IfExistsBehavior::Error);
+            assert_eq!(with_options, vec![]);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_temporary_view() {
+    let sql = "CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar";
+    let stmt = verified_stmt(sql);
+    assert_eq!(
+        "CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar",
+        stmt.to_string()
+    );
+    match stmt {
+        Statement::CreateView {
+            name,
+            columns,
+            query,
+            temporary,
+            materialized,
+            if_exists,
+            with_options,
+        } => {
+            assert_eq!("myview", name.to_string());
+            assert_eq!(Vec::<Ident>::new(), columns);
+            assert_eq!("SELECT foo FROM bar", query.to_string());
+            assert!(temporary);
+            assert!(!materialized);
+            assert_eq!(if_exists, IfExistsBehavior::Error);
+            assert_eq!(with_options, vec![]);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn parse_create_temp_view() {
+    let sql = "CREATE TEMP VIEW myview AS SELECT foo FROM bar";
+    let stmt = unverified_stmt(sql);
+    assert_eq!(
+        "CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar",
+        stmt.to_string()
+    );
+    match stmt {
+        Statement::CreateView {
+            name,
+            columns,
+            query,
+            temporary,
+            materialized,
+            if_exists,
+            with_options,
+        } => {
+            assert_eq!("myview", name.to_string());
+            assert_eq!(Vec::<Ident>::new(), columns);
+            assert_eq!("SELECT foo FROM bar", query.to_string());
+            assert!(temporary);
             assert!(!materialized);
             assert_eq!(if_exists, IfExistsBehavior::Error);
             assert_eq!(with_options, vec![]);
@@ -2906,6 +2968,7 @@ fn parse_create_view_with_columns() {
             columns,
             with_options,
             query,
+            temporary,
             materialized,
             if_exists,
         } => {
@@ -2913,6 +2976,7 @@ fn parse_create_view_with_columns() {
             assert_eq!(columns, vec![Ident::new("has"), Ident::new("cols")]);
             assert_eq!(with_options, vec![]);
             assert_eq!("SELECT 1, 2", query.to_string());
+            assert!(!temporary);
             assert!(!materialized);
             assert_eq!(if_exists, IfExistsBehavior::Error);
         }
@@ -2928,6 +2992,7 @@ fn parse_create_materialized_view() {
             name,
             columns,
             query,
+            temporary,
             materialized,
             if_exists,
             with_options,
@@ -2935,6 +3000,7 @@ fn parse_create_materialized_view() {
             assert_eq!("myschema.myview", name.to_string());
             assert_eq!(Vec::<Ident>::new(), columns);
             assert_eq!("SELECT foo FROM bar", query.to_string());
+            assert!(!temporary);
             assert!(materialized);
             assert_eq!(if_exists, IfExistsBehavior::Error);
             assert_eq!(with_options, vec![]);

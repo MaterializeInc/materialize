@@ -1098,6 +1098,18 @@ impl Parser {
         } else if self.parse_keyword("OR") || self.parse_keyword("VIEW") {
             self.prev_token();
             self.parse_create_view()
+        } else if self.parse_keyword("TEMP") || self.parse_keyword("TEMPORARY") {
+            if self.parse_keyword("VIEW") {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_view()
+            } else {
+                self.expected(
+                    self.peek_range(),
+                    "VIEW after CREATE TEMPORARY",
+                    self.peek_token(),
+                )
+            }
         } else if self.parse_keyword("MATERIALIZED") {
             if self.parse_keyword("VIEW") {
                 self.prev_token();
@@ -1360,6 +1372,7 @@ impl Parser {
         } else {
             IfExistsBehavior::Error
         };
+        let temporary = self.parse_keyword("TEMPORARY") | self.parse_keyword("TEMP");
         let materialized = self.parse_keyword("MATERIALIZED");
         self.expect_keyword("VIEW")?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
@@ -1378,6 +1391,7 @@ impl Parser {
             name,
             columns,
             query,
+            temporary,
             materialized,
             if_exists,
             with_options,
