@@ -56,24 +56,18 @@ impl MzClient {
         Ok(())
     }
 
-    pub async fn create_proto_source(
+    pub async fn create_upsert_text_source(
         &self,
-        descriptor: &[u8],
         kafka_url: &impl std::fmt::Display,
         kafka_topic_name: &str,
         source_name: &str,
-        message_name: &str,
     ) -> Result<()> {
-        let encoded = hex::encode(descriptor);
-
         let query = format!(
-            "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
-             FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
-            descriptor = encoded,
+            "CREATE MATERIALIZED SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+             FORMAT TEXT ENVELOPE UPSERT",
             kafka_url = kafka_url,
             topic = kafka_topic_name,
             source = source_name,
-            message = message_name,
         );
         log::debug!("creating source=> {}", query);
 
