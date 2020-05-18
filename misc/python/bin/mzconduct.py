@@ -17,8 +17,8 @@ import socket
 import subprocess
 import sys
 import time
+import webbrowser
 from datetime import datetime, timezone
-from materialize.errors import UnknownItem, BadSpec, Failed, error_handler
 from pathlib import Path
 from typing import (
     Any,
@@ -43,6 +43,13 @@ import yaml
 
 from materialize import spawn
 from materialize import ui
+from materialize.errors import (
+    BadSpec,
+    Failed,
+    MzRuntimeError,
+    UnknownItem,
+    error_handler,
+)
 
 
 T = TypeVar("T")
@@ -55,25 +62,60 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("-d", "--duration-seconds", "duration", default=60 * 5)
-@click.option("--tag", help="Which tag to launch for docker processes")
 @click.option("-w", "--workflow", help="The name of a workflow to run")
 @click.argument("composition")
-def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> None:
+@click.argument("services", nargs=-1)
+def up(composition: str, workflow: Optional[str], services: Iterable[str],) -> None:
     """Conduct a docker-composed set of services
 
     With the --workflow flag, perform all the steps in the workflow together.
     """
     comp = Composition.find(composition)
-    if comp is not None:
-        if workflow is not None:
-            say(f"Executing {comp.name} -> {workflow}")
-            comp.run_workflow(workflow)
-        else:
-            say(f"Starting {comp.name}")
-            comp.run()
+    if workflow is not None:
+        say(f"Executing {comp.name} -> {workflow}")
+        if services:
+            serv = " ".join(services)
+            say(f"WARNING: services list specified with -w, ignoring: {serv}")
+        comp.run_workflow(workflow)
     else:
-        raise UnknownItem("composition", composition, Composition.known_compositions())
+        comp.up(list(services))
+
+
+@cli.command()
+@click.option("-w", "--workflow", help="The name of a workflow to run")
+@click.argument("composition")
+@click.argument("services", nargs=-1)
+def run(composition: str, workflow: Optional[str], services: Iterable[str],) -> None:
+    """Conduct a docker-composed set of services
+
+    With the --workflow flag, perform all the steps in the workflow together.
+    """
+    comp = Composition.find(composition)
+    if workflow is not None:
+        say(f"Executing {comp.name} -> {workflow}")
+        if services:
+            serv = " ".join(services)
+            say(f"WARNING: services list specified with -w, ignoring: {serv}")
+        comp.run_workflow(workflow)
+    else:
+        comp.run(list(services))
+
+
+@cli.command()
+@click.argument("composition")
+def down(composition: str) -> None:
+    comp = Composition.find(composition)
+    comp.down()
+
+
+@cli.command()
+@click.argument("composition")
+def ps(composition: str) -> None:
+    comp = Composition.find(composition)
+    comp.ps()
+
+
+# Non-mzcompose commands
 
 
 @cli.command()
@@ -81,24 +123,9 @@ def run(duration: int, composition: str, tag: str, workflow: Optional[str]) -> N
 def help_workflows(composition: str) -> None:
     """Help on available workflows in DEMO"""
     comp = Composition.find(composition)
-    if comp is not None:
-        print("Workflows available:")
-        for workflow in comp.workflows():
-            print(f"    {workflow.name}")
-    else:
-        print(f"Unknown comp {comp}, available demos:")
-        for comp_ in Composition.known_compositions():
-            print(f"    {comp_}")
-
-
-@cli.command()
-@click.argument("composition")
-def down(composition: str) -> None:
-    comp = Composition.find(composition)
-    if comp is not None:
-        comp.down()
-    else:
-        raise UnknownItem("composition", comp, Composition.known_compositions())
+    print("Workflows available:")
+    for workflow in comp.workflows():
+        print(f"    {workflow.name}")
 
 
 @cli.command()
@@ -106,13 +133,24 @@ def down(composition: str) -> None:
 def nuke(composition: str) -> None:
     """Destroy everything docker, stopping composition before trying"""
     comp = Composition.find(composition)
-    if comp is not None:
-        comp.down()
-        cmds = ["docker system prune -af".split(), "docker volume prune -f".split()]
-        for cmd in cmds:
-            spawn.runv(cmd, capture_output=True)
-    else:
-        raise UnknownItem("composition", comp, Composition.known_compositions())
+    comp.down()
+    cmds = ["docker system prune -af".split(), "docker volume prune -f".split()]
+    for cmd in cmds:
+        spawn.runv(cmd, capture_output=True)
+
+
+@cli.command()
+@click.argument("composition")
+@click.argument("service")
+def web(composition: str, service: str) -> None:
+    """
+    Attempt to open a service in a web browser
+
+    This parses the output of `mzconduct ps` and tries to find the right way to open a
+    web browser for you.
+    """
+    comp = Composition.find(composition)
+    comp.web(service)
 
 
 # Composition Discovery
@@ -143,16 +181,27 @@ class Composition:
     def workflows(self) -> Collection["Workflow"]:
         return self._workflows.all_workflows()
 
-    def run(self) -> None:
+    def up(self, services: List[str]) -> None:
         with cd(self._path):
             try:
-                mzcompose_up([])
+                mzcompose_up(services)
+            except subprocess.CalledProcessError:
+                raise Failed("error when bringing up all services")
+
+    def run(self, services: List[str]) -> None:
+        with cd(self._path):
+            try:
+                mzcompose_run(services)
             except subprocess.CalledProcessError:
                 raise Failed("error when bringing up all services")
 
     def down(self) -> None:
         with cd(self._path):
             mzcompose_down()
+
+    def ps(self) -> None:
+        with cd(self._path):
+            spawn.runv(["./mzcompose", "--mz-quiet", "ps"])
 
     def run_workflow(self, workflow: str) -> None:
         with cd(self._path):
@@ -162,12 +211,46 @@ class Composition:
                 raise UnknownItem("workflow", workflow, self._workflows.names())
             workflow_.run(self)
 
+    def web(self, service: str) -> None:
+        """Best effort attempt to open the service in a web browser"""
+        with cd(self._path):
+            ps = spawn.capture(["./mzcompose", "--mz-quiet", "ps"], unicode=True,)
+        # technically 'docker-compose ps' has a `--filter` flag but...
+        # https://github.com/docker/compose/issues/5996
+        service_lines = [
+            l.strip() for l in ps.splitlines() if service in l and "Up" in l
+        ]
+        if len(service_lines) == 1:
+            *_, port_config = service_lines[0].split()
+            if "," in port_config or " " in port_config or "->" not in port_config:
+                raise MzRuntimeError(
+                    "Unable to unambiguously determine listening port for service:"
+                    "\n{}".format(service_lines[0])
+                )
+            port = port_config.split(":")[1].split("-")[0]
+            webbrowser.open(f"http://localhost:{port}")
+        elif not service_lines:
+            raise MzRuntimeError(f"No running services matched {service}")
+        else:
+            raise MzRuntimeError(
+                "Too many services matched {}:\n{}".format(
+                    service, "\n".join(service_lines)
+                )
+            )
+
     @classmethod
-    def find(cls, comp: str) -> Optional["Composition"]:
-        """Try to find a configured comp"""
+    def find(cls, comp: str) -> "Composition":
+        """Try to find a configured comp
+
+        Raises:
+            `UnknownItem`: if the composition cannot be discovered
+        """
         if cls._demos is None:
             cls._demos = cls.load()
-        return cls._demos.get(comp)
+        try:
+            return cls._demos[comp]
+        except KeyError:
+            raise UnknownItem("composition", comp, Composition.known_compositions())
 
     @classmethod
     def known_compositions(cls) -> Collection[str]:
