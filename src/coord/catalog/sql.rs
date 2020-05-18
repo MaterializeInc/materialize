@@ -189,7 +189,7 @@ impl Connection {
                 Ok((
                     id.0,
                     FullName {
-                        database: DatabaseSpecifier::from(database),
+                        database: DatabaseSpecifier::ambient_or_named(database),
                         schema,
                         item,
                     },

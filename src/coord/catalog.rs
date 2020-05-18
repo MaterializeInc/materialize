@@ -422,9 +422,7 @@ impl Catalog {
             }),
             DatabaseSpecifier::Temporary => {
                 // todo: this match should return temporary schemas.
-                Err(Error::new(ErrorKind::UnknownDatabase(
-                    "mz_temp".to_owned(),
-                )))
+                Err(Error::new(ErrorKind::UnknownDatabase("mz_temp".to_owned())))
             }
             DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
                 Some(database) => Ok(DatabaseResolver {
