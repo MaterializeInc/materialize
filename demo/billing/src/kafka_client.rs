@@ -46,6 +46,10 @@ impl KafkaClient {
     pub async fn create_topic(&self, partitions: i32) -> Result<()> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
+        config.set("cleanup.policy", "compact");
+        config.set("segment.ms", "10000");
+        config.set("delete.retention.ms", "60000");
+        config.set("min.cleanable.dirty.ratio", "0.01");
         let res = config
             .create::<AdminClient<_>>()
             .expect("creating admin kafka client failed")
