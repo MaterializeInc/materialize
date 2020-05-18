@@ -76,13 +76,11 @@ async fn run() -> Result<()> {
 
 async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     use rand::SeedableRng;
-    let rng = &mut if let Some(seed) = config.seed {
-        rand::rngs::StdRng::seed_from_u64(seed)
-    } else {
-        rand::rngs::StdRng::from_seed(rand::random())
-    };
+    let rng = rand::rngs::StdRng::from_seed(rand::random());
 
-    let mut recordstate = randomizer::RecordState::new(config.start_time);
+    let keys: Vec<Vec<u8>> = (1..1001).map(|x| x.to_string().into_bytes()).collect();
+    let val_a: Vec<u8> = "a".repeat(500).into_bytes();
+    let val_b: Vec<u8> = "b".repeat(500).into_bytes();
 
     let mut k_client =
         kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)?;
@@ -91,25 +89,21 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         k_client.create_topic(partitions).await?;
     }
 
-    let mut buf = vec![];
     let mut interval = config.message_sleep.map(tokio::time::interval);
     let mut total_size = 0;
     for i in 0..config.message_count {
         if let Some(int) = interval.as_mut() {
             int.tick().await;
         }
-        let m = randomizer::random_batch(rng, &mut recordstate);
-        m.write_to_vec(&mut buf)?;
-        log::trace!("sending: {:?}", m);
-        k_client.send(&buf).await?;
-        total_size += buf.len();
-        buf.clear();
+        let key_index = i % (1000 as usize);
+        k_client
+            .send(keys[key_index].as_slice(), val_a.as_slice())
+            .await?;
+        k_client
+            .send(keys[key_index].as_slice(), val_b.as_slice())
+            .await?;
         if i % (config.message_count / 100).max(5) == 0 {
-            log::info!(
-                "sent message {} average message size: {}B",
-                i,
-                total_size / i.max(1)
-            );
+            log::info!("sent message {}", i);
         }
     }
     Ok(())
@@ -122,51 +116,16 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
         let sources = client.show_sources().await?;
         if any_matches(&sources, config::KAFKA_SOURCE_NAME) {
             client.drop_source(config::KAFKA_SOURCE_NAME).await?;
-            client.drop_source(config::CSV_SOURCE_NAME).await?;
         }
     }
 
     let sources = client.show_sources().await?;
     if !any_matches(&sources, config::KAFKA_SOURCE_NAME) {
         client
-            .create_csv_source(
-                &config.csv_file_name,
-                config::CSV_SOURCE_NAME,
-                randomizer::NUM_CLIENTS,
-                config.seed,
-            )
-            .await?;
-
-        client
-            .create_proto_source(
-                proto::BILLING_DESCRIPTOR,
+            .create_upsert_text_source(
                 &config.kafka_url,
                 &config.kafka_topic,
                 config::KAFKA_SOURCE_NAME,
-                proto::BILLING_MESSAGE_NAME,
-            )
-            .await?;
-
-        exec_query!(client, "billing_raw_data");
-        exec_query!(client, "billing_prices");
-        exec_query!(client, "billing_batches");
-        exec_query!(client, "billing_records");
-        exec_query!(client, "billing_agg_by_minute");
-        exec_query!(client, "billing_agg_by_hour");
-        exec_query!(client, "billing_agg_by_day");
-        exec_query!(client, "billing_agg_by_month");
-        exec_query!(client, "billing_monthly_statement");
-        if config.low_memory {
-            exec_query!(client, "drop_index_billing_raw_data");
-            exec_query!(client, "drop_index_billing_records");
-        }
-
-        client
-            .create_kafka_sink(
-                &config.kafka_url,
-                config::KAFKA_SINK_TOPIC_NAME,
-                config::KAFKA_SINK_NAME,
-                &config.schema_registry_url,
             )
             .await?;
     } else {

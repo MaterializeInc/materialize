@@ -76,9 +76,10 @@ impl KafkaClient {
         Ok(())
     }
 
-    pub async fn send(&mut self, message: &[u8]) -> Result<()> {
+    pub async fn send(&mut self, key: &[u8], message: &[u8]) -> Result<()> {
         self.messages += 1;
-        let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic)
+        let record: FutureRecord<_, _> = FutureRecord::to(&self.topic)
+            .key(key)
             .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
         if let Err((e, _message)) = self.producer.send(record, Duration::from_millis(500)).await {
