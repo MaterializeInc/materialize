@@ -154,7 +154,7 @@ pub struct Index {
 impl Schemas {
     pub fn contains_id(&self, id: GlobalId) -> bool {
         for schema in self.0.values() {
-            for item_id in schema.items.values() {
+            for item_id in schema.items.0.values() {
                 if id == *item_id {
                     return true;
                 }
