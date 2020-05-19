@@ -953,7 +953,7 @@ where
                 .expect("sending to internal_cmd_tx cannot fail");
         });
     }
-    
+
     #[allow(clippy::too_many_arguments)]
     fn sequence_create_view(
         &mut self,

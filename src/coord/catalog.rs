@@ -150,6 +150,19 @@ pub struct Index {
     pub keys: Vec<ScalarExpr>,
 }
 
+impl Schemas {
+    pub fn contains_id(&self, id: GlobalId) -> bool {
+        for (_, schema) in self.0.iter() {
+            for (_, item_id) in schema.items.iter() {
+                if id == *item_id {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
     pub fn type_string(&self) -> &'static str {
@@ -497,6 +510,15 @@ impl Catalog {
         }
     }
 
+    fn is_in_temporary_schema(&self, id: GlobalId, conn_id: Option<u32>) -> bool {
+        if let Some(conn_id) = conn_id {
+            if let Some(schemas) = self.temporary_schemas.get(&conn_id) {
+                return schemas.contains_id(id);
+            }
+        }
+        false
+    }
+
     pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
         if !item.is_placeholder() {
             info!("create {} {} ({})", item.type_string(), name, id);
@@ -709,7 +731,9 @@ impl Catalog {
                     }
                 }
                 Op::DropItem { id, conn_id } => {
-                    tx.remove_item(id)?;
+                    if !self.is_in_temporary_schema(id, conn_id) {
+                        tx.remove_item(id)?;
+                    }
                     Action::DropItem { id, conn_id }
                 }
             })

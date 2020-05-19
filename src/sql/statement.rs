@@ -206,7 +206,6 @@ pub fn describe_statement(
 
         Statement::Tail { name, .. } => {
             let name = scx.resolve_name(name)?;
-            println!("tailing");
             let sql_object = scx.get(&name)?;
             (Some(sql_object.desc()?.clone()), vec![])
         }
@@ -342,7 +341,6 @@ fn handle_tail(
     as_of: Option<sql_parser::ast::Expr>,
 ) -> Result<Plan, failure::Error> {
     let from = scx.resolve_name(from)?;
-    println!("handline tail");
     let entry = scx.get(&from)?;
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
 
@@ -535,7 +533,6 @@ fn handle_show_indexes(
         bail!("SHOW EXTENDED INDEXES is not supported")
     }
     let from_name = scx.resolve_name(from_name)?;
-    println!("show indexes");
     let from_entry = scx.get(&from_name)?;
     if !object_type_matches(ObjectType::View, from_entry.item_type())
         && !object_type_matches(ObjectType::Source, from_entry.item_type())
@@ -632,7 +629,6 @@ fn handle_show_create_view(
     name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = scx.resolve_name(name)?;
-    println!("show create view");
     let entry = scx.get(&name)?;
     if let CatalogItemType::View = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
@@ -1823,7 +1819,6 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    // put the get here!!!
     pub fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
         Ok(self
             .catalog

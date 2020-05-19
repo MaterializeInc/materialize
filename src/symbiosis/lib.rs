@@ -218,7 +218,6 @@ END $$;
                 if_exists,
                 ..
             } => {
-                println!("trying to drop objects");
                 self.client.execute(&*stmt.to_string(), &[]).await?;
                 let mut items = vec![];
                 let mut temporary_items = vec![];
@@ -252,7 +251,6 @@ END $$;
                 }
             }
             Statement::Delete { table_name, .. } => {
-                println!("trying to delete");
                 let mut updates = vec![];
                 let table_name = scx.resolve_name(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
@@ -275,7 +273,6 @@ END $$;
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
-                println!("trying to insert");
                 Plan::SendDiffs {
                     id: catalog.get(&table_name)?.id(),
                     updates,
@@ -303,7 +300,6 @@ END $$;
                     updates.push((row, 1));
                 }
                 assert_eq!(affected_rows * 2, updates.len());
-                println!("trying to update");
                 Plan::SendDiffs {
                     id: catalog.get(&table_name)?.id(),
                     updates,

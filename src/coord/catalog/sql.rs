@@ -344,10 +344,11 @@ impl Transaction<'_> {
             .prepare_cached("DELETE FROM items WHERE gid = ?")?
             .execute(params![SqlVal(id)])?;
         assert!(n <= 1);
-        // if n != 1 {
-        // error!("Unable to delete item with gid = {}", id.to_string());
-        // }
-        Ok(())
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(Error::new(ErrorKind::UnknownItem(id.to_string())))
+        }
     }
 
     pub fn commit(self) -> Result<(), rusqlite::Error> {
