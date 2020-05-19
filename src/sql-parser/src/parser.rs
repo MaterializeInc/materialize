@@ -104,12 +104,14 @@ pub struct Parser {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Precedence {
     Zero,
-    Json,
     Or,
     And,
     UnaryNot,
     Is,
     Cmp,
+    Like,
+    JsonCompare,
+    JsonOp,
     Plus,
     Times,
     UnaryOp,
@@ -801,9 +803,9 @@ impl Parser {
     pub fn parse_between(&mut self, expr: Expr, negated: bool) -> Result<Expr, ParserError> {
         // Stop parsing subexpressions for <low> and <high> on tokens with
         // precedence lower than that of `BETWEEN`, such as `AND`, `IS`, etc.
-        let low = self.parse_subexpr(Precedence::Cmp)?;
+        let low = self.parse_subexpr(Precedence::Like)?;
         self.expect_keyword("AND")?;
-        let high = self.parse_subexpr(Precedence::Cmp)?;
+        let high = self.parse_subexpr(Precedence::Like)?;
         Ok(Expr::Between {
             expr: Box::new(expr),
             negated,
@@ -834,35 +836,33 @@ impl Parser {
                     // it takes on the precedence of those tokens. Otherwise it
                     // is not an infix operator, and therefore has zero
                     // precedence.
-                    Some(Token::Word(k)) if k.keyword == "IN" => Precedence::Cmp,
-                    Some(Token::Word(k)) if k.keyword == "BETWEEN" => Precedence::Cmp,
-                    Some(Token::Word(k)) if k.keyword == "LIKE" => Precedence::Cmp,
+                    Some(Token::Word(k)) if k.keyword == "IN" => Precedence::Like,
+                    Some(Token::Word(k)) if k.keyword == "BETWEEN" => Precedence::Like,
+                    Some(Token::Word(k)) if k.keyword == "LIKE" => Precedence::Like,
                     _ => Precedence::Zero,
                 },
                 Token::Word(k) if k.keyword == "IS" => Precedence::Is,
-                Token::Word(k) if k.keyword == "IN" => Precedence::Cmp,
-                Token::Word(k) if k.keyword == "BETWEEN" => Precedence::Cmp,
-                Token::Word(k) if k.keyword == "LIKE" => Precedence::Cmp,
+                Token::Word(k) if k.keyword == "IN" => Precedence::Like,
+                Token::Word(k) if k.keyword == "BETWEEN" => Precedence::Like,
+                Token::Word(k) if k.keyword == "LIKE" => Precedence::Like,
                 Token::Eq | Token::Lt | Token::LtEq | Token::Neq | Token::Gt | Token::GtEq => {
                     Precedence::Cmp
                 }
-                Token::Plus | Token::Minus => Precedence::Plus,
-                Token::Mult | Token::Div | Token::Mod => Precedence::Times,
-                Token::DoubleColon => Precedence::DoubleColon,
-                // TODO(jamii) it's not clear what precedence postgres gives to json operators
-                Token::JsonGet
-                | Token::JsonGetAsText
-                | Token::JsonGetPath
-                | Token::JsonGetPathAsText
-                | Token::JsonContainsJson
+                Token::JsonContainsJson
                 | Token::JsonContainedInJson
                 | Token::JsonContainsField
                 | Token::JsonContainsAnyFields
                 | Token::JsonContainsAllFields
+                | Token::JsonContainsPath => Precedence::JsonCompare,
+                Token::JsonGet
+                | Token::JsonGetAsText
+                | Token::JsonGetPath
+                | Token::JsonGetPathAsText
                 | Token::JsonConcat
-                | Token::JsonDeletePath
-                | Token::JsonContainsPath => Precedence::Json,
-
+                | Token::JsonDeletePath => Precedence::JsonOp,
+                Token::Plus | Token::Minus => Precedence::Plus,
+                Token::Mult | Token::Div | Token::Mod => Precedence::Times,
+                Token::DoubleColon => Precedence::DoubleColon,
                 _ => Precedence::Zero,
             }
         } else {

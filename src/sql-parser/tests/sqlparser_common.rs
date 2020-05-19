@@ -26,6 +26,7 @@ use repr::datetime::DateTimeField;
 
 use matches::assert_matches;
 use sql_parser::ast::display::AstDisplay;
+use sql_parser::ast::visit_mut::VisitMut;
 use sql_parser::ast::*;
 use sql_parser::parser::*;
 
@@ -102,6 +103,37 @@ Expected INTO, found: public"
             .to_string()),
         format!("{}", res.unwrap_err())
     );
+}
+
+#[test]
+fn op_precedence() {
+    struct RemoveParens;
+
+    impl<'a> VisitMut<'a> for RemoveParens {
+        fn visit_expr(&mut self, expr: &'a mut Expr) {
+            if let Expr::Nested(e) = expr {
+                *expr = (**e).clone();
+            }
+            visit_mut::visit_expr(self, expr);
+        }
+    }
+
+    for (actual, expected) in &[
+        ("a + b + c", "(a + b) + c"),
+        ("a - b + c", "(a - b) + c"),
+        ("a + b * c", "a + (b * c)"),
+        ("true = 'foo' like 'foo'", "true = ('foo' like 'foo')"),
+        ("a->b = c->d", "(a->b) = (c->d)"),
+        ("a @> b = c @> d", "(a @> b) = (c @> d)"),
+        ("a = b is null", "(a = b) is null"),
+        ("a and b or c and d", "(a and b) or (c and d)"),
+    ] {
+        let left = Parser::parse_sql(format!("SELECT {}", actual)).unwrap();
+        let mut right = Parser::parse_sql(format!("SELECT {}", expected)).unwrap();
+        VisitMut::visit_statement(&mut RemoveParens, &mut right[0]);
+
+        assert_eq!(left, right);
+    }
 }
 
 #[test]
@@ -4933,12 +4965,6 @@ fn parse_json_ops() {
         ("@@", JsonApplyPathPredicate),
     ] {
         let sql = format!("a {} b", op_string);
-        assert_matches!(
-            &verified_expr(&sql),
-            BinaryOp {op, ..} if *op == op_enum
-        );
-
-        let sql = format!("a {} b = c {} d", op_string, op_string);
         assert_matches!(
             &verified_expr(&sql),
             BinaryOp {op, ..} if *op == op_enum
