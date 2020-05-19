@@ -18,9 +18,9 @@ creates an index which will eagerly materialize that source or view. {{< /warnin
 
 ## Conceptual framework
 
-Indexes assemble and maintain in memory the data that results from a query, which can
+Indexes assemble and maintain in memory a query's results, which can
 provide future queries the data they need pre-arranged in a format they can immediately use.
-In particular, this can be very helpful for the [`JOIN`](../join) operator which will need
+In particular, this can be very helpful for the [`JOIN`](../join) operator which needs
 to build and maintain the appropriate indexes if they do not otherwise exist.
 For more information, see [API Components: Indexes](../../overview/api-components#indexes).
 
