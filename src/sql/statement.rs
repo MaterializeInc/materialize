@@ -1563,25 +1563,15 @@ fn handle_drop_items(
         .map(|n| scx.resolve_name(n))
         .collect::<Vec<_>>();
     let mut ids = vec![];
-    let mut temporary_ids = vec![];
     for name in names {
         match name {
-            Ok(name) => match name.database {
-                DatabaseSpecifier::Temporary => temporary_ids.extend(handle_drop_item(
-                    scx,
-                    object_type,
-                    if_exists,
-                    &name,
-                    cascade,
-                )?),
-                _ => ids.extend(handle_drop_item(
-                    scx,
-                    object_type,
-                    if_exists,
-                    &name,
-                    cascade,
-                )?),
-            },
+            Ok(name) => ids.extend(handle_drop_item(
+                scx,
+                object_type,
+                if_exists,
+                &name,
+                cascade,
+            )?),
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating this
                 // item does not exist.
@@ -1591,7 +1581,6 @@ fn handle_drop_items(
     }
     Ok(Plan::DropItems {
         items: ids,
-        temporary_items: temporary_ids,
         ty: object_type,
         conn_id: scx.session.conn_id(),
     })

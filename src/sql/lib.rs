@@ -96,7 +96,6 @@ pub enum Plan {
     },
     DropItems {
         items: Vec<GlobalId>,
-        temporary_items: Vec<GlobalId>,
         ty: ObjectType,
         conn_id: Option<u32>,
     },

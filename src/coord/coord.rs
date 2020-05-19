@@ -645,15 +645,9 @@ where
                 session,
             ),
 
-            Plan::DropItems {
-                items,
-                temporary_items,
-                ty,
-                conn_id,
-            } => tx.send(
-                self.sequence_drop_items(items, temporary_items, ty, conn_id),
-                session,
-            ),
+            Plan::DropItems { items, ty, conn_id } => {
+                tx.send(self.sequence_drop_items(items, ty, conn_id), session)
+            }
 
             Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
 
@@ -1073,12 +1067,10 @@ where
     fn sequence_drop_items(
         &mut self,
         items: Vec<GlobalId>,
-        temporary_items: Vec<GlobalId>,
         ty: ObjectType,
         conn_id: Option<u32>,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let mut ops = self.catalog.drop_items_ops(&items, None);
-        ops.extend(self.catalog.drop_items_ops(&temporary_items, conn_id));
+        let ops = self.catalog.drop_items_ops(&items, conn_id);
         self.catalog_transact(ops)?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
