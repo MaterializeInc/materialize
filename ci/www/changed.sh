@@ -27,4 +27,4 @@ fi
 # shellcheck disable=SC2016
 git submodule foreach 'git -C $toplevel submodule deinit $sm_path'
 
-exec git diff --quiet "$spec" -- doc/user 1>&2
+exec git diff --quiet "$spec" -- ci/www doc/user 1>&2

@@ -71,8 +71,8 @@ copyright_files=$(grep -vE \
     -e '(^|/)requirements.*\.txt$' \
     -e '\.(md|json|asc|png|jpe?g|svg|avro|pb)$' \
     -e '^doc/user/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
-    -e '^doc/user/static/_redirects$' \
     -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool.defconfig)$' \
+    -e '^ci/www/public/_redirects$' \
     -e 'demo/chbench/chbench' \
     -e 'demo/billing/resources/views/.*\.sql\.in' \
     -e 'test/smith/resources/views/.*\.sql' \
