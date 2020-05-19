@@ -902,13 +902,14 @@ fn handle_create_view(
         ),
         _ => unreachable!(),
     };
-    if *temporary {
-        bail!("TEMPORARY views are not yet supported");
-    }
     if !with_options.is_empty() {
         bail!("WITH options are not yet supported");
     }
-    let name = scx.allocate_name(normalize::object_name(name.to_owned())?);
+    let name = if *temporary {
+        scx.allocate_temporary_name(normalize::object_name(name.to_owned())?)
+    } else {
+        scx.allocate_name(normalize::object_name(name.to_owned())?)
+    };
     let replace = if *if_exists == IfExistsBehavior::Replace {
         let if_exists = true;
         let cascade = false;
@@ -935,6 +936,10 @@ fn handle_create_view(
         for (i, name) in columns.iter().enumerate() {
             desc.set_name(i, Some(normalize::column_name(name.clone())));
         }
+    }
+    // todo: remove!
+    if *temporary {
+        bail!("TEMPORARY views are not yet supported");
     }
     let materialize = *materialized; // Normalize for `raw_sql` below.
     let if_not_exists = *if_exists == IfExistsBehavior::Skip;
@@ -1796,6 +1801,14 @@ impl<'a> StatementContext<'a> {
                 None => self.session.database(),
             },
             schema: name.schema.unwrap_or_else(|| "public".into()),
+            item: name.item,
+        }
+    }
+
+    pub fn allocate_temporary_name(&self, name: PartialName) -> FullName {
+        FullName {
+            database: DatabaseSpecifier::Ambient,
+            schema: "mz_temp".to_owned(),
             item: name.item,
         }
     }
