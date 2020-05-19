@@ -192,3 +192,88 @@ a b u1 u2 n
 1 2 5 <null> 6
 2 3 <null> <null> <null>
 3 4 <null> "hello" 7
+
+
+# Source with new-style three-valued "snapshot".
+$ set new-dbz-schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "io.debezium.connector.mysql",
+          "fields": [
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "string",
+                  "connect.version": 1,
+                  "connect.parameters": {
+                    "allowed": "true,last,false"
+                  },
+                  "connect.default": "false",
+                  "connect.name": "io.debezium.data.Enum"
+                },
+                "null"
+              ],
+              "default": "false"
+            },
+            {
+              "name": "file",
+              "type": "string"
+            },
+            {
+              "name": "pos",
+              "type": "long"
+            },
+            {
+              "name": "row",
+              "type": "int"
+            }
+          ],
+          "connect.name": "io.debezium.connector.mysql.Source"
+        }
+      }
+    ]
+  }
+
+$ kafka-create-topic topic=new-dbz-data
+
+# We don't do anything sensible yet for snapshot "true" or "last", so don't test those.
+
+$ kafka-ingest format=avro topic=new-dbz-data schema=${new-dbz-schema} timestamp=1
+{"before": null, "after": {"a": 1, "b": 1}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": "false"}}
+{"before": null, "after": {"a": 2, "b": 3}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": "false"}}
+{"before": null, "after": {"a": -1, "b": 7}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": "false"}}
+{"before": null, "after": {"a": -1, "b": 7}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": "false"}}
+
+> CREATE MATERIALIZED SOURCE new_dbz
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-new-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM new_dbz
+a b
+---
+1 1
+2 3
+-1 7
