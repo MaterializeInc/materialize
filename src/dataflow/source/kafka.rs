@@ -285,7 +285,7 @@ impl DataPlaneInfo {
     }
 
     /// Marks a source as needing refresh, along with the expected partition count
-    pub fn needs_refresh(&mut self, expected_pcount: i32) {
+    pub fn set_needs_refresh(&mut self, expected_pcount: i32) {
         self.needs_refresh = true;
         assert!(expected_pcount > self.expected_partition_count);
         self.expected_partition_count = expected_pcount
@@ -293,6 +293,7 @@ impl DataPlaneInfo {
 
     /// Update the list of Kafka consumers to match the number of partitions
     /// We currently create one consumer per partition
+    #[must_use]
     fn update_consumer_list(&mut self) -> bool {
         let next_pid = self.get_consumer_count();
         let to_add = self.expected_partition_count - next_pid;
@@ -375,7 +376,7 @@ impl DataPlaneInfo {
                         offset,
                         last_offset.offset + 1
                     );
-                    // Seek to the *next* offset (ak last_offset + 1) that we have not yet processed
+                    // Seek to the *next* offset (aka last_offset + 1) that we have not yet processed
                     last_offset.offset += 1;
                     self.fast_forward_consumer(&consumer, partition, last_offset.into());
                     // We explicitly should not consume the message as we have already processed it
@@ -760,10 +761,9 @@ fn downgrade_capability(
                 // There is an entry for a partition for which we have no metadata. Must refresh before
                 // continuing
                 if pid >= cp_info.get_partition_count() {
-                    // PIDs in Kafka are monotonically increasing and 0-indexed Finding a PID of x means there
+                    // PIDs in Kafka are monotonically increasing and 0-indexed. Finding a PID of x means there
                     // must be at least (x+1) partitions
-                    dp_info.needs_refresh(pid + 1);
-                    //dp_info.refresh_source_information(cp_info);
+                    dp_info.set_needs_refresh(pid + 1);
                     return;
                 }
 
@@ -786,9 +786,8 @@ fn downgrade_capability(
                     // than we know about. We have to refresh metadata before continuing
                     if *partition_count > cp_info.get_partition_count() {
                         // New partition has been added, must refresh metadata before continuing
-                        dp_info.needs_refresh(*partition_count);
+                        dp_info.set_needs_refresh(*partition_count);
                         return;
-                        //dp_info.refresh_source_information(cp_info);
                     }
 
                     KAFKA_PARTITION_CLOSED_TS
