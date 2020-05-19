@@ -179,8 +179,7 @@ class CargoBuild(CargoPreImage):
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
-    def run(self) -> None:
-        super().run()
+    def build(self) -> None:
         cargo_build = [self.rd.xcargo(), "build", "--release", "--bin", self.bin]
         spawn.runv(
             cargo_build, cwd=self.rd.root,
@@ -225,6 +224,10 @@ class CargoBuild(CargoPreImage):
                 for d in self.extract.get(package, []):
                     shutil.copy(Path(message["out_dir"]) / d, self.path / Path(d).name)
 
+    def run(self) -> None:
+        super().run()
+        self.build()
+
     def inputs(self) -> Set[str]:
         crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
         deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
@@ -246,7 +249,8 @@ class CargoTest(CargoPreImage):
 
     def run(self) -> None:
         super().run()
-        CargoBuild(self.rd, self.path, {"bin": "testdrive"}).run()
+        CargoBuild(self.rd, self.path, {"bin": "testdrive", "strip": True}).build()
+        CargoBuild(self.rd, self.path, {"bin": "materialized", "strip": True}).build()
 
         # NOTE(benesch): The two invocations of `cargo test --no-run` here
         # deserve some explanation. The first invocation prints error messages
@@ -291,6 +295,7 @@ class CargoTest(CargoPreImage):
                 shutil.copy(executable, self.path / "tests" / slug)
                 spawn.runv([xstrip, self.path / "tests" / slug])
                 manifest.write(f"{slug} {crate_path}\n")
+        shutil.move(str(self.path / "materialized"), self.path / "tests")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")
         shutil.copy(
             self.rd.xcargo_target_dir() / "debug" / "examples" / "pingpong",

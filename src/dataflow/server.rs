@@ -212,6 +212,8 @@ pub fn serve<C>(
 where
     C: comm::Connection,
 {
+    assert!(threads > 0);
+
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
     //
