@@ -258,9 +258,12 @@ $ set new-dbz-schema={
 
 $ kafka-create-topic topic=new-dbz-data
 
-# We don't do anything sensible yet for snapshot "true" or "last", so don't test those.
+# We don't do anything sensible yet for snapshot "true" or "last", so just test that those are ingested.
 
 $ kafka-ingest format=avro topic=new-dbz-data schema=${new-dbz-schema} timestamp=1
+{"before": null, "after": {"a": 9, "b": 10}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": "true"}}
+{"before": null, "after": {"a": 11, "b": 11}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": "last"}}
+{"before": null, "after": {"a": 14, "b": 6}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": null}}
 {"before": null, "after": {"a": 1, "b": 1}, "source": {"file": "binlog", "pos": 0, "row": 0, "snapshot": "false"}}
 {"before": null, "after": {"a": 2, "b": 3}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": "false"}}
 {"before": null, "after": {"a": -1, "b": 7}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": "false"}}
@@ -274,6 +277,9 @@ $ kafka-ingest format=avro topic=new-dbz-data schema=${new-dbz-schema} timestamp
 > SELECT * FROM new_dbz
 a b
 ---
+9 10
+11 11
+14 6
 1 1
 2 3
 -1 7
