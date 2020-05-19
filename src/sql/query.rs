@@ -1699,58 +1699,32 @@ fn plan_any_or_all<'a>(
         allow_subqueries: true,
     };
 
-    match (op, &func) {
-        // This operator/aggregate pair has a better implementation that is tricky to spot later on
-        // in the planning process, so we intercept it here.
-        (BinaryOperator::NotEq, AggregateFunc::All) => {
-            // SELECT abc.a != ALL(SELECT xyz.x FROM xyz) FROM abc
-            // =>
-            // SELECT NOT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
-            let equality = plan_binary_op(
-                &any_ecx,
-                &BinaryOperator::Eq,
-                left,
-                &Expr::Identifier(vec![Ident::new(right_name)]),
-            )?;
-            Ok(right
-                .filter(vec![equality])
-                .exists()
-                .call_unary(UnaryFunc::Not))
-        }
-        (BinaryOperator::Eq, AggregateFunc::Any) => {
-            // SELECT abc.a = ANY(SELECT xyz.x FROM xyz) FROM abc
-            // =>
-            // SELECT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
-            let equality = plan_binary_op(
-                &any_ecx,
-                &BinaryOperator::Eq,
-                left,
-                &Expr::Identifier(vec![Ident::new(right_name)]),
-            )?;
-            Ok(right.filter(vec![equality]).exists())
-        }
-        _ => {
-            let op_expr = plan_binary_op(
-                &any_ecx,
-                op,
-                left,
-                &Expr::Identifier(vec![Ident::new(right_name)]),
-            )?;
+    // Planning ANY:
+    // SELECT abc.a = ANY(SELECT xyz.x FROM xyz) FROM abc
+    // =>
+    // SELECT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
+    //
+    // Planning ALL (the same, but applying De Morgan's law):
+    // SELECT abc.a != ALL(SELECT xyz.x FROM xyz) FROM abc
+    // =>
+    // SELECT NOT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
 
-            // plan subquery
-            let expr = right
-                .reduce(
-                    vec![],
-                    vec![AggregateExpr {
-                        func,
-                        expr: Box::new(op_expr),
-                        distinct: false,
-                    }],
-                )
-                .select();
-            Ok(expr)
-        }
+    let mut cond = plan_binary_op(
+        &any_ecx,
+        op,
+        left,
+        &Expr::Identifier(vec![Ident::new(right_name)]),
+    )?;
+    if func == AggregateFunc::All {
+        cond = cond.call_unary(UnaryFunc::Not);
     }
+
+    let mut exists = right.filter(vec![cond]).exists();
+    if func == AggregateFunc::All {
+        exists = exists.call_unary(UnaryFunc::Not);
+    }
+
+    Ok(exists)
 }
 
 fn plan_cast<'a>(
