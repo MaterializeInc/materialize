@@ -27,4 +27,10 @@ lazy_static! {
     )
     .unwrap();
     pub static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
+    pub static ref SCHEDULING_ELAPSED_NS: IntCounterVec = register_int_counter_vec!(
+        "mz_dataflow_operator_scheduling_elapsed_ns",
+        "Nanoseconds spent in each operator",
+        &["worker_id", "operator_id"]
+    )
+    .unwrap();
 }

@@ -19,6 +19,7 @@ use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
+use crate::metrics::SCHEDULING_ELAPSED_NS;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
 use repr::{Datum, Row};
@@ -296,6 +297,9 @@ pub fn construct<A: Allocate>(
             .count_total()
             .map({
                 move |((id, worker), cnt)| {
+                    SCHEDULING_ELAPSED_NS
+                        .with_label_values(&[&worker.to_string(), &id.to_string()])
+                        .inc_by(cnt as i64);
                     Row::pack(&[
                         Datum::Int64(id as i64),
                         Datum::Int64(worker as i64),
