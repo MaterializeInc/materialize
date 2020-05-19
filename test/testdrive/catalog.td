@@ -136,7 +136,7 @@ unacceptable schema name 'pg_bar'
 
 # The search path is currently hardcoded.
 > SHOW search_path
-"mz_catalog, pg_catalog, public"
+"mz_catalog, pg_catalog, public, mz_temp"
 ! SET search_path = foo
 parameter search_path is read only
 
