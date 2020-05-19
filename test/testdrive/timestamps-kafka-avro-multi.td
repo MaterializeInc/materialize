@@ -272,3 +272,82 @@ b  sum
 9  1
 10 1
 11 1
+
+$ kafka-create-topic topic=data-consistency2
+
+$ kafka-create-topic topic=data-multi partitions=2
+
+$ kafka-ingest format=avro topic=data-consistency2 schema=${consistency}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 0, "timestamp": 1, "offset": 0}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 1, "timestamp": 1, "offset": 0}
+
+
+> CREATE MATERIALIZED SOURCE data_multi
+    FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-multi-${testdrive.seed}'
+    WITH (consistency = 'testdrive-data-consistency2-${testdrive.seed}')
+    FORMAT AVRO USING SCHEMA '${schema}'
+
+
+! SELECT * FROM data_multi;
+At least one input has no complete timestamps yet.
+
+
+$ kafka-ingest partition=0 format=avro topic=data-multi schema=${schema} timestamp=1
+{"a": 0, "b": 1}
+
+
+$ kafka-ingest partition=1 format=avro topic=data-multi schema=${schema} timestamp=1
+{"a": 1, "b": 1}
+
+
+! SELECT * FROM data_multi;
+At least one input has no complete timestamps yet.
+
+$ kafka-add-partitions topic=data-multi total-partitions=4
+
+
+$ kafka-ingest partition=2 format=avro topic=data-multi schema=${schema} timestamp=1
+{"a": 2, "b": 1}
+
+$ kafka-ingest format=avro topic=data-consistency2 schema=${consistency}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 0, "timestamp": 2, "offset": 1}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 1, "timestamp": 2, "offset": 1}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 2, "timestamp": 2, "offset": 0}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 3, "timestamp": 2, "offset": 1}
+
+$ kafka-ingest partition=3 format=avro topic=data-multi schema=${schema} timestamp=1
+{"a": 3, "b": 1}
+
+
+> SELECT * FROM data_multi
+a  b
+------
+0  1
+1  1
+3  1
+
+$ kafka-ingest partition=0 format=avro topic=data-multi schema=${schema} timestamp=1
+{"a": 0, "b": 2}
+$ kafka-ingest partition=3 format=avro topic=data-multi schema=${schema} timestamp=1
+{"a": 1, "b": 2}
+$ kafka-ingest partition=1 format=avro topic=data-multi schema=${schema} timestamp=1
+{"a": 3, "b": 2}
+
+
+$ kafka-ingest format=avro topic=data-consistency2 schema=${consistency}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 2, "timestamp": 3, "offset": 1}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 1, "timestamp": 3, "offset": 2}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 3, "timestamp": 3, "offset": 2}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": 0, "timestamp": 3, "offset": 2}
+
+
+> SELECT * FROM data_multi
+a  b
+------
+0  1
+1  1
+3  1
+2  1
+0  2
+1  2
+3  2
