@@ -532,3 +532,65 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | Project (#3)
 
 EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
+----
+%0 =
+| Get materialize.public.y (u57)
+| Distinct group=(#0)
+
+%1 =
+| Get %0
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.x (u55)
+
+%3 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0, #1)
+| Filter (#0 <= #1)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u57)
+| ArrangeBy (#0)
+
+%5 =
+| Get %3
+| Map true
+
+%6 =
+| Get %3
+| Negate
+
+%7 =
+| Get %0
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Get %0
+| ArrangeBy (#0)
+
+%10 =
+| Join %8 %9 (= #0 #1)
+| | implementation = Differential %8 %9.(#0)
+| | demand = (#0)
+| Map false
+| Project (#0, #2)
+
+%11 =
+| Union %5 %10
+
+%12 =
+| Join %4 %11 (= #0 #1)
+| | implementation = Differential %11 %4.(#0)
+| | demand = (#2)
+| Map !(#2)
+| Project (#3)
+
+EOF
