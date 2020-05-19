@@ -1,6 +1,6 @@
 ---
 title: "CREATE INDEX"
-description: "`CREATE INDEX` creates an in-memory index on a view."
+description: "`CREATE INDEX` creates an in-memory index on a source or view."
 menu:
   main:
     parent: 'sql'
@@ -8,27 +8,28 @@ menu:
 
 {{< warning >}} This is an advanced feature of Materialized; most users will not
 need to manually create indexes to maximize the value Materialize offers, as
-running `CREATE MATERIALIZED VIEW` automatically creates all required indexes to
-eagerly materialize that view. {{< /warning >}}
+running `CREATE MATERIALIZED SOURCE` or `CREATE MATERIALIZED VIEW` automatically
+creates an index which will eagerly materialize that source or view. {{< /warning >}}
 
-`CREATE INDEX` creates an in-memory index on a view.
+`CREATE INDEX` creates an in-memory index on a source or view.
 
 - For materialized views, this creates additional indexes.
 - For non-materialized views, it converts them into materialized views.
 
 ## Conceptual framework
 
-Indexes persist some subset of a query's data to memory, which let materialized
-views quickly perform reads from materialized views, which includes performing
-[`JOIN`](../join)s. For more information, see [API Components:
-Indexes](../../overview/api-components#indexes).
+Indexes assemble and maintain in memory the data that results from a query, which can
+provide future queries the data they need pre-arranged in a format they can immediately use.
+In particular, this can be very helpful for the [`JOIN`](../join) operator which will need
+to build and maintain the appropriate indexes if they do not otherwise exist.
+For more information, see [API Components: Indexes](../../overview/api-components#indexes).
 
 ### When to create indexes
 
 You might want to create indexes when...
 
-- Using non-primary keys (e.g. foreign keys) as a join condition. In this case,
-  users could create an index on the columns in the join condition.
+- You want to use non-primary keys (e.g. foreign keys) as a join condition.
+  In this case, you could create an index on the columns in the join condition.
 - You want to convert a non-materialized view to a materialized view.
 
 ## Syntax
@@ -38,7 +39,7 @@ You might want to create indexes when...
 Field | Use
 ------|-----
 _index&lowbar;name_ | A name for the index.
-_view&lowbar;name_ | The name of the view for which you want to create an index.
+_view&lowbar;name_ | The name of the source or view on which you want to create an index.
 _col&lowbar;ref_**...** | The columns to use as the key into the index.
 
 ## Details
@@ -68,32 +69,40 @@ Indexes in Materialize have the following structure for each unique row.
 
 #### Indexed columns vs. stored columns
 
-Automatically created columns index all of a table's columns, unless Materialize
-is provided or can infer a unique key for the result set.
+Automatically created indexes will use all columns as key columns for the index,
+unless Materialize is provided or can infer a unique key for the source or view.
 
 For instance, unique keys can be...
 
 - **Provided** by the schema provided for the source, e.g. through the Confluent
   Schema Registry.
-- **Inferred** when the query's results...
-  - Contains a `GROUP BY`.
-  - Uses results derived from a unique key without adding any additional
-    columns.
+- **Inferred** when the query...
+  - Concludes with a `GROUP BY`.
+  - Uses sources or views that have a unique key without damaging this property.
+    For example, joining a view with unique keys against a second, where the join
+    constraint uses foreign keys.
 
 When creating your own indexes, you can choose the indexed columns.
 
 ### Memory footprint
 
-We do not currently have a good "rule of thumb" for understanding the size of
-indexes and are working on [a feature to let you see the size each index
-consumes](https://github.com/MaterializeInc/materialize/issues/1532).
+The in-memory sizes of indexes are proportional to the current size of the source
+or view they represent. The actual amount of memory required depends on several
+details related to the rate of compaction and the representation of the types of
+data in the source or view. We are working on [a feature to let you see the size
+each index consumes](https://github.com/MaterializeInc/materialize/issues/1532).
+
+Creating an index may also force the first materialization of a view, which may
+cause Materialize to install a dataflow to determine and maintain the results of
+the view. This dataflow may have a memory footprint itself, in addition to that
+of the index.
 
 ## Examples
 
 ### Optimizing joins with indexes
 
 We can optimize the performance of `JOIN` on two relations by ensuring their
-join keys are the leading columns in an index.
+join keys are the key columns in an index.
 
 ```sql
 CREATE MATERIALIZED VIEW active_customers AS
@@ -113,11 +122,11 @@ CREATE MATERIALIZED VIEW active_customer_per_geo AS
 In the above example, the index `active_customers_geo_idx`...
 
 - Helps us because it contains a key that the view `active_customer_per_geo` can
-  use to look up values for the join condition (`active_customers.geo`).
+  use to look up values for the join condition (`active_customers.geo_id`).
 
-    Because this access pattern is more optimal than scanning the entire
-    `active_customers` results set, the Materialize optimizer will choose to use
-    `active_customers_geo_idx`.
+    Because this index is exactly what the query requires, the Materialize
+    optimizer will choose to use `active_customers_geo_idx` rather than build
+    and maintain a private copy of the index just for this query.
 
 - Obeys our restrictions by containing only a subset of columns in the result
   set.
