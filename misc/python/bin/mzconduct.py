@@ -209,7 +209,7 @@ class Composition:
                 workflow_ = self._workflows[workflow]
             except KeyError:
                 raise UnknownItem("workflow", workflow, self._workflows.names())
-            workflow_.run(self)
+            workflow_.run(self, None)
 
     def web(self, service: str) -> None:
         """Best effort attempt to open the service in a web browser"""
@@ -288,7 +288,9 @@ class Composition:
                                 f"Unable to construct {step_name} with args {a}: {e}"
                             )
                         built_steps.append(step)
-                    workflows[workflow_name] = Workflow(workflow_name, built_steps)
+                    workflows[workflow_name] = Workflow(
+                        workflow_name, built_steps, raw_w.get("include_compose")
+                    )
 
             compositions[name] = Composition(
                 name, mzcompose.parent, Workflows(workflows)
@@ -314,22 +316,68 @@ class Workflows:
 
 
 class Workflow:
-    """A workflow is a collection of WorkflowSteps
+    """
+    A workflow is a collection of WorkflowSteps and some context
+
+    It is possible to specify additional compose files for specific workflows, and all
+    their child workflows will have access to services defined in those files.
     """
 
-    def __init__(self, name: str, steps: List["WorkflowStep"]) -> None:
+    def __init__(
+        self,
+        name: str,
+        steps: List["WorkflowStep"],
+        include_compose: Optional[List[str]] = None,
+    ) -> None:
         self.name = name
+        self.include_compose = include_compose or []
         self._steps = steps
+        self._parent: Optional["Workflow"] = None
 
     def overview(self) -> str:
-        return "{} [{}]".format(self.name, " ".join([s.name for s in self._steps]))
+        steps = " ".join([s.name for s in self._steps])
+        additional = ""
+        if self.include_compose:
+            additional = " [depends on {}]".format(",".join(self.include_compose))
+        return "{} [{}]{}".format(self.name, steps, additional)
 
     def __repr__(self) -> str:
         return "Workflow<{}>".format(self.overview())
 
-    def run(self, comp: Composition) -> None:
+    def with_parent(self, parent: Optional["Workflow"]) -> "Workflow":
+        """Create a new workflow from this one, but with access to the properties on the parent
+        """
+        w = Workflow(self.name, self._steps, self.include_compose)
+        w._parent = parent
+        return w
+
+    def _include_compose(self) -> List[str]:
+        add = list(self.include_compose)
+        if self._parent is not None:
+            add.extend(self._parent._include_compose())
+        return add
+
+    # Commands
+    def run(self, comp: Composition, parent_workflow: Optional["Workflow"]) -> None:
         for step in self._steps:
-            step.run(comp)
+            step.run(comp, self.with_parent(parent_workflow))
+
+    def mzcompose_up(self, services: List[str]) -> None:
+        mzcompose_up(services, self._docker_extra_args())
+
+    def mzcompose_run(self, services: List[str]) -> None:
+        mzcompose_run(services, self._docker_extra_args())
+
+    def _docker_extra_args(self) -> List[str]:
+        """Get additional docker arguments specified by this workflow context
+        """
+        args = []
+        additional = self._include_compose()
+        if additional is not None:
+            args.extend(["-f", "./mzcompose.yml"])
+            for f in additional:
+                args.extend(["-f", f])
+        return args
 
 
 class Steps:
@@ -377,7 +425,7 @@ class WorkflowStep:
     def __init__(self, **kwargs: Any) -> None:
         pass
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         """Perform the action specified by this step"""
 
 
@@ -393,9 +441,9 @@ class StartServicesStep(WorkflowStep):
         if not isinstance(self._services, list):
             raise BadSpec(f"services should be a list, got: {self._services}")
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         try:
-            proc = mzcompose_up(self._services)
+            workflow.mzcompose_up(self._services)
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
             raise Failed(f"ERROR: services didn't come up cleanly: {services}")
@@ -431,7 +479,7 @@ class WaitForPgStep(WorkflowStep):
         self._expected = expected
         self._print_result = print_result
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         wait_for_pg(
             dbname=self._dbname,
             host=self._host,
@@ -495,7 +543,7 @@ class WaitForMysqlStep(WorkflowStep):
         self._port = port
         self._timeout_secs = timeout_secs
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         wait_for_mysql(
             user=self._user,
             passwd=self._password,
@@ -522,7 +570,7 @@ class WaitForTcpStep(WorkflowStep):
         self._port = port
         self._timeout_secs = timeout_secs
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         ui.progress(
             f"waiting for {self._host}:{self._port}", "C",
         )
@@ -553,7 +601,7 @@ class DropKafkaTopicsStep(WorkflowStep):
         self._container = kafka_container
         self._topic_pattern = topic_pattern
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         say(f"dropping kafka topics {self._topic_pattern} from {self._container}")
         try:
             spawn.runv(
@@ -580,9 +628,11 @@ class WorkflowWorkflowStep(WorkflowStep):
     def __init__(self, workflow: str) -> None:
         self._workflow = workflow
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         try:
-            comp.workflow(self._workflow).run(comp)
+            # Run the specified workflow with the context of the parent workflow
+            sub_workflow = comp.workflow(self._workflow)
+            sub_workflow.run(comp, workflow)
         except KeyError:
             raise UnknownItem(
                 f"workflow in {comp.name}",
@@ -610,9 +660,9 @@ class RunStep(WorkflowStep):
         cmd.extend(shlex.split(command))
         self._command = cmd
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         try:
-            mzcompose_run(self._command)
+            workflow.mzcompose_run(self._command)
         except subprocess.CalledProcessError:
             raise Failed("giving up: {}".format(ui.shell_quote(self._command)))
 
@@ -623,7 +673,7 @@ class EnsureStaysUpStep(WorkflowStep):
         self._container = container
         self._uptime_secs = seconds
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         pattern = f"{comp.name}_{self._container}"
         ui.progress(f"Ensuring {self._container} stays up ", "C")
         for i in range(self._uptime_secs, 0, -1):
@@ -653,7 +703,7 @@ class DownStep(WorkflowStep):
         """Bring the cluster down"""
         self._destroy_volumes = destroy_volumes
 
-    def run(self, comp: Composition) -> None:
+    def run(self, comp: Composition, workflow: Workflow) -> None:
         say("bringing the cluster down")
         mzcompose_down(self._destroy_volumes)
 
@@ -661,13 +711,21 @@ class DownStep(WorkflowStep):
 # Generic commands
 
 
-def mzcompose_up(services: List[str]) -> subprocess.CompletedProcess:
-    cmd = ["./mzcompose", "--mz-quiet", "up", "-d"]
+def mzcompose_up(
+    services: List[str], args: Optional[List[str]] = None
+) -> subprocess.CompletedProcess:
+    if args is None:
+        args = []
+    cmd = ["./mzcompose", "--mz-quiet", *args, "up", "-d"]
     return spawn.runv(cmd + services)
 
 
-def mzcompose_run(command: List[str]) -> subprocess.CompletedProcess:
-    cmd = ["./mzcompose", "--mz-quiet", "run"]
+def mzcompose_run(
+    command: List[str], args: Optional[List[str]] = None
+) -> subprocess.CompletedProcess:
+    if args is None:
+        args = []
+    cmd = ["./mzcompose", "--mz-quiet", *args, "run"]
     return spawn.runv(cmd + command)
 
 

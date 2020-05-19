@@ -11,7 +11,7 @@
 
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import List, Tuple, Text, Optional, Sequence
+from typing import IO, List, Tuple, Text, Optional, Sequence
 from typing_extensions import NoReturn
 import argparse
 import os
@@ -19,6 +19,7 @@ import subprocess
 import sys
 import yaml
 
+from materialize import errors
 from materialize import ui
 from materialize import mzbuild
 
@@ -31,15 +32,9 @@ def main(argv: List[str]) -> int:
     # Lightly parse the arguments so we know what to do.
     args, unknown_args = ArgumentParser().parse_known_args(argv)
     if not args.file:
-        config_file = "mzcompose.yml"
-    elif len(args.file) > 1:
-        print(
-            "mzcompose: multiple -f/--file options are not yet supported",
-            file=sys.stderr,
-        )
-        return 1
+        config_files = ["mzcompose.yml"]
     else:
-        config_file = args.file[0]
+        config_files = args.file
 
     ui.Verbosity.init_from_env(args.mz_quiet)
     # TODO: we should propagate this down to subprocesses by explicit command-line flags, probably
@@ -52,8 +47,32 @@ def main(argv: List[str]) -> int:
     if args.command == "gen-shortcuts":
         return gen_shortcuts(repo)
 
-    # Determine what images this particular compose file depends upon.
     announce("Collecting mzbuild dependencies")
+    composes = []
+    for config_file in config_files:
+        composes.append(build_compose_file(repo, args.command, config_file))
+
+    # Hand over control to Docker Compose.
+    announce("Delegating to Docker Compose")
+    dc_args = [
+        "docker-compose",
+        *[f"-f/dev/fd/{comp.fileno()}" for comp in composes],
+        "--project-directory",
+        args.project_directory or str(Path(config_file).parent),
+        *unknown_args,
+        *([args.command] if args.command is not None else []),
+        *args.extra,
+    ]
+    os.execvp("docker-compose", dc_args)
+
+
+def build_compose_file(
+    repo: mzbuild.Repository, command: str, config_file: str
+) -> IO[bytes]:
+    """Substitute known keys with mzbuild-provided values
+
+    * Replace `mzimage` with fingerprinted image names
+    """
     images = []
     with open(config_file) as f:
         compose = yaml.safe_load(f)
@@ -64,10 +83,7 @@ def main(argv: List[str]) -> int:
                 image_name = config["mzbuild"]
 
                 if image_name not in repo.images:
-                    print(
-                        f"mzcompose: unknown image {image_name}", file=sys.stderr,
-                    )
-                    return 1
+                    raise errors.BadSpec(f"mzcompose: unknown image {image_name}")
 
                 image = repo.images[image_name]
                 override_tag = os.environ.get(
@@ -99,7 +115,7 @@ def main(argv: List[str]) -> int:
     # Check if the command is going to create or start containers, and if so
     # build the dependencies. This can be slow, so we don't want to do it if we
     # can help it (e.g., for `down` or `ps`).
-    if args.command in ["create", "run", "start", "up"]:
+    if command in ["create", "run", "start", "up"]:
         deps.acquire()
 
     # Construct a configuration that will point Docker Compose at the correct
@@ -109,20 +125,7 @@ def main(argv: List[str]) -> int:
     yaml.dump(compose, tempfile, encoding="utf-8")  # type: ignore
     tempfile.flush()
     tempfile.seek(0)
-
-    # Hand over control to Docker Compose.
-    announce("Delegating to Docker Compose")
-    dc_args = [
-        "docker-compose",
-        "-f",
-        f"/dev/fd/{tempfile.fileno()}",
-        "--project-directory",
-        args.project_directory or str(Path(config_file).parent),
-        *unknown_args,
-        *([args.command] if args.command is not None else []),
-        *args.extra,
-    ]
-    os.execvp("docker-compose", dc_args)
+    return tempfile
 
 
 def gen_shortcuts(repo: mzbuild.Repository) -> int:
@@ -177,4 +180,5 @@ class ArgumentParser(argparse.ArgumentParser):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    with errors.error_handler(lambda *args: print(*args, file=sys.stderr)):
+        sys.exit(main(sys.argv[1:]))
