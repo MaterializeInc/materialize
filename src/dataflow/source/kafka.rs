@@ -15,7 +15,10 @@ use std::time::Duration;
 
 use lazy_static::lazy_static;
 use log::{error, info, log_enabled, warn};
-use prometheus::{register_int_counter, register_int_gauge_vec, IntCounter, IntGaugeVec};
+use prometheus::{
+    register_int_counter, register_int_counter_vec, register_int_gauge_vec, IntCounter,
+    IntCounterVec, IntGaugeVec,
+};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
@@ -63,6 +66,12 @@ lazy_static! {
         "mz_kafka_capability",
         "The current capability for this dataflow. This corresponds to min(mz_kafka_partition_closed_ts)",
         &["topic", "source_id"]
+    )
+    .unwrap();
+    static ref KAFKA_PARTITION_MESSAGE_INGESTED: IntCounterVec = register_int_counter_vec!(
+        "mz_kafka_messages_ingested",
+        "The number of messages ingested per partition.",
+        &["topic", "source_id", "partition_id"]
     )
     .unwrap();
 }
@@ -229,6 +238,7 @@ fn create_kafka_config(
         .set("max.poll.interval.ms", "300000") // 5 minutes
         .set("fetch.message.max.bytes", "134217728")
         .set("enable.sparse.connections", "true")
+        .set("debug", "all")
         .set("bootstrap.servers", &url.to_string())
         .set("partition.assignment.strategy", "roundrobin");
 
@@ -635,6 +645,14 @@ where
                                         &partition.to_string(),
                                     ])
                                     .set(offset.offset);
+
+                                KAFKA_PARTITION_MESSAGE_INGESTED
+                                    .with_label_values(&[
+                                        &dp_info.topic_name,
+                                        &id.to_string(),
+                                        &partition.to_string(),
+                                    ])
+                                    .inc_by(1);
 
                                 if downgrade_capability(
                                     &dp_info.topic_name,
