@@ -390,3 +390,145 @@ query I
 SELECT col FROM (SELECT 1 AS col) t WHERE col IN(VALUES(1))
 ----
 1
+
+statement ok
+CREATE TABLE x (a int not null)
+
+statement ok
+CREATE TABLE y (b int not null)
+
+statement ok
+INSERT INTO x VALUES (1), (2), (3);
+
+statement ok
+INSERT INTO y VALUES (2), (3), (4);
+
+query B
+SELECT b != ALL(SELECT a FROM x) FROM y
+----
+false
+false
+true
+
+query T multiline
+EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
+----
+%0 =
+| Get materialize.public.y (u57)
+| Distinct group=(#0)
+
+%1 =
+| Get %0
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.x (u55)
+| ArrangeBy (#0)
+
+%3 =
+| Join %1 %2 (= #0 #1)
+| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
+| | demand = (#0)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u57)
+| ArrangeBy (#0)
+
+%5 =
+| Get %3
+| Map true
+
+%6 =
+| Get %3
+| Negate
+
+%7 =
+| Get %0
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Get %0
+| ArrangeBy (#0)
+
+%10 =
+| Join %8 %9 (= #0 #1)
+| | implementation = Differential %8 %9.(#0)
+| | demand = (#0)
+| Map false
+| Project (#0, #2)
+
+%11 =
+| Union %5 %10
+
+%12 =
+| Join %4 %11 (= #0 #1)
+| | implementation = Differential %11 %4.(#0)
+| | demand = (#2)
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
+----
+%0 =
+| Get materialize.public.y (u57)
+| Distinct group=(#0)
+
+%1 =
+| Get %0
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.x (u55)
+| ArrangeBy (#0)
+
+%3 =
+| Join %1 %2 (= #0 #1)
+| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
+| | demand = (#0)
+| Distinct group=(#0)
+
+%4 =
+| Get materialize.public.y (u57)
+| ArrangeBy (#0)
+
+%5 =
+| Get %3
+| Map true
+
+%6 =
+| Get %3
+| Negate
+
+%7 =
+| Get %0
+
+%8 =
+| Union %6 %7
+
+%9 =
+| Get %0
+| ArrangeBy (#0)
+
+%10 =
+| Join %8 %9 (= #0 #1)
+| | implementation = Differential %8 %9.(#0)
+| | demand = (#0)
+| Map false
+| Project (#0, #2)
+
+%11 =
+| Union %5 %10
+
+%12 =
+| Join %4 %11 (= #0 #1)
+| | implementation = Differential %11 %4.(#0)
+| | demand = (#2)
+| Map !(#2)
+| Project (#3)
+
+EOF

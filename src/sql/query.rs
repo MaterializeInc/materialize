@@ -1698,25 +1698,59 @@ fn plan_any_or_all<'a>(
         allow_aggregates: false,
         allow_subqueries: true,
     };
-    let op_expr = plan_binary_op(
-        &any_ecx,
-        op,
-        left,
-        &Expr::Identifier(vec![Ident::new(right_name)]),
-    )?;
 
-    // plan subquery
-    let expr = right
-        .reduce(
-            vec![],
-            vec![AggregateExpr {
-                func,
-                expr: Box::new(op_expr),
-                distinct: false,
-            }],
-        )
-        .select();
-    Ok(expr)
+    match (op, &func) {
+        // This operator/aggregate pair has a better implementation that is tricky to spot later on
+        // in the planning process, so we intercept it here.
+        (BinaryOperator::NotEq, AggregateFunc::All) => {
+            // SELECT abc.a != ALL(SELECT xyz.x FROM xyz) FROM abc
+            // =>
+            // SELECT NOT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
+            let equality = plan_binary_op(
+                &any_ecx,
+                &BinaryOperator::Eq,
+                left,
+                &Expr::Identifier(vec![Ident::new(right_name)]),
+            )?;
+            Ok(right
+                .filter(vec![equality])
+                .exists()
+                .call_unary(UnaryFunc::Not))
+        }
+        (BinaryOperator::Eq, AggregateFunc::Any) => {
+            // SELECT abc.a = ANY(SELECT xyz.x FROM xyz) FROM abc
+            // =>
+            // SELECT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
+            let equality = plan_binary_op(
+                &any_ecx,
+                &BinaryOperator::Eq,
+                left,
+                &Expr::Identifier(vec![Ident::new(right_name)]),
+            )?;
+            Ok(right.filter(vec![equality]).exists())
+        }
+        _ => {
+            let op_expr = plan_binary_op(
+                &any_ecx,
+                op,
+                left,
+                &Expr::Identifier(vec![Ident::new(right_name)]),
+            )?;
+
+            // plan subquery
+            let expr = right
+                .reduce(
+                    vec![],
+                    vec![AggregateExpr {
+                        func,
+                        expr: Box::new(op_expr),
+                        distinct: false,
+                    }],
+                )
+                .select();
+            Ok(expr)
+        }
+    }
 }
 
 fn plan_cast<'a>(

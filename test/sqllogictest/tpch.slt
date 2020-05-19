@@ -1157,55 +1157,38 @@ ORDER BY
 | Distinct group=(#1)
 
 %4 =
-| Get %3
-| ArrangeBy ()
-
-%5 =
-| Get materialize.public.supplier (u8)
-| Filter "^.*Customer.*Complaints.*$" ~(#6)
-
-%6 =
-| Join %4 %5
-| | implementation = Differential %5 %4.()
-| | demand = (#0, #1)
-| Reduce group=(#0) all((#0 != #1))
-
-%7 =
 | Get %2
 | ArrangeBy (#1)
 
-%8 =
-| Get %6
-| Filter #1
-
-%9 =
-| Get %6
-| Negate
-| Project (#0)
-
-%10 =
-| Get %3
-
-%11 =
-| Union %9 %10
-
-%12 =
+%5 =
 | Get %3
 | ArrangeBy (#0)
 
-%13 =
-| Join %11 %12 (= #0 #1)
-| | implementation = Differential %11 %12.(#0)
-| | demand = (#0)
-| Map true
-| Project (#0, #2)
+%6 =
+| Get materialize.public.supplier (u8)
+| ArrangeBy (#0)
 
-%14 =
-| Union %8 %13
+%7 =
+| Join %5 %6 (= #0 #1)
+| | implementation = DeltaQuery %5 %6.(#0) | %6 %5.(#0)
+| | demand = (#0, #7)
+| Filter "^.*Customer.*Complaints.*$" ~(#7)
+| Negate
+| Project (#0)
 
-%15 =
-| Join %7 %14 (= #1 #14)
-| | implementation = Differential %14 %7.(#1)
+%8 =
+| Get %3
+
+%9 =
+| Union %7 %8
+
+%10 =
+| Get %3
+| ArrangeBy (#0)
+
+%11 =
+| Join %4 %9 %10 (= #1 #14 #15)
+| | implementation = Differential %9 %10.(#0) %4.(#1)
 | | demand = (#1, #8..#10)
 | Reduce group=(#8, #9, #10) count(distinct #1)
 
@@ -1877,7 +1860,7 @@ ORDER BY
 
 %4 =
 | InnerJoin %2 %3 on true
-| Filter ((select(%7) && (#3 = #7)) && (#8 = "CANADA"))
+| Filter ((exists(%7) && (#3 = #7)) && (#8 = "CANADA"))
 | |
 | | %5 =
 | | | Constant ()
@@ -1887,7 +1870,7 @@ ORDER BY
 | |
 | | %7 =
 | | | InnerJoin %5 %6 on true
-| | | Filter (select(%10) && ((i32todec(#2) * 1000dec) > select(%14)))
+| | | Filter (exists(%10) && ((i32todec(#2) * 1000dec) > select(%14)))
 | | | |
 | | | | %8 =
 | | | | | Constant ()
@@ -1902,7 +1885,7 @@ ORDER BY
 | | | | | Project (#9)
 | | | | | Map
 | | | | | Project (#0)
-| | | | | Reduce group=() any((#^0 = #0))
+| | | | | Filter (#^0 = #0)
 | | | |
 | | | |
 | | | | %12 =
@@ -1925,7 +1908,7 @@ ORDER BY
 | | | Project (#5)
 | | | Map
 | | | Project (#0)
-| | | Reduce group=() any((#^0 = #0))
+| | | Filter (#^0 = #0)
 | |
 | Map #1, #2
 | Project (#11, #12)

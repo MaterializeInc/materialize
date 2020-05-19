@@ -1096,55 +1096,38 @@ ORDER BY supplier_cnt DESC
 | Distinct group=(#17)
 
 %4 =
-| Get %3
-| ArrangeBy ()
-
-%5 =
-| Get materialize.public.supplier (u34)
-| Filter "^.*bad.*$" ~(#6)
-
-%6 =
-| Join %4 %5
-| | implementation = Differential %5 %4.()
-| | demand = (#0, #1)
-| Reduce group=(#0) all((#0 != #1))
-
-%7 =
 | Get %2
 | ArrangeBy (#17)
 
-%8 =
-| Get %6
-| Filter #1
-
-%9 =
-| Get %6
-| Negate
-| Project (#0)
-
-%10 =
-| Get %3
-
-%11 =
-| Union %9 %10
-
-%12 =
+%5 =
 | Get %3
 | ArrangeBy (#0)
 
-%13 =
-| Join %11 %12 (= #0 #1)
-| | implementation = Differential %11 %12.(#0)
-| | demand = (#0)
-| Map true
-| Project (#0, #2)
+%6 =
+| Get materialize.public.supplier (u34)
+| ArrangeBy (#0)
 
-%14 =
-| Union %8 %13
+%7 =
+| Join %5 %6 (= #0 #1)
+| | implementation = DeltaQuery %5 %6.(#0) | %6 %5.(#0)
+| | demand = (#0, #7)
+| Filter "^.*bad.*$" ~(#7)
+| Negate
+| Project (#0)
 
-%15 =
-| Join %7 %14 (= #17 #23)
-| | implementation = Differential %14 %7.(#17)
+%8 =
+| Get %3
+
+%9 =
+| Union %7 %8
+
+%10 =
+| Get %3
+| ArrangeBy (#0)
+
+%11 =
+| Join %4 %9 %10 (= #17 #23 #24)
+| | implementation = Differential %9 %10.(#0) %4.(#17)
 | | demand = (#17, #20..#22)
 | Reduce group=(#20, substr(#22, 1, 3), #21) count(distinct #17)
 
@@ -1375,7 +1358,6 @@ ORDER BY su_name
 
 %8 =
 | Get %6
-| Filter (#0 = ((#11 * #12) % 10000))
 
 %9 =
 | Get %6
@@ -1393,6 +1375,8 @@ ORDER BY su_name
 | Filter "^co.*$" ~(#44)
 | Reduce group=(#0, #11, #12, #13) sum(#36)
 | Filter ((2 * #3) > #4)
+| Map ((#1 * #2) % 10000)
+| Filter (#0 = #5)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
