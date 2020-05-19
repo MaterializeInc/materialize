@@ -515,6 +515,20 @@ impl DebeziumDecodeState {
     }
 
     pub fn extract(&mut self, v: Value, n: SchemaNode) -> Result<DiffPair<Row>> {
+        fn is_snapshot(v: Value) -> Result<Option<bool>> {
+            let answer = match v {
+                Value::Union(_idx, inner) => is_snapshot(*inner)?,
+                Value::Boolean(b) => Some(b),
+                // Since https://issues.redhat.com/browse/DBZ-1295 ,
+                // "snapshot" is three-valued. "last" is the last row
+                // in the snapshot, but still part of it.
+                Value::String(s) => Some(&s == "true" || &s == "last"),
+                Value::Null => None,
+                _ => bail!("\"snapshot\" is neither a boolean nor a string"),
+            };
+            Ok(answer)
+        }
+
         match v {
             Value::Record(mut fields) => {
                 if let Some(schema_indices) = self.binlog_schema_indices {
@@ -528,11 +542,9 @@ impl DebeziumDecodeState {
                         schema_indices.source_snapshot_idx,
                         "snapshot",
                         &mut source_fields,
-                    )?
-                    .into_nullable_bool()
-                    .ok_or_else(|| format_err!("\"snapshot\" is not a boolean"))?;
+                    )?;
 
-                    if !snapshot_val {
+                    if is_snapshot(snapshot_val)? != Some(true) {
                         let file_val = take_field_by_index(
                             schema_indices.source_file_idx,
                             "file",
