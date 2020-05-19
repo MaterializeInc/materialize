@@ -4937,6 +4937,12 @@ fn parse_json_ops() {
             &verified_expr(&sql),
             BinaryOp {op, ..} if *op == op_enum
         );
+
+        let sql = format!("a {} b = c {} d", op_string, op_string);
+        assert_matches!(
+            &verified_expr(&sql),
+            BinaryOp {op, ..} if *op == op_enum
+        );
     }
 }
 
