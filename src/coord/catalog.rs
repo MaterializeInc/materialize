@@ -16,7 +16,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, TimeZone, Utc};
 use failure::bail;
 use lazy_static::lazy_static;
-use log::{info, trace};
+use log::{error, info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,7 @@ use repr::{RelationDesc, Row};
 use transform::Optimizer;
 
 use crate::catalog::error::{Error, ErrorKind};
+use itertools::any;
 
 mod error;
 pub mod sql;
@@ -473,6 +474,23 @@ impl Catalog {
     }
 
     pub fn drop_temporary_schema(&mut self, conn_id: u32) {
+        let mut ids = vec![];
+        match self.temporary_schemas.get_mut(&conn_id) {
+            Some(schemas) => {
+                for schema in schemas.0.values() {
+                    for id in schema.items.0.values() {
+                        ids.push(id.clone());
+                    }
+                }
+            }
+            None => {
+                error!("Temporary schemas for connection {} not found.", &conn_id);
+            }
+        }
+        for id in ids {
+            self.remove_item_from_dependencies(&id);
+        }
+
         self.temporary_schemas.remove(&conn_id);
     }
 
@@ -510,13 +528,8 @@ impl Catalog {
         }
     }
 
-    fn is_in_temporary_schema(&self, id: GlobalId, conn_id: Option<u32>) -> bool {
-        if let Some(conn_id) = conn_id {
-            if let Some(schemas) = self.temporary_schemas.get(&conn_id) {
-                return schemas.contains_id(id);
-            }
-        }
-        false
+    fn in_temporary_schemas(&self, id: GlobalId) -> bool {
+        any(self.temporary_schemas.values(), |schemas| schemas.contains_id(id))
     }
 
     pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
@@ -694,6 +707,9 @@ impl Catalog {
                 }
                 Op::CreateItem { id, name, item } => {
                     if !item.is_temporary() {
+                        if any(item.uses(), |id| self.in_temporary_schemas(id)) {
+                            return Err(Error::new(ErrorKind::TemporaryItem(id.to_string())));
+                        }
                         let database_id = match &name.database {
                             DatabaseSpecifier::Name(name) => tx.load_database_id(&name)?,
                             DatabaseSpecifier::Ambient => {
@@ -731,7 +747,7 @@ impl Catalog {
                     }
                 }
                 Op::DropItem { id, conn_id } => {
-                    if !self.is_in_temporary_schema(id, conn_id) {
+                    if !self.in_temporary_schemas(id) {
                         tx.remove_item(id)?;
                     }
                     Action::DropItem { id, conn_id }
@@ -801,20 +817,7 @@ impl Catalog {
                 }
 
                 Action::DropItem { id, conn_id } => {
-                    let metadata = self.by_id.remove(&id).unwrap();
-                    if !metadata.item.is_placeholder() {
-                        info!(
-                            "drop {} {} ({})",
-                            metadata.item.type_string(),
-                            metadata.name,
-                            id
-                        );
-                    }
-                    for u in metadata.uses() {
-                        if let Some(dep_metadata) = self.by_id.get_mut(&u) {
-                            dep_metadata.used_by.retain(|u| *u != metadata.id)
-                        }
-                    }
+                    let metadata = self.remove_item_from_dependencies(&id);
                     self.get_schemas_mut(&metadata.name.database, conn_id)
                         .expect("catalog out of sync")
                         .0
@@ -839,6 +842,24 @@ impl Catalog {
                 }
             })
             .collect())
+    }
+
+    fn remove_item_from_dependencies(&mut self, id: &GlobalId) -> CatalogEntry {
+        let metadata = self.by_id.remove(id).unwrap();
+        if !metadata.item.is_placeholder() {
+            info!(
+                "drop {} {} ({})",
+                metadata.item.type_string(),
+                metadata.name,
+                id
+            );
+        }
+        for u in metadata.uses() {
+            if let Some(dep_metadata) = self.by_id.get_mut(&u) {
+                dep_metadata.used_by.retain(|u| *u != metadata.id)
+            }
+        }
+        metadata
     }
 
     fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {

@@ -122,7 +122,7 @@ impl State {
                 let query = format!("DROP DATABASE {}", name);
                 sql::print_query(&query);
                 self.pgclient.batch_execute(&query).await.err_ctx(format!(
-                    "restting materialized state: DROP DATABASE {}",
+                    "resetting materialized state: DROP DATABASE {}",
                     name,
                 ))?;
             }
@@ -133,7 +133,6 @@ impl State {
             .err_ctx("resetting materialized state: CREATE DATABASE materialize".into())?;
         Ok(())
     }
-
     // Delete the Kinesis streams created for this run of testdrive.
     pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
         if !self.kinesis_stream_names.is_empty() {
