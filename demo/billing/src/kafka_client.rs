@@ -44,11 +44,12 @@ impl KafkaClient {
     pub async fn create_topic(&self, partitions: i32) -> Result<()> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
-        let new_topic = NewTopic::new(&self.topic, partitions, TopicReplication::Fixed(3))
+        let new_topic = NewTopic::new(&self.topic, partitions, TopicReplication::Fixed(1))
             .set("cleanup.policy", "compact")
-            .set("segment.ms", "10000")
-            .set("segment.bytes", "52428800")
-            .set("delete.retention.ms", "60000")
+            .set("segment.ms", "144000")
+            .set("segment.bytes", "1000000000")
+            .set("delete.retention.ms", "100000000")
+            .set("max.compaction.lag.ms", "10000000")
             .set("min.cleanable.dirty.ratio", "0.01");
 
         let res = config
@@ -77,7 +78,11 @@ impl KafkaClient {
         Ok(())
     }
 
-    pub fn send(&self, key: &[u8], message: &[u8]) -> std::result::Result<rdkafka::producer::DeliveryFuture, rdkafka::error::KafkaError> {
+    pub fn send(
+        &self,
+        key: &[u8],
+        message: &[u8],
+    ) -> std::result::Result<rdkafka::producer::DeliveryFuture, rdkafka::error::KafkaError> {
         let record: FutureRecord<_, _> = FutureRecord::to(&self.topic)
             .key(key)
             .payload(message)

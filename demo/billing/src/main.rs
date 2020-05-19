@@ -19,12 +19,12 @@
 #![deny(missing_debug_implementations, missing_docs)]
 
 use std::error::Error as _;
-use std::sync::Arc;
 use std::process;
+use std::sync::Arc;
 use std::time::Duration;
 
-use rand::Rng;
 use protobuf::Message;
+use rand::Rng;
 use structopt::StructOpt;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
@@ -84,8 +84,11 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     let val_a: Vec<u8> = "a".repeat(500).into_bytes();
     let val_b: Vec<u8> = "b".repeat(500).into_bytes();
 
-    let k_client =
-        Arc::new(kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)?);
+    let k_client = Arc::new(kafka_client::KafkaClient::new(
+        &config.url,
+        &config.group_id,
+        &config.topic,
+    )?);
 
     if let Some(partitions) = config.partitions {
         k_client.create_topic(partitions).await?;
@@ -95,7 +98,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         log::info!("producing 8k records");
         let backoff = tokio::time::delay_for(Duration::from_secs(1));
         for i in 0..8000 {
-            let key: i32 = rand::thread_rng().gen_range(0, 100000);
+            let key: i32 = rand::thread_rng().gen_range(0, 10000000);
             let res = k_client.send(key.to_string().as_bytes(), val_a.as_slice());
             match res {
                 Ok(fut) => {
