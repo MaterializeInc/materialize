@@ -19,7 +19,9 @@
 #![deny(missing_debug_implementations, missing_docs)]
 
 use std::error::Error as _;
+use std::sync::Arc;
 use std::process;
+use std::time::Duration;
 
 use protobuf::Message;
 use structopt::StructOpt;
@@ -82,8 +84,8 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     let val_a: Vec<u8> = "a".repeat(500).into_bytes();
     let val_b: Vec<u8> = "b".repeat(500).into_bytes();
 
-    let mut k_client =
-        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)?;
+    let k_client =
+        Arc::new(kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)?);
 
     if let Some(partitions) = config.partitions {
         k_client.create_topic(partitions).await?;
@@ -96,13 +98,17 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
             int.tick().await;
         }
         let key_index = i % (1000 as usize);
-        k_client
-            .send(keys[key_index].as_slice(), val_a.as_slice())
-            .await?;
-        k_client
-            .send(keys[key_index].as_slice(), val_b.as_slice())
-            .await?;
-        if i % (config.message_count / 100).max(5) == 0 {
+        let res = k_client.send(keys[key_index].as_slice(), val_a.as_slice());
+        match res {
+            Ok(fut) => {
+                tokio::spawn(fut);
+            }
+            Err(e) => {
+                log::error!("failed to produce message: {}", e);
+                tokio::time::delay_for(Duration::from_millis(100)).await;
+            }
+        }
+        if i % 1000 == 0 {
             log::info!("sent message {}", i);
         }
     }

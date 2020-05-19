@@ -22,7 +22,6 @@ use crate::error::Result;
 
 pub struct KafkaClient {
     producer: FutureProducer<DefaultClientContext>,
-    messages: i64,
     kafka_url: String,
     topic: String,
 }
@@ -37,7 +36,6 @@ impl KafkaClient {
 
         Ok(KafkaClient {
             producer,
-            messages: 0,
             kafka_url: kafka_url.to_string(),
             topic: topic.to_string(),
         })
@@ -46,7 +44,7 @@ impl KafkaClient {
     pub async fn create_topic(&self, partitions: i32) -> Result<()> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
-        let new_topic = NewTopic::new(&self.topic, partitions, TopicReplication::Fixed(1))
+        let new_topic = NewTopic::new(&self.topic, partitions, TopicReplication::Fixed(3))
             .set("cleanup.policy", "compact")
             .set("segment.ms", "10000")
             .set("delete.retention.ms", "60000")
@@ -78,16 +76,11 @@ impl KafkaClient {
         Ok(())
     }
 
-    pub async fn send(&mut self, key: &[u8], message: &[u8]) -> Result<()> {
-        self.messages += 1;
+    pub fn send(&self, key: &[u8], message: &[u8]) -> std::result::Result<rdkafka::producer::DeliveryFuture, rdkafka::error::KafkaError> {
         let record: FutureRecord<_, _> = FutureRecord::to(&self.topic)
             .key(key)
             .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
-        if let Err((e, _message)) = self.producer.send(record, Duration::from_millis(500)).await {
-            return Err(e.into());
-        }
-
-        Ok(())
+        self.producer.send_result(record).map_err(|(e, _message)| e)
     }
 }
