@@ -414,7 +414,10 @@ where
                     }
                     Err(e) => {
                         self.catalog
-                            .transact(vec![catalog::Op::DropItem(id)])
+                            .transact(vec![catalog::Op::DropItem {
+                                id,
+                                conn_id: Some(session.conn_id()),
+                            }])
                             .expect("corrupt catalog");
                         tx.send(Err(e), session);
                     }
@@ -541,6 +544,8 @@ where
         if let Some(name) = self.active_tails.remove(&conn_id) {
             self.drop_sinks(vec![name]);
         }
+
+        self.catalog.drop_temporary_schema(conn_id);
     }
 
     fn sequence_plan(
@@ -603,10 +608,21 @@ where
                 name,
                 view,
                 replace,
+                temporary,
+                conn_id,
                 materialize,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_view(pcx, name, view, replace, materialize, if_not_exists),
+                self.sequence_create_view(
+                    pcx,
+                    name,
+                    view,
+                    replace,
+                    temporary,
+                    conn_id,
+                    materialize,
+                    if_not_exists,
+                ),
                 session,
             ),
 
@@ -629,7 +645,15 @@ where
                 session,
             ),
 
-            Plan::DropItems { items, ty } => tx.send(self.sequence_drop_items(items, ty), session),
+            Plan::DropItems {
+                items,
+                temporary_items,
+                ty,
+                conn_id,
+            } => tx.send(
+                self.sequence_drop_items(items, temporary_items, ty, conn_id),
+                session,
+            ),
 
             Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
 
@@ -929,19 +953,22 @@ where
                 .expect("sending to internal_cmd_tx cannot fail");
         });
     }
-
+    
+    #[allow(clippy::too_many_arguments)]
     fn sequence_create_view(
         &mut self,
         pcx: PlanContext,
         name: FullName,
         view: sql::View,
         replace: Option<GlobalId>,
+        temporary: bool,
+        conn_id: Option<u32>,
         materialize: bool,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, failure::Error> {
         let mut ops = vec![];
         if let Some(id) = replace {
-            ops.extend(self.catalog.drop_items_ops(&[id]));
+            ops.extend(self.catalog.drop_items_ops(&[id], conn_id));
         }
         let view_id = self.catalog.allocate_id()?;
         // Optimize the expression so that we can form an accurately typed description.
@@ -955,6 +982,8 @@ where
             plan_cx: pcx,
             optimized_expr,
             desc,
+            temporary,
+            conn_id,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -1044,9 +1073,12 @@ where
     fn sequence_drop_items(
         &mut self,
         items: Vec<GlobalId>,
+        temporary_items: Vec<GlobalId>,
         ty: ObjectType,
+        conn_id: Option<u32>,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let ops = self.catalog.drop_items_ops(&items);
+        let mut ops = self.catalog.drop_items_ops(&items, None);
+        ops.extend(self.catalog.drop_items_ops(&temporary_items, conn_id));
         self.catalog_transact(ops)?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
@@ -1201,6 +1233,8 @@ where
                     plan_cx: PlanContext::default(),
                     optimized_expr: source,
                     desc,
+                    temporary: false,
+                    conn_id: None,
                 };
                 self.build_view_collection(&view_id, &view, &mut dataflow);
                 let index = auto_generate_view_idx(index_name, view_name, &view, view_id);
@@ -1751,7 +1785,7 @@ where
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
         let ops = vec![
-            catalog::Op::DropItem(id),
+            catalog::Op::DropItem { id, conn_id: None },
             catalog::Op::CreateItem {
                 id,
                 name: name.clone(),
@@ -2440,6 +2474,8 @@ fn open_catalog(
                         name: _,
                         view,
                         replace,
+                        temporary,
+                        conn_id,
                         materialize,
                         if_not_exists,
                     }) => {
@@ -2459,6 +2495,8 @@ fn open_catalog(
                             plan_cx: pcx,
                             optimized_expr,
                             desc,
+                            temporary,
+                            conn_id,
                         };
                         let view_name = FullName {
                             database: DatabaseSpecifier::Ambient,

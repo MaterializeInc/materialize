@@ -38,8 +38,8 @@ use repr::decimal::Significand;
 use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::{
-    normalize, scalar_type_from_sql, FullName, MutationKind, Plan, PlanCatalog, PlanContext,
-    Session, StatementContext,
+    normalize, scalar_type_from_sql, DatabaseSpecifier, FullName, MutationKind, Plan, PlanCatalog,
+    PlanContext, Session, StatementContext,
 };
 
 pub struct Postgres {
@@ -218,11 +218,23 @@ END $$;
                 if_exists,
                 ..
             } => {
+                println!("trying to drop objects");
                 self.client.execute(&*stmt.to_string(), &[]).await?;
                 let mut items = vec![];
+                let mut temporary_items = vec![];
                 for name in names {
-                    let name = match scx.resolve_name(name.clone()) {
-                        Ok(name) => name,
+                    match scx.resolve_name(name.clone()) {
+                        Ok(name) => match catalog.get(&name).ok() {
+                            None => {
+                                if !if_exists {
+                                    bail!("internal error: table {} missing from catalog", name);
+                                }
+                            }
+                            Some(entry) => match name.database {
+                                DatabaseSpecifier::Temporary => temporary_items.push(entry.id()),
+                                _ => items.push(entry.id()),
+                            },
+                        },
                         Err(err) => {
                             if *if_exists {
                                 continue;
@@ -231,23 +243,16 @@ END $$;
                             }
                         }
                     };
-                    match catalog.get(&name).ok() {
-                        None => {
-                            if !if_exists {
-                                bail!("internal error: table {} missing from catalog", name);
-                            }
-                        }
-                        Some(entry) => {
-                            items.push(entry.id());
-                        }
-                    }
                 }
                 Plan::DropItems {
                     items,
+                    temporary_items,
                     ty: ObjectType::Table,
+                    conn_id: None,
                 }
             }
             Statement::Delete { table_name, .. } => {
+                println!("trying to delete");
                 let mut updates = vec![];
                 let table_name = scx.resolve_name(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
@@ -270,6 +275,7 @@ END $$;
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
+                println!("trying to insert");
                 Plan::SendDiffs {
                     id: catalog.get(&table_name)?.id(),
                     updates,
@@ -297,6 +303,7 @@ END $$;
                     updates.push((row, 1));
                 }
                 assert_eq!(affected_rows * 2, updates.len());
+                println!("trying to update");
                 Plan::SendDiffs {
                     id: catalog.get(&table_name)?.id(),
                     updates,

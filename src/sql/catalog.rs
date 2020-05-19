@@ -31,11 +31,21 @@ pub trait PlanCatalog: fmt::Debug {
 
     fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error>;
 
+    fn get_with_conn_id(
+        &self,
+        name: &FullName,
+        conn_id: Option<u32>,
+    ) -> Result<&dyn PlanCatalogEntry, failure::Error>;
+
     fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry;
 
     fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>;
 
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap>;
+    fn get_schemas(
+        &self,
+        database_spec: &DatabaseSpecifier,
+        conn_id: Option<u32>,
+    ) -> Option<&dyn SchemaMap>;
 
     fn database_resolver<'a>(
         &'a self,
@@ -47,6 +57,7 @@ pub trait PlanCatalog: fmt::Debug {
         current_database: DatabaseSpecifier,
         search_path: &[&str],
         name: &PartialName,
+        conn_id: Option<u32>,
     ) -> Result<FullName, failure::Error>;
 
     fn empty_item_map(&self) -> Box<dyn ItemMap>;
@@ -128,6 +139,14 @@ impl PlanCatalog for DummyCatalog {
         unimplemented!();
     }
 
+    fn get_with_conn_id(
+        &self,
+        _: &FullName,
+        _: Option<u32>,
+    ) -> Result<&dyn PlanCatalogEntry, failure::Error> {
+        unimplemented!();
+    }
+
     fn get_by_id(&self, _: &GlobalId) -> &dyn PlanCatalogEntry {
         unimplemented!();
     }
@@ -136,7 +155,7 @@ impl PlanCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn get_schemas(&self, _: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
+    fn get_schemas(&self, _: &DatabaseSpecifier, _: Option<u32>) -> Option<&dyn SchemaMap> {
         unimplemented!();
     }
 
@@ -152,6 +171,7 @@ impl PlanCatalog for DummyCatalog {
         _: DatabaseSpecifier,
         _: &[&str],
         _: &PartialName,
+        _: Option<u32>,
     ) -> Result<FullName, failure::Error> {
         unimplemented!();
     }

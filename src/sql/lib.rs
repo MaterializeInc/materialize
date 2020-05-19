@@ -75,6 +75,9 @@ pub enum Plan {
         view: View,
         /// The ID of the object that this view is replacing, if any.
         replace: Option<GlobalId>,
+        /// Temporary views only exist for a single session
+        temporary: bool,
+        conn_id: Option<u32>,
         /// whether we should auto-materialize the view
         materialize: bool,
         if_not_exists: bool,
@@ -93,7 +96,9 @@ pub enum Plan {
     },
     DropItems {
         items: Vec<GlobalId>,
+        temporary_items: Vec<GlobalId>,
         ty: ObjectType,
+        conn_id: Option<u32>,
     },
     EmptyQuery,
     ShowAllVariables,

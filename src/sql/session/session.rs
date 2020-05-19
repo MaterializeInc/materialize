@@ -62,7 +62,7 @@ const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
 
 const SEARCH_PATH: ServerVar<&[&str]> = ServerVar {
     name: unicase::Ascii::new("search_path"),
-    value: &["mz_catalog", "pg_catalog", "public"],
+    value: &["mz_catalog", "pg_catalog", "public", "mz_temp"],
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
 };
@@ -441,6 +441,9 @@ pub trait PlanSession: fmt::Debug {
 
     /// Constructs an owned version of this `PlanSession`.
     fn to_owned(&self) -> Box<dyn PlanSession + Send>;
+
+    /// Returns the connection id of the session.
+    fn conn_id(&self) -> Option<u32>;
 }
 
 impl PlanSession for Session {
@@ -456,7 +459,12 @@ impl PlanSession for Session {
         Box::new(OwnedPlanSession {
             database: self.database(),
             search_path: self.search_path.value,
+            conn_id: self.conn_id,
         })
+    }
+
+    fn conn_id(&self) -> Option<u32> {
+        Some(self.conn_id)
     }
 }
 
@@ -464,6 +472,7 @@ impl PlanSession for Session {
 pub struct OwnedPlanSession {
     database: DatabaseSpecifier,
     search_path: &'static [&'static str],
+    conn_id: u32,
 }
 
 impl PlanSession for OwnedPlanSession {
@@ -477,6 +486,10 @@ impl PlanSession for OwnedPlanSession {
 
     fn to_owned(&self) -> Box<dyn PlanSession + Send> {
         Box::new(self.clone())
+    }
+
+    fn conn_id(&self) -> Option<u32> {
+        Some(self.conn_id)
     }
 }
 
@@ -497,5 +510,9 @@ impl PlanSession for InternalSession {
 
     fn to_owned(&self) -> Box<dyn PlanSession + Send> {
         Box::new(self.clone())
+    }
+
+    fn conn_id(&self) -> Option<u32> {
+        None
     }
 }
