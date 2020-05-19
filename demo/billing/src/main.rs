@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::process;
 use std::time::Duration;
 
+use rand::Rng;
 use protobuf::Message;
 use structopt::StructOpt;
 
@@ -80,7 +81,6 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     use rand::SeedableRng;
     let rng = rand::rngs::StdRng::from_seed(rand::random());
 
-    let keys: Vec<Vec<u8>> = (1..1001).map(|x| x.to_string().into_bytes()).collect();
     let val_a: Vec<u8> = "a".repeat(500).into_bytes();
     let val_b: Vec<u8> = "b".repeat(500).into_bytes();
 
@@ -91,26 +91,23 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         k_client.create_topic(partitions).await?;
     }
 
-    let mut interval = config.message_sleep.map(tokio::time::interval);
-    let mut total_size = 0;
-    for i in 0..config.message_count {
-        if let Some(int) = interval.as_mut() {
-            int.tick().await;
-        }
-        let key_index = i % (1000 as usize);
-        let res = k_client.send(keys[key_index].as_slice(), val_a.as_slice());
-        match res {
-            Ok(fut) => {
-                tokio::spawn(fut);
+    loop {
+        log::info!("producing 8k records");
+        let backoff = tokio::time::delay_for(Duration::from_secs(1));
+        for i in 0..8000 {
+            let key: i32 = rand::thread_rng().gen_range(0, 100000);
+            let res = k_client.send(key.to_string().as_bytes(), val_a.as_slice());
+            match res {
+                Ok(fut) => {
+                    tokio::spawn(fut);
+                }
+                Err(e) => {
+                    log::error!("failed to produce message: {}", e);
+                    tokio::time::delay_for(Duration::from_millis(100)).await;
+                }
             }
-            Err(e) => {
-                log::error!("failed to produce message: {}", e);
-                tokio::time::delay_for(Duration::from_millis(100)).await;
-            }
         }
-        if i % 1000 == 0 {
-            log::info!("sent message {}", i);
-        }
+        backoff.await;
     }
     Ok(())
 }

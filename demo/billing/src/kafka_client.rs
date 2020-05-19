@@ -47,6 +47,7 @@ impl KafkaClient {
         let new_topic = NewTopic::new(&self.topic, partitions, TopicReplication::Fixed(3))
             .set("cleanup.policy", "compact")
             .set("segment.ms", "10000")
+            .set("segment.bytes", "52428800")
             .set("delete.retention.ms", "60000")
             .set("min.cleanable.dirty.ratio", "0.01");
 
