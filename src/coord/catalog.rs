@@ -15,6 +15,7 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, TimeZone, Utc};
 use failure::bail;
+use itertools::any;
 use lazy_static::lazy_static;
 use log::{error, info, trace};
 use ore::collections::CollectionExt;
@@ -32,7 +33,6 @@ use repr::{RelationDesc, Row};
 use transform::Optimizer;
 
 use crate::catalog::error::{Error, ErrorKind};
-use itertools::any;
 
 mod error;
 pub mod sql;
@@ -153,8 +153,8 @@ pub struct Index {
 
 impl Schemas {
     pub fn contains_id(&self, id: GlobalId) -> bool {
-        for (_, schema) in self.0.iter() {
-            for (_, item_id) in schema.items.iter() {
+        for schema in self.0.values() {
+            for item_id in schema.items.values() {
                 if id == *item_id {
                     return true;
                 }
@@ -475,7 +475,7 @@ impl Catalog {
 
     pub fn drop_temporary_schema(&mut self, conn_id: u32) {
         let mut ids = vec![];
-        match self.temporary_schemas.get_mut(&conn_id) {
+        match self.temporary_schemas.get(&conn_id) {
             Some(schemas) => {
                 for schema in schemas.0.values() {
                     for id in schema.items.0.values() {
@@ -529,7 +529,9 @@ impl Catalog {
     }
 
     fn in_temporary_schemas(&self, id: GlobalId) -> bool {
-        any(self.temporary_schemas.values(), |schemas| schemas.contains_id(id))
+        any(self.temporary_schemas.values(), |schemas| {
+            schemas.contains_id(id)
+        })
     }
 
     pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
