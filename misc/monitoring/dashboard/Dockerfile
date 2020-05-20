@@ -43,10 +43,6 @@ COPY --from=build /prometheus/consoles/                              /usr/share/
 COPY --from=build /prometheus/LICENSE                                /licenses-prometheus/LICENSE
 COPY --from=build /prometheus/NOTICE                                 /licenses-prometheus/NOTICE
 
-# Our configuration -- needs to be before the RUN block because it needs to be made
-# writeable so that startup.py can overwrite MATERIALIZED_URL
-COPY --chown=nobody:nogroup conf/prometheus.yml /etc/prometheus/prometheus.yml
-
 # Grafana
 
 # Copy over the grafana steps that must get their permissions changed in the next step
@@ -67,7 +63,6 @@ ENV GF_PATHS_CONFIG="/etc/grafana/grafana.ini" \
 
 # SQL Exporter
 COPY --from=sql_exporter /bin/sql_exporter  /bin/sql_exporter
-COPY --chown=nobody:nogroup conf/prometheus-sql-exporter/mz/* /sql_exporter/
 
 RUN set -x && export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
@@ -103,8 +98,26 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
         /var/lib/grafana \
         /var/log/grafana \
         /run/prefixed \
-    # Ensure that files can be read even when not running as nobody
-    && chmod -R 666 \
+    # clean up apt
+    && apt-get purge -qy apt-utils \
+    && apt-get autoremove -qy \
+    && rm -rf \
+        /var/cache/apt/archives \
+        /var/lib/apt/lists/* \
+    ;
+
+# Our configuration -- needs to be before the RUN next block because it needs to be made
+# writeable so that startup.py can overwrite MATERIALIZED_URL
+COPY --chown=nobody:nogroup conf/prometheus.yml /etc/prometheus/prometheus.yml
+COPY --chown=nobody:nogroup conf/prometheus-sql-exporter/mz/* /sql_exporter/
+
+# Our grafana configuration
+COPY --chown=nobody:nogroup conf/grafana/dashboards/dashboards.yaml /etc/grafana/provisioning/dashboards/
+COPY --chown=nobody:nogroup conf/grafana/dashboards/*.json /etc/grafana/provisioning/dashboards/
+COPY --chown=nobody:nogroup conf/grafana/datasources/builtin.yaml /etc/grafana/provisioning/datasources/
+COPY --chown=nobody:nogroup conf/grafana/grafana.ini /etc/grafana/grafana.ini
+
+RUN chmod -R 666 \
         /sql_exporter/* \
         /etc/prometheus/prometheus.yml \
         /etc/grafana \
@@ -123,20 +136,7 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
         /etc/grafana/provisioning/datasources \
         /etc/grafana/provisioning/dashboards \
         /etc/grafana/provisioning/notifiers \
-    # clean up apt
-    && apt-get purge -qy apt-utils \
-    && apt-get autoremove -qy \
-    && rm -rf \
-        /var/cache/apt/archives \
-        /var/lib/apt/lists/* \
     ;
-
-# Our grafana configuration, doesn't get overwritten by startup.py
-COPY --chown=nobody:nogroup conf/grafana/dashboards/dashboards.yaml /etc/grafana/provisioning/dashboards/
-COPY --chown=nobody:nogroup conf/grafana/dashboards/*.json /etc/grafana/provisioning/dashboards/
-COPY --chown=nobody:nogroup conf/grafana/datasources/builtin.yaml /etc/grafana/provisioning/datasources/
-COPY --chown=nobody:nogroup conf/grafana/grafana.ini /etc/grafana/grafana.ini
-
 
 # Entrypoint/supervisor/externally visible
 COPY bin/startup.py /bin/startup.py
