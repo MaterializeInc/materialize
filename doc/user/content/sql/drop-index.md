@@ -11,7 +11,7 @@ do not have any indexes.)
 
 ## Syntax
 
-{{< diagram "drop-index.html" >}}
+{{< diagram "drop-index.svg" >}}
 
 Field | Use
 ------|-----

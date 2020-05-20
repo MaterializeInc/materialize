@@ -15,7 +15,7 @@ This document details how to connect Materialize to local CSV files.
 
 ## Syntax
 
-{{< diagram "create-source-csv.html" >}}
+{{< diagram "create-source-csv.svg" >}}
 
 {{% create-source/syntax-details connector="file" formats="csv" envelopes="append-only" %}}
 

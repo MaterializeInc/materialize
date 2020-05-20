@@ -10,7 +10,7 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-length.html" >}}
+{{< diagram "func-length.svg" >}}
 
 Parameter | Type | Description
 ----------|------|------------

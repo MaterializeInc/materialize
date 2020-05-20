@@ -10,7 +10,7 @@ menu:
 
 ## Syntax
 
-{{< diagram "drop-sink.html" >}}
+{{< diagram "drop-sink.svg" >}}
 
 Field | Use
 ------|-----

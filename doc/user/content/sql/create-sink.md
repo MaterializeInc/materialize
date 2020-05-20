@@ -19,7 +19,7 @@ Sink source type | Description
 
 ## Syntax
 
-{{< diagram "create-sink.html" >}}
+{{< diagram "create-sink.svg" >}}
 
 Field | Use
 ------|-----
@@ -30,7 +30,7 @@ _item&lowbar;name_ | The name of the source or view you want to send to the sink
 
 ### Kafka connector
 
-{{< diagram "kafka-connector.html" >}}
+{{< diagram "kafka-connector.svg" >}}
 
 Field | Use
 ------|-----

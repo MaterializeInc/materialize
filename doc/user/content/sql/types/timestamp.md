@@ -23,7 +23,7 @@ as an alias for `timestamp with time zone`.
 
 ## Syntax
 
-{{< diagram "type-timestamp.html" >}}
+{{< diagram "type-timestamp.svg" >}}
 
 Field | Use
 ------|-----

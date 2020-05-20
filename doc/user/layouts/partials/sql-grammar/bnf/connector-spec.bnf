@@ -1,3 +1,0 @@
-connector_spec ::=
-  'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
-  'KAFKA BROKER' host 'TOPIC' topic?

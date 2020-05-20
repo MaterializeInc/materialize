@@ -1,5 +1,0 @@
-type_timestamp ::=
-  ('TIMESTAMP' 'WITH TIME ZONE'? | 'TIMESTAMPTZ')
-  "'" date_str
-    ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
-  "'"

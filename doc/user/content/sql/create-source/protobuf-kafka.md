@@ -17,7 +17,7 @@ topics.
 
 ## Syntax
 
-{{< diagram "create-source-protobuf-kafka.html" >}}
+{{< diagram "create-source-protobuf-kafka.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="protobuf" envelopes="append-only" %}}
 

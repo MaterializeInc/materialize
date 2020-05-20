@@ -1,2 +1,0 @@
-show_sources ::=
-  'SHOW' 'SOURCES' ('FROM' schema_name)?

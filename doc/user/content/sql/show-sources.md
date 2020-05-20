@@ -11,7 +11,7 @@ instances.
 
 ## Syntax
 
-{{< diagram "show-sources.html" >}}
+{{< diagram "show-sources.svg" >}}
 
 Field | Use
 ------|-----

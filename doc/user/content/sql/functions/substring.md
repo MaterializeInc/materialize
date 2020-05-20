@@ -10,7 +10,7 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-substring.html" >}}
+{{< diagram "func-substring.svg" >}}
 
 Parameter | Type | Description
 ----------|------|------------

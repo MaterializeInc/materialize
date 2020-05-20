@@ -20,7 +20,7 @@ shorthand for performing the query. For more information, see [API Components: S
 
 ## Syntax
 
-{{< diagram "create-view.html" >}}
+{{< diagram "create-view.svg" >}}
 
 Field | Use
 ------|-----

@@ -17,7 +17,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-time.html" >}}
+{{< diagram "type-time.svg" >}}
 
 Field | Use
 ------|------------

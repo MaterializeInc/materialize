@@ -21,7 +21,7 @@ Type               | Aliases           | Size    | Range
 
 ## Syntax
 
-{{< diagram "type-float.html" >}}
+{{< diagram "type-float.svg" >}}
 
 ## Details
 

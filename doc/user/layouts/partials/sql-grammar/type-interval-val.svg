@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="429" height="171">
+   <polygon points="11 33 3 29 3 37"/>
+   <polygon points="19 33 11 29 11 37"/>
+   <rect x="33" y="19" width="86" height="32" rx="10"/>
+   <rect x="31"
+         y="17"
+         width="86"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="41" y="37">INTERVAL</text>
+   <rect x="139" y="19" width="22" height="32" rx="10"/>
+   <rect x="137"
+         y="17"
+         width="22"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="147" y="37">'</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#time_expr"
+      xlink:title="time_expr">
+      <rect x="201" y="19" width="80" height="32"/>
+      <rect x="199" y="17" width="80" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="209" y="37">time_expr</text>
+   </a>
+   <rect x="321" y="19" width="22" height="32" rx="10"/>
+   <rect x="319"
+         y="17"
+         width="22"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="329" y="37">'</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#head_time_unit"
+      xlink:title="head_time_unit">
+      <rect x="65" y="137" width="114" height="32"/>
+      <rect x="63" y="135" width="114" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="73" y="155">head_time_unit</text>
+   </a>
+   <rect x="199" y="137" width="38" height="32" rx="10"/>
+   <rect x="197"
+         y="135"
+         width="38"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="207" y="155">TO</text>
+   <a xmlns:xlink="http://www.w3.org/1999/xlink"
+      xlink:href="#tail_time_unit"
+      xlink:title="tail_time_unit">
+      <rect x="277" y="105" width="104" height="32"/>
+      <rect x="275" y="103" width="104" height="32" class="nonterminal"/>
+      <text class="nonterminal" x="285" y="123">tail_time_unit</text>
+   </a>
+   <path class="line"
+         d="m19 33 h2 m0 0 h10 m86 0 h10 m0 0 h10 m22 0 h10 m20 0 h10 m80 0 h10 m-120 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -12 q0 -10 10 -10 m100 32 l20 0 m-20 0 q10 0 10 -10 l0 -12 q0 -10 -10 -10 m-100 0 h10 m0 0 h90 m20 32 h10 m22 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-362 54 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h346 m-376 0 h20 m356 0 h20 m-396 0 q10 0 10 10 m376 0 q0 -10 10 -10 m-386 10 v12 m376 0 v-12 m-376 12 q0 10 10 10 m356 0 q10 0 10 -10 m-346 10 h10 m0 0 h182 m-212 0 h20 m192 0 h20 m-232 0 q10 0 10 10 m212 0 q0 -10 10 -10 m-222 10 v12 m212 0 v-12 m-212 12 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m114 0 h10 m0 0 h10 m38 0 h10 m20 -32 h10 m104 0 h10 m23 -32 h-3"/>
+   <polygon points="419 87 427 83 427 91"/>
+   <polygon points="419 87 411 83 411 91"/>
+</svg>

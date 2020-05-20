@@ -1,2 +1,0 @@
-show_create_sink ::=
-  'SHOW' 'CREATE' 'SINK' sink_name

@@ -1,2 +1,0 @@
-create_database ::=
-    'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name

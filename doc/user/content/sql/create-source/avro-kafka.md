@@ -17,11 +17,11 @@ topic.
 
 ## Syntax
 
-{{< diagram "create-source-avro-kafka.html" >}}
+{{< diagram "create-source-avro-kafka.svg" >}}
 
 ### format_spec
 
-{{< diagram "format-spec-avro-kafka.html" >}}
+{{< diagram "format-spec-avro-kafka.svg" >}}
 
 {{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" %}}
 

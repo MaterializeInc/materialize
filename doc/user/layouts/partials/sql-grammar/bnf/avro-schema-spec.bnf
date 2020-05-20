@@ -1,3 +1,0 @@
-avro_schema_spec ::=
-  'CONFLUENT SCHEMA REGISTRY' url |
-  'SCHEMA' ('FILE' schema_file_path | inline_schema)

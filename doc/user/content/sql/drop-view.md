@@ -18,7 +18,7 @@ rely on a source before you can [drop the source](../drop-source) itself. You ca
 
 ## Syntax
 
-{{< diagram "drop-view.html" >}}
+{{< diagram "drop-view.svg" >}}
 
 Field | Use
 ------|-----

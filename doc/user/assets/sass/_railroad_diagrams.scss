@@ -22,25 +22,16 @@
     stroke: none;
   }
 
-  text.terminal {
-    font-family: Verdana, Sans-serif;
-    font-size: 12px;
-    fill: $black;
-    font-weight: bold;
-  }
-
-  text.nonterminal {
-    font-family: Verdana, Sans-serif;
-    font-size: 12px;
-    fill: $black;
-    font-weight: normal;
-  }
-
+  text.terminal,
+  text.nonterminal,
   text.regexp {
-    font-family: Verdana, Sans-serif;
-    font-size: 12px;
+    font-family: "RM Neue", sans-serif;
+    font-size: 14px;
     fill: $black;
-    font-weight: normal;
+  }
+
+  text.terminal {
+    font-weight: bold;
   }
 
   rect,
@@ -68,5 +59,12 @@
   polygon.regexp {
     fill: scale-color($purple-10, $saturation: -50%);
     stroke: $off-black;
+  }
+
+  // The interdiagram links don't presently work, so just visually hide them
+  // for now.
+  a:hover {
+    cursor: default;
+    opacity: 1;
   }
 }

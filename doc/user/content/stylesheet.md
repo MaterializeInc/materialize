@@ -38,4 +38,4 @@ code block
 
 Diagrams from [bottlecaps.de/rr/ui](https://www.bottlecaps.de/rr/ui):
 
-{{< diagram "join-type.html" >}}
+{{< diagram "join-type.svg" >}}

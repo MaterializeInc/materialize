@@ -1,2 +1,0 @@
-type_interval ::=
- ('+' | '-')? (ym_str | time_str | (int ('.' frac)? time_unit?))

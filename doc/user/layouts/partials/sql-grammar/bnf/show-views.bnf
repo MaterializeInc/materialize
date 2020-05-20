@@ -1,2 +1,0 @@
-show_views ::=
-  'SHOW' ('MATERIALIZED' | 'FULL')? 'VIEWS' ('FROM' schema_name)?

@@ -19,7 +19,7 @@ Materialize does not yet support a type more similar to PostgreSQL's impplementa
 
 ## Syntax
 
-{{< diagram "type-jsonb.html" >}}
+{{< diagram "type-jsonb.svg" >}}
 
 Field | Use
 ------|-----

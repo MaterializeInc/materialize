@@ -10,7 +10,7 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-views.html" >}}
+{{< diagram "show-views.svg" >}}
 
 Field | Use
 ------|-----

@@ -22,7 +22,7 @@ Kinesis support is still undergoing active development. If you run into any issu
 
 ## Syntax
 
-{{< diagram "create-source-kinesis.html" >}}
+{{< diagram "create-source-kinesis.svg" >}}
 
 {{% create-source/syntax-details connector="kinesis" formats="json-bytes" envelopes="append-only" %}}
 

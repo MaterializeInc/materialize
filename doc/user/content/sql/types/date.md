@@ -18,7 +18,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-date.html" >}}
+{{< diagram "type-date.svg" >}}
 
 Field | Use
 ------|----

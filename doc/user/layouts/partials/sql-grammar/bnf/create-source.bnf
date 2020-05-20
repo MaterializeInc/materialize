@@ -1,6 +1,0 @@
-create_source ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' connector_spec
-  'FORMAT' format_spec
-  ('ENVELOPE' ('NONE'|'DEBEZIUM'))?

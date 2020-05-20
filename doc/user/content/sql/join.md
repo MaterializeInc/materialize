@@ -23,11 +23,11 @@ expect.
 
 ### join_expr
 
-{{< diagram "join-expr.html" >}}
+{{< diagram "join-expr.svg" >}}
 
 ### join_type
 
-{{< diagram "join-type.html" >}}
+{{< diagram "join-type.svg" >}}
 
 Field | Use
 ------|-----

@@ -18,7 +18,7 @@ query in memory. For more information, see [API Components: Materialized views](
 
 ## Syntax
 
-{{< diagram "create-materialized-view.html" >}}
+{{< diagram "create-materialized-view.svg" >}}
 
 Field | Use
 ------|-----

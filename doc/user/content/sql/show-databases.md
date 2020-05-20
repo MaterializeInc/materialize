@@ -11,7 +11,7 @@ instances.
 
 ## Syntax
 
-{{< diagram "show-databases.html" >}}
+{{< diagram "show-databases.svg" >}}
 
 ## Examples
 

@@ -1,2 +1,0 @@
-drop_source ::=
-  'DROP' 'SINK' ('IF' 'EXISTS')? sink_name

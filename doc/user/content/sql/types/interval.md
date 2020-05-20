@@ -19,15 +19,15 @@ Detail | Info
 
 #### INTERVAL
 
-{{< diagram "type-interval-val.html" >}}
+{{< diagram "type-interval-val.svg" >}}
 
 #### `time_expr`
 
-{{< diagram "type-interval-time-expr.html" >}}
+{{< diagram "type-interval-time-expr.svg" >}}
 
 #### `time_unit`
 
-{{< diagram "time-units.html" >}}
+{{< diagram "time-unit.svg" >}}
 
 Field | Use
 ------|----
