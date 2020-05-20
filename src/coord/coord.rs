@@ -542,6 +542,10 @@ where
             self.drop_sinks(vec![name]);
         }
 
+        // Remove all temporary items created by the conn_id.
+        let ops = self.catalog.drop_temp_item_ops(conn_id);
+        self.catalog_transact(ops)
+            .expect("unable to drop temporary items for conn_id");
         self.catalog.drop_temporary_schema(conn_id);
     }
 

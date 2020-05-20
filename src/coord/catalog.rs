@@ -470,22 +470,40 @@ impl Catalog {
             .insert(conn_id, Schemas(temp_schema_for_conn_id));
     }
 
+    fn get_temp_schemas(&mut self, conn_id: u32) -> &Schemas {
+        self.temporary_schemas
+            .get(&conn_id)
+            .expect("missing temporary schema for connection")
+    }
+
+    pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
+        self.get_temp_schemas(conn_id)
+            .0
+            .values()
+            .flat_map(|schema| {
+                schema
+                    .items
+                    .0
+                    .values()
+                    .map(|id| Op::DropItem(*id))
+                    .collect::<Vec<Op>>()
+            })
+            .collect()
+    }
+
     pub fn drop_temporary_schema(&mut self, conn_id: u32) {
-        let mut ids = vec![];
-        match self.temporary_schemas.get(&conn_id) {
-            Some(schemas) => {
-                for schema in schemas.0.values() {
-                    for id in schema.items.0.values() {
-                        ids.push(id.clone());
-                    }
-                }
-            }
-            None => {
-                error!("Temporary schemas for connection {} not found.", &conn_id);
-            }
-        }
-        for id in ids {
-            self.remove_item_from_dependencies(&id);
+        if self
+            .get_temp_schemas(conn_id)
+            .0
+            .get("mz_temp")
+            .expect("missing temporary schema mz_temp for conn_id: {}")
+            .items
+            .is_empty()
+        {
+            error!(
+                "items leftover in temporary schema for conn_id: {}",
+                conn_id
+            );
         }
 
         self.temporary_schemas.remove(&conn_id);
@@ -823,7 +841,21 @@ impl Catalog {
                         CatalogItem::View(view) => view.conn_id.clone(),
                         _ => None,
                     };
-                    let metadata = self.remove_item_from_dependencies(&id);
+
+                    let metadata = self.by_id.remove(&id).unwrap();
+                    if !metadata.item.is_placeholder() {
+                        info!(
+                            "drop {} {} ({})",
+                            metadata.item.type_string(),
+                            metadata.name,
+                            id
+                        );
+                    }
+                    for u in metadata.uses() {
+                        if let Some(dep_metadata) = self.by_id.get_mut(&u) {
+                            dep_metadata.used_by.retain(|u| *u != metadata.id)
+                        }
+                    }
 
                     self.get_schemas_mut(&metadata.name.database, conn_id)
                         .expect("catalog out of sync")
@@ -849,24 +881,6 @@ impl Catalog {
                 }
             })
             .collect())
-    }
-
-    fn remove_item_from_dependencies(&mut self, id: &GlobalId) -> CatalogEntry {
-        let metadata = self.by_id.remove(id).unwrap();
-        if !metadata.item.is_placeholder() {
-            info!(
-                "drop {} {} ({})",
-                metadata.item.type_string(),
-                metadata.name,
-                id
-            );
-        }
-        for u in metadata.uses() {
-            if let Some(dep_metadata) = self.by_id.get_mut(&u) {
-                dep_metadata.used_by.retain(|u| *u != metadata.id)
-            }
-        }
-        metadata
     }
 
     fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
