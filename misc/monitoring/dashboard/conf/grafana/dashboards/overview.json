@@ -511,7 +511,7 @@
       "title": "Frontier lags",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -895,15 +895,20 @@
         "x": 0,
         "y": 34
       },
+      "hiddenSeries": false,
       "id": 49,
       "legend": {
+        "alignAsTable": true,
         "avg": false,
-        "current": false,
+        "current": true,
+        "hideEmpty": true,
         "max": false,
         "min": false,
         "show": true,
+        "sort": "current",
+        "sortDesc": true,
         "total": false,
-        "values": false
+        "values": true
       },
       "lines": true,
       "linewidth": 1,
@@ -923,7 +928,8 @@
         {
           "expr": "mz_kafka_partition_offset_max - mz_kafka_partition_offset_ingested",
           "hide": false,
-          "legendFormat": "{{topic}} (part={{partition_id}})",
+          "interval": "",
+          "legendFormat": "{{topic}} (source={{source_id}} part={{partition_id}})",
           "refId": "A"
         }
       ],
@@ -934,7 +940,7 @@
       "title": "Messages behind external source",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -1028,7 +1034,7 @@
       "title": " Capability Closing Rate",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 1,
         "value_type": "individual"
       },
       "type": "graph",
@@ -1218,7 +1224,7 @@
       "title": "Partition Imbalance Amount",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -1807,7 +1813,7 @@
       "title": "Arrangement Records",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
