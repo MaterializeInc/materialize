@@ -26,6 +26,7 @@ use repr::datetime::DateTimeField;
 
 use matches::assert_matches;
 use sql_parser::ast::display::AstDisplay;
+use sql_parser::ast::visit_mut::VisitMut;
 use sql_parser::ast::*;
 use sql_parser::parser::*;
 
@@ -102,6 +103,43 @@ Expected INTO, found: public"
             .to_string()),
         format!("{}", res.unwrap_err())
     );
+}
+
+#[test]
+fn op_precedence() {
+    struct RemoveParens;
+
+    impl<'a> VisitMut<'a> for RemoveParens {
+        fn visit_expr(&mut self, expr: &'a mut Expr) {
+            if let Expr::Nested(e) = expr {
+                *expr = (**e).clone();
+            }
+            visit_mut::visit_expr(self, expr);
+        }
+    }
+
+    for (actual, expected) in &[
+        ("a + b + c", "(a + b) + c"),
+        ("a - b + c", "(a - b) + c"),
+        ("a + b * c", "a + (b * c)"),
+        ("true = 'foo' like 'foo'", "true = ('foo' like 'foo')"),
+        ("a->b = c->d", "(a->b) = (c->d)"),
+        ("a @> b = c @> d", "(a @> b) = (c @> d)"),
+        ("a = b is null", "(a = b) is null"),
+        ("a and b or c and d", "(a and b) or (c and d)"),
+        ("+ a / b", "(+ a) / b"),
+        ("NOT true OR true", "(NOT true) OR true"),
+        ("NOT a IS NULL", "NOT (a IS NULL)"),
+        ("NOT 1 NOT BETWEEN 1 AND 2", "NOT (1 NOT BETWEEN 1 AND 2)"),
+        ("NOT a NOT LIKE b", "NOT (a NOT LIKE b)"),
+        ("NOT a NOT IN ('a')", "NOT (a NOT IN ('a'))"),
+    ] {
+        let left = Parser::parse_sql(format!("SELECT {}", actual)).unwrap();
+        let mut right = Parser::parse_sql(format!("SELECT {}", expected)).unwrap();
+        RemoveParens.visit_statement(&mut right[0]);
+
+        assert_eq!(left, right);
+    }
 }
 
 #[test]
@@ -653,21 +691,6 @@ fn parse_unary_math() {
 }
 
 #[test]
-fn parse_unary_math_precedence() {
-    assert_eq!(
-        verified_expr("+ a / b"),
-        Expr::BinaryOp {
-            left: Box::new(Expr::UnaryOp {
-                op: UnaryOperator::Plus,
-                expr: Box::new(single_ident("a")),
-            }),
-            op: BinaryOperator::Divide,
-            right: Box::new(single_ident("b")),
-        }
-    )
-}
-
-#[test]
 fn parse_is_null() {
     use self::Expr::*;
     let sql = "a IS NULL";
@@ -679,66 +702,6 @@ fn parse_is_not_null() {
     use self::Expr::*;
     let sql = "a IS NOT NULL";
     assert_eq!(IsNotNull(Box::new(single_ident("a"))), verified_expr(sql));
-}
-
-#[test]
-fn parse_not_precedence() {
-    // NOT has higher precedence than OR/AND, so the following must parse as (NOT true) OR true
-    let sql = "NOT true OR true";
-    assert_matches!(verified_expr(sql), Expr::BinaryOp {
-        op: BinaryOperator::Or,
-        ..
-    });
-
-    // But NOT has lower precedence than comparison operators, so the following parses as NOT (a IS NULL)
-    let sql = "NOT a IS NULL";
-    assert_matches!(verified_expr(sql), Expr::UnaryOp {
-        op: UnaryOperator::Not,
-        ..
-    });
-
-    // NOT has lower precedence than BETWEEN, so the following parses as NOT (1 NOT BETWEEN 1 AND 2)
-    let sql = "NOT 1 NOT BETWEEN 1 AND 2";
-    assert_eq!(
-        verified_expr(sql),
-        Expr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr: Box::new(Expr::Between {
-                expr: Box::new(Expr::Value(number("1"))),
-                low: Box::new(Expr::Value(number("1"))),
-                high: Box::new(Expr::Value(number("2"))),
-                negated: true,
-            }),
-        },
-    );
-
-    // NOT has lower precedence than LIKE, so the following parses as NOT ('a' NOT LIKE 'b')
-    let sql = "NOT 'a' NOT LIKE 'b'";
-    assert_eq!(
-        verified_expr(sql),
-        Expr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr: Box::new(Expr::BinaryOp {
-                left: Box::new(Expr::Value(Value::SingleQuotedString("a".into()))),
-                op: BinaryOperator::NotLike,
-                right: Box::new(Expr::Value(Value::SingleQuotedString("b".into()))),
-            }),
-        },
-    );
-
-    // NOT has lower precedence than IN, so the following parses as NOT (a NOT IN 'a')
-    let sql = "NOT a NOT IN ('a')";
-    assert_eq!(
-        verified_expr(sql),
-        Expr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr: Box::new(Expr::InList {
-                expr: Box::new(single_ident("a")),
-                list: vec![Expr::Value(Value::SingleQuotedString("a".into()))],
-                negated: true,
-            }),
-        },
-    );
 }
 
 #[test]

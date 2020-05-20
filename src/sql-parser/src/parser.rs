@@ -101,6 +101,26 @@ pub struct Parser {
     index: usize,
 }
 
+/// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
+/// precedence classes are ordered from weakest binding at the top to tightest binding at the
+/// bottom.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum Precedence {
+    Zero,
+    Or,
+    And,
+    UnaryNot,
+    Is,
+    Cmp,
+    Like,
+    JsonCompare,
+    JsonOp,
+    Plus,
+    Times,
+    UnaryOp,
+    DoubleColon,
+}
+
 impl Parser {
     /// Parse the specified tokens
     pub fn new(sql: String, tokens: Vec<(Token, Range<usize>)>) -> Self {
@@ -203,16 +223,16 @@ impl Parser {
 
     /// Parse a new expression
     pub fn parse_expr(&mut self) -> Result<Expr, ParserError> {
-        self.parse_subexpr(0)
+        self.parse_subexpr(Precedence::Zero)
     }
 
     /// Parse tokens until the precedence changes
-    pub fn parse_subexpr(&mut self, precedence: u8) -> Result<Expr, ParserError> {
+    pub fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr, ParserError> {
         debug!("parsing expr");
         let mut expr = self.parse_prefix()?;
         debug!("prefix: {:?}", expr);
         loop {
-            let next_precedence = self.get_next_precedence()?;
+            let next_precedence = self.get_next_precedence();
             debug!("next precedence: {:?}", next_precedence);
             if precedence >= next_precedence {
                 break;
@@ -243,7 +263,7 @@ impl Parser {
                 "INTERVAL" => self.parse_literal_interval(),
                 "NOT" => Ok(Expr::UnaryOp {
                     op: UnaryOperator::Not,
-                    expr: Box::new(self.parse_subexpr(Self::UNARY_NOT_PREC)?),
+                    expr: Box::new(self.parse_subexpr(Precedence::UnaryNot)?),
                 }),
                 "TIME" => Ok(Expr::Value(self.parse_time()?)),
                 "TIMESTAMP" => self.parse_timestamp(),
@@ -296,7 +316,7 @@ impl Parser {
                 };
                 Ok(Expr::UnaryOp {
                     op,
-                    expr: Box::new(self.parse_subexpr(45)?),
+                    expr: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
                 })
             }
             Token::Number(_) | Token::SingleQuotedString(_) | Token::HexStringLiteral(_) => {
@@ -637,7 +657,7 @@ impl Parser {
     }
 
     /// Parse an operator following an expression
-    pub fn parse_infix(&mut self, expr: Expr, precedence: u8) -> Result<Expr, ParserError> {
+    pub fn parse_infix(&mut self, expr: Expr, precedence: Precedence) -> Result<Expr, ParserError> {
         debug!("parsing infix");
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
@@ -786,9 +806,9 @@ impl Parser {
     pub fn parse_between(&mut self, expr: Expr, negated: bool) -> Result<Expr, ParserError> {
         // Stop parsing subexpressions for <low> and <high> on tokens with
         // precedence lower than that of `BETWEEN`, such as `AND`, `IS`, etc.
-        let low = self.parse_subexpr(Self::BETWEEN_PREC)?;
+        let low = self.parse_subexpr(Precedence::Like)?;
         self.expect_keyword("AND")?;
-        let high = self.parse_subexpr(Self::BETWEEN_PREC)?;
+        let high = self.parse_subexpr(Precedence::Like)?;
         Ok(Expr::Between {
             expr: Box::new(expr),
             negated,
@@ -805,56 +825,52 @@ impl Parser {
         })
     }
 
-    const UNARY_NOT_PREC: u8 = 15;
-    const BETWEEN_PREC: u8 = 20;
-
     /// Get the precedence of the next token
-    pub fn get_next_precedence(&self) -> Result<u8, ParserError> {
+    pub fn get_next_precedence(&self) -> Precedence {
         if let Some(token) = self.peek_token() {
             debug!("get_next_precedence() {:?}", token);
 
             match &token {
-                Token::Word(k) if k.keyword == "OR" => Ok(5),
-                Token::Word(k) if k.keyword == "AND" => Ok(10),
+                Token::Word(k) if k.keyword == "OR" => Precedence::Or,
+                Token::Word(k) if k.keyword == "AND" => Precedence::And,
                 Token::Word(k) if k.keyword == "NOT" => match &self.peek_nth_token(1) {
                     // The precedence of NOT varies depending on keyword that
                     // follows it. If it is followed by IN, BETWEEN, or LIKE,
                     // it takes on the precedence of those tokens. Otherwise it
                     // is not an infix operator, and therefore has zero
                     // precedence.
-                    Some(Token::Word(k)) if k.keyword == "IN" => Ok(Self::BETWEEN_PREC),
-                    Some(Token::Word(k)) if k.keyword == "BETWEEN" => Ok(Self::BETWEEN_PREC),
-                    Some(Token::Word(k)) if k.keyword == "LIKE" => Ok(Self::BETWEEN_PREC),
-                    _ => Ok(0),
+                    Some(Token::Word(k)) if k.keyword == "IN" => Precedence::Like,
+                    Some(Token::Word(k)) if k.keyword == "BETWEEN" => Precedence::Like,
+                    Some(Token::Word(k)) if k.keyword == "LIKE" => Precedence::Like,
+                    _ => Precedence::Zero,
                 },
-                Token::Word(k) if k.keyword == "IS" => Ok(17),
-                Token::Word(k) if k.keyword == "IN" => Ok(Self::BETWEEN_PREC),
-                Token::Word(k) if k.keyword == "BETWEEN" => Ok(Self::BETWEEN_PREC),
-                Token::Word(k) if k.keyword == "LIKE" => Ok(Self::BETWEEN_PREC),
+                Token::Word(k) if k.keyword == "IS" => Precedence::Is,
+                Token::Word(k) if k.keyword == "IN" => Precedence::Like,
+                Token::Word(k) if k.keyword == "BETWEEN" => Precedence::Like,
+                Token::Word(k) if k.keyword == "LIKE" => Precedence::Like,
                 Token::Eq | Token::Lt | Token::LtEq | Token::Neq | Token::Gt | Token::GtEq => {
-                    Ok(20)
+                    Precedence::Cmp
                 }
-                Token::Plus | Token::Minus => Ok(30),
-                Token::Mult | Token::Div | Token::Mod => Ok(40),
-                Token::DoubleColon => Ok(50),
-                // TODO(jamii) it's not clear what precedence postgres gives to json operators
-                Token::JsonGet
-                | Token::JsonGetAsText
-                | Token::JsonGetPath
-                | Token::JsonGetPathAsText
-                | Token::JsonContainsJson
+                Token::JsonContainsJson
                 | Token::JsonContainedInJson
                 | Token::JsonContainsField
                 | Token::JsonContainsAnyFields
                 | Token::JsonContainsAllFields
-                | Token::JsonConcat
-                | Token::JsonDeletePath
                 | Token::JsonContainsPath
-                | Token::JsonApplyPathPredicate => Ok(1),
-                _ => Ok(0),
+                | Token::JsonApplyPathPredicate => Precedence::JsonCompare,
+                Token::JsonGet
+                | Token::JsonGetAsText
+                | Token::JsonGetPath
+                | Token::JsonGetPathAsText
+                | Token::JsonConcat
+                | Token::JsonDeletePath => Precedence::JsonOp,
+                Token::Plus | Token::Minus => Precedence::Plus,
+                Token::Mult | Token::Div | Token::Mod => Precedence::Times,
+                Token::DoubleColon => Precedence::DoubleColon,
+                _ => Precedence::Zero,
             }
         } else {
-            Ok(0)
+            Precedence::Zero
         }
     }
 
@@ -2054,7 +2070,7 @@ impl Parser {
             vec![]
         };
 
-        let body = self.parse_query_body(0)?;
+        let body = self.parse_query_body(Precedence::Zero)?;
 
         let order_by = if self.parse_keywords(vec!["ORDER", "BY"]) {
             self.parse_comma_separated(Parser::parse_order_by_expr)?
@@ -2111,7 +2127,7 @@ impl Parser {
     ///   subquery ::= query_body [ order_by_limit ]
     ///   set_operation ::= query_body { 'UNION' | 'EXCEPT' | 'INTERSECT' } [ 'ALL' ] query_body
     /// ```
-    fn parse_query_body(&mut self, precedence: u8) -> Result<SetExpr, ParserError> {
+    fn parse_query_body(&mut self, precedence: Precedence) -> Result<SetExpr, ParserError> {
         // We parse the expression using a Pratt parser, as in `parse_expr()`.
         // Start by parsing a restricted SELECT or a `(subquery)`:
         let mut expr = if self.parse_keyword("SELECT") {
@@ -2137,9 +2153,9 @@ impl Parser {
             let op = self.parse_set_operator(&next_token);
             let next_precedence = match op {
                 // UNION and EXCEPT have the same binding power and evaluate left-to-right
-                Some(SetOperator::Union) | Some(SetOperator::Except) => 10,
+                Some(SetOperator::Union) | Some(SetOperator::Except) => Precedence::Plus,
                 // INTERSECT has higher precedence than UNION/EXCEPT
-                Some(SetOperator::Intersect) => 20,
+                Some(SetOperator::Intersect) => Precedence::Times,
                 // Unexpected token or EOF => stop parsing the query body
                 None => break,
             };
