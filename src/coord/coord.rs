@@ -385,14 +385,10 @@ where
                     tx,
                     result,
                     params,
-                } => {
-                    match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
-                        Ok((pcx, plan)) => {
-                            self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
-                        }
-                        Err(e) => tx.send(Err(e), session),
-                    }
-                }
+                } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
+                    Ok((pcx, plan)) => self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan),
+                    Err(e) => tx.send(Err(e), session),
+                },
 
                 Message::SinkConnectorReady {
                     session,
