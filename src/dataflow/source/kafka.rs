@@ -727,7 +727,7 @@ where
                                 ));
 
                                 partition_metrics.offset_ingested.set(offset.offset);
-                                partition_metrics.messages_ingested.inc()
+                                partition_metrics.messages_ingested.inc();
 
                                 downgrade_capability(
                                     &id,
