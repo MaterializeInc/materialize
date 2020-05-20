@@ -884,8 +884,9 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "This shows the number of messages that materialize knows it is behind an external source.\n\nFor example, if there are 1,000 messages in kafka and materialized has processed 750, this value will be 250",
-      "fill": 1,
+      "fill": 0,
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -930,7 +931,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mz_kafka_partition_offset_max - mz_kafka_partition_offset_ingested",
+          "expr": "topk(50, mz_kafka_partition_offset_max - mz_kafka_partition_offset_ingested)",
           "hide": false,
           "interval": "",
           "legendFormat": "{{topic}} (source={{source_id}} part={{partition_id}})",
@@ -1715,7 +1716,8 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mz_perf_arrangements_batches",
+          "expr": "topk(10, mz_perf_arrangements_batches)",
+          "interval": "",
           "legendFormat": "w={{worker}} op={{operator}}",
           "refId": "A"
         }
@@ -1809,7 +1811,8 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mz_perf_arrangement_records",
+          "expr": "topk(10, mz_perf_arrangement_records)",
+          "interval": "",
           "legendFormat": "w={{worker}} op={{operator}} name={{name}}",
           "refId": "A"
         }
