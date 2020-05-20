@@ -2205,7 +2205,7 @@ where
         let pcx = PlanContext::default();
         match sql::plan(
             &pcx,
-            &ConnCatalog::new(&self.catalog, session.conn_id()),
+            &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
             session,
             stmt.clone(),
             params,
@@ -2213,7 +2213,12 @@ where
             Ok(plan) => Ok((pcx, plan)),
             Err(err) => match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    let plan = block_on(postgres.execute(&pcx, &self.catalog, session, &stmt))?;
+                    let plan = block_on(postgres.execute(
+                        &pcx,
+                        &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
+                        session,
+                        &stmt,
+                    ))?;
                     Ok((pcx, plan))
                 }
                 _ => Err(err),
@@ -2229,7 +2234,7 @@ where
     ) -> Result<(), failure::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
             match sql::describe(
-                &ConnCatalog::new(&self.catalog, session.conn_id()),
+                &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
                 session,
                 stmt.clone(),
             ) {
@@ -2464,7 +2469,13 @@ fn open_catalog(
                 let stmt = sql::parse(log_view.sql.to_owned())
                     .expect("failed to parse bootstrap sql")
                     .into_element();
-                match sql::plan(&pcx, catalog, &sql::InternalSession, stmt, &params) {
+                match sql::plan(
+                    &pcx,
+                    &ConnCatalog::new(catalog, None),
+                    &sql::InternalSession,
+                    stmt,
+                    &params,
+                ) {
                     Ok(Plan::CreateView {
                         name: _,
                         view,

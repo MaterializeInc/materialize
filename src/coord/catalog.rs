@@ -72,11 +72,11 @@ pub struct Catalog {
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
-    conn_id: u32,
+    conn_id: Option<u32>,
 }
 
 impl ConnCatalog<'_> {
-    pub fn new(catalog: &Catalog, conn_id: u32) -> ConnCatalog {
+    pub fn new(catalog: &Catalog, conn_id: Option<u32>) -> ConnCatalog {
         ConnCatalog { catalog, conn_id }
     }
 }
@@ -922,7 +922,13 @@ impl Catalog {
             Some(eval_env) => eval_env.into(),
         };
         let stmt = ::sql::parse(create_sql)?.into_element();
-        let plan = ::sql::plan(&pcx, self, &::sql::InternalSession, stmt, &params)?;
+        let plan = ::sql::plan(
+            &pcx,
+            &ConnCatalog::new(self, None),
+            &::sql::InternalSession,
+            stmt,
+            &params,
+        )?;
         Ok(match plan {
             Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -1139,61 +1145,6 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
-impl PlanCatalog for Catalog {
-    fn creation_time(&self) -> SystemTime {
-        self.creation_time()
-    }
-
-    fn nonce(&self) -> u64 {
-        self.nonce()
-    }
-
-    fn databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.databases())
-    }
-
-    fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
-        Ok(self.get(name, None)?)
-    }
-
-    fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry {
-        self.get_by_id(id)
-    }
-
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a> {
-        Box::new(self.iter().map(|e| e as &dyn PlanCatalogEntry))
-    }
-
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
-        self.get_schemas(database_spec, None)
-            .map(|m| m as &dyn SchemaMap)
-    }
-
-    fn database_resolver<'a>(
-        &'a self,
-        database_spec: DatabaseSpecifier,
-    ) -> Result<Box<dyn PlanDatabaseResolver<'a> + 'a>, failure::Error> {
-        Ok(Box::new(self.database_resolver(database_spec)?))
-    }
-
-    fn resolve(
-        &self,
-        current_database: DatabaseSpecifier,
-        search_path: &[&str],
-        name: &PartialName,
-    ) -> Result<FullName, failure::Error> {
-        Ok(self.resolve(current_database, search_path, name, None)?)
-    }
-
-    fn empty_item_map(&self) -> Box<dyn ItemMap> {
-        Box::new(Items(BTreeMap::new()))
-    }
-
-    fn conn_id(&self) -> Option<u32> {
-        None
-    }
-}
-
 impl PlanCatalog for ConnCatalog<'_> {
     fn creation_time(&self) -> SystemTime {
         self.catalog.creation_time()
@@ -1208,7 +1159,7 @@ impl PlanCatalog for ConnCatalog<'_> {
     }
 
     fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
-        Ok(self.catalog.get(name, Some(self.conn_id))?)
+        Ok(self.catalog.get(name, self.conn_id)?)
     }
 
     fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry {
@@ -1221,7 +1172,7 @@ impl PlanCatalog for ConnCatalog<'_> {
 
     fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
         self.catalog
-            .get_schemas(database_spec, Some(self.conn_id))
+            .get_schemas(database_spec, self.conn_id)
             .map(|m| m as &dyn SchemaMap)
     }
 
@@ -1240,7 +1191,7 @@ impl PlanCatalog for ConnCatalog<'_> {
     ) -> Result<FullName, failure::Error> {
         Ok(self
             .catalog
-            .resolve(current_database, search_path, name, Some(self.conn_id))?)
+            .resolve(current_database, search_path, name, self.conn_id)?)
     }
 
     fn empty_item_map(&self) -> Box<dyn ItemMap> {
@@ -1248,7 +1199,7 @@ impl PlanCatalog for ConnCatalog<'_> {
     }
 
     fn conn_id(&self) -> Option<u32> {
-        Some(self.conn_id)
+        self.conn_id
     }
 }
 
