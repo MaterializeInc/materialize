@@ -457,6 +457,8 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "description": "This shows the top 10 dataflow operators that are introducing lag into the system.\n\nAn operator can introduce lag either because its source is running behind, or because it is doing lots of work.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -508,7 +510,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Frontier lags",
+      "title": "Dataflow Operator Lag Times",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -526,7 +528,7 @@
         {
           "format": "ms",
           "label": "Lag (from -> to)",
-          "logBase": 2,
+          "logBase": 1,
           "max": null,
           "min": null,
           "show": true
@@ -550,6 +552,8 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "description": "A worker is the underlying thread of computation in materialized. In general materialized should send similar amounts of work to each worker, and the queue depths should be similar to each other.\n\nIf a queue is growing without bound, or queues are very unbalanced, that could signify a problem.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -979,7 +983,8 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "description": "Rate at which capabilities are downgraded in the system",
+      "datasource": null,
+      "description": "This is a measure of when we last stated that ingested data was valid for computation.\n\nAll sources that have a rate of 0 are *stalled* and are either not ingesting new data or have no new data to ingest.\n\nInternally, this is the capability, and the underlying measure is what capability we have released.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1031,7 +1036,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": " Capability Closing Rate",
+      "title": "Data Acceptance Rate",
       "tooltip": {
         "shared": true,
         "sort": 1,
@@ -1047,7 +1052,7 @@
       },
       "yaxes": [
         {
-          "format": "short",
+          "format": "ms",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -1169,7 +1174,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Rate at which capabilities are downgraded in the system",
+      "description": "The difference between the most-consumed and least-consumed kafka partition, in terms of when we last released messages into the dataflow layer.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1221,7 +1226,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Partition Imbalance Amount",
+      "title": "Kafka Partition Imbalance Amount",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1359,6 +1364,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
+      "description": "This only applies to kinesis",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1666,6 +1672,8 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "description": "A batch is a slab of memory, arrangements with a large number of batches have allocated a large number of records, which should be represented in the Arrangement Records panel.\n\nThis shows the top 10 arrangements by number of batches, and should be similar to the Arrangement Records panel.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1759,7 +1767,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Uncompacted records in each arrangement",
+      "description": "An arrangement is where materialize stores state, records are equivalent to rows in a database or messages in a stream.\n\nThis shows the top 10 arrangements by number of records, and should be similar to the Arrangement Batches panel.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
