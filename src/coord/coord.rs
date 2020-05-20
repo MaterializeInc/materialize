@@ -386,7 +386,6 @@ where
                     result,
                     params,
                 } => {
-                    // do something here.
                     match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
                         Ok((pcx, plan)) => {
                             self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
@@ -431,7 +430,6 @@ where
                     mut session,
                     tx,
                 }) => {
-                    // do something here.
                     let result = self.handle_describe(&mut session, name, stmt);
                     let _ = tx.send(Response { result, session });
                 }
