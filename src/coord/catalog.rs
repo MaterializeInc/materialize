@@ -656,6 +656,17 @@ impl Catalog {
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
+        let temp_items: Vec<GlobalId> = ops
+            .iter()
+            .filter_map(|op| {
+                if let Op::CreateItem { id, item, .. } = op {
+                    if item.is_temporary() {
+                        return Some(id.clone());
+                    }
+                }
+                None
+            })
+            .collect();
         for op in ops {
             actions.push(match op {
                 Op::CreateDatabase { name } => Action::CreateDatabase {
@@ -683,11 +694,10 @@ impl Catalog {
                 }
                 Op::CreateItem { id, name, item } => {
                     if !item.is_temporary() {
-                        if item
-                            .uses()
-                            .iter()
-                            .any(|id| self.get_by_id(&id).item().is_temporary())
-                        {
+                        if item.uses().iter().any(|id| match self.try_get_by_id(*id) {
+                            Some(entry) => entry.item().is_temporary(),
+                            None => temp_items.contains(&id),
+                        }) {
                             return Err(Error::new(ErrorKind::TemporaryItem(id.to_string())));
                         }
                         let database_id = match &name.database {
