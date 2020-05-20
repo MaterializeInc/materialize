@@ -16,11 +16,10 @@ We support a large fraction of  PostgreSQL, and are actively working on supporti
 
 Materialize reads Avro, Protobuf, JSON, and newline-delimited text. Need something else? [Just ask](https://github.com/MaterializeInc/materialize/issues/new/choose).
 
-Materialize can read data from Kafka topics or tail local files.
+Materialize can read data from Kafka topics, Kinesis streams (in preview), or tail local files.
 
 **Coming soon**:
 
--   Support for AWS Kinesis streams and Azure Event Hub
 -   Reading ORC and Parquet files on object storage (i.e. join your streams against your data lake in real-time)
 -   Getting data in from arbitrary HTTP endpoints
 
