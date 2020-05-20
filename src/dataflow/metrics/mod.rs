@@ -33,4 +33,10 @@ lazy_static! {
         &["worker_id", "operator_id"]
     )
     .unwrap();
+    pub static ref SCHEDULING_HISTOGRAM: IntGaugeVec = register_int_gauge_vec!(
+        "mz_dataflow_operator_scheduling_histogram",
+        "How many times it took each operator to complete in at most le_ns seconds",
+        &["worker_id", "operator_id", "le_ns"]
+    )
+    .unwrap();
 }
