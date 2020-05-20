@@ -932,7 +932,6 @@ fn handle_create_view(
             desc.set_name(i, Some(normalize::column_name(name.clone())));
         }
     }
-    let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
     let if_not_exists = *if_exists == IfExistsBehavior::Skip;
     Ok(Plan::CreateView {
@@ -943,10 +942,13 @@ fn handle_create_view(
             desc,
         },
         replace,
-        temporary,
         materialize,
         if_not_exists,
-        conn_id: scx.session.conn_id(),
+        conn_id: if *temporary {
+            scx.session.conn_id()
+        } else {
+            None
+        },
     })
 }
 

@@ -138,7 +138,6 @@ pub struct View {
     pub plan_cx: PlanContext,
     pub optimized_expr: OptimizedRelationExpr,
     pub desc: RelationDesc,
-    pub temporary: bool,
     pub conn_id: Option<u32>,
 }
 
@@ -191,7 +190,7 @@ impl CatalogItem {
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
         match self {
-            CatalogItem::View(view) => view.temporary,
+            CatalogItem::View(view) => view.conn_id.is_some(),
             _ => false,
         }
     }
@@ -902,7 +901,6 @@ impl Catalog {
                     plan_cx: pcx,
                     optimized_expr: optimizer.optimize(view.expr, self.indexes())?,
                     desc: view.desc,
-                    temporary: false,
                     conn_id: None,
                 })
             }

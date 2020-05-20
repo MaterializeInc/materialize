@@ -75,8 +75,8 @@ pub enum Plan {
         view: View,
         /// The ID of the object that this view is replacing, if any.
         replace: Option<GlobalId>,
-        /// Temporary views only exist for a single session
-        temporary: bool,
+        /// If the view is temporary, it will only exist for a single connection/
+        /// session. Otherwise, this value will be None.
         conn_id: Option<u32>,
         /// whether we should auto-materialize the view
         materialize: bool,

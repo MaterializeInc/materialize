@@ -605,7 +605,6 @@ where
                 name,
                 view,
                 replace,
-                temporary,
                 conn_id,
                 materialize,
                 if_not_exists,
@@ -615,7 +614,6 @@ where
                     name,
                     view,
                     replace,
-                    temporary,
                     conn_id,
                     materialize,
                     if_not_exists,
@@ -950,7 +948,6 @@ where
         name: FullName,
         view: sql::View,
         replace: Option<GlobalId>,
-        temporary: bool,
         conn_id: Option<u32>,
         materialize: bool,
         if_not_exists: bool,
@@ -971,7 +968,6 @@ where
             plan_cx: pcx,
             optimized_expr,
             desc,
-            temporary,
             conn_id,
         };
         ops.push(catalog::Op::CreateItem {
@@ -1219,7 +1215,6 @@ where
                     plan_cx: PlanContext::default(),
                     optimized_expr: source,
                     desc,
-                    temporary: false,
                     conn_id: None,
                 };
                 self.build_view_collection(&view_id, &view, &mut dataflow);
@@ -2460,7 +2455,6 @@ fn open_catalog(
                         name: _,
                         view,
                         replace,
-                        temporary,
                         conn_id,
                         materialize,
                         if_not_exists,
@@ -2481,7 +2475,6 @@ fn open_catalog(
                             plan_cx: pcx,
                             optimized_expr,
                             desc,
-                            temporary,
                             conn_id,
                         };
                         let view_name = FullName {
