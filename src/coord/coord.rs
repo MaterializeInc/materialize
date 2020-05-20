@@ -414,10 +414,7 @@ where
                     }
                     Err(e) => {
                         self.catalog
-                            .transact(vec![catalog::Op::DropItem {
-                                id,
-                                conn_id: Some(session.conn_id()),
-                            }])
+                            .transact(vec![catalog::Op::DropItem(id)])
                             .expect("corrupt catalog");
                         tx.send(Err(e), session);
                     }
@@ -645,9 +642,7 @@ where
                 session,
             ),
 
-            Plan::DropItems { items, ty, conn_id } => {
-                tx.send(self.sequence_drop_items(items, ty, conn_id), session)
-            }
+            Plan::DropItems { items, ty } => tx.send(self.sequence_drop_items(items, ty), session),
 
             Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
 
@@ -962,7 +957,7 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         let mut ops = vec![];
         if let Some(id) = replace {
-            ops.extend(self.catalog.drop_items_ops(&[id], conn_id));
+            ops.extend(self.catalog.drop_items_ops(&[id]));
         }
         let view_id = self.catalog.allocate_id()?;
         // Optimize the expression so that we can form an accurately typed description.
@@ -1068,9 +1063,8 @@ where
         &mut self,
         items: Vec<GlobalId>,
         ty: ObjectType,
-        conn_id: Option<u32>,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let ops = self.catalog.drop_items_ops(&items, conn_id);
+        let ops = self.catalog.drop_items_ops(&items);
         self.catalog_transact(ops)?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
@@ -1777,7 +1771,7 @@ where
         };
         sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
         let ops = vec![
-            catalog::Op::DropItem { id, conn_id: None },
+            catalog::Op::DropItem(id),
             catalog::Op::CreateItem {
                 id,
                 name: name.clone(),

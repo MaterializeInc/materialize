@@ -133,6 +133,7 @@ impl State {
             .err_ctx("resetting materialized state: CREATE DATABASE materialize".into())?;
         Ok(())
     }
+
     // Delete the Kinesis streams created for this run of testdrive.
     pub async fn reset_kinesis(&mut self) -> Result<(), Error> {
         if !self.kinesis_stream_names.is_empty() {

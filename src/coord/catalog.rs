@@ -15,7 +15,6 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, TimeZone, Utc};
 use failure::bail;
-use itertools::any;
 use lazy_static::lazy_static;
 use log::{error, info, trace};
 use ore::collections::CollectionExt;
@@ -149,19 +148,6 @@ pub struct Index {
     pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<ScalarExpr>,
-}
-
-impl Schemas {
-    pub fn contains_id(&self, id: GlobalId) -> bool {
-        for schema in self.0.values() {
-            for item_id in schema.items.0.values() {
-                if id == *item_id {
-                    return true;
-                }
-            }
-        }
-        false
-    }
 }
 
 impl CatalogItem {
@@ -528,12 +514,6 @@ impl Catalog {
         }
     }
 
-    fn in_temporary_schemas(&self, id: GlobalId) -> bool {
-        any(self.temporary_schemas.values(), |schemas| {
-            schemas.contains_id(id)
-        })
-    }
-
     pub fn insert_item(&mut self, id: GlobalId, name: FullName, item: CatalogItem) {
         if !item.is_placeholder() {
             info!("create {} {} ({})", item.type_string(), name, id);
@@ -580,7 +560,7 @@ impl Catalog {
         let mut ops = vec![];
         if let Some(database) = self.by_name.get(&name) {
             for (schema_name, schema) in &database.schemas.0 {
-                Self::drop_schema_items(schema, &self.by_id, &mut ops, None);
+                Self::drop_schema_items(schema, &self.by_id, &mut ops);
                 ops.push(Op::DropSchema {
                     database_name: DatabaseSpecifier::Name(name.clone()),
                     schema_name: schema_name.clone(),
@@ -600,7 +580,7 @@ impl Catalog {
         if let DatabaseSpecifier::Name(database_name) = database_spec {
             if let Some(database) = self.by_name.get(&database_name) {
                 if let Some(schema) = database.schemas.0.get(&schema_name) {
-                    Self::drop_schema_items(schema, &self.by_id, &mut ops, None);
+                    Self::drop_schema_items(schema, &self.by_id, &mut ops);
                     ops.push(Op::DropSchema {
                         database_name: DatabaseSpecifier::Name(database_name),
                         schema_name,
@@ -611,10 +591,10 @@ impl Catalog {
         ops
     }
 
-    pub fn drop_items_ops(&mut self, ids: &[GlobalId], conn_id: Option<u32>) -> Vec<Op> {
+    pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
         for &id in ids {
-            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut HashSet::new(), conn_id);
+            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut HashSet::new());
         }
         ops
     }
@@ -623,11 +603,10 @@ impl Catalog {
         schema: &Schema,
         by_id: &BTreeMap<GlobalId, CatalogEntry>,
         ops: &mut Vec<Op>,
-        conn_id: Option<u32>,
     ) {
         let mut seen = HashSet::new();
         for &id in schema.items.0.values() {
-            Self::drop_item_cascade(id, by_id, ops, &mut seen, conn_id)
+            Self::drop_item_cascade(id, by_id, ops, &mut seen)
         }
     }
 
@@ -636,14 +615,13 @@ impl Catalog {
         by_id: &BTreeMap<GlobalId, CatalogEntry>,
         ops: &mut Vec<Op>,
         seen: &mut HashSet<GlobalId>,
-        conn_id: Option<u32>,
     ) {
         if !seen.contains(&id) {
             seen.insert(id);
             for &u in &by_id[&id].used_by {
-                Self::drop_item_cascade(u, by_id, ops, seen, conn_id)
+                Self::drop_item_cascade(u, by_id, ops, seen)
             }
-            ops.push(Op::DropItem { id, conn_id });
+            ops.push(Op::DropItem(id));
         }
     }
 
@@ -673,10 +651,7 @@ impl Catalog {
                 database_name: String,
                 schema_name: String,
             },
-            DropItem {
-                id: GlobalId,
-                conn_id: Option<u32>,
-            },
+            DropItem(GlobalId),
         }
 
         let mut actions = Vec::with_capacity(ops.len());
@@ -709,7 +684,11 @@ impl Catalog {
                 }
                 Op::CreateItem { id, name, item } => {
                     if !item.is_temporary() {
-                        if any(item.uses(), |id| self.in_temporary_schemas(id)) {
+                        if item
+                            .uses()
+                            .iter()
+                            .any(|id| self.get_by_id(&id).item().is_temporary())
+                        {
                             return Err(Error::new(ErrorKind::TemporaryItem(id.to_string())));
                         }
                         let database_id = match &name.database {
@@ -748,11 +727,11 @@ impl Catalog {
                         schema_name,
                     }
                 }
-                Op::DropItem { id, conn_id } => {
-                    if !self.in_temporary_schemas(id) {
+                Op::DropItem(id) => {
+                    if !self.get_by_id(&id).item().is_temporary() {
                         tx.remove_item(id)?;
                     }
-                    Action::DropItem { id, conn_id }
+                    Action::DropItem(id)
                 }
             })
         }
@@ -818,8 +797,13 @@ impl Catalog {
                     OpStatus::DroppedSchema
                 }
 
-                Action::DropItem { id, conn_id } => {
+                Action::DropItem(id) => {
                     let metadata = self.remove_item_from_dependencies(&id);
+                    let conn_id = match &self.get_by_id(&id).item {
+                        CatalogItem::View(view) => view.conn_id.clone(),
+                        _ => None,
+                    };
+
                     self.get_schemas_mut(&metadata.name.database, conn_id)
                         .expect("catalog out of sync")
                         .0
@@ -1006,10 +990,7 @@ pub enum Op {
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
     /// may be violated.
-    DropItem {
-        id: GlobalId,
-        conn_id: Option<u32>,
-    },
+    DropItem(GlobalId),
 }
 
 #[derive(Debug, Clone)]

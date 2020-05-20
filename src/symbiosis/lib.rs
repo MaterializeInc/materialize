@@ -245,7 +245,6 @@ END $$;
                 Plan::DropItems {
                     items,
                     ty: ObjectType::Table,
-                    conn_id: None,
                 }
             }
             Statement::Delete { table_name, .. } => {

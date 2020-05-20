@@ -1582,7 +1582,6 @@ fn handle_drop_items(
     Ok(Plan::DropItems {
         items: ids,
         ty: object_type,
-        conn_id: scx.session.conn_id(),
     })
 }
 
