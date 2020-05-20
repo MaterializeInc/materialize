@@ -10,4 +10,4 @@
 name: dashboard
 build-args:
   PROM_VERSION: '2.18.1'
-  GRAFANA_VERSION: '6.7.3'
+  GRAFANA_VERSION: '7.0.0'
