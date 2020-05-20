@@ -1224,7 +1224,7 @@ impl Timestamper {
     ) -> Option<RtTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
-                self.create_rt_kafka_connector(id, kc)
+                self.create_rt_kafka_connector(kc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
                         last_partition_offset,
@@ -1329,27 +1329,9 @@ impl Timestamper {
         })
     }
 
-    fn create_rt_kafka_connector(
-        &self,
-        id: SourceInstanceId,
-        kc: KafkaSourceConnector,
-    ) -> Option<RtKafkaConnector> {
+    fn create_rt_kafka_connector(&self, kc: KafkaSourceConnector) -> Option<RtKafkaConnector> {
         let mut config = ClientConfig::new();
-        config
-            .set("auto.offset.reset", "earliest")
-            .set("enable.auto.commit", "false")
-            .set("enable.partition.eof", "false")
-            .set("session.timeout.ms", "6000")
-            .set("max.poll.interval.ms", "300000") // 5 minutes
-            .set("fetch.message.max.bytes", "134217728")
-            .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &kc.url.to_string());
-
-        let group_id_prefix = kc.group_id_prefix.unwrap_or_else(String::new);
-        config.set(
-            "group.id",
-            &format!("{}materialize-rt-{}-{}", group_id_prefix, &kc.topic, id),
-        );
+        config.set("bootstrap.servers", &kc.url.to_string());
 
         if log_enabled!(target: "librdkafka", log::Level::Debug) {
             config.set("debug", "all");
