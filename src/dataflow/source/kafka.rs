@@ -74,6 +74,18 @@ lazy_static! {
         &["topic", "source_id", "partition_id"]
     )
     .unwrap();
+    static ref KAFKA_SOURCE_OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "mz_kafka_source_operator_scheduled_total",
+        "The number of times the kafka client got invoked for this source",
+        &["topic", "source_id"]
+    )
+    .unwrap();
+    static ref KAFKA_METADATA_REFRESH_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "mz_kafka_metadata_refresh_total",
+        "The number of times the kafka client had to refresh metadata for this source",
+        &["topic", "source_id"]
+    )
+    .unwrap();
 }
 
 // There is other stuff in librdkafka messages, e.g. headers.
@@ -119,7 +131,6 @@ fn create_kafka_config(
         .set("max.poll.interval.ms", "300000") // 5 minutes
         .set("fetch.message.max.bytes", "134217728")
         .set("enable.sparse.connections", "true")
-        .set("debug", "all")
         .set("bootstrap.servers", &url.to_string())
         .set("partition.assignment.strategy", "roundrobin");
 
@@ -196,6 +207,8 @@ struct DataPlaneInfo {
     topic_name: String,
     /// Name of the source (will have format kafka-source-id)
     source_name: String,
+    /// Source instance ID (stored as a string for logging)
+    source_id: String,
     /// Kafka Configuration Parameters
     kafka_config: ClientConfig,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
@@ -247,12 +260,14 @@ impl DataPlaneInfo {
     fn new(
         topic_name: String,
         source_name: String,
+        source_id: SourceInstanceId,
         kafka_config: ClientConfig,
         consumer_activator: Arc<Mutex<SyncActivator>>,
     ) -> DataPlaneInfo {
         DataPlaneInfo {
             topic_name,
             source_name,
+            source_id: source_id.to_string(),
             kafka_config,
             consumers: VecDeque::new(),
             needs_refresh: true,
@@ -281,6 +296,10 @@ impl DataPlaneInfo {
                 "Refreshing Source Metadata for Source {} Partition Count: {}",
                 self.source_name, self.expected_partition_count
             );
+
+            KAFKA_METADATA_REFRESH_COUNTER
+                .with_label_values(&[&self.topic_name, &self.source_id])
+                .inc();
             if self.update_consumer_list() {
                 cp_info.update_partition_metadata(self.expected_partition_count);
                 self.needs_refresh = false;
@@ -590,6 +609,7 @@ where
                 let mut dp_info = DataPlaneInfo::new(
                     topic.clone(),
                     name.clone(),
+                    id.clone(),
                     create_kafka_config(&name, &url, group_id_prefix, &config_options),
                     Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
                 );
@@ -603,6 +623,9 @@ where
                 // Accumulate updates to BYTES_READ_COUNTER;
                 let mut bytes_read = 0;
                 if let Some(mut dp_info) = dp_info.as_mut() {
+                    KAFKA_SOURCE_OPERATOR_SCHEDULED_COUNTER
+                        .with_label_values(&[&dp_info.topic_name, &dp_info.source_id])
+                        .inc();
                     // Repeatedly interrogate Kafka for messages. Cease when
                     // Kafka stops returning new data, or after 10 milliseconds.
                     let timer = std::time::Instant::now();
@@ -627,7 +650,7 @@ where
                         KAFKA_PARTITION_OFFSET_RECEIVED
                             .with_label_values(&[
                                 &dp_info.topic_name,
-                                &id.to_string(),
+                                &dp_info.source_id,
                                 &partition.to_string(),
                             ])
                             .set(offset.offset);
@@ -660,7 +683,7 @@ where
                                 KAFKA_PARTITION_OFFSET_INGESTED
                                     .with_label_values(&[
                                         &dp_info.topic_name,
-                                        &id.to_string(),
+                                        &dp_info.source_id,
                                         &partition.to_string(),
                                     ])
                                     .set(offset.offset);
@@ -668,7 +691,7 @@ where
                                 KAFKA_PARTITION_MESSAGE_INGESTED
                                     .with_label_values(&[
                                         &dp_info.topic_name,
-                                        &id.to_string(),
+                                        &dp_info.source_id,
                                         &partition.to_string(),
                                     ])
                                     .inc_by(1);
@@ -815,7 +838,7 @@ fn downgrade_capability(
                     KAFKA_PARTITION_CLOSED_TS
                         .with_label_values(&[
                             &dp_info.topic_name,
-                            &id.to_string(),
+                            &dp_info.source_id,
                             &pid.to_string(),
                         ])
                         .set(
@@ -850,7 +873,7 @@ fn downgrade_capability(
         // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
         if changed && min > 0 {
             KAFKA_CAPABILITY
-                .with_label_values(&[&dp_info.topic_name, &id.to_string()])
+                .with_label_values(&[&dp_info.topic_name, &dp_info.source_id])
                 .set(min.try_into().unwrap());
             cap.downgrade(&(&min + 1));
             cp_info.last_closed_ts = min;
