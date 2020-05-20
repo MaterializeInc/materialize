@@ -140,6 +140,36 @@ alice false
 bob true
 eve true
 
+# ANY/ALL semantics
+
+query BBBBBBBB
+(VALUES (
+  1 < ANY(SELECT * FROM (VALUES (1)) WHERE false),
+  1 < ANY(VALUES (0)),
+  1 < ANY(VALUES (1)),
+  1 < ANY(VALUES (2)),
+  1 < ANY(VALUES (NULL)),
+  1 < ANY(VALUES (0), (NULL)),
+  1 < ANY(VALUES (1), (NULL)),
+  1 < ANY(VALUES (2), (NULL))
+))
+----
+false  false  false  true  NULL  NULL  NULL  true
+
+query BBBBBBBB
+(VALUES (
+  1 < ALL(SELECT * FROM (VALUES (1)) WHERE false),
+  1 < ALL(VALUES (0)),
+  1 < ALL(VALUES (1)),
+  1 < ALL(VALUES (2)),
+  1 < ALL(VALUES (NULL)),
+  1 < ALL(VALUES (0), (NULL)),
+  1 < ALL(VALUES (1), (NULL)),
+  1 < ALL(VALUES (2), (NULL))
+))
+----
+true  false  false  true  NULL  false  false  NULL
+
 statement ok
 CREATE TABLE s1 (a int NOT NULL)
 
