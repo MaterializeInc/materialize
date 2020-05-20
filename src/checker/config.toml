@@ -196,14 +196,15 @@ ON w_id = h_w_id WHERE w_ytd != sum)
 
 # Entries in the DISTRICT and HISTORY tables must satisfy the relationship:
 # D_YTD=SUM(H_AMOUNT) for each district defined by (D_W_ID,D_ID)=(H_W_ID,H_D_ID)
-# [[checks]]
-# name = "c3329"
-# enabled = true
-# query = """
-# SELECT count(*) as count FROM (SELECT d_id, d_ytd, sum FROM district JOIN (SELECT h_w_id, h_d_id, sum(h_amount) FROM history GROUP BY (h_w_id, h_d_id))
-# ON d_id = h_d_id AND d_w_id = h_w_id WHERE d_ytd != sum)
-# """
-# [[checks.rows]]
-# [[checks.rows.columns]]
-# column = "count"
- # value = "0"
+[[checks]]
+name = "c3329"
+enabled = true
+query = """
+SELECT count(*) as count FROM
+(SELECT d_id, d_ytd, sum FROM district JOIN (SELECT h_w_id, h_d_id, sum(h_amount) FROM history GROUP BY h_w_id, h_d_id)
+ON d_id = h_d_id AND d_w_id = h_w_id WHERE d_ytd != sum)
+ """
+ [[checks.rows]]
+ [[checks.rows.columns]]
+ column = "count"
+  value = "0"
