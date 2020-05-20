@@ -98,7 +98,11 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         log::info!("producing 8k records");
         let backoff = tokio::time::delay_for(Duration::from_secs(1));
         for i in 0..8000 {
-            let key: i32 = rand::thread_rng().gen_range(0, 10000000);
+            let key: i32 = if i % 3 != 0 {
+                rand::thread_rng().gen_range(0, 10000)
+            } else {
+                rand::thread_rng().gen_range(0, 10000000)
+            };
             let res = k_client.send(key.to_string().as_bytes(), val_a.as_slice());
             match res {
                 Ok(fut) => {
