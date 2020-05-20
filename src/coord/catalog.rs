@@ -797,11 +797,11 @@ impl Catalog {
                 }
 
                 Action::DropItem(id) => {
-                    let metadata = self.remove_item_from_dependencies(&id);
                     let conn_id = match &self.get_by_id(&id).item {
                         CatalogItem::View(view) => view.conn_id.clone(),
                         _ => None,
                     };
+                    let metadata = self.remove_item_from_dependencies(&id);
 
                     self.get_schemas_mut(&metadata.name.database, conn_id)
                         .expect("catalog out of sync")

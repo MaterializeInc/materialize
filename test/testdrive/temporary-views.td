@@ -46,6 +46,39 @@ non-temporary items cannot depend on temporary item
 2 "bar"
 3 "foo"
 
+#####################################################################
+Test things we shouldn't be able to make temporary.
+
+##### Temporary materialized views.
+! CREATE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v;
+Expected VIEW after CREATE TEMPORARY, found: MATERIALIZED
+
+! CREATE TEMP MATERIALIZED VIEW foo AS SELECT * FROM v;
+Expected VIEW after CREATE TEMPORARY, found: MATERIALIZED
+
+
+##### Temporary sources.
+$ set schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [{},]
+  }
+
+! CREATE TEMPORARY SOURCE data_schema_inline
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+Expected VIEW after CREATE TEMPORARY, found: SOURCE
+
+
+##### Temporary sinks.
+! CREATE TEMPORARY SINK data_sink FROM data
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Expected VIEW after CREATE TEMPORARY, found: SINK
+
+#####################################################################
+
 ! DROP VIEW temp_v;
 cannot drop mz_temp.temp_v: still depended upon by catalog item 'mz_temp.double_temp_v'
 
