@@ -299,7 +299,7 @@ pub fn construct<A: Allocate>(
                 move |((id, worker), cnt)| {
                     SCHEDULING_ELAPSED_NS
                         .with_label_values(&[&worker.to_string(), &id.to_string()])
-                        .inc_by(cnt as i64);
+                        .set(cnt as i64);
                     Row::pack(&[
                         Datum::Int64(id as i64),
                         Datum::Int64(worker as i64),
