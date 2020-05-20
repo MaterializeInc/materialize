@@ -45,11 +45,11 @@ impl KafkaClient {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
         let new_topic = NewTopic::new(&self.topic, partitions, TopicReplication::Fixed(1))
-            .set("cleanup.policy", "compact")
-            .set("segment.ms", "144000")
+            .set("cleanup.policy", "delete")
+            .set("segment.ms", "10000000")
             .set("segment.bytes", "1000000000")
-            .set("delete.retention.ms", "100000000")
-            .set("max.compaction.lag.ms", "10000000")
+            .set("delete.retention.ms", "1000000000")
+            .set("max.compaction.lag.ms", "10000000000")
             .set("min.cleanable.dirty.ratio", "0.01");
 
         let res = config
