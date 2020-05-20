@@ -52,7 +52,7 @@ use sql::{
 use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
-use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, ConnCatalog, SinkConnectorState};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
@@ -541,6 +541,12 @@ where
         if let Some(name) = self.active_tails.remove(&conn_id) {
             self.drop_sinks(vec![name]);
         }
+
+        // Remove all temporary items created by the conn_id.
+        let ops = self.catalog.drop_temp_item_ops(conn_id);
+        self.catalog_transact(ops)
+            .expect("unable to drop temporary items for conn_id");
+        self.catalog.drop_temporary_schema(conn_id);
     }
 
     fn sequence_plan(
@@ -606,7 +612,15 @@ where
                 materialize,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_view(pcx, name, view, replace, materialize, if_not_exists),
+                self.sequence_create_view(
+                    pcx,
+                    name,
+                    view,
+                    replace,
+                    session.conn_id(),
+                    materialize,
+                    if_not_exists,
+                ),
                 session,
             ),
 
@@ -930,12 +944,14 @@ where
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sequence_create_view(
         &mut self,
         pcx: PlanContext,
         name: FullName,
         view: sql::View,
         replace: Option<GlobalId>,
+        conn_id: u32,
         materialize: bool,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, failure::Error> {
@@ -955,6 +971,7 @@ where
             plan_cx: pcx,
             optimized_expr,
             desc,
+            conn_id: if view.temporary { Some(conn_id) } else { None },
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -1201,6 +1218,7 @@ where
                     plan_cx: PlanContext::default(),
                     optimized_expr: source,
                     desc,
+                    conn_id: None,
                 };
                 self.build_view_collection(&view_id, &view, &mut dataflow);
                 let index = auto_generate_view_idx(index_name, view_name, &view, view_id);
@@ -2184,11 +2202,22 @@ where
         params: &sql::Params,
     ) -> Result<(PlanContext, sql::Plan), failure::Error> {
         let pcx = PlanContext::default();
-        match sql::plan(&pcx, &self.catalog, session, stmt.clone(), params) {
+        match sql::plan(
+            &pcx,
+            &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
+            session,
+            stmt.clone(),
+            params,
+        ) {
             Ok(plan) => Ok((pcx, plan)),
             Err(err) => match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    let plan = block_on(postgres.execute(&pcx, &self.catalog, session, &stmt))?;
+                    let plan = block_on(postgres.execute(
+                        &pcx,
+                        &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
+                        session,
+                        &stmt,
+                    ))?;
                     Ok((pcx, plan))
                 }
                 _ => Err(err),
@@ -2203,7 +2232,11 @@ where
         stmt: Option<Statement>,
     ) -> Result<(), failure::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
-            match sql::describe(&self.catalog, session, stmt.clone()) {
+            match sql::describe(
+                &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
+                session,
+                stmt.clone(),
+            ) {
                 Ok((desc, param_types)) => (desc, param_types),
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
@@ -2435,7 +2468,13 @@ fn open_catalog(
                 let stmt = sql::parse(log_view.sql.to_owned())
                     .expect("failed to parse bootstrap sql")
                     .into_element();
-                match sql::plan(&pcx, catalog, &sql::InternalSession, stmt, &params) {
+                match sql::plan(
+                    &pcx,
+                    &ConnCatalog::new(catalog, None),
+                    &sql::InternalSession,
+                    stmt,
+                    &params,
+                ) {
                     Ok(Plan::CreateView {
                         name: _,
                         view,
@@ -2459,6 +2498,7 @@ fn open_catalog(
                             plan_cx: pcx,
                             optimized_expr,
                             desc,
+                            conn_id: None,
                         };
                         let view_name = FullName {
                             database: DatabaseSpecifier::Ambient,

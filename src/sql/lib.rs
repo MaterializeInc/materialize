@@ -158,6 +158,7 @@ pub struct View {
     pub create_sql: String,
     pub expr: ::expr::RelationExpr,
     pub desc: RelationDesc,
+    pub temporary: bool,
 }
 
 #[derive(Clone, Debug)]

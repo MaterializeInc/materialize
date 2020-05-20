@@ -29,6 +29,7 @@ pub(crate) enum ErrorKind {
     ItemAlreadyExists(String),
     UnacceptableSchemaName(String),
     ReadOnlySystemSchema(String),
+    TemporaryItem(String),
     UnsatisfiableLoggingDependency { depender_name: String },
     Storage(rusqlite::Error),
 }
@@ -61,6 +62,7 @@ impl std::error::Error for Error {
             | ErrorKind::ItemAlreadyExists(_)
             | ErrorKind::UnacceptableSchemaName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
+            | ErrorKind::TemporaryItem(_)
             | ErrorKind::UnsatisfiableLoggingDependency { .. } => None,
             ErrorKind::Storage(e) => Some(e),
         }
@@ -88,6 +90,11 @@ impl fmt::Display for Error {
             ErrorKind::ReadOnlySystemSchema(name) => {
                 write!(f, "system schema '{}' cannot be modified", name)
             }
+            ErrorKind::TemporaryItem(name) => write!(
+                f,
+                "non-temporary items cannot depend on temporary item '{}'",
+                name
+            ),
             ErrorKind::UnsatisfiableLoggingDependency { depender_name } => write!(
                 f,
                 "catalog item '{}' depends on system logging, but logging is disabled",

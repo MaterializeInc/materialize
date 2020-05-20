@@ -122,7 +122,7 @@ impl State {
                 let query = format!("DROP DATABASE {}", name);
                 sql::print_query(&query);
                 self.pgclient.batch_execute(&query).await.err_ctx(format!(
-                    "restting materialized state: DROP DATABASE {}",
+                    "resetting materialized state: DROP DATABASE {}",
                     name,
                 ))?;
             }

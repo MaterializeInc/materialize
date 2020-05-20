@@ -62,7 +62,7 @@ const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
 
 const SEARCH_PATH: ServerVar<&[&str]> = ServerVar {
     name: unicase::Ascii::new("search_path"),
-    value: &["mz_catalog", "pg_catalog", "public"],
+    value: &["mz_catalog", "pg_catalog", "public", "mz_temp"],
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
 };

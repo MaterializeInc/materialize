@@ -50,6 +50,8 @@ pub trait PlanCatalog: fmt::Debug {
     ) -> Result<FullName, failure::Error>;
 
     fn empty_item_map(&self) -> Box<dyn ItemMap>;
+
+    fn conn_id(&self) -> Option<u32>;
 }
 
 pub trait PlanCatalogEntry {
@@ -157,6 +159,10 @@ impl PlanCatalog for DummyCatalog {
     }
 
     fn empty_item_map(&self) -> Box<dyn ItemMap> {
+        unimplemented!();
+    }
+
+    fn conn_id(&self) -> Option<u32> {
         unimplemented!();
     }
 }
