@@ -75,9 +75,6 @@ pub enum Plan {
         view: View,
         /// The ID of the object that this view is replacing, if any.
         replace: Option<GlobalId>,
-        /// If the view is temporary, it will only exist for a single connection/
-        /// session. Otherwise, this value will be None.
-        conn_id: Option<u32>,
         /// whether we should auto-materialize the view
         materialize: bool,
         if_not_exists: bool,
@@ -161,6 +158,7 @@ pub struct View {
     pub create_sql: String,
     pub expr: ::expr::RelationExpr,
     pub desc: RelationDesc,
+    pub temporary: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -609,7 +609,6 @@ where
                 name,
                 view,
                 replace,
-                conn_id,
                 materialize,
                 if_not_exists,
             } => tx.send(
@@ -618,7 +617,7 @@ where
                     name,
                     view,
                     replace,
-                    conn_id,
+                    session.conn_id(),
                     materialize,
                     if_not_exists,
                 ),
@@ -952,7 +951,7 @@ where
         name: FullName,
         view: sql::View,
         replace: Option<GlobalId>,
-        conn_id: Option<u32>,
+        conn_id: u32,
         materialize: bool,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, failure::Error> {
@@ -972,7 +971,7 @@ where
             plan_cx: pcx,
             optimized_expr,
             desc,
-            conn_id,
+            conn_id: if view.temporary { Some(conn_id) } else { None },
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2480,7 +2479,6 @@ fn open_catalog(
                         name: _,
                         view,
                         replace,
-                        conn_id,
                         materialize,
                         if_not_exists,
                     }) => {
@@ -2500,7 +2498,7 @@ fn open_catalog(
                             plan_cx: pcx,
                             optimized_expr,
                             desc,
-                            conn_id,
+                            conn_id: None,
                         };
                         let view_name = FullName {
                             database: DatabaseSpecifier::Ambient,
