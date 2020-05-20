@@ -815,7 +815,7 @@ fn downgrade_capability(
                 let last_offset = cp_info.partition_metadata[pid as usize].offset;
 
                 // Check whether timestamps can be closed on this partition
-                while let Some((partition_count, ts, offset)) = entries.first() {
+                while let Some((partition_count, ts, offset)) = entries.front() {
                     assert!(
                         *offset >= cp_info.start_offset,
                         "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
@@ -852,7 +852,7 @@ fn downgrade_capability(
                         // partition. We
                         // can close the timestamp (on this partition) and remove the associated metadata
                         cp_info.partition_metadata[pid as usize].ts = *ts;
-                        entries.remove(0);
+                        entries.pop_front();
                         changed = true;
                     } else {
                         // Offset isn't at a timestamp boundary, we take no action

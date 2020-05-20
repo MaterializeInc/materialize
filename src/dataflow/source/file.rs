@@ -232,12 +232,12 @@ fn downgrade_capability(
             // one entry here
             for entries in entries.values_mut() {
                 // Check whether timestamps can be closed on this partition
-                while let Some((_, ts, offset)) = entries.first() {
+                while let Some((_, ts, offset)) = entries.front() {
                     if *last_processed_offset == *offset {
                         // We have now seen all messages corresponding to this timestamp.  We
                         // can close the timestamp and remove the associated metadata.
                         *last_closed_ts = *ts;
-                        entries.remove(0);
+                        entries.pop_front();
                         changed = true;
                     } else {
                         // Offset isn't at a timestamp boundary, we take no action

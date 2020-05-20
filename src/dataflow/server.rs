@@ -12,6 +12,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::net::TcpStream;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -276,7 +277,7 @@ pub type TimestampUpdate = (PartitionCount, Timestamp, MzOffset);
 /// where the correct timestamp for a given offset `x` is the highest timestamp value for
 /// the first offset >= `x`.
 pub type TimestampHistories =
-    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, Vec<TimestampUpdate>>>>>;
+    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, VecDeque<TimestampUpdate>>>>>;
 
 /// List of sources that need to start being timestamped or have been dropped and no longer require
 /// timestamping.
@@ -742,9 +743,9 @@ where
             } => {
                 let mut timestamps = self.ts_histories.borrow_mut();
                 if let Some(entries) = timestamps.get_mut(&id) {
-                    let ts = entries.entry(pid).or_insert_with(Vec::new);
+                    let ts = entries.entry(pid).or_insert_with(VecDeque::new);
                     let (_, last_ts, last_offset) =
-                        ts.last().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
+                        ts.back().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
                     assert!(
                         offset >= *last_offset,
                         "offset should not go backwards, but {} < {}",
@@ -757,7 +758,7 @@ where
                         timestamp,
                         last_ts
                     );
-                    ts.push((partition_count, timestamp, offset));
+                    ts.push_back((partition_count, timestamp, offset));
                     let source = self
                         .ts_source_mapping
                         .get(&id)
