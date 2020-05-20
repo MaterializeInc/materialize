@@ -167,7 +167,6 @@ lazy_static! {
 
 pub struct TimestampConfig {
     pub frequency: Duration,
-    pub max_size: i64,
     pub persist_ts: bool,
 }
 
@@ -184,6 +183,7 @@ struct RtTimestampConsumer {
     connector: RtTimestampConnector,
     last_partition_offset: HashMap<PartitionId, MzOffset>,
     start_offset: MzOffset,
+    max_ts_batch: i64,
 }
 
 enum RtTimestampConnector {
@@ -229,6 +229,8 @@ struct ByoTimestampConsumer {
     last_offset: MzOffset,
     /// The total number of partitions for the data topic
     current_partition_count: i32,
+    /// This is the maximum number of timestamp updates that we process in one run
+    max_ts_batch: i64,
 }
 
 impl ByoTimestampConsumer {
@@ -373,10 +375,7 @@ struct ByoFileConnector<Out, Err> {
     stream: Receiver<Result<Out, Err>>,
 }
 
-fn byo_query_source(
-    consumer: &mut ByoTimestampConsumer,
-    max_increment_size: i64,
-) -> Vec<ValueEncoding> {
+fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> Vec<ValueEncoding> {
     let mut messages = vec![];
     let mut msg_count = 0;
     match &mut consumer.connector {
@@ -386,7 +385,7 @@ fn byo_query_source(
             while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer) {
                 messages.push(ValueEncoding::Bytes(payload));
                 msg_count += 1;
-                if msg_count == max_increment_size {
+                if msg_count == consumer.max_ts_batch {
                     // Make sure to bound the number of timestamp updates we have at once,
                     // to avoid overflowing the system
                     break;
@@ -400,7 +399,7 @@ fn byo_query_source(
             while let Some(payload) = file_get_next_message(file_consumer) {
                 messages.push(ValueEncoding::Bytes(payload));
                 msg_count += 1;
-                if msg_count == max_increment_size {
+                if msg_count == consumer.max_ts_batch {
                     // Make sure to bound the number of timestamp updates we have at once,
                     // to avoid overflowing the system
                     break;
@@ -411,7 +410,7 @@ fn byo_query_source(
             while let Some(payload) = file_get_next_message(file_consumer) {
                 messages.push(ValueEncoding::Avro(payload));
                 msg_count += 1;
-                if msg_count == max_increment_size {
+                if msg_count == consumer.max_ts_batch {
                     // Make sure to bound the number of timestamp updates we have at once,
                     // to avoid overflowing the system
                     break;
@@ -548,28 +547,25 @@ fn get_kafka_partitions(consumer: &BaseConsumer, topic: &str) -> Result<Vec<i32>
 }
 
 pub struct Timestamper {
-    // Current list of up to date sources that use a real time consistency model
+    /// Current list of up to date sources that use a real time consistency model
     rt_sources: HashMap<SourceInstanceId, RtTimestampConsumer>,
 
-    // Current list of up to date sources that use a BYO consistency model
+    /// Current list of up to date sources that use a BYO consistency model
     byo_sources: HashMap<SourceInstanceId, ByoTimestampConsumer>,
 
-    // Connection to the underlying SQL lite instance
+    /// Connection to the underlying SQL lite instance
     storage: Arc<Mutex<crate::catalog::sql::Connection>>,
 
     tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
     rx: std::sync::mpsc::Receiver<TimestampMessage>,
 
-    // Last Timestamp (necessary because not necessarily increasing otherwise)
+    /// Last Timestamp (necessary because not necessarily increasing otherwise)
     current_timestamp: u64,
 
-    // Frequency at which thread should run
+    /// Frequency at which thread should run
     timestamp_frequency: Duration,
 
-    // Max increment size
-    max_increment_size: i64,
-
-    // Persist consistency information
+    /// Persist consistency information
     persist_ts: bool,
 }
 
@@ -693,8 +689,11 @@ fn determine_next_offset(
     // The max size of the batch
     max_increment_size: i64,
 ) -> MzOffset {
-    // Bound the next timestamp to be no more than max_increment_size in the future
-    if (current_max_kafka_offset.offset - last_processed_offset.offset) > max_increment_size {
+    // If bounding batches is activated (aka, max_increment_size > 0), then
+    // bound the next timestamp to be no more than max_increment_size in the future
+    if max_increment_size > 0
+        && ((current_max_kafka_offset.offset - last_processed_offset.offset) > max_increment_size)
+    {
         MzOffset {
             offset: (last_processed_offset.offset + max_increment_size),
         }
@@ -814,7 +813,6 @@ impl Timestamper {
             rx,
             current_timestamp: max_ts,
             timestamp_frequency: config.frequency,
-            max_increment_size: config.max_size,
             persist_ts: config.persist_ts,
         }
     }
@@ -874,14 +872,15 @@ impl Timestamper {
             // time we update
             match update {
                 TimestampMessage::Add(id, sc) => {
-                    let (sc, enc, env, cons) = if let SourceConnector::External {
+                    let (sc, enc, env, cons, max_ts_batch) = if let SourceConnector::External {
                         connector,
                         encoding,
                         envelope,
                         consistency,
+                        max_ts_batch,
                     } = sc
                     {
-                        (connector, encoding, envelope, consistency)
+                        (connector, encoding, envelope, consistency, max_ts_batch)
                     } else {
                         panic!("A Local Source should never be timestamped");
                     };
@@ -889,7 +888,7 @@ impl Timestamper {
                         // Did not know about source, must update
                         match cons {
                             Consistency::RealTime => {
-                                info!("Timestamping Source {} with Real Time Consistency.", id);
+                                info!("Timestamping Source {} with Real Time Consistency. Max Timestamp Batch {}", id, max_ts_batch);
                                 let start_offset = match sc {
                                     ExternalSourceConnector::Kafka(KafkaSourceConnector {
                                         start_offset,
@@ -920,16 +919,27 @@ impl Timestamper {
                                 } else {
                                     HashMap::new()
                                 };
-                                let consumer =
-                                    self.create_rt_connector(id, sc, last_offsets, start_offset);
+                                let consumer = self.create_rt_connector(
+                                    id,
+                                    sc,
+                                    last_offsets,
+                                    start_offset,
+                                    max_ts_batch,
+                                );
                                 if let Some(consumer) = consumer {
                                     self.rt_sources.insert(id, consumer);
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}", id, consistency_topic);
-                                let consumer =
-                                    self.create_byo_connector(id, sc, enc, env, consistency_topic);
+                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}. Max Timestamp Batch: {}", id, consistency_topic, max_ts_batch);
+                                let consumer = self.create_byo_connector(
+                                    id,
+                                    sc,
+                                    enc,
+                                    env,
+                                    consistency_topic,
+                                    max_ts_batch,
+                                );
                                 if let Some(consumer) = consumer {
                                     self.byo_sources.insert(id, consumer);
                                 }
@@ -968,7 +978,7 @@ impl Timestamper {
     fn update_byo_timestamp(&mut self) {
         for (id, byo_consumer) in &mut self.byo_sources {
             // Get the next set of messages from the Consistency topic
-            let messages = byo_query_source(byo_consumer, self.max_increment_size);
+            let messages = byo_query_source(byo_consumer);
             match byo_consumer.envelope {
                 ConsistencyFormatting::ByoBytes => {
                     for (partition_count, partition, timestamp, offset) in
@@ -1221,6 +1231,7 @@ impl Timestamper {
         sc: ExternalSourceConnector,
         last_partition_offset: HashMap<PartitionId, MzOffset>,
         start_offset: MzOffset,
+        max_ts_batch: i64,
     ) -> Option<RtTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
@@ -1229,28 +1240,31 @@ impl Timestamper {
                         connector: RtTimestampConnector::Kafka(connector),
                         last_partition_offset,
                         start_offset,
+                        max_ts_batch,
                     })
             }
             ExternalSourceConnector::File(fc) => {
                 if start_offset.offset > 0 {
                     warn!("Start Offset is not supported for file sources. Ignoring");
                 }
-                self.create_rt_file_connector(id, fc)
+                self.create_rt_file_connector(id, fc, max_ts_batch)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::File(connector),
                         last_partition_offset,
                         start_offset: MzOffset { offset: 0 },
+                        max_ts_batch,
                     })
             }
             ExternalSourceConnector::AvroOcf(fc) => {
                 if start_offset.offset > 0 {
                     warn!("Start Offset is not supported for Avro OCF sources. Ignoring");
                 }
-                self.create_rt_ocf_connector(id, fc)
+                self.create_rt_ocf_connector(id, fc, max_ts_batch)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Ocf(connector),
                         last_partition_offset,
                         start_offset: MzOffset { offset: 0 },
+                        max_ts_batch,
                     })
             }
             ExternalSourceConnector::Kinesis(kinc) => {
@@ -1262,6 +1276,7 @@ impl Timestamper {
                         connector: RtTimestampConnector::Kinesis(connector),
                         last_partition_offset,
                         start_offset: MzOffset { offset: 0 },
+                        max_ts_batch,
                     })
             }
         }
@@ -1272,9 +1287,14 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
+        max_ts_batch: i64,
     ) -> Option<ByoFileConnector<std::vec::Vec<u8>, failure::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
-        let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
+        let (tx, rx) = if max_ts_batch > 0 {
+            std::sync::mpsc::sync_channel(max_ts_batch as usize)
+        } else {
+            std::sync::mpsc::sync_channel(10000)
+        };
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
         } else {
@@ -1357,9 +1377,14 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         fc: FileSourceConnector,
+        max_ts_batch: i64,
     ) -> Option<RtFileConnector<avro::types::Value, failure::Error>> {
         let ctor = move |file| avro::Reader::new(file);
-        let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
+        let (tx, rx) = if max_ts_batch > 0 {
+            std::sync::mpsc::sync_channel(max_ts_batch as usize)
+        } else {
+            std::sync::mpsc::sync_channel(10000)
+        };
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
         } else {
@@ -1376,9 +1401,14 @@ impl Timestamper {
         &self,
         _id: SourceInstanceId,
         fc: FileSourceConnector,
+        max_ts_batch: i64,
     ) -> Option<RtFileConnector<std::vec::Vec<u8>, failure::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
-        let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
+        let (tx, rx) = if max_ts_batch > 0 {
+            std::sync::mpsc::sync_channel(max_ts_batch as usize)
+        } else {
+            std::sync::mpsc::sync_channel(10000)
+        };
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd
         } else {
@@ -1396,6 +1426,7 @@ impl Timestamper {
         _id: SourceInstanceId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
+        max_ts_batch: i64,
     ) -> Option<ByoFileConnector<avro::types::Value, failure::Error>> {
         let ctor = move |file| avro::Reader::new(file);
         let tail = if fc.tail {
@@ -1403,7 +1434,11 @@ impl Timestamper {
         } else {
             FileReadStyle::ReadOnce
         };
-        let (tx, rx) = std::sync::mpsc::sync_channel(self.max_increment_size as usize);
+        let (tx, rx) = if max_ts_batch > 0 {
+            std::sync::mpsc::sync_channel(max_ts_batch as usize)
+        } else {
+            std::sync::mpsc::sync_channel(10000 as usize)
+        };
         std::thread::spawn(move || {
             read_file_task(PathBuf::from(timestamp_topic), tx, None, tail, ctor);
         });
@@ -1419,6 +1454,7 @@ impl Timestamper {
         enc: DataEncoding,
         env: Envelope,
         timestamp_topic: String,
+        max_ts_batch: i64,
     ) -> Option<ByoTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
@@ -1432,13 +1468,14 @@ impl Timestamper {
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
                         current_partition_count: 1,
+                        max_ts_batch,
                         last_offset: MzOffset { offset: 0 },
                     }),
                     None => None,
                 }
             }
             ExternalSourceConnector::File(fc) => {
-                match self.create_byo_file_connector(id, &fc, timestamp_topic) {
+                match self.create_byo_file_connector(id, &fc, timestamp_topic, max_ts_batch) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
                         source_id: id,
@@ -1446,6 +1483,7 @@ impl Timestamper {
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
+                        max_ts_batch,
                         current_partition_count: 1,
                         last_offset: MzOffset { offset: 0 },
                     }),
@@ -1453,7 +1491,7 @@ impl Timestamper {
                 }
             }
             ExternalSourceConnector::AvroOcf(fc) => {
-                match self.create_byo_ocf_connector(id, &fc, timestamp_topic) {
+                match self.create_byo_ocf_connector(id, &fc, timestamp_topic, max_ts_batch) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
                         source_id: id,
@@ -1461,6 +1499,7 @@ impl Timestamper {
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
+                        max_ts_batch,
                         current_partition_count: 1,
                         last_offset: MzOffset { offset: 0 },
                     }),
@@ -1477,6 +1516,7 @@ impl Timestamper {
                         last_partition_ts: HashMap::new(),
                         last_ts: 0,
                         current_partition_count: 1,
+                        max_ts_batch,
                         last_offset: MzOffset { offset: 0 },
                     }),
                     None => None,
@@ -1656,7 +1696,7 @@ impl Timestamper {
                                 *current_p_offset = determine_next_offset(
                                     *current_p_offset,
                                     current_max_kafka_offset.into(),
-                                    self.max_increment_size,
+                                    cons.max_ts_batch,
                                 );
                                 result.push((
                                     *id,
@@ -1688,7 +1728,7 @@ impl Timestamper {
                         .last_partition_offset
                         .entry(PartitionId::File)
                         .or_insert(cons.start_offset);
-                    while count < self.max_increment_size {
+                    while cons.max_ts_batch == 0 || count < cons.max_ts_batch {
                         match fc.stream.try_recv() {
                             Ok(Ok(_)) => {
                                 count += 1;
@@ -1710,7 +1750,7 @@ impl Timestamper {
                         .entry(PartitionId::File)
                         .or_insert(cons.start_offset);
                     let mut count = 0;
-                    while count < self.max_increment_size {
+                    while cons.max_ts_batch == 0 || count < cons.max_ts_batch {
                         match fc.stream.try_recv() {
                             Ok(Ok(_)) => {
                                 count += 1;

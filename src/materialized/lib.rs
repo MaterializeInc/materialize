@@ -255,7 +255,6 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             data_directory: config.data_directory.as_deref(),
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,
-                max_size: config.max_increment_ts_size,
                 persist_ts: config.persist_ts,
             },
             logical_compaction_window: config.logical_compaction_window,

@@ -59,7 +59,7 @@ $ avro-ocf-write path=data2.ocf schema=${schema}
 {"a": 1, "b": 1}
 {"a": 2, "b": 2}
 
-> CREATE MATERIALIZED SOURCE data_byo FROM AVRO OCF '${testdrive.temp-dir}/data.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf', tail=true)
+> CREATE MATERIALIZED SOURCE data_byo FROM AVRO OCF '${testdrive.temp-dir}/data.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf', tail=true , max_ts_batch=2)
 
 > CREATE MATERIALIZED SOURCE data_byo2 FROM AVRO OCF '${testdrive.temp-dir}/data2.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf')
 
