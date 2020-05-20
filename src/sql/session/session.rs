@@ -441,9 +441,6 @@ pub trait PlanSession: fmt::Debug {
 
     /// Constructs an owned version of this `PlanSession`.
     fn to_owned(&self) -> Box<dyn PlanSession + Send>;
-
-    /// Returns the connection id of the session.
-    fn conn_id(&self) -> Option<u32>;
 }
 
 impl PlanSession for Session {
@@ -459,12 +456,7 @@ impl PlanSession for Session {
         Box::new(OwnedPlanSession {
             database: self.database(),
             search_path: self.search_path.value,
-            conn_id: self.conn_id,
         })
-    }
-
-    fn conn_id(&self) -> Option<u32> {
-        Some(self.conn_id)
     }
 }
 
@@ -472,7 +464,6 @@ impl PlanSession for Session {
 pub struct OwnedPlanSession {
     database: DatabaseSpecifier,
     search_path: &'static [&'static str],
-    conn_id: u32,
 }
 
 impl PlanSession for OwnedPlanSession {
@@ -486,10 +477,6 @@ impl PlanSession for OwnedPlanSession {
 
     fn to_owned(&self) -> Box<dyn PlanSession + Send> {
         Box::new(self.clone())
-    }
-
-    fn conn_id(&self) -> Option<u32> {
-        Some(self.conn_id)
     }
 }
 
@@ -510,9 +497,5 @@ impl PlanSession for InternalSession {
 
     fn to_owned(&self) -> Box<dyn PlanSession + Send> {
         Box::new(self.clone())
-    }
-
-    fn conn_id(&self) -> Option<u32> {
-        None
     }
 }

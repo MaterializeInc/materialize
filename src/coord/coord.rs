@@ -52,7 +52,7 @@ use sql::{
 use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
-use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, ConnCatalog, SinkConnectorState};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
@@ -385,10 +385,15 @@ where
                     tx,
                     result,
                     params,
-                } => match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
-                    Ok((pcx, plan)) => self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan),
-                    Err(e) => tx.send(Err(e), session),
-                },
+                } => {
+                    // do something here.
+                    match result.and_then(|stmt| self.handle_statement(&session, stmt, &params)) {
+                        Ok((pcx, plan)) => {
+                            self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
+                        }
+                        Err(e) => tx.send(Err(e), session),
+                    }
+                }
 
                 Message::SinkConnectorReady {
                     session,
@@ -426,6 +431,7 @@ where
                     mut session,
                     tx,
                 }) => {
+                    // do something here.
                     let result = self.handle_describe(&mut session, name, stmt);
                     let _ = tx.send(Response { result, session });
                 }
@@ -2199,7 +2205,13 @@ where
         params: &sql::Params,
     ) -> Result<(PlanContext, sql::Plan), failure::Error> {
         let pcx = PlanContext::default();
-        match sql::plan(&pcx, &self.catalog, session, stmt.clone(), params) {
+        match sql::plan(
+            &pcx,
+            &ConnCatalog::new(&self.catalog, session.conn_id()),
+            session,
+            stmt.clone(),
+            params,
+        ) {
             Ok(plan) => Ok((pcx, plan)),
             Err(err) => match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
@@ -2218,7 +2230,11 @@ where
         stmt: Option<Statement>,
     ) -> Result<(), failure::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
-            match sql::describe(&self.catalog, session, stmt.clone()) {
+            match sql::describe(
+                &ConnCatalog::new(&self.catalog, session.conn_id()),
+                session,
+                stmt.clone(),
+            ) {
                 Ok((desc, param_types)) => (desc, param_types),
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres

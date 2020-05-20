@@ -47,7 +47,7 @@ non-temporary items cannot depend on temporary item
 3 "foo"
 
 #####################################################################
-Test things we shouldn't be able to make temporary.
+# Test things we shouldn't be able to make temporary.
 
 ##### Temporary materialized views.
 ! CREATE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v;

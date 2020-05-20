@@ -942,13 +942,13 @@ fn handle_create_view(
             desc,
         },
         replace,
-        materialize,
-        if_not_exists,
         conn_id: if *temporary {
-            scx.session.conn_id()
+            scx.catalog.conn_id()
         } else {
             None
         },
+        materialize,
+        if_not_exists,
     })
 }
 
@@ -1810,23 +1810,17 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
-        Ok(self
-            .catalog
-            .get_with_conn_id(name, self.session.conn_id())?)
+        Ok(self.catalog.get(name)?)
     }
 
     pub fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
-        self.catalog
-            .get_schemas(database_spec, self.session.conn_id())
+        self.catalog.get_schemas(database_spec)
     }
 
     pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
         let name = normalize::object_name(name)?;
-        Ok(self.catalog.resolve(
-            self.session.database(),
-            self.session.search_path(),
-            &name,
-            self.session.conn_id(),
-        )?)
+        Ok(self
+            .catalog
+            .resolve(self.session.database(), self.session.search_path(), &name)?)
     }
 }
