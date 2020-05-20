@@ -2422,7 +2422,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#abe40499265a0ed0242a10924e4946eb7b3634f4"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#a1e3690bcb0899826898bfbdc960a4f4b317165e"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -2436,7 +2436,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#abe40499265a0ed0242a10924e4946eb7b3634f4"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#a1e3690bcb0899826898bfbdc960a4f4b317165e"
 dependencies = [
  "lazy_static",
  "proc-macro2",

@@ -16,8 +16,9 @@ use std::time::Duration;
 use lazy_static::lazy_static;
 use log::{error, info, log_enabled, warn};
 use prometheus::{
-    register_int_counter, register_int_counter_vec, register_int_gauge_vec, IntCounter,
-    IntCounterVec, IntGaugeVec,
+    register_int_counter, register_int_counter_vec, register_int_gauge_vec,
+    register_uint_gauge_vec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, UIntGauge,
+    UIntGaugeVec,
 };
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
@@ -37,55 +38,98 @@ use super::util::source;
 use super::{SourceConfig, SourceStatus, SourceToken};
 use crate::server::TimestampHistories;
 
+// Global Kafka metrics.
 lazy_static! {
-    static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
+    static ref KAFKA_BYTES_READ_COUNTER: IntCounter = register_int_counter!(
         "mz_kafka_bytes_read_total",
         "Count of kafka bytes we have read from the wire"
     )
     .unwrap();
-    static ref KAFKA_PARTITION_OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kafka_partition_offset_ingested",
-        "The most recent kafka offset that we have ingested into a dataflow. This correspond to \
-        data that we have 1)ingested 2) assigned a timestamp",
-        &["topic", "source_id", "partition_id"]
-    )
-    .unwrap();
-    static ref KAFKA_PARTITION_OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kafka_partition_offset_received",
-        "The most recent kafka offset that we have been received by this source.",
-        &["topic", "source_id", "partition_id"]
-    )
-    .unwrap();
-    static ref KAFKA_PARTITION_CLOSED_TS: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kafka_partition_closed_ts",
-        "The highest closed timestamp for each partition in this dataflow",
-        &["topic", "source_id", "partition_id"]
-    )
-    .unwrap();
-    static ref KAFKA_CAPABILITY: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kafka_capability",
-        "The current capability for this dataflow. This corresponds to min(mz_kafka_partition_closed_ts)",
-        &["topic", "source_id"]
-    )
-    .unwrap();
-    static ref KAFKA_PARTITION_MESSAGE_INGESTED: IntCounterVec = register_int_counter_vec!(
-        "mz_kafka_messages_ingested",
-        "The number of messages ingested per partition.",
-        &["topic", "source_id", "partition_id"]
-    )
-    .unwrap();
-    static ref KAFKA_SOURCE_OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "mz_kafka_source_operator_scheduled_total",
-        "The number of times the kafka client got invoked for this source",
-        &["topic", "source_id"]
-    )
-    .unwrap();
-    static ref KAFKA_METADATA_REFRESH_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "mz_kafka_metadata_refresh_total",
-        "The number of times the kafka client had to refresh metadata for this source",
-        &["topic", "source_id"]
-    )
-    .unwrap();
+}
+
+/// Per-Kafka source metrics.
+pub struct SourceMetrics {
+    operator_scheduled_counter: IntCounter,
+    metadata_refresh_counter: IntCounter,
+    capability: UIntGauge,
+}
+
+impl SourceMetrics {
+    fn new(topic_name: &str, source_id: &str) -> SourceMetrics {
+        lazy_static! {
+            static ref OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
+                "mz_operator_scheduled_total",
+                "The number of times the kafka client got invoked for this source",
+                &["topic", "source_id"]
+            )
+            .unwrap();
+            static ref METADATA_REFRESH_COUNTER: IntCounterVec = register_int_counter_vec!(
+                "mz_kafka_metadata_refresh_total",
+                "The number of times the kafka client had to refresh metadata for this source",
+                &["topic", "source_id"]
+            )
+            .unwrap();
+            static ref CAPABILITY: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_kafka_capability",
+                "The current capability for this dataflow. This corresponds to min(mz_kafka_partition_closed_ts)",
+                &["topic", "source_id"]
+            )
+            .unwrap();
+        }
+        let labels = &[topic_name, source_id];
+        SourceMetrics {
+            operator_scheduled_counter: OPERATOR_SCHEDULED_COUNTER.with_label_values(labels),
+            metadata_refresh_counter: METADATA_REFRESH_COUNTER.with_label_values(labels),
+            capability: CAPABILITY.with_label_values(labels),
+        }
+    }
+}
+
+/// Per-Kafka source partition metrics.
+pub struct PartitionMetrics {
+    offset_ingested: IntGauge,
+    offset_received: IntGauge,
+    closed_ts: UIntGauge,
+    messages_ingested: IntCounter,
+}
+
+impl PartitionMetrics {
+    fn new(topic_name: &str, source_id: &str, partition_id: &str) -> PartitionMetrics {
+        lazy_static! {
+            static ref OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
+                "mz_kafka_partition_offset_ingested",
+                "The most recent kafka offset that we have ingested into a dataflow. This correspond to \
+                data that we have 1)ingested 2) assigned a timestamp",
+                &["topic", "source_id", "partition_id"]
+            )
+            .unwrap();
+            static ref OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
+                "mz_kafka_partition_offset_received",
+                "The most recent kafka offset that we have been received by this source.",
+                &["topic", "source_id", "partition_id"]
+            )
+            .unwrap();
+            static ref CLOSED_TS: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_kafka_partition_closed_ts",
+                "The highest closed timestamp for each partition in this dataflow",
+                &["topic", "source_id", "partition_id"]
+            )
+            .unwrap();
+            static ref MESSAGES_INGESTED: IntCounterVec = register_int_counter_vec!(
+                "mz_kafka_messages_ingested",
+                "The number of messages ingested per partition.",
+                &["topic", "source_id", "partition_id"]
+            )
+            .unwrap();
+        }
+        let labels = &[topic_name, source_id, partition_id];
+        PartitionMetrics {
+            offset_ingested: OFFSET_INGESTED.with_label_values(labels),
+            offset_received: OFFSET_RECEIVED.with_label_values(labels),
+            closed_ts: CLOSED_TS.with_label_values(labels),
+            messages_ingested: MESSAGES_INGESTED.with_label_values(labels),
+        }
+    }
 }
 
 // There is other stuff in librdkafka messages, e.g. headers.
@@ -222,6 +266,10 @@ struct DataPlaneInfo {
     /// Activator shared across consumers. Anytime a consumer receives a new message, the source
     /// will get scheduled.
     consumer_activator: Arc<Mutex<SyncActivator>>,
+    /// Per-source metrics.
+    source_metrics: SourceMetrics,
+    /// Per-partition metrics.
+    partition_metrics: Vec<PartitionMetrics>,
 }
 
 /// Refreshes metadata for a single consumer
@@ -264,10 +312,13 @@ impl DataPlaneInfo {
         kafka_config: ClientConfig,
         consumer_activator: Arc<Mutex<SyncActivator>>,
     ) -> DataPlaneInfo {
+        let source_id = source_id.to_string();
         DataPlaneInfo {
+            source_metrics: SourceMetrics::new(&topic_name, &source_id),
+            partition_metrics: Vec::new(),
             topic_name,
             source_name,
-            source_id: source_id.to_string(),
+            source_id,
             kafka_config,
             consumers: VecDeque::new(),
             needs_refresh: true,
@@ -296,10 +347,7 @@ impl DataPlaneInfo {
                 "Refreshing Source Metadata for Source {} Partition Count: {}",
                 self.source_name, self.expected_partition_count
             );
-
-            KAFKA_METADATA_REFRESH_COUNTER
-                .with_label_values(&[&self.topic_name, &self.source_id])
-                .inc();
+            self.source_metrics.metadata_refresh_counter.inc();
             if self.update_consumer_list() {
                 cp_info.update_partition_metadata(self.expected_partition_count);
                 self.needs_refresh = false;
@@ -356,6 +404,11 @@ impl DataPlaneInfo {
             consumer.assign(&partition_list).unwrap();
             self.consumers
                 .push_front(PartitionConsumer::new(partition_id, consumer));
+            self.partition_metrics.push(PartitionMetrics::new(
+                &self.topic_name,
+                &self.source_id,
+                &partition_id.to_string(),
+            ));
             true
         } else {
             false
@@ -623,9 +676,7 @@ where
                 // Accumulate updates to BYTES_READ_COUNTER;
                 let mut bytes_read = 0;
                 if let Some(mut dp_info) = dp_info.as_mut() {
-                    KAFKA_SOURCE_OPERATOR_SCHEDULED_COUNTER
-                        .with_label_values(&[&dp_info.topic_name, &dp_info.source_id])
-                        .inc();
+                    dp_info.source_metrics.operator_scheduled_counter.inc();
                     // Repeatedly interrogate Kafka for messages. Cease when
                     // Kafka stops returning new data, or after 10 milliseconds.
                     let timer = std::time::Instant::now();
@@ -645,15 +696,10 @@ where
 
                     while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                         let partition = message.partition;
+                        let partition_metrics = &dp_info.partition_metrics[partition as usize];
                         let offset = MzOffset::from(message.offset);
 
-                        KAFKA_PARTITION_OFFSET_RECEIVED
-                            .with_label_values(&[
-                                &dp_info.topic_name,
-                                &dp_info.source_id,
-                                &partition.to_string(),
-                            ])
-                            .set(offset.offset);
+                        partition_metrics.offset_received.set(offset.offset);
 
                         // Determine the timestamp to which we need to assign this message
                         let ts =
@@ -680,21 +726,8 @@ where
                                     (out, Some(Into::<KafkaOffset>::into(offset).offset)),
                                 ));
 
-                                KAFKA_PARTITION_OFFSET_INGESTED
-                                    .with_label_values(&[
-                                        &dp_info.topic_name,
-                                        &dp_info.source_id,
-                                        &partition.to_string(),
-                                    ])
-                                    .set(offset.offset);
-
-                                KAFKA_PARTITION_MESSAGE_INGESTED
-                                    .with_label_values(&[
-                                        &dp_info.topic_name,
-                                        &dp_info.source_id,
-                                        &partition.to_string(),
-                                    ])
-                                    .inc_by(1);
+                                partition_metrics.offset_ingested.set(offset.offset);
+                                partition_metrics.messages_ingested.inc_by(1);
 
                                 downgrade_capability(
                                     &id,
@@ -720,7 +753,7 @@ where
                 // Ensure that we poll kafka more often than the eviction timeout
                 activator.activate_after(Duration::from_secs(60));
                 if bytes_read > 0 {
-                    BYTES_READ_COUNTER.inc_by(bytes_read);
+                    KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                 }
                 SourceStatus::Alive
             }
@@ -835,17 +868,9 @@ fn downgrade_capability(
                         return;
                     }
 
-                    KAFKA_PARTITION_CLOSED_TS
-                        .with_label_values(&[
-                            &dp_info.topic_name,
-                            &dp_info.source_id,
-                            &pid.to_string(),
-                        ])
-                        .set(
-                            (cp_info.partition_metadata[pid as usize].ts)
-                                .try_into()
-                                .unwrap(),
-                        );
+                    dp_info.partition_metrics[pid as usize]
+                        .closed_ts
+                        .set(cp_info.partition_metadata[pid as usize].ts);
 
                     if last_offset >= *offset {
                         // We have now seen all messages corresponding to this timestamp for this
@@ -872,9 +897,7 @@ fn downgrade_capability(
             .expect("There should never be 0 partitions!");
         // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
         if changed && min > 0 {
-            KAFKA_CAPABILITY
-                .with_label_values(&[&dp_info.topic_name, &dp_info.source_id])
-                .set(min.try_into().unwrap());
+            dp_info.source_metrics.capability.set(min);
             cap.downgrade(&(&min + 1));
             cp_info.last_closed_ts = min;
         }
