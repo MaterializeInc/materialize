@@ -133,8 +133,8 @@ RUN set -x && export DEBIAN_FRONTEND=noninteractive \
 
 # Our grafana configuration, doesn't get overwritten by startup.py
 COPY --chown=nobody:nogroup conf/grafana/dashboards/dashboards.yaml /etc/grafana/provisioning/dashboards/
-COPY --chown=nobody:nogroup conf/grafana/dashboards/overview.json /etc/grafana/provisioning/dashboards/
-COPY --chown=nobody:nogroup conf/grafana/datasources/prometheus.yaml /etc/grafana/provisioning/datasources/
+COPY --chown=nobody:nogroup conf/grafana/dashboards/*.json /etc/grafana/provisioning/dashboards/
+COPY --chown=nobody:nogroup conf/grafana/datasources/builtin.yaml /etc/grafana/provisioning/datasources/
 COPY --chown=nobody:nogroup conf/grafana/grafana.ini /etc/grafana/grafana.ini
 
 
@@ -151,6 +151,7 @@ ENTRYPOINT [ "/bin/startup.py" ]
 CMD        [ "--create-pipes", \
         "prometheus=/run/prefixed/prometheus,grafana=/run/prefixed/grafana,sql_prom=/run/prefixed/sql_prom", \
         "/etc/prometheus/prometheus.yml", \
+        "/etc/grafana/provisioning/datasources/builtin.yaml", \
         "/sql_exporter/sql_exporter.yml" ]
 EXPOSE     3000
 VOLUME     [ "/prometheus", "/etc/grafana/provisioning" ]

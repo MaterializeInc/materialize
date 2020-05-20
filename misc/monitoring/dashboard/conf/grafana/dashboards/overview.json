@@ -14,8 +14,8 @@
   },
   "editable": true,
   "gnetId": null,
-  "graphTooltip": 1,
-  "id": 1,
+  "graphTooltip": 0,
+  "id": 2,
   "iteration": 1588902358992,
   "links": [],
   "panels": [
@@ -48,6 +48,12 @@
       },
       "dataFormat": "tsbuckets",
       "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -114,6 +120,12 @@
       "dashes": false,
       "datasource": null,
       "description": "the view of how long things took, from inside pgwire",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -232,6 +244,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -240,6 +259,7 @@
         "x": 0,
         "y": 9
       },
+      "hiddenSeries": false,
       "id": 2,
       "legend": {
         "avg": false,
@@ -321,6 +341,12 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -329,6 +355,7 @@
         "x": 12,
         "y": 9
       },
+      "hiddenSeries": false,
       "id": 41,
       "legend": {
         "avg": false,
@@ -413,6 +440,7 @@
     },
     {
       "collapsed": false,
+      "datasource": null,
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -429,6 +457,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "description": "This shows the top 10 dataflow operators that are introducing lag into the system.\n\nAn operator can introduce lag either because its source is running behind, or because it is doing lots of work.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -437,6 +473,7 @@
         "x": 0,
         "y": 18
       },
+      "hiddenSeries": false,
       "id": 6,
       "legend": {
         "avg": false,
@@ -473,10 +510,10 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Frontier lags",
+      "title": "Dataflow Operator Lag Times",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -491,7 +528,7 @@
         {
           "format": "ms",
           "label": "Lag (from -> to)",
-          "logBase": 2,
+          "logBase": 1,
           "max": null,
           "min": null,
           "show": true
@@ -515,6 +552,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "description": "A worker is the underlying thread of computation in materialized. In general materialized should send similar amounts of work to each worker, and the queue depths should be similar to each other.\n\nIf a queue is growing without bound, or queues are very unbalanced, that could signify a problem.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -523,6 +568,7 @@
         "x": 12,
         "y": 18
       },
+      "hiddenSeries": false,
       "id": 37,
       "legend": {
         "avg": false,
@@ -605,6 +651,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -613,6 +666,7 @@
         "x": 0,
         "y": 26
       },
+      "hiddenSeries": false,
       "id": 10,
       "legend": {
         "avg": false,
@@ -723,6 +777,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -731,6 +792,7 @@
         "x": 12,
         "y": 26
       },
+      "hiddenSeries": false,
       "id": 12,
       "legend": {
         "avg": false,
@@ -822,8 +884,15 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
       "description": "This shows the number of messages that materialize knows it is behind an external source.\n\nFor example, if there are 1,000 messages in kafka and materialized has processed 750, this value will be 250",
-      "fill": 1,
+      "fill": 0,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
@@ -831,15 +900,20 @@
         "x": 0,
         "y": 34
       },
+      "hiddenSeries": false,
       "id": 49,
       "legend": {
+        "alignAsTable": true,
         "avg": false,
-        "current": false,
+        "current": true,
+        "hideEmpty": true,
         "max": false,
         "min": false,
         "show": true,
+        "sort": "current",
+        "sortDesc": true,
         "total": false,
-        "values": false
+        "values": true
       },
       "lines": true,
       "linewidth": 1,
@@ -857,9 +931,10 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mz_kafka_partition_offset_max - mz_kafka_partition_offset_ingested",
+          "expr": "topk(50, mz_kafka_partition_offset_max - mz_kafka_partition_offset_ingested)",
           "hide": false,
-          "legendFormat": "{{topic}} (part={{partition_id}})",
+          "interval": "",
+          "legendFormat": "{{topic}} (source={{source_id}} part={{partition_id}})",
           "refId": "A"
         }
       ],
@@ -870,7 +945,7 @@
       "title": "Messages behind external source",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -909,7 +984,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "description": "Rate at which capabilities are downgraded in the system",
+      "datasource": null,
+      "description": "This is a measure of when we last stated that ingested data was valid for computation.\n\nAll sources that have a rate of 0 are *stalled* and are either not ingesting new data or have no new data to ingest.\n\nInternally, this is the capability, and the underlying measure is what capability we have released.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -918,6 +1000,7 @@
         "x": 12,
         "y": 34
       },
+      "hiddenSeries": false,
       "id": 50,
       "legend": {
         "avg": false,
@@ -954,10 +1037,10 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": " Capability Closing Rate",
+      "title": "Data Acceptance Rate",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 1,
         "value_type": "individual"
       },
       "type": "graph",
@@ -970,7 +1053,7 @@
       },
       "yaxes": [
         {
-          "format": "short",
+          "format": "ms",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -998,6 +1081,12 @@
       "dashes": false,
       "datasource": null,
       "description": "Rate at which data is first received from the Kafka Source",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1086,7 +1175,13 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Rate at which capabilities are downgraded in the system",
+      "description": "The difference between the most-consumed and least-consumed kafka partition, in terms of when we last released messages into the dataflow layer.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1132,10 +1227,10 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Partition Imbalance Amount",
+      "title": "Kafka Partition Imbalance Amount",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -1176,6 +1271,12 @@
       "dashes": false,
       "datasource": null,
       "description": "Difference between allocated timestamps and close timestamps",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1211,7 +1312,8 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "(mz_max_timestamp- ignoring(topic) mz_kafka_partition_closed_ts)",         "interval": "",
+          "expr": "(mz_max_timestamp- ignoring(topic) mz_kafka_partition_closed_ts)",
+          "interval": "",
           "legendFormat": "{{source_id}}-{{partition_id}}",
           "refId": "A"
         }
@@ -1263,6 +1365,13 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
+      "description": "This only applies to kinesis",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1371,6 +1480,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1379,6 +1495,7 @@
         "x": 0,
         "y": 59
       },
+      "hiddenSeries": false,
       "id": 24,
       "legend": {
         "avg": false,
@@ -1456,6 +1573,13 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1464,6 +1588,7 @@
         "x": 12,
         "y": 59
       },
+      "hiddenSeries": false,
       "id": 20,
       "legend": {
         "avg": false,
@@ -1548,6 +1673,14 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "datasource": null,
+      "description": "A batch is a slab of memory, arrangements with a large number of batches have allocated a large number of records, which should be represented in the Arrangement Records panel.\n\nThis shows the top 10 arrangements by number of batches, and should be similar to the Arrangement Records panel.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1556,6 +1689,7 @@
         "x": 0,
         "y": 67
       },
+      "hiddenSeries": false,
       "id": 16,
       "legend": {
         "avg": false,
@@ -1582,7 +1716,8 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mz_perf_arrangements_batches",
+          "expr": "topk(10, mz_perf_arrangements_batches)",
+          "interval": "",
           "legendFormat": "w={{worker}} op={{operator}}",
           "refId": "A"
         }
@@ -1634,7 +1769,13 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "Uncompacted records in each arrangement",
+      "description": "An arrangement is where materialize stores state, records are equivalent to rows in a database or messages in a stream.\n\nThis shows the top 10 arrangements by number of records, and should be similar to the Arrangement Batches panel.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -1643,6 +1784,7 @@
         "x": 12,
         "y": 67
       },
+      "hiddenSeries": false,
       "id": 35,
       "legend": {
         "avg": false,
@@ -1669,7 +1811,8 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mz_perf_arrangement_records",
+          "expr": "topk(10, mz_perf_arrangement_records)",
+          "interval": "",
           "legendFormat": "w={{worker}} op={{operator}} name={{name}}",
           "refId": "A"
         }
@@ -1681,7 +1824,7 @@
       "title": "Arrangement Records",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -1717,11 +1860,13 @@
     }
   ],
   "refresh": "30s",
+  "schemaVersion": 25,
   "style": "dark",
   "tags": [],
   "templating": {
     "list": [
       {
+        "allFormat": "glob",
         "allValue": null,
         "current": {
           "tags": [],
@@ -1792,6 +1937,7 @@
         "useTags": false
       },
       {
+        "allFormat": "glob",
         "allValue": null,
         "current": {
           "selected": false,
@@ -1818,11 +1964,13 @@
         "useTags": false
       },
       {
+        "allFormat": "glob",
         "current": {
           "tags": [],
           "text": "--->",
           "value": "--->"
         },
+        "datasource": null,
         "hide": 0,
         "label": "Build Info",
         "name": "build_info",
@@ -1838,6 +1986,7 @@
         "type": "constant"
       },
       {
+        "allFormat": "glob",
         "allValue": null,
         "current": {
           "text": "2020-05-08T01:36:48Z",
@@ -1847,7 +1996,6 @@
         "definition": "label_values(mz_server_metadata_seconds, build_time)",
         "hide": 0,
         "includeAll": false,
-        "index": -1,
         "label": "Built at",
         "multi": false,
         "name": "built_at",
@@ -1864,6 +2012,7 @@
         "useTags": false
       },
       {
+        "allFormat": "glob",
         "allValue": null,
         "current": {
           "text": "0.2.1-dev",
@@ -1889,6 +2038,7 @@
         "useTags": false
       },
       {
+        "allFormat": "glob",
         "allValue": null,
         "current": {
           "text": "df6a7d5e975afa9779882c7a03bbaba421161194",
@@ -1898,7 +2048,6 @@
         "definition": "label_values(mz_server_metadata_seconds, build_sha)",
         "hide": 0,
         "includeAll": false,
-        "index": -1,
         "label": "Git commit",
         "multi": false,
         "name": "build_sha",
@@ -1922,7 +2071,6 @@
   },
   "timepicker": {
     "refresh_intervals": [
-      "5s",
       "10s",
       "30s",
       "1m",
