@@ -18,11 +18,11 @@ use crate::Datum;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
-use prometheus::{register_int_counter, IntCounter};
+use prometheus::{register_int_gauge, IntGauge};
 use serde::{Deserialize, Serialize};
 
 lazy_static! {
-    static ref BYTES_IN_ROWS: IntCounter = register_int_counter!(
+    static ref BYTES_IN_ROWS: IntGauge = register_int_gauge!(
         "mz_bytes_in_rows",
         "Count of bytes we are using to store row data"
     )
@@ -95,7 +95,7 @@ impl Ord for Row {
 
 impl Drop for Row {
     fn drop(&mut self) {
-        BYTES_IN_ROWS.inc_by((std::mem::size_of_val(&self.data) as i64) * -1);
+        BYTES_IN_ROWS.sub(std::mem::size_of_val(&self.data) as i64);
     }
 }
 
@@ -687,7 +687,7 @@ impl RowPacker {
 
     /// Finish packing and return a `Row`.
     pub fn finish(self) -> Row {
-        BYTES_IN_ROWS.inc_by(self.data.len() as i64);
+        BYTES_IN_ROWS.add(self.data.len() as i64);
         Row {
             // drop excess capacity
             data: self.data.into_boxed_slice(),
@@ -702,7 +702,7 @@ impl RowPacker {
     /// In principle this can reduce the amount of interaction with the
     /// allocator, as opposed to creating new row packers for each row.
     pub fn finish_and_reuse(&mut self) -> Row {
-        BYTES_IN_ROWS.inc_by(self.data.len() as i64);
+        BYTES_IN_ROWS.add(self.data.len() as i64);
         let data = Box::<[u8]>::from(&self.data[..]);
         self.data.clear();
         Row { data }
