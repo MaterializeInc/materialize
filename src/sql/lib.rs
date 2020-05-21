@@ -240,3 +240,13 @@ pub fn describe(
     let types = types.into_iter().map(|t| pgrepr::Type::from(&t)).collect();
     Ok((desc, types))
 }
+
+#[macro_export]
+macro_rules! unsupported {
+    ($feature:expr) => {
+        bail!("{} not yet supported", $feature)
+    };
+    ($issue:expr, $feature:expr) => {
+        bail!("{} not yet supported, see https://github.com/MaterializeInc/materialize/issues/{} for more details", $feature, $issue)
+    };
+}

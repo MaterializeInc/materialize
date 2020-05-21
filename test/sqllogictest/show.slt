@@ -164,7 +164,7 @@ SHOW VIEWS LIKE '%u'
 ----
 u
 
-statement error not supported
+statement error supported
 SHOW VIEWS WHERE "VIEWS" = 'u'
 
 query T
@@ -172,7 +172,7 @@ SHOW SOURCES
 ----
 xyz
 
-statement error not supported
+statement error supported
 SHOW SOURCES WHERE "SOURCES" = 'u'
 
 # SHOW OBJECTS

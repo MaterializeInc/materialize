@@ -48,9 +48,9 @@ use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
     RelationExpr, ScalarExpr, TableFunc, UnaryFunc, VariadicFunc,
 };
-use super::normalize;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 use super::statement::StatementContext;
+use super::{normalize, unsupported};
 use crate::names::PartialName;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
@@ -259,7 +259,7 @@ fn plan_query(
     q: &Query,
 ) -> Result<(RelationExpr, Scope, RowSetFinishing), failure::Error> {
     if !q.ctes.is_empty() {
-        bail!("CTEs are not yet supported");
+        unsupported!(2617, "CTEs");
     }
     let limit = match &q.limit {
         None => None,
@@ -699,11 +699,11 @@ fn plan_table_factor<'a>(
             with_hints,
         } => {
             if !with_hints.is_empty() {
-                bail!("WITH hints are not supported");
+                unsupported!("WITH hints");
             }
             let alias = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
-                    bail!("aliasing columns is not yet supported");
+                    unsupported!(3112, "aliasing columns");
                 }
                 PartialName {
                     database: None,
@@ -744,12 +744,12 @@ fn plan_table_factor<'a>(
             alias,
         } => {
             if *lateral {
-                bail!("LATERAL derived tables are not yet supported");
+                unsupported!(3111, "LATERAL derived tables");
             }
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
             let alias = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
-                    bail!("aliasing columns is not yet supported");
+                    unsupported!(3112, "aliasing columns");
                 }
                 Some(PartialName {
                     database: None,
@@ -1091,8 +1091,8 @@ fn plan_join_operator(
         // The remaining join types are MSSQL-specific. We are unlikely to
         // ever support them. The standard SQL equivalent is LATERAL, which
         // we are not capable of even parsing at the moment.
-        JoinOperator::CrossApply => bail!("CROSS APPLY is not supported"),
-        JoinOperator::OuterApply => bail!("OUTER APPLY is not supported"),
+        JoinOperator::CrossApply => unsupported!("CROSS APPLY"),
+        JoinOperator::OuterApply => unsupported!("OUTER APPLY"),
     }
 }
 
@@ -1543,7 +1543,7 @@ fn plan_expr_returning_name<'a>(
                 };
                 (expr.call_unary(func), None)
             }
-            Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
+            Expr::Collate { .. } => unsupported!("COLLATE"),
             Expr::List(exprs) => {
                 let elem_type_hint = if let Some(ScalarType::List(elem_type_hint)) = type_hint {
                     Some(*elem_type_hint)
@@ -1770,7 +1770,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     assert!(is_aggregate_func(&name));
 
     if sql_func.over.is_some() {
-        bail!("window functions are not yet supported");
+        unsupported!(213, "window functions");
     }
 
     let (mut expr, mut func) = match (name.as_str(), &sql_func.args) {
@@ -2471,12 +2471,12 @@ fn plan_function<'a>(
 
         _ => {
             if is_table_func(&name) {
-                bail!(
-                    "table functions in scalar position are not supported: {}",
-                    ident
-                )
+                unsupported!(
+                    1546,
+                    format!("table function ({}) in scalar position", ident)
+                );
             } else {
-                bail!("unsupported function: {}", ident)
+                unsupported!(ident)
             }
         }
     }
@@ -3073,15 +3073,15 @@ fn plan_json_op(
         (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
 
         // TODO(jamii) these require sql arrays
-        (ContainsAnyFields, _, _) => bail!("Unsupported json operator: {}", op),
-        (ContainsAllFields, _, _) => bail!("Unsupported json operator: {}", op),
+        (ContainsAnyFields, _, _) => unsupported!(op),
+        (ContainsAllFields, _, _) => unsupported!(op),
 
         // TODO(jamii) these require json paths
-        (GetPath, _, _) => bail!("Unsupported json operator: {}", op),
-        (GetPathAsText, _, _) => bail!("Unsupported json operator: {}", op),
-        (DeletePath, _, _) => bail!("Unsupported json operator: {}", op),
-        (ContainsPath, _, _) => bail!("Unsupported json operator: {}", op),
-        (ApplyPathPredicate, _, _) => bail!("Unsupported json operator: {}", op),
+        (GetPath, _, _) => unsupported!(op),
+        (GetPathAsText, _, _) => unsupported!(op),
+        (DeletePath, _, _) => unsupported!(op),
+        (ContainsPath, _, _) => unsupported!(op),
+        (ApplyPathPredicate, _, _) => unsupported!(op),
     })
 }
 
@@ -3224,7 +3224,7 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             }
         }
         Value::SingleQuotedString(s) => (Datum::String(s), ScalarType::String),
-        Value::HexStringLiteral(_) => bail!("x'' string literals are not supported: {}", l),
+        Value::HexStringLiteral(_) => unsupported!(3114, "hex string literals"),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),

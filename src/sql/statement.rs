@@ -42,7 +42,10 @@ use crate::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry, SchemaMap, 
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::query::QueryLifetime;
-use crate::{normalize, query, Index, Params, Plan, PlanContext, PlanSession, Sink, Source, View};
+use crate::{
+    normalize, query, unsupported, Index, Params, Plan, PlanContext, PlanSession, Sink, Source,
+    View,
+};
 use regex::Regex;
 
 use tokio::io::AsyncBufReadExt;
@@ -223,7 +226,7 @@ pub fn describe_statement(
             "CREATE TABLE statements are not supported. \
              Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
         ),
-        _ => bail!("unsupported SQL statement: {:?}", stmt),
+        _ => unsupported!(format!("{:?}", stmt)),
     })
 }
 
@@ -314,7 +317,7 @@ fn handle_set_variable(
     value: SetVariableValue,
 ) -> Result<Plan, failure::Error> {
     if local {
-        bail!("SET LOCAL ... is not supported");
+        unsupported!("SET LOCAL");
     }
     Ok(Plan::SetVariable {
         name: variable.to_string(),
@@ -494,7 +497,7 @@ fn handle_show_objects(
             // fixed by passing down this extra catalog info somehow.
             let like_regex = match filter {
                 Some(ShowStatementFilter::Like(pattern)) => like_pattern::build_regex(&pattern)?,
-                Some(ShowStatementFilter::Where(_)) => bail!("SHOW ... WHERE is not supported"),
+                Some(ShowStatementFilter::Where(_)) => unsupported!("SHOW ... WHERE"),
                 None => like_pattern::build_regex("%")?,
             };
 
@@ -530,7 +533,7 @@ fn handle_show_indexes(
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
     if extended {
-        bail!("SHOW EXTENDED INDEXES is not supported")
+        unsupported!("SHOW EXTENDED INDEXES")
     }
     let from_name = scx.resolve_name(from_name)?;
     let from_entry = scx.get(&from_name)?;
@@ -599,10 +602,10 @@ fn handle_show_columns(
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
     if extended {
-        bail!("SHOW EXTENDED COLUMNS is not supported");
+        unsupported!("SHOW EXTENDED COLUMNS");
     }
     if full {
-        bail!("SHOW FULL COLUMNS is not supported");
+        unsupported!("SHOW FULL COLUMNS");
     }
 
     let arena = RowArena::new();
@@ -687,7 +690,7 @@ fn kafka_sink_builder(
             }
             url.parse()?
         }
-        _ => bail!("only confluent schema registry avro sinks are supported"),
+        _ => unsupported!("non-confluent schema registry avro sinks"),
     };
 
     if !broker.contains(':') {
@@ -773,7 +776,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     );
 
     let connector_builder = match connector {
-        Connector::File { .. } => bail!("file sinks are not yet supported"),
+        Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic } => kafka_sink_builder(
             format,
             with_options,
@@ -782,7 +785,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             from.desc()?.clone(),
             suffix,
         )?,
-        Connector::Kinesis { .. } => bail!("Kinesis sinks are not yet supported"),
+        Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => avro_ocf_sink_builder(format, with_options, path, suffix)?,
     };
 
@@ -898,7 +901,7 @@ fn handle_create_view(
         _ => unreachable!(),
     };
     if !with_options.is_empty() {
-        bail!("WITH options are not yet supported");
+        unsupported!("WITH options");
     }
     let name = if *temporary {
         scx.allocate_temporary_name(normalize::object_name(name.to_owned())?)
@@ -1180,7 +1183,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                             },
                         })
                     }
-                    Format::Json => bail!("JSON sources are not supported yet."),
+                    Format::Json => unsupported!("JSON sources"),
                     Format::Text => DataEncoding::Text,
                 })
             };
@@ -1246,7 +1249,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                                 bail!("Unable to parse stream name from resource path: {}", path);
                             }
                         }
-                        _ => bail!("Unsupported AWS Resource type: {:#?}", arn.resource),
+                        _ => unsupported!(format!("AWS Resource type: {:#?}", arn.resource)),
                     };
 
                     let region: Region = match arn.region {
@@ -1388,11 +1391,11 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                                 }
                             }
                             DataEncoding::Bytes | DataEncoding::Text => {}
-                            _ => bail!("Format for upsert key is not yet supported."),
+                            _ => unsupported!("format for upsert key"),
                         }
                         dataflow_types::Envelope::Upsert(key_encoding)
                     }
-                    _ => bail!("Upsert envelope for non-Kafka sources not supported yet"),
+                    _ => unsupported!("upsert envelope for non-Kafka sources"),
                 },
             };
 
@@ -1402,7 +1405,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         *key_schema = None;
                     }
                     DataEncoding::Bytes | DataEncoding::Text => {}
-                    _ => bail!("Upsert envelope is not yet supported for this format."),
+                    _ => unsupported!("upsert envelope for this format"),
                 }
             }
 
@@ -1464,7 +1467,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 materialized,
             })
         }
-        other => bail!("Unsupported statement: {:?}", other),
+        other => unsupported!(format!("{:?}", other)),
     }
 }
 
@@ -1498,7 +1501,7 @@ fn handle_drop_objects(
         ObjectType::Source | ObjectType::View | ObjectType::Index | ObjectType::Sink => {
             handle_drop_items(scx, object_type, if_exists, names, cascade)
         }
-        _ => bail!("unsupported SQL statement: DROP {}", object_type),
+        _ => unsupported!(format!("DROP {}", object_type)),
     }
 }
 
@@ -1509,7 +1512,7 @@ fn handle_drop_schema(
     cascade: bool,
 ) -> Result<Plan, failure::Error> {
     if names.len() != 1 {
-        bail!("DROP SCHEMA with multiple schemas is not yet supported");
+        unsupported!("DROP SCHEMA with multiple schemas");
     }
     let mut name = names.into_element();
     let schema_name = normalize::ident(name.0.pop().unwrap());
