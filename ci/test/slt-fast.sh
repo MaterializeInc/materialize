@@ -133,7 +133,7 @@ tests=(
     test/sqllogictest/cockroach/srfs.slt
     # test/sqllogictest/cockroach/statement_source.slt
     # test/sqllogictest/cockroach/suboperators.slt
-    # test/sqllogictest/cockroach/subquery_correlated.slt
+    test/sqllogictest/cockroach/subquery_correlated.slt
     # test/sqllogictest/cockroach/subquery-opt.slt
     # test/sqllogictest/cockroach/subquery.slt
     test/sqllogictest/cockroach/table.slt

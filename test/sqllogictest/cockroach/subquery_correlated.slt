@@ -224,19 +224,20 @@ SELECT * FROM c WHERE bill = ANY(SELECT ship FROM o) OR bill IS NULL;
 4  TX
 5  NULL
 
-# Test NULL IN case. Use IS NOT NULL to prevent normalize ANY into EXISTS.
-query IT rowsort
-SELECT * FROM c WHERE (NULL::text IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
-----
-3  MA
-5  NULL
-
+# TODO(justin): #3099
+# # Test NULL IN case. Use IS NOT NULL to prevent normalize ANY into EXISTS.
+# query IT rowsort
+# SELECT * FROM c WHERE (NULL::text IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
+# ----
+# 3  MA
+# 5  NULL
+#
 # Test NULL NOT IN case. Use IS NOT NULL to prevent normalize ANY into EXISTS.
-query IT rowsort
-SELECT * FROM c WHERE (NULL::text NOT IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
-----
-3  MA
-5  NULL
+# query IT rowsort
+# SELECT * FROM c WHERE (NULL::text NOT IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
+# ----
+# 3  MA
+# 5  NULL
 
 # Customers where it is unknown whether a replaced bill state is one of the ship
 # states. This tests a more complex scalar expression as argument to IN.
@@ -367,19 +368,9 @@ WHERE EXISTS
 2  TX
 4  TX
 
-# Customers with each of their orders numbered.
-query II rowsort
+# #1546
+statement error not supported
 SELECT c_id, generate_series(1, (SELECT count(*) FROM o WHERE o.c_id=c.c_id)) FROM c
-----
-1  1
-1  2
-1  3
-2  1
-2  2
-2  3
-4  1
-4  2
-6  1
 
 # Customers that have no orders with a NULL ship state.
 query IT rowsort
@@ -872,82 +863,39 @@ ORDER BY c_id
 5  NULL
 6  false
 
-query T
-SELECT (SELECT concat_agg(ship || ' ')
-  FROM
-  (SELECT c_id AS o_c_id, ship FROM o ORDER BY ship)
-  WHERE o_c_id=c.c_id)
-FROM c ORDER BY c_id
-----
-CA CA CA
-CA TX
-NULL
-WY
-NULL
-WA
-
-query T
+# #3110
+statement error supported
 SELECT (SELECT string_agg(ship, ', ')
   FROM
   (SELECT c_id AS o_c_id, ship FROM o ORDER BY ship)
   WHERE o_c_id=c.c_id)
 FROM c ORDER BY c_id
-----
-CA, CA, CA
-CA, TX
-NULL
-WY
-NULL
-WA
 
-query T
+# #3110
+statement error supported
 SELECT (SELECT string_agg(DISTINCT ship, ', ')
   FROM
   (SELECT c_id AS o_c_id, ship FROM o ORDER BY ship)
   WHERE o_c_id=c.c_id)
 FROM c ORDER BY c_id
-----
-CA
-CA, TX
-NULL
-WY
-NULL
-WA
 
-query ITI colnames
+# #3111
+statement error supported
 SELECT
     *
 FROM
     (SELECT c_id AS c_c_id, bill FROM c),
     LATERAL (SELECT row_number() OVER () AS rownum FROM o WHERE c_id = c_c_id)
 ORDER BY c_c_id, bill, rownum
-----
-c_c_id  bill  rownum
-1       CA    1
-1       CA    2
-1       CA    3
-2       TX    1
-2       TX    2
-2       TX    3
-4       TX    1
-4       TX    2
-6       FL    1
 
-query TI colnames,rowsort
+# #3111
+statement error supported
 SELECT
     *
 FROM
     (SELECT bill FROM c),
     LATERAL (SELECT row_number() OVER (PARTITION BY bill) AS rownum FROM o WHERE ship = bill)
 ORDER BY bill, rownum
-----
-bill  rownum
-CA    1
-CA    2
-CA    3
-CA    4
-TX    1
-TX    1
 
 # ------------------------------------------------------------------------------
 # Subqueries in other interesting locations.
@@ -960,20 +908,17 @@ SELECT
     count(*) AS cust_cnt
 FROM c
 GROUP BY (SELECT count(*) FROM o WHERE o.c_id=c.c_id)
-ORDER BY (SELECT count(*) FROM o WHERE o.c_id=c.c_id) DESC;
+ORDER BY (SELECT count(*) FROM o WHERE o.c_id=c.c_id) DESC
 ----
 3  2
 2  1
 1  1
 0  2
 
-# Subquery in VALUES clause.
-query III
+statement error supported
 SELECT c_cnt, o_cnt, c_cnt + o_cnt AS total
 FROM (VALUES ((SELECT count(*) FROM c), (SELECT count(*) FROM o))) AS v(c_cnt, o_cnt)
 WHERE c_cnt > 0 AND o_cnt > 0;
-----
-6  9  15
 
 # Subquery in JOIN condition.
 query II rowsort
@@ -988,140 +933,98 @@ ON c.c_id=o.c_id AND EXISTS(SELECT * FROM o WHERE o.c_id=c.c_id AND ship IS NULL
 4  70
 4  80
 
-query error more than one row returned by a subquery
-SELECT c.c_id, o.o_id
-FROM c
-INNER JOIN o
-ON c.c_id=o.c_id AND o.ship = (SELECT o.ship FROM o WHERE o.c_id=c.c_id);
+# TODO(justin): Not supported by Materialize.
+# query error more than one row returned by a subquery
+# SELECT c.c_id, o.o_id
+# FROM c
+# INNER JOIN o
+# ON c.c_id=o.c_id AND o.ship = (SELECT o.ship FROM o WHERE o.c_id=c.c_id);
 
-statement error AS OF SYSTEM TIME must be provided on a top-level statement
-SELECT (SELECT c_id FROM o AS OF SYSTEM TIME '-1us')
-FROM c
-WHERE EXISTS(SELECT * FROM o WHERE o.c_id=c.c_id)
-
-# Subquery in ARRAY(...)
-query ITT
-SELECT
-  c_id,
-  ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id),
-  ARRAY(SELECT o_id FROM o WHERE o.ship = c.bill ORDER BY o_id)
-FROM c ORDER BY c_id
-----
-1  {10,20,30}  {10,20,30,40}
-2  {40,50,60}  {50}
-3  {}          {}
-4  {70,80}     {50}
-5  {}          {}
-6  {90}        {}
-
-query IT
-SELECT
-  c_id,
-  ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id)
-FROM c ORDER BY c_id
-----
-1  {10,20,30}
-2  {40,50,60}
-3  {}
-4  {70,80}
-5  {}
-6  {90}
+# TODO(justin): Not supported by Materialize.
+# # Subquery in ARRAY(...)
+# query ITT
+# SELECT
+#   c_id,
+#   ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id),
+#   ARRAY(SELECT o_id FROM o WHERE o.ship = c.bill ORDER BY o_id)
+# FROM c ORDER BY c_id
+# ----
+# 1  {10,20,30}  {10,20,30,40}
+# 2  {40,50,60}  {50}
+# 3  {}          {}
+# 4  {70,80}     {50}
+# 5  {}          {}
+# 6  {90}        {}
+#
+# query IT
+# SELECT
+#   c_id,
+#   ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id)
+# FROM c ORDER BY c_id
+# ----
+# 1  {10,20,30}
+# 2  {40,50,60}
+# 3  {}
+# 4  {70,80}
+# 5  {}
+# 6  {90}
 
 # Regression for issue #24676: missing support for correlated subquery in JSON
 # operator.
 statement ok
 CREATE TABLE groups(
-  id SERIAL PRIMARY KEY,
+  id INT PRIMARY KEY,
   data JSONB
 )
 
 statement ok
-INSERT INTO groups(data) VALUES('{"name": "Group 1", "members": [{"name": "admin", "type": "USER"}, {"name": "user", "type": "USER"}]}')
+INSERT INTO groups(id, data) VALUES(1, '{"name": "Group 1", "members": [{"name": "admin", "type": "USER"}, {"name": "user", "type": "USER"}]}')
 
 statement ok
-INSERT INTO groups(data) VALUES('{"name": "Group 2", "members": [{"name": "admin2", "type": "USER"}]}')
+INSERT INTO groups(id, data) VALUES(2, '{"name": "Group 2", "members": [{"name": "admin2", "type": "USER"}]}')
 
-query TT
-SELECT
-  g.data->>'name' AS group_name,
-  jsonb_array_elements( (SELECT gg.data->'members' FROM groups gg WHERE gg.data->>'name' = g.data->>'name') )
-FROM
-  groups g
-----
-Group 1	{"name": "admin", "type": "USER"}
-Group 1	{"name": "user", "type": "USER"}
-Group 2	{"name": "admin2", "type": "USER"}
+# #1546
+# query TT
+# SELECT
+#   g.data->>'name' AS group_name,
+#   jsonb_array_elements( (SELECT gg.data->'members' FROM groups gg WHERE gg.data->>'name' = g.data->>'name') )
+# FROM
+#   groups g
+# ----
+# Group 1	{"name": "admin", "type": "USER"}
+# Group 1	{"name": "user", "type": "USER"}
+# Group 2	{"name": "admin2", "type": "USER"}
 
-query TT
-SELECT
-    data->>'name',
-    members
-FROM
-    groups AS g,
-    jsonb_array_elements(
-        (
-            SELECT
-                gg.data->'members' AS members
-            FROM
-                groups AS gg
-            WHERE
-                gg.data->>'name' = g.data->>'name'
-        )
-    ) AS members
-----
-Group 1  {"name": "admin", "type": "USER"}
-Group 1  {"name": "user", "type": "USER"}
-Group 2  {"name": "admin2", "type": "USER"}
+# query TT
+# SELECT
+#     data->>'name',
+#     members
+# FROM
+#     groups AS g,
+#     jsonb_array_elements(
+#         (
+#             SELECT
+#                 gg.data->'members' AS members
+#             FROM
+#                 groups AS gg
+#             WHERE
+#                 gg.data->>'name' = g.data->>'name'
+#         )
+#     ) AS members
+# ----
+# Group 1  {"name": "admin", "type": "USER"}
+# Group 1  {"name": "user", "type": "USER"}
+# Group 2  {"name": "admin2", "type": "USER"}
 
 # ------------------------------------------------------------------------------
 # Regression test cases.
 # ------------------------------------------------------------------------------
 
-# Regression for issue 32786.
-
-statement ok
-CREATE TABLE t32786 (id UUID PRIMARY KEY, parent_id UUID, parent_path text)
-
-statement ok
-INSERT INTO t32786 VALUES ('3AAA2577-DBC3-47E7-9E85-9CC7E19CF48A', null)
-
-statement ok
-UPDATE t32786 as node
-SET parent_path=concat((SELECT parent.parent_path
-  FROM t32786 parent
-  WHERE parent.id=node.parent_id),
-  node.id::varchar, '/')
-
-statement ok
-INSERT INTO t32786 VALUES ('5AE7EAFD-8277-4F41-83DE-0FD4B4482169', '3AAA2577-DBC3-47E7-9E85-9CC7E19CF48A')
-
-statement ok
-UPDATE t32786 as node
-SET parent_path=concat((SELECT parent.parent_path
-  FROM t32786 parent
-  WHERE parent.id=node.parent_id),
-  node.id::varchar, '/')
-
-query T
-SELECT parent_path FROM t32786 ORDER BY id
-----
-3aaa2577-dbc3-47e7-9e85-9cc7e19cf48a/
-3aaa2577-dbc3-47e7-9e85-9cc7e19cf48a/5ae7eafd-8277-4f41-83de-0fd4b4482169/
-
-# Regression test for #32723.
-query I
-SELECT
-    generate_series(a + 1, a + 1)
-FROM
-    (SELECT a FROM ((SELECT 1 AS a, 1) EXCEPT ALL (SELECT 0, 0)))
-----
-2
-
 # Regression for issue 35437.
 
 statement ok
 CREATE TABLE users (
-    id INT8 NOT NULL DEFAULT unique_rowid(),
+    id INT NOT NULL,
     name VARCHAR(50),
     PRIMARY KEY (id)
 )
@@ -1137,9 +1040,9 @@ INSERT INTO users(id, name) VALUES (3, 'user3')
 
 statement ok
 CREATE TABLE stuff (
-    id INT8 NOT NULL DEFAULT unique_rowid(),
+    id INT NOT NULL,
     date DATE,
-    user_id INT8,
+    user_id INT,
     PRIMARY KEY (id),
     FOREIGN KEY (user_id) REFERENCES users (id)
 )
@@ -1162,38 +1065,41 @@ INSERT INTO stuff(id, date, user_id) VALUES (5, '2007-06-15'::DATE, 3)
 statement ok
 INSERT INTO stuff(id, date, user_id) VALUES (6, '2007-03-15'::DATE, 3)
 
-query ITITI
-SELECT
-    users.id AS users_id,
-    users.name AS users_name,
-    stuff_1.id AS stuff_1_id,
-    stuff_1.date AS stuff_1_date,
-    stuff_1.user_id AS stuff_1_user_id
-FROM
-    users
-    LEFT JOIN stuff AS stuff_1
-    ON
-        users.id = stuff_1.user_id
-        AND stuff_1.id
-            = (
-                    SELECT
-                        stuff_2.id
-                    FROM
-                        stuff AS stuff_2
-                    WHERE
-                        stuff_2.user_id = users.id
-                    ORDER BY
-                        stuff_2.date DESC
-                    LIMIT
-                        1
-                )
-ORDER BY
-    users.name;
-----
-1  user1  2  2007-12-15 00:00:00 +0000 +0000  1
-2  user2  4  2008-01-15 00:00:00 +0000 +0000  2
-3  user3  5  2007-06-15 00:00:00 +0000 +0000  3
+# #2804
+# query ITITI
+# SELECT
+#     users.id AS users_id,
+#     users.name AS users_name,
+#     stuff_1.id AS stuff_1_id,
+#     stuff_1.date AS stuff_1_date,
+#     stuff_1.user_id AS stuff_1_user_id
+# FROM
+#     users
+#     LEFT JOIN stuff AS stuff_1
+#     ON
+#         users.id = stuff_1.user_id
+#         AND stuff_1.id
+#             = (
+#                     SELECT
+#                         stuff_2.id
+#                     FROM
+#                         stuff AS stuff_2
+#                     WHERE
+#                         stuff_2.user_id = users.id
+#                     ORDER BY
+#                         stuff_2.date DESC
+#                     LIMIT
+#                         1
+#                 )
+# ORDER BY
+#     users.name;
+# ----
+# 1  user1  2  2007-12-15 00:00:00 +0000 +0000  1
+# 2  user2  4  2008-01-15 00:00:00 +0000 +0000  2
+# 3  user3  5  2007-06-15 00:00:00 +0000 +0000  3
 
 statement ok
 DROP TABLE stuff;
+
+statement ok
 DROP TABLE users;
