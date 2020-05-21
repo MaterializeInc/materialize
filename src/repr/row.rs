@@ -173,7 +173,7 @@ enum Tag {
 /// This function is safe if a value of type `T` was previously written at this offset by `push_plain!`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 #[inline(always)]
-unsafe fn read_copy<T>(data: &[u8], offset: &mut usize) -> T
+unsafe fn read_plain<T>(data: &[u8], offset: &mut usize) -> T
 where
     T: Copy + 'static,
 {
@@ -192,7 +192,7 @@ where
 /// This function is safe if a `&[u8]` was previously written at this offset by `push_untagged_bytes`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 unsafe fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
-    let len = read_copy::<usize>(data, offset);
+    let len = read_plain::<usize>(data, offset);
     let bytes = &data[*offset..(*offset + len)];
     *offset += len;
     bytes
@@ -220,48 +220,48 @@ unsafe fn read_untagged_string<'a>(data: &'a [u8], offset: &mut usize) -> &'a st
 /// This function is safe if a `Datum` was previously written at this offset by `push_datum`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
-    let tag = read_copy::<Tag>(data, offset);
+    let tag = read_plain::<Tag>(data, offset);
     match tag {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
         Tag::Int32 => {
-            let i = read_copy::<i32>(data, offset);
+            let i = read_plain::<i32>(data, offset);
             Datum::Int32(i)
         }
         Tag::Int64 => {
-            let i = read_copy::<i64>(data, offset);
+            let i = read_plain::<i64>(data, offset);
             Datum::Int64(i)
         }
         Tag::Float32 => {
-            let f = read_copy::<f32>(data, offset);
+            let f = read_plain::<f32>(data, offset);
             Datum::Float32(OrderedFloat::from(f))
         }
         Tag::Float64 => {
-            let f = read_copy::<f64>(data, offset);
+            let f = read_plain::<f64>(data, offset);
             Datum::Float64(OrderedFloat::from(f))
         }
         Tag::Date => {
-            let d = read_copy::<NaiveDate>(data, offset);
+            let d = read_plain::<NaiveDate>(data, offset);
             Datum::Date(d)
         }
         Tag::Time => {
-            let t = read_copy::<NaiveTime>(data, offset);
+            let t = read_plain::<NaiveTime>(data, offset);
             Datum::Time(t)
         }
         Tag::Timestamp => {
-            let t = read_copy::<NaiveDateTime>(data, offset);
+            let t = read_plain::<NaiveDateTime>(data, offset);
             Datum::Timestamp(t)
         }
         Tag::TimestampTz => {
-            let t = read_copy::<DateTime<Utc>>(data, offset);
+            let t = read_plain::<DateTime<Utc>>(data, offset);
             Datum::TimestampTz(t)
         }
         Tag::Interval => {
-            let months = read_copy::<i64>(data, offset);
-            let secs = read_copy::<u64>(data, offset);
-            let nanosecs = read_copy::<u32>(data, offset);
-            let is_positive_dur = read_copy::<bool>(data, offset);
+            let months = read_plain::<i64>(data, offset);
+            let secs = read_plain::<u64>(data, offset);
+            let nanosecs = read_plain::<u32>(data, offset);
+            let is_positive_dur = read_plain::<bool>(data, offset);
             Datum::Interval(Interval {
                 months,
                 duration: std::time::Duration::new(secs, nanosecs),
@@ -269,7 +269,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             })
         }
         Tag::Decimal => {
-            let s = read_copy::<Significand>(data, offset);
+            let s = read_plain::<Significand>(data, offset);
             Datum::Decimal(s)
         }
         Tag::Bytes => {
@@ -298,6 +298,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 fn assert_is_plain_data<T: Copy + 'static>(_t: T) {}
 
 // See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
+//
+// Asserts that a value is "plain data" and then pushes its bytes onto a buffer.
+// "Plain data" means Copy (i.e., can validly be transmuted to and from [u8; _])
+// and 'static (i.e., the lifetime can validly be erased, and the value will still be valid when it's later read).
 macro_rules! push_plain {
     ($data:expr, $t:expr, $T:ty) => {
         let t: $T = $t;
@@ -590,7 +594,7 @@ impl<'a> Iterator for DatumDictIter<'a> {
             None
         } else {
             Some(unsafe {
-                let key_tag = read_copy::<Tag>(self.data, &mut self.offset);
+                let key_tag = read_plain::<Tag>(self.data, &mut self.offset);
                 assert!(
                     key_tag == Tag::String,
                     "Dict keys must be strings, got {:?}",
