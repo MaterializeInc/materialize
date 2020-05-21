@@ -170,12 +170,12 @@ enum Tag {
 ///
 /// # Safety
 ///
-/// This function is safe if a value of type `T` was previously written at this offset by `push_copy!`.
+/// This function is safe if a value of type `T` was previously written at this offset by `push_plain!`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
 #[inline(always)]
 unsafe fn read_copy<T>(data: &[u8], offset: &mut usize) -> T
 where
-    T: Copy,
+    T: Copy + 'static,
 {
     debug_assert!(data.len() >= *offset + size_of::<T>());
     let ptr = data.as_ptr().add(*offset);
@@ -295,19 +295,19 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 // --------------------------------------------------------------------------------
 // writing data
 
-fn assert_is_copy<T: Copy>(_t: T) {}
+fn assert_is_plain_data<T: Copy + 'static>(_t: T) {}
 
 // See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
-macro_rules! push_copy {
+macro_rules! push_plain {
     ($data:expr, $t:expr, $T:ty) => {
         let t: $T = $t;
-        assert_is_copy(t);
+        assert_is_plain_data(t);
         $data.extend_from_slice(&unsafe { transmute::<_, [u8; size_of::<$T>()]>(t) })
     };
 }
 
 fn push_untagged_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
-    push_copy!(data, bytes.len(), usize);
+    push_plain!(data, bytes.len(), usize);
     data.extend_from_slice(bytes);
 }
 
@@ -322,46 +322,46 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
         Datum::True => data.push(Tag::True as u8),
         Datum::Int32(i) => {
             data.push(Tag::Int32 as u8);
-            push_copy!(data, i, i32);
+            push_plain!(data, i, i32);
         }
         Datum::Int64(i) => {
             data.push(Tag::Int64 as u8);
-            push_copy!(data, i, i64);
+            push_plain!(data, i, i64);
         }
         Datum::Float32(f) => {
             data.push(Tag::Float32 as u8);
-            push_copy!(data, f.to_bits(), u32);
+            push_plain!(data, f.to_bits(), u32);
         }
         Datum::Float64(f) => {
             data.push(Tag::Float64 as u8);
-            push_copy!(data, f.to_bits(), u64);
+            push_plain!(data, f.to_bits(), u64);
         }
         Datum::Date(d) => {
             data.push(Tag::Date as u8);
-            push_copy!(data, d, NaiveDate);
+            push_plain!(data, d, NaiveDate);
         }
         Datum::Time(t) => {
             data.push(Tag::Time as u8);
-            push_copy!(data, t, NaiveTime);
+            push_plain!(data, t, NaiveTime);
         }
         Datum::Timestamp(t) => {
             data.push(Tag::Timestamp as u8);
-            push_copy!(data, t, NaiveDateTime);
+            push_plain!(data, t, NaiveDateTime);
         }
         Datum::TimestampTz(t) => {
             data.push(Tag::TimestampTz as u8);
-            push_copy!(data, t, DateTime<Utc>);
+            push_plain!(data, t, DateTime<Utc>);
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval as u8);
-            push_copy!(data, i.months, i64);
-            push_copy!(data, i.duration.as_secs(), u64);
-            push_copy!(data, i.duration.subsec_nanos(), u32);
-            push_copy!(data, i.is_positive_dur, bool);
+            push_plain!(data, i.months, i64);
+            push_plain!(data, i.duration.as_secs(), u64);
+            push_plain!(data, i.duration.subsec_nanos(), u32);
+            push_plain!(data, i.is_positive_dur, bool);
         }
         Datum::Decimal(s) => {
             data.push(Tag::Decimal as u8);
-            push_copy!(data, s, Significand);
+            push_plain!(data, s, Significand);
         }
         Datum::Bytes(bytes) => {
             data.push(Tag::Bytes as u8);
@@ -700,12 +700,12 @@ impl RowPacker {
     /// # Safety
     /// You must finish the list (or throw away self).
     /// Lists/dicts can be nested, but not overlapped.
-    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
+    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_plain!
     pub unsafe fn start_list(&mut self) -> usize {
         self.data.push(Tag::List as u8);
         let start = self.data.len();
         // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
+        push_plain!(&mut self.data, 0, usize);
         start
     }
 
@@ -728,12 +728,12 @@ impl RowPacker {
     /// # Safety
     /// You must finish the dict (or throw away self).
     /// Lists/dicts can be nested, but not overlapped.
-    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
+    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_plain!
     pub unsafe fn start_dict(&mut self) -> usize {
         self.data.push(Tag::Dict as u8);
         let start = self.data.len();
         // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
+        push_plain!(&mut self.data, 0, usize);
         start
     }
 
@@ -1035,7 +1035,7 @@ mod tests {
             let row = Row::pack(datums.clone());
 
             // When run under miri this catchs undefined bytes written to data
-            // eg by calling push_copy! on a type which contains undefined padding values
+            // eg by calling push_plain! on a type which contains undefined padding values
             dbg!(row.data());
 
             let datums2 = row.iter().collect::<Vec<_>>();
