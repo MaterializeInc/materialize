@@ -1160,7 +1160,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "",
+      "description": "The total number of times that a source has been scheduled, and the rate at which they're scheduled.\n\nIn a well-behaved system, sources should be activated approximately in proportion to how much data they have to read. If sources are being scheduled at significantly different proportions it could mean that the more-scheduled sources are having a hard time keeping up.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1200,27 +1200,8 @@
       "renderer": "flot",
       "seriesOverrides": [
         {
-          "alias": "avro events total success",
-          "yaxis": 2
-        },
-        {
-          "alias": "avro events total error",
-          "yaxis": 2
-        },
-        {
-          "alias": "protobuf events total success",
-          "yaxis": 2
-        },
-        {
-          "alias": "protobuf events total error",
-          "yaxis": 2
-        },
-        {
-          "alias": "csv events total success",
-          "yaxis": 2
-        },
-        {
-          "alias": "csv events total error",
+          "alias": "/.*total.*/",
+          "fill": 0,
           "yaxis": 2
         }
       ],
@@ -1229,10 +1210,16 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "mz_operator_scheduled_total",
+          "expr": "rate(mz_operator_scheduled_total[10s])",
           "interval": "",
           "legendFormat": "kafka {{topic}} {{source_id}}",
           "refId": "A"
+        },
+        {
+          "expr": "mz_operator_scheduled_total",
+          "interval": "",
+          "legendFormat": "kafka total {{topic}} {{source_id}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
@@ -2490,7 +2477,9 @@
       {
         "allValue": null,
         "current": {
-          "selected": false
+          "selected": false,
+          "text": "1",
+          "value": "1"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_timely_worker_threads, count)",
@@ -2515,6 +2504,9 @@
         "allFormat": "glob",
         "allValue": null,
         "current": {
+          "selected": false,
+          "text": "2020-05-21T03:43:28Z",
+          "value": "2020-05-21T03:43:28Z"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, build_time)",
@@ -2539,6 +2531,9 @@
         "allFormat": "glob",
         "allValue": null,
         "current": {
+          "selected": false,
+          "text": "0.2.3-dev",
+          "value": "0.2.3-dev"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, build_version)",
@@ -2563,6 +2558,9 @@
         "allFormat": "glob",
         "allValue": null,
         "current": {
+          "selected": false,
+          "text": "bb23b79f0c982ca1ee5ea82e6fcbc8d327eca244",
+          "value": "bb23b79f0c982ca1ee5ea82e6fcbc8d327eca244"
         },
         "datasource": "Prometheus",
         "definition": "label_values(mz_server_metadata_seconds, build_sha)",
@@ -2605,5 +2603,5 @@
   "timezone": "",
   "title": "Materialize Overview",
   "uid": "materialize-overview",
-  "version": 1
+  "version": 5
 }
