@@ -2360,13 +2360,13 @@
       {
         "allFormat": "glob",
         "current": {
-          "tags": [],
+          "selected": false,
           "text": "--->",
           "value": "--->"
         },
         "datasource": null,
         "hide": 0,
-        "label": "Build Info",
+        "label": "Server Info",
         "name": "build_info",
         "options": [
           {
@@ -2378,6 +2378,30 @@
         "query": "--->",
         "skipUrlSync": false,
         "type": "constant"
+      },
+      {
+        "allValue": null,
+        "current": {
+          "selected": false
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_timely_worker_threads, count)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Timely Workers",
+        "multi": false,
+        "name": "timely_workers",
+        "options": [],
+        "query": "label_values(mz_server_metadata_timely_worker_threads, count)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
       },
       {
         "allFormat": "glob",

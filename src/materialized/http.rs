@@ -17,7 +17,9 @@ use futures::sink::SinkExt;
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
 use openssl::ssl::SslAcceptor;
-use prometheus::{register_gauge_vec, Encoder, Gauge, GaugeVec};
+use prometheus::{
+    register_gauge_vec, register_int_gauge_vec, Encoder, Gauge, GaugeVec, IntGauge, IntGaugeVec,
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use ore::netio::SniffedStream;
@@ -34,6 +36,12 @@ lazy_static! {
         crate::VERSION,
         crate::BUILD_SHA,
     ]);
+    static ref WORKER_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "mz_server_metadata_timely_worker_threads",
+        "number of timely workers materialized is running with",
+        &["count"]
+    )
+    .unwrap();
 }
 
 const METHODS: &[&[u8]] = &[
@@ -57,7 +65,10 @@ impl Server {
         tls: Option<SslAcceptor>,
         cmdq_tx: UnboundedSender<coord::Command>,
         start_time: Instant,
+        worker_count: &str,
     ) -> Server {
+        // just set this so it shows up in metrics
+        WORKER_COUNT.with_label_values(&[worker_count]).set(1);
         Server {
             tls,
             cmdq_tx,

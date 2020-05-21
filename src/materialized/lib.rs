@@ -222,7 +222,12 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                 let mut mux = Mux::new();
                 mux.add_handler(switchboard.clone());
                 mux.add_handler(pgwire::Server::new(tls.clone(), cmdq_tx.clone()));
-                mux.add_handler(http::Server::new(tls, cmdq_tx, start_time));
+                mux.add_handler(http::Server::new(
+                    tls,
+                    cmdq_tx,
+                    start_time,
+                    &num_timely_workers.to_string(),
+                ));
                 mux.serve(incoming.take_until(drain_tripwire)).await;
             }
 
