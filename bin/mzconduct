@@ -15,4 +15,4 @@ set -euo pipefail
 
 cd "$(dirname "${0}")/.."
 
-exec "$(dirname "$0")"/pyactivate -m bin.mzconduct "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.mzconduct "$@"

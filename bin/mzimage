@@ -13,4 +13,4 @@
 
 set -euo pipefail
 
-exec "$(dirname "$0")"/pyactivate -m bin.mzimage "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.mzimage "$@"
