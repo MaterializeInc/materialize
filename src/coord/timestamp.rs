@@ -174,6 +174,7 @@ pub struct TimestampConfig {
 pub enum TimestampMessage {
     Add(SourceInstanceId, SourceConnector),
     DropInstance(SourceInstanceId),
+    FastForward(SourceInstanceId,PartitionId,MzOffset),
     Shutdown,
 }
 
@@ -956,6 +957,9 @@ impl Timestamper {
                         .expect("Failed to execute delete statement");
                     self.rt_sources.remove(&id);
                     self.byo_sources.remove(&id);
+                }
+                TimestampMessage::FastForward(id, pid, offset) => {
+                    unimplemented!();
                 }
                 TimestampMessage::Shutdown => return true,
             }

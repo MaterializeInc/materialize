@@ -36,7 +36,7 @@ use expr::{PartitionId, SourceInstanceId};
 
 use super::util::source;
 use super::{SourceConfig, SourceStatus, SourceToken};
-use crate::server::TimestampHistories;
+use crate::server::{TimestampHistories, TimestampChanges, TimestampMetadataChange};
 
 // Global Kafka metrics.
 lazy_static! {
@@ -547,10 +547,12 @@ struct ControlPlaneInfo {
     partition_metadata: Vec<ConsInfo>,
     /// Optional: Materialize Offset from which source should start reading (default is 0)
     start_offset: MzOffset,
+    /// Timestamp channel to communicate timestamp metadata updates back to coordinator/timestamper
+    timestamp_tx: TimestampChanges
 }
 
 impl ControlPlaneInfo {
-    fn new(start_offset: MzOffset) -> ControlPlaneInfo {
+    fn new(start_offset: MzOffset, timestamp_tx: TimestampChanges) -> ControlPlaneInfo {
         ControlPlaneInfo {
             last_closed_ts: 0,
             partition_metadata: vec![ConsInfo {
@@ -560,6 +562,7 @@ impl ControlPlaneInfo {
                 ts: 0,
             }],
             start_offset,
+            timestamp_tx
         }
     }
 
@@ -605,13 +608,7 @@ fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSou
             .insert(config.id.clone(), HashMap::new());
         // Check that this is the first time this source id is registered
         assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::Kafka(connector),
-                config.consistency.clone(),
-            )),
-        ));
+        config.timestamp_tx.as_ref().borrow_mut().push(TimestampMetadataChange::StartTimestamping(config.id));
     }
 }
 
@@ -648,7 +645,7 @@ where
 
     let (stream, capability) = source(
         id,
-        if active { Some(timestamp_tx) } else { None },
+        if active { Some(timestamp_tx.clone())} else { None },
         scope,
         &name.clone(),
         move |info| {
@@ -658,7 +655,7 @@ where
             // Create control plane information (Consistency-related information)
             let mut cp_info = ControlPlaneInfo::new(MzOffset {
                 offset: start_offset,
-            });
+            }, timestamp_tx);
 
             // Create dataplane information (Kafka-related information)
             let mut dp_info = if active {

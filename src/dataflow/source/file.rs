@@ -30,7 +30,7 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::operator::StreamExt;
-use crate::server::TimestampHistories;
+use crate::server::{TimestampHistories, TimestampMetadataChange};
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
 
@@ -307,16 +307,7 @@ where
             .borrow_mut()
             .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::File(FileSourceConnector {
-                    path: path.clone(),
-                    tail: read_style == FileReadStyle::TailFollowFd,
-                }),
-                config.consistency,
-            )),
-        ));
+        config.timestamp_tx.as_ref().borrow_mut().push(TimestampMetadataChange::StartTimestamping(config.id));
         Some(config.timestamp_tx)
     } else {
         None
