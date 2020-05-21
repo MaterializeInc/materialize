@@ -12,6 +12,7 @@
 import contextlib
 import itertools
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -27,6 +28,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Match,
     Optional,
     TextIO,
     Type,
@@ -54,6 +56,14 @@ from materialize.errors import (
 
 T = TypeVar("T")
 say = ui.speaker("C>")
+
+_BASHLIKE_ENV_VAR_PATTERN = re.compile(
+    r"""\$\{
+        (?P<var>[^:}]+)
+        (?P<default>:-[^}]+)?
+        \}""",
+    re.VERBOSE,
+)
 
 
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]))
@@ -273,6 +283,7 @@ class Composition:
             raw_comp = mzcomp.get("mzconduct")
             workflows = {}
             if raw_comp is not None:
+                raw_comp = _substitute_env_vars(raw_comp)
                 name = raw_comp.get("name", name)
                 for workflow_name, raw_w in raw_comp["workflows"].items():
                     built_steps = []
@@ -297,6 +308,38 @@ class Composition:
             )
 
         return compositions
+
+
+def _substitute_env_vars(val: T) -> T:
+    """Substitute docker-compose style env vars in a dict
+
+    This is necessary for mzconduct, since its parameters are not handled by docker-compose
+    """
+    if isinstance(val, str):
+        val = cast(T, _BASHLIKE_ENV_VAR_PATTERN.sub(_subst, val))
+    elif isinstance(val, dict):
+        for k, v in val.items():
+            val[k] = _substitute_env_vars(v)
+    elif isinstance(val, list):
+        val = cast(T, [_substitute_env_vars(v) for v in val])
+    return val
+
+
+def _subst(match: Match) -> str:
+    var = match.group("var")
+    if var is None:
+        raise BadSpec(f"Unable to parse environment variable {match.group(0)}")
+    # https://github.com/python/typeshed/issues/3902
+    default = cast(Optional[str], match.group("default"))
+    env_val = os.getenv(var)
+    if env_val is None and default is None:
+        say(f"WARNING: unknown env var {var!r}")
+        return cast(str, match.group(0))
+    elif env_val is None and default is not None:
+        # strip the leading ":-"
+        env_val = default[2:]
+    assert env_val is not None, "should be replaced correctly"
+    return env_val
 
 
 class Workflows:
