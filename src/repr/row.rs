@@ -164,7 +164,7 @@ enum Tag {
 // --------------------------------------------------------------------------------
 // reading data
 
-/// Reads a `Copy` value starting at byte `offset`.
+/// Reads a `Copy+'static` value starting at byte `offset`.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
 ///
