@@ -180,14 +180,17 @@ mammalmore:herd
       WITH (consistency = 'testdrive-data-consistency2-${testdrive.seed}')
   FORMAT BYTES ENVELOPE UPSERT
 
+> CREATE MATERIALIZED SOURCE bytestext
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-textbytes-${testdrive.seed}'
+      WITH (consistency = 'testdrive-data-consistency2-${testdrive.seed}')
+  FORMAT TEXT ENVELOPE UPSERT FORMAT BYTES
+
 $ kafka-ingest format=bytes topic=data-consistency2
 testdrive-textbytes-${testdrive.seed},1,0,1,1
 testdrive-textbytes-${testdrive.seed},1,0,3,3
 testdrive-textbytes-${testdrive.seed},1,0,6,4
 testdrive-textbytes-${testdrive.seed},1,0,10,5
-testdrive-texttext-${testdrive.seed},1,0,1,1
-testdrive-texttext-${testdrive.seed},1,0,2,2
-testdrive-texttext-${testdrive.seed},1,0,3,3
 
 > select * from texttext
 key           data  mz_offset
@@ -216,6 +219,21 @@ key              data             mz_offset
 ----------------------------------------
 fish             fish             0
 b\xc3\xadrdmore  g\xc3\xa9ese     5
+mammal1          mouse            8
+mammalmore       herd             9
+
+$ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
+bìrd1:
+fish:
+
+$ kafka-ingest format=bytes topic=data-consistency2
+testdrive-textbytes-${testdrive.seed},1,0,36,11
+testdrive-textbytes-${testdrive.seed},1,0,45,12
+
+> select * from bytestext
+key              data             mz_offset
+----------------------------------------
+b\xc3\xadrdmore  géese            5
 mammal1          mouse            8
 mammalmore       herd             9
 
@@ -254,28 +272,40 @@ mammalmore    moose 5
 
 $ kafka-create-topic topic=realtimeavroavro
 
-$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
-{"key": "fire"} {"f1": "dog", "f2": 42}
-{"key": "lightning"} {"f1": "sheep", "f2": 53}
-{"key": "water"} {"f1":"plesiosaur", "f2": 224}
-{"key": "earth"} {"f1": "turtle", "f2": 34}
-{"key": "lightning"} {"f1": "sheep", "f2": 54}
-{"key": "earth"} {"f1": "snake", "f2": 68}
-{"key": "water"} {"f1": "crocodile", "f2": 7}
-{"key": "earth"}
+# test multi-field avro key
+$ set keyschema2={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+        {"name": "f3", "type": ["null", "string"]},
+        {"name": "f4", "type": ["null", "string"]}
+    ]
+  }
 
-> CREATE MATERIALIZED SOURCE realtimeavroavro
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
+{"f3": "fire", "f4": "yang"} {"f1": "dog", "f2": 42}
+{"f3": null, "f4": "yin"} {"f1": "sheep", "f2": 53}
+{"f3": "water", "f4": null} {"f1":"plesiosaur", "f2": 224}
+{"f3": "earth", "f4": "dao"} {"f1": "turtle", "f2": 34}
+{"f3": null, "f4": "yin"} {"f1": "sheep", "f2": 54}
+{"f3": "earth", "f4": "dao"} {"f1": "snake", "f2": 68}
+{"f3": "water", "f4": null} {"f1": "crocodile", "f2": 7}
+{"f3": "earth", "f4":"dao"}
+
+> CREATE SOURCE realtimeavroavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-realtimeavroavro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> select * from realtimeavroavro
-key        f1             f2
-----------------------------
-fire       dog            42
-lightning  sheep          54
-water      crocodile      7
+> CREATE MATERIALIZED VIEW realtimeavroavro_view as SELECT * from realtimeavroavro;
+
+> select * from realtimeavroavro_view
+f3        f4      f1             f2
+-----------------------------------
+fire      yang    dog            42
+<null>    yin     sheep          54
+water     <null>  crocodile      7
 
 # Ensure that Upsert sources work with `start_offset`
 > CREATE MATERIALIZED SOURCE realtimeavroavro_ff
@@ -286,26 +316,26 @@ water      crocodile      7
   ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > SELECT * FROM realtimeavroavro_ff
-key        f1             f2
-----------------------------
-lightning  sheep          54
-water      crocodile      7
+f3        f4        f1           f2
+-----------------------------------
+<null>    yin       sheep        54
+water     <null>    crocodile    7
 
 # ensure that having deletion on a key that never existed does not break anything
-$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema} schema=${schema} publish=true
-{"key": "spirit"}
-{"key": "air"} {"f1": "pigeon", "f2": 10}
-{"key": "air"} {"f1": "owl", "f2": 15}
-{"key": "earth"} {"f1": "rhinoceros", "f2": 211}
-{"key": "air"} {"f1": "chicken", "f2": 47}
-{"key": "lightning"}
-{"key": "lightning"} {"f1":"dog", "f2": 243}
-{"key": "water"}
+$ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
+{"f3": "fire", "f4": "yin"}
+{"f3": "air", "f4":"qi"} {"f1": "pigeon", "f2": 10}
+{"f3": "air", "f4":"qi"} {"f1": "owl", "f2": 15}
+{"f3": "earth", "f4": "dao"} {"f1": "rhinoceros", "f2": 211}
+{"f3": "air", "f4":"qi"} {"f1": "chicken", "f2": 47}
+{"f3": null, "f4":"yin"}
+{"f3": null, "f4":"yin"} {"f1":"dog", "f2": 243}
+{"f3": "water", "f4": null}
 
-> select * from realtimeavroavro
-key        f1             f2
-------------------------------
-fire       dog            42
-air        chicken        47
-lightning  dog            243
-earth      rhinoceros     211
+> select * from realtimeavroavro_view
+key        f4          f1             f2
+-----------------------------------------
+fire       yang        dog            42
+air        qi          chicken        47
+<null>     yin         dog            243
+earth      dao         rhinoceros     211
