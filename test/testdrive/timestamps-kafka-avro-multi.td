@@ -63,7 +63,7 @@ $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED SOURCE data_byo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-    WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}')
+    WITH (consistency = 'testdrive-data-consistency-${testdrive.seed}', max_timestamp_batch_size=3)
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED SOURCE data_empty

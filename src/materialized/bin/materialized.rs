@@ -108,12 +108,6 @@ fn run() -> Result<(), failure::Error> {
     );
     opts.optopt(
         "",
-        "batch-size",
-        "maximum number of messages with same timestamp (default 10000) ",
-        "SIZE",
-    );
-    opts.optopt(
-        "",
         "persist-ts",
         "persists consistency information locally and recovers from local store",
         "true/false",
@@ -224,7 +218,6 @@ fn run() -> Result<(), failure::Error> {
         None => Duration::from_millis(10),
         Some(d) => parse_duration::parse(&d)?,
     };
-    let max_increment_ts_size = popts.opt_get_default("batch-size", 10000_i64)?;
     let persist_ts = popts.opt_get_default("persist-ts", false)?;
 
     // Configure connections.
@@ -307,7 +300,6 @@ environment:{}",
         logging_granularity,
         logical_compaction_window,
         timestamp_frequency,
-        max_increment_ts_size,
         persist_ts,
         listen_addr,
         tls,

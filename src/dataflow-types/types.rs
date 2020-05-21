@@ -455,6 +455,7 @@ pub enum SourceConnector {
         encoding: DataEncoding,
         envelope: Envelope,
         consistency: Consistency,
+        max_ts_batch: i64,
     },
     Local,
 }

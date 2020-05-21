@@ -251,6 +251,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     encoding,
                     envelope,
                     consistency,
+                    max_ts_batch: _,
                 } = src.connector
                 {
                     let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());

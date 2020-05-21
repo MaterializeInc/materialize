@@ -1077,6 +1077,25 @@ pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure:
     Ok(stmt)
 }
 
+fn extract_batch_size_option(
+    with_options: &mut HashMap<String, Value>,
+) -> Result<i64, failure::Error> {
+    match with_options.remove("max_timestamp_batch_size") {
+        None => Ok(0),
+        Some(Value::Number(n)) => match n.parse::<i64>() {
+            Ok(n) => {
+                if n < 0 {
+                    bail!("max_ts_batch must be greater than zero")
+                } else {
+                    Ok(n)
+                }
+            }
+            _ => bail!("max_timestamp_batch_size must be an i64"),
+        },
+        Some(_) => bail!("max_timestamp_batch_size must be an i64"),
+    }
+}
+
 fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     match &stmt {
         Statement::CreateSource {
@@ -1191,6 +1210,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut with_options = normalize::with_options(with_options);
 
             let mut consistency = Consistency::RealTime;
+            let mut max_ts_batch = 0;
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
                     let config_options = kafka_util::extract_config(&mut with_options)?;
@@ -1206,6 +1226,8 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::SingleQuotedString(s)) => Some(s),
                         Some(_) => bail!("group_id_prefix must be a string"),
                     };
+
+                    max_ts_batch = extract_batch_size_option(&mut with_options)?;
 
                     // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
                     // until we have had time to think about what the right UX/design is on a non-urgent timeline!
@@ -1317,6 +1339,8 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
+                    max_ts_batch = extract_batch_size_option(&mut with_options)?;
+
                     let connector = ExternalSourceConnector::File(FileSourceConnector {
                         path: path.clone().into(),
                         tail,
@@ -1335,6 +1359,9 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
+
+                    max_ts_batch = extract_batch_size_option(&mut with_options)?;
+
                     let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                         path: path.clone().into(),
                         tail,
@@ -1457,6 +1484,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     encoding,
                     envelope,
                     consistency,
+                    max_ts_batch,
                 },
                 desc,
             };

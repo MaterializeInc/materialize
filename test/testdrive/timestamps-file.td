@@ -32,7 +32,7 @@ a,b
 > CREATE MATERIALIZED VIEW view_byo AS SELECT * FROM data_byo
 
 > CREATE MATERIALIZED SOURCE data_byo2 (a,b) FROM FILE '${testdrive.temp-dir}/data2.csv'
-    WITH (consistency = '${testdrive.temp-dir}/data-consistency.csv', tail=true)
+    WITH (consistency = '${testdrive.temp-dir}/data-consistency.csv', tail=true, max_timestamp_batch_size=2)
     FORMAT CSV WITH HEADER
 
 > CREATE MATERIALIZED VIEW view_byo2 AS SELECT * FROM data_byo2
