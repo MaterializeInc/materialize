@@ -992,27 +992,7 @@
       "renderer": "flot",
       "seriesOverrides": [
         {
-          "alias": "avro events total success",
-          "yaxis": 2
-        },
-        {
-          "alias": "avro events total error",
-          "yaxis": 2
-        },
-        {
-          "alias": "protobuf events total success",
-          "yaxis": 2
-        },
-        {
-          "alias": "protobuf events total error",
-          "yaxis": 2
-        },
-        {
-          "alias": "csv events total success",
-          "yaxis": 2
-        },
-        {
-          "alias": "csv events total error",
+          "alias": "/.*total.*/",
           "yaxis": 2
         }
       ],
@@ -1023,15 +1003,21 @@
         {
           "expr": "rate(mz_kafka_messages_ingested[3s])",
           "interval": "",
-          "legendFormat": "kafka {{topic}} {{source_id}} {{partition_id}}",
+          "legendFormat": "{{topic}} {{source_id}} {{partition_id}}",
           "refId": "A"
+        },
+        {
+          "expr": "mz_kafka_messages_ingested",
+          "interval": "",
+          "legendFormat": "total {{topic}} {{source_id}} {{partition_id}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Messages Ingest Rate by IO Type",
+      "title": "Messages Ingested by IO Type",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1174,7 +1160,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "A worker is the underlying thread of computation in materialized. In general materialized should send similar amounts of work to each worker, and the queue depths should be similar to each other.\n\nIf a queue is growing without bound, or queues are very unbalanced, that could signify a problem.",
+      "description": "",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1190,10 +1176,12 @@
         "y": 42
       },
       "hiddenSeries": false,
-      "id": 37,
+      "id": 58,
       "legend": {
         "avg": false,
         "current": false,
+        "hideEmpty": true,
+        "hideZero": true,
         "max": false,
         "min": false,
         "show": true,
@@ -1210,30 +1198,51 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": true,
-      "targets": [
+      "seriesOverrides": [
         {
-          "expr": "mz_worker_command_queue_size",
-          "legendFormat": "pending commands worker={{worker}}",
-          "refId": "A"
+          "alias": "avro events total success",
+          "yaxis": 2
         },
         {
-          "expr": "mz_worker_pending_peeks_queue_size",
-          "legendFormat": "pending peeks worker={{worker}}",
-          "refId": "B"
+          "alias": "avro events total error",
+          "yaxis": 2
+        },
+        {
+          "alias": "protobuf events total success",
+          "yaxis": 2
+        },
+        {
+          "alias": "protobuf events total error",
+          "yaxis": 2
+        },
+        {
+          "alias": "csv events total success",
+          "yaxis": 2
+        },
+        {
+          "alias": "csv events total error",
+          "yaxis": 2
+        }
+      ],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "mz_operator_scheduled_total",
+          "interval": "",
+          "legendFormat": "kafka {{topic}} {{source_id}}",
+          "refId": "A"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Worker queue sizes",
+      "title": "Source Scheduled Count",
       "tooltip": {
         "shared": true,
-        "sort": 0,
+        "sort": 2,
         "value_type": "individual"
       },
       "type": "graph",
@@ -1246,7 +1255,7 @@
       },
       "yaxes": [
         {
-          "format": "short",
+          "format": "none",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -1368,6 +1377,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
+      "description": "A worker is the underlying thread of computation in materialized. In general materialized should send similar amounts of work to each worker, and the queue depths should be similar to each other.\n\nIf a queue is growing without bound, or queues are very unbalanced, that could signify a problem.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1383,7 +1393,7 @@
         "y": 50
       },
       "hiddenSeries": false,
-      "id": 12,
+      "id": 37,
       "legend": {
         "avg": false,
         "current": false,
@@ -1403,28 +1413,19 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "seriesOverrides": [
-        {
-          "alias": "mz_kafka_bytes_read_total{instance=\"materialized:6875\",job=\"materialized\"}",
-          "yaxis": 2
-        },
-        {
-          "alias": "total",
-          "yaxis": 2
-        }
-      ],
+      "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
-      "steppedLine": false,
+      "steppedLine": true,
       "targets": [
         {
-          "expr": "rate(mz_kafka_bytes_read_total[3s])",
-          "legendFormat": "rate",
+          "expr": "mz_worker_command_queue_size",
+          "legendFormat": "pending commands worker={{worker}}",
           "refId": "A"
         },
         {
-          "expr": "mz_kafka_bytes_read_total",
-          "legendFormat": "total",
+          "expr": "mz_worker_pending_peeks_queue_size",
+          "legendFormat": "pending peeks worker={{worker}}",
           "refId": "B"
         }
       ],
@@ -1432,7 +1433,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "Kafka bytes read",
+      "title": "Worker queue sizes",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -1448,7 +1449,7 @@
       },
       "yaxes": [
         {
-          "format": "Bps",
+          "format": "short",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -1456,7 +1457,7 @@
           "show": true
         },
         {
-          "format": "decbytes",
+          "format": "short",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -1570,7 +1571,6 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
-      "description": "This is a measure of when we last stated that ingested data was valid for computation.\n\nAll sources that have a rate of 0 are *stalled* and are either not ingesting new data or have no new data to ingest.\n\nInternally, this is the capability, and the underlying measure is what capability we have released.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1586,7 +1586,7 @@
         "y": 58
       },
       "hiddenSeries": false,
-      "id": 50,
+      "id": 12,
       "legend": {
         "avg": false,
         "current": false,
@@ -1606,23 +1606,36 @@
       "pointradius": 2,
       "points": false,
       "renderer": "flot",
-      "seriesOverrides": [],
+      "seriesOverrides": [
+        {
+          "alias": "mz_kafka_bytes_read_total{instance=\"materialized:6875\",job=\"materialized\"}",
+          "yaxis": 2
+        },
+        {
+          "alias": "/.*total.*/",
+          "yaxis": 2
+        }
+      ],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(mz_kafka_capability[3s])",
-          "interval": "",
-          "legendFormat": "{{topic}}-{{source_id}}",
+          "expr": "rate(mz_kafka_bytes_read_total[3s])",
+          "legendFormat": "rate {{topic}}-{{source_id}}",
           "refId": "A"
+        },
+        {
+          "expr": "mz_kafka_bytes_read_total",
+          "legendFormat": "total {{topic}}-{{source_id}}",
+          "refId": "B"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": " Capability Closing Rate",
+      "title": "Kafka bytes read",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -1638,7 +1651,7 @@
       },
       "yaxes": [
         {
-          "format": "short",
+          "format": "Bps",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -1651,7 +1664,7 @@
           "logBase": 1,
           "max": null,
           "min": null,
-          "show": false
+          "show": true
         }
       ],
       "yaxis": {
@@ -1760,6 +1773,7 @@
       "dashLength": 10,
       "dashes": false,
       "datasource": null,
+      "description": "This is a measure of when we last stated that ingested data was valid for computation.\n\nAll sources that have a rate of 0 are *stalled* and are either not ingesting new data or have no new data to ingest.\n\nInternally, this is the capability, and the underlying measure is what capability we have released.",
       "fieldConfig": {
         "defaults": {
           "custom": {}
@@ -1773,6 +1787,100 @@
         "w": 12,
         "x": 12,
         "y": 66
+      },
+      "hiddenSeries": false,
+      "id": 50,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "rate(mz_kafka_capability[3s])",
+          "interval": "",
+          "legendFormat": "{{topic}}-{{source_id}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": " Capability Closing Rate",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": false
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 74
       },
       "hiddenSeries": false,
       "id": 47,
@@ -1862,7 +1970,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 82
       },
       "id": 30,
       "panels": [],
@@ -1887,7 +1995,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 75
+        "y": 83
       },
       "hiddenSeries": false,
       "id": 24,
@@ -1980,7 +2088,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 75
+        "y": 83
       },
       "hiddenSeries": false,
       "id": 20,
@@ -2081,7 +2189,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 83
+        "y": 91
       },
       "hiddenSeries": false,
       "id": 16,
@@ -2176,7 +2284,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 83
+        "y": 91
       },
       "hiddenSeries": false,
       "id": 35,
