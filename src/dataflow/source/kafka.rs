@@ -593,23 +593,26 @@ impl ControlPlaneInfo {
 }
 
 /// This function activates the necessary timestamping information when a source is first created
+/// These steps are only taken if a source actively reads data
 /// 1) it inserts an entry in the timestamp_history datastructure
 /// 2) it notifies the coordinator that timestamping should begin by inserting an entry in the
 /// timestamp_tx channel
 fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSourceConnector) {
-    let prev = config
-        .timestamp_histories
-        .borrow_mut()
-        .insert(config.id.clone(), HashMap::new());
-    // Check that this is the first time this source id is registered
-    assert!(prev.is_none());
-    config.timestamp_tx.as_ref().borrow_mut().push((
-        config.id,
-        Some((
-            ExternalSourceConnector::Kafka(connector),
-            config.consistency.clone(),
-        )),
-    ));
+    if config.active {
+        let prev = config
+            .timestamp_histories
+            .borrow_mut()
+            .insert(config.id.clone(), HashMap::new());
+        // Check that this is the first time this source id is registered
+        assert!(prev.is_none());
+        config.timestamp_tx.as_ref().borrow_mut().push((
+            config.id,
+            Some((
+                ExternalSourceConnector::Kafka(connector),
+                config.consistency.clone(),
+            )),
+        ));
+    }
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
