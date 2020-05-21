@@ -110,8 +110,7 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
-use timely::dataflow::operators::aggregation::Aggregate;
-use timely::dataflow::operators::generic::operator;
+use timely::dataflow::operators::generic::{operator, Operator};
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
@@ -119,6 +118,8 @@ use timely::dataflow::Scope;
 use timely::dataflow::Stream;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
+
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 
 use avro::Schema;
 use dataflow_types::Timestamp;
@@ -289,27 +290,36 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
                             ExternalSourceConnector::Kafka(kc) => {
-                                use timely::dataflow::operators::delay::Delay;
-
                                 let (source, capability) = source::kafka(source_config, kc);
-                                // Advance the time component of each timely message,
-                                // to implement the `as_of` frontier compaction.
-                                let source = source.delay({
-                                    let as_of_frontier = as_of_frontier.clone();
-                                    move |_datum, time| {
-                                        let mut time = time.clone();
-                                        time.advance_by(as_of_frontier.borrow());
-                                        time
-                                    }
-                                });
+
+                                // This operator changes the timestamp from capability to message payload,
+                                // and applies `as_of` frontier compaction. The compaction is important as
+                                // downstream upsert preparation can compact away updates for the same keys
+                                // at the same times, and by advancing times we make more of them the same.
+                                let as_of_frontier = as_of_frontier.clone();
+                                let source =
+                                    source.unary(Pipeline, "AppendTimestamp", move |_, _| {
+                                        let mut vector = Vec::new();
+                                        move |input, output| {
+                                            input.for_each(|cap, data| {
+                                                data.swap(&mut vector);
+                                                let mut time = cap.time().clone();
+                                                time.advance_by(as_of_frontier.borrow());
+                                                output.session(&cap).give_iterator(
+                                                    vector.drain(..).map(|x| (x, time.clone())),
+                                                );
+                                            });
+                                        }
+                                    });
+
+                                // Deduplicate records by key, decode, and then upsert arrange them.
+                                let deduplicated = prepare_upsert_by_max_offset(&source);
+                                let decoded = decode_upsert(&deduplicated, encoding, key_encoding);
                                 let arranged = arrange_from_upsert(
-                                    &decode_upsert(
-                                        &prepare_upsert_by_max_offset(&source),
-                                        encoding,
-                                        key_encoding,
-                                    ),
+                                    &decoded,
                                     &format!("UpsertArrange: {}", src_id.to_string()),
                                 );
+
                                 let keys = src.desc.typ().keys[0]
                                     .iter()
                                     .map(|k| ScalarExpr::Column(*k))
@@ -484,23 +494,22 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             err_collection = err_collection.concat(&errors);
                         }
 
-                        // Apply `as_of` to each timestamp
-                        collection = collection.delay({
-                            let as_of_frontier = as_of_frontier.clone();
-                            move |time| {
-                                let mut time = time.clone();
-                                time.advance_by(as_of_frontier.borrow());
-                                time
-                            }
-                        });
-                        err_collection = err_collection.delay({
-                            let as_of_frontier = as_of_frontier.clone();
-                            move |time| {
-                                let mut time = time.clone();
-                                time.advance_by(as_of_frontier.borrow());
-                                time
-                            }
-                        });
+                        // Apply `as_of` to each timestamp.
+                        let as_of_frontier1 = as_of_frontier.clone();
+                        collection = collection
+                            .inner
+                            .map_in_place(move |(_, time, _)| {
+                                time.advance_by(as_of_frontier1.borrow())
+                            })
+                            .as_collection();
+
+                        let as_of_frontier2 = as_of_frontier.clone();
+                        err_collection = err_collection
+                            .inner
+                            .map_in_place(move |(_, time, _)| {
+                                time.advance_by(as_of_frontier2.borrow())
+                            })
+                            .as_collection();
 
                         // Introduce the stream by name, as an unarranged collection.
                         context.collections.insert(
@@ -686,38 +695,64 @@ pub(crate) fn build_dataflow<A: Allocate>(
     })
 }
 
-/// `arrange_from_upsert` may not behave as intended if multiple rows
-/// with the same key and timestamp are sent because it cannot determine
-/// which row was the last update. Resolve this confusion for
-/// `arrange_from_upsert` by deleting all rows except the one with the
-/// highest offset if multiple rows with the same key will have the
-/// same timestamp.
+/// Produces at most one entry for each `(key, time)` pair.
+///
+/// The incoming stream of `(key, (val, off), time)` records may have many
+/// entries with the same `key` and `time`. We are able to reduce this to
+/// at most one record for each pair, by retaining only the record with the
+/// greatest offset: its action summarizes the sequence of many actions that
+/// occur at the same moment and so are not distinguishable.
 fn prepare_upsert_by_max_offset<G>(
-    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
-) -> Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>
+    stream: &Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>,
+) -> Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // This approach works as long as there is a 1:1 correspondence between
-    // Timely capabilities and Differential timestamps.
-    // Change the code if the assumption no longer holds.
-    stream.aggregate::<_, (Vec<u8>, Option<i64>), _, _, _>(
-        |_key, val, agg| {
-            // All offsets are assumed to be Some(...).
-            // Offsets are always Some(...) for Kafka and file sources.
-            // Kinesis offsets are already None.
-            if let Some(new_offset) = val.1 {
-                if let Some(offset) = agg.1 {
-                    if offset < new_offset {
-                        *agg = val;
+    stream.unary_frontier(
+        Exchange::new(
+            move |&((ref k, _), _): &((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)| k.hashed(),
+        ),
+        "UpsertCompaction",
+        |_cap, _info| {
+            let mut values = HashMap::<_, HashMap<_, (Vec<u8>, Option<i64>)>>::new();
+            let mut vector = Vec::new();
+
+            move |input, output| {
+                // Digest each input, reduce by presented timestamp.
+                input.for_each(|cap, data| {
+                    data.swap(&mut vector);
+                    for ((key, val), time) in vector.drain(..) {
+                        let value = values
+                            .entry(cap.delayed(&time))
+                            .or_insert_with(HashMap::new)
+                            .entry(key)
+                            .or_insert_with(Default::default);
+
+                        if let Some(new_offset) = val.1 {
+                            if let Some(offset) = value.1 {
+                                if offset < new_offset {
+                                    *value = val;
+                                }
+                            } else {
+                                *value = val;
+                            }
+                        }
                     }
-                } else {
-                    *agg = val;
+                });
+
+                // Produce (key, val) pairs at any complete times.
+                for (cap, map) in values.iter_mut() {
+                    if !input.frontier.less_equal(cap.time()) {
+                        let mut session = output.session(cap);
+                        for (key, val) in map.drain() {
+                            session.give(((key, val), cap.time().clone()))
+                        }
+                    }
                 }
+                // Discard entries, capabilities for complete times.
+                values.retain(|_cap, map| !map.is_empty());
             }
         },
-        |key, agg| (key, agg),
-        |key| key.hashed(),
     )
 }
 
