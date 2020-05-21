@@ -22,6 +22,7 @@ use sql_parser::ast::{
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::statement::StatementContext;
+use crate::unsupported;
 
 pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
@@ -29,7 +30,7 @@ pub fn ident(ident: Ident) -> String {
 
 pub fn function_name(name: ObjectName) -> Result<String, failure::Error> {
     if name.0.len() != 1 {
-        bail!("qualified function names are not supported");
+        unsupported!("qualified function names");
     }
     Ok(ident(name.0.into_element()))
 }
