@@ -38,7 +38,7 @@ use sql_parser::ast::{
     SqlOption, Statement, Value,
 };
 
-use crate::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry, SchemaMap, SchemaType};
+use crate::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry, SchemaMap};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::query::QueryLifetime;
@@ -474,7 +474,6 @@ fn handle_show_objects(
                 .database_resolver(database_spec)?
                 .resolve_schema(&schema_name)
                 .ok_or_else(|| format_err!("schema '{}' does not exist", schema_name))?
-                .0
                 .items()
         } else {
             let resolver = scx.catalog.database_resolver(scx.session.database())?;
@@ -482,8 +481,8 @@ fn handle_show_objects(
                 .search_path()
                 .iter()
                 .filter_map(|schema_name| resolver.resolve_schema(schema_name))
-                .find(|(_schema, typ)| *typ == SchemaType::Normal)
-                .map_or_else(|| &*empty_schema, |(schema, _typ)| schema.items())
+                .find(|schema| !schema.is_system())
+                .map_or_else(|| &*empty_schema, |schema| schema.items())
         };
 
         let filtered_items = items
@@ -1561,13 +1560,13 @@ fn handle_drop_schema(
                     // the schema does not exist.
                 }
                 None => bail!("schema '{}.{}' does not exist", database_name, schema_name),
-                Some((_schema, SchemaType::Ambient)) => {
+                Some(schema) if schema.is_system() => {
                     bail!(
                         "cannot drop schema {} because it is required by the database system",
                         schema_name
                     );
                 }
-                Some((schema, SchemaType::Normal)) if !cascade && !schema.items().is_empty() => {
+                Some(schema) if !cascade && !schema.items().is_empty() => {
                     bail!("schema '{}.{}' cannot be dropped without CASCADE while it contains objects", database_name, schema_name);
                 }
                 _ => (),

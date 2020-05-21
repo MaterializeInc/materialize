@@ -16,12 +16,6 @@ use repr::RelationDesc;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::PlanContext;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum SchemaType {
-    Ambient,
-    Normal,
-}
-
 pub trait PlanCatalog: fmt::Debug {
     fn creation_time(&self) -> SystemTime;
 
@@ -94,11 +88,12 @@ impl fmt::Display for CatalogItemType {
 }
 
 pub trait PlanDatabaseResolver<'a> {
-    fn resolve_schema(&self, schema_name: &str) -> Option<(&'a dyn PlanSchema, SchemaType)>;
+    fn resolve_schema(&self, schema_name: &str) -> Option<&'a dyn PlanSchema>;
 }
 
 pub trait PlanSchema {
     fn items(&self) -> &dyn ItemMap;
+    fn is_system(&self) -> bool;
 }
 
 pub trait SchemaMap {

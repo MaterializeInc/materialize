@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use ::sql::catalog::{
     CatalogItemType, ItemMap, PlanCatalog, PlanCatalogEntry, PlanDatabaseResolver, PlanSchema,
-    SchemaMap, SchemaType,
+    SchemaMap,
 };
 use ::sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
@@ -100,6 +100,7 @@ struct Schemas(BTreeMap<String, Schema>);
 #[derive(Debug, Serialize)]
 pub struct Schema {
     id: i64,
+    is_system: bool,
     items: Items,
 }
 
@@ -296,10 +297,12 @@ impl Catalog {
                 }
                 None => &mut catalog.ambient_schemas,
             };
+            let is_system = is_system_schema_name(&schema_name);
             schemas.0.insert(
                 schema_name,
                 Schema {
                     id,
+                    is_system,
                     items: Items(BTreeMap::new()),
                 },
             );
@@ -463,6 +466,7 @@ impl Catalog {
             "mz_temp".into(),
             Schema {
                 id: -1,
+                is_system: true,
                 items: Items(BTreeMap::new()),
             },
         );
@@ -707,7 +711,7 @@ impl Catalog {
                     database_name,
                     schema_name,
                 } => {
-                    if schema_name.starts_with("mz_") || schema_name.starts_with("pg_") {
+                    if is_system_schema_name(&schema_name) {
                         return Err(Error::new(ErrorKind::UnacceptableSchemaName(schema_name)));
                     }
                     let (database_id, database_name) = match database_name {
@@ -807,6 +811,7 @@ impl Catalog {
                             schema_name,
                             Schema {
                                 id,
+                                is_system: false,
                                 items: Items(BTreeMap::new()),
                             },
                         );
@@ -1006,6 +1011,10 @@ impl IdHumanizer for Catalog {
     }
 }
 
+fn is_system_schema_name(schema_name: &str) -> bool {
+    schema_name.starts_with("mz_") || schema_name.starts_with("pg_")
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
     CreateDatabase {
@@ -1094,22 +1103,6 @@ impl<'a> DatabaseResolver<'a> {
         }
 
         None
-    }
-
-    /// Attempts to find the schema specified by `schema_name` in the database
-    /// that this resolver is attached to, or in the set of ambient schemas.
-    pub fn resolve_schema(&self, schema_name: &str) -> Option<(&'a Schema, SchemaType)> {
-        self.database
-            .schemas
-            .0
-            .get(schema_name)
-            .map(|s| (s, SchemaType::Normal))
-            .or_else(|| {
-                self.ambient_schemas
-                    .0
-                    .get(schema_name)
-                    .map(|s| (s, SchemaType::Ambient))
-            })
     }
 }
 
@@ -1261,15 +1254,23 @@ impl PlanCatalogEntry for CatalogEntry {
 }
 
 impl<'a> PlanDatabaseResolver<'a> for DatabaseResolver<'a> {
-    fn resolve_schema(&self, schema_name: &str) -> Option<(&'a dyn PlanSchema, SchemaType)> {
-        self.resolve_schema(schema_name)
-            .map(|(a, b)| (a as &'a dyn PlanSchema, b))
+    fn resolve_schema(&self, schema_name: &str) -> Option<&'a dyn PlanSchema> {
+        self.database
+            .schemas
+            .0
+            .get(schema_name)
+            .or_else(|| self.ambient_schemas.0.get(schema_name))
+            .map(|s| s as &dyn PlanSchema)
     }
 }
 
 impl PlanSchema for Schema {
     fn items(&self) -> &dyn ItemMap {
         &self.items
+    }
+
+    fn is_system(&self) -> bool {
+        self.is_system
     }
 }
 
