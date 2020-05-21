@@ -42,6 +42,14 @@ lazy_static! {
         &["count"]
     )
     .unwrap();
+    static ref REQUEST_TIMES: IntGaugeVec = register_int_gauge_vec!(
+        "mz_server_scrape_metrics_times",
+        "how long it took to gather metrics, used for very low frequency high accuracy measures",
+        &["action"]
+    )
+    .unwrap();
+    static ref REQUEST_METRICS_GATHER: IntGauge = REQUEST_TIMES.with_label_values(&["gather"]);
+    static ref REQUEST_METRICS_ENCODE: IntGauge = REQUEST_TIMES.with_label_values(&["encode"]);
 }
 
 const METHODS: &[&[u8]] = &[
@@ -57,6 +65,7 @@ fn sniff_tls(buf: &[u8]) -> bool {
 pub struct Server {
     tls: Option<SslAcceptor>,
     cmdq_tx: UnboundedSender<coord::Command>,
+    /// When this server started
     start_time: Instant,
 }
 
@@ -155,7 +164,11 @@ async fn handle_prometheus(
     let metric_families = load_prom_metrics(start_time);
     let encoder = prometheus::TextEncoder::new();
     let mut buffer = Vec::new();
+
+    let start = Instant::now();
     encoder.encode(&metric_families, &mut buffer)?;
+    REQUEST_METRICS_ENCODE.set(Instant::now().duration_since(start).as_micros() as i64);
+
     Ok(Response::new(Body::from(buffer)))
 }
 
@@ -256,11 +269,14 @@ async fn handle_status(
 
 /// Call [`prometheus::gather`], ensuring that all our metrics are up to date
 fn load_prom_metrics(start_time: Instant) -> Vec<prometheus::proto::MetricFamily> {
-    let uptime = Instant::now() - start_time;
+    let before_gather = Instant::now();
+    let uptime = before_gather - start_time;
     let (secs, milli_part) = (uptime.as_secs() as f64, uptime.subsec_millis() as f64);
     SERVER_METADATA.set(secs + milli_part / 1_000.0);
+    let result = prometheus::gather();
 
-    prometheus::gather()
+    REQUEST_METRICS_GATHER.set(Instant::now().duration_since(before_gather).as_micros() as i64);
+    result
 }
 
 #[derive(Debug)]
