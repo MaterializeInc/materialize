@@ -369,7 +369,7 @@ WHERE EXISTS
 4  TX
 
 # #1546
-statement error not supported
+statement error supported
 SELECT c_id, generate_series(1, (SELECT count(*) FROM o WHERE o.c_id=c.c_id)) FROM c
 
 # Customers that have no orders with a NULL ship state.
