@@ -239,21 +239,8 @@ mzconduct:
       steps:
       - step: workflow
         workflow: bring-up-source-data
-      - step: run
-        service: chbench
-        daemon: true
-        command: >-
-          run
-          --dsn=mysql --gen-dir=/var/lib/mysql-files
-          --peek-conns=0
-          --analytic-threads=0
-          --transactional-threads=1
-          --run-seconds=864000
-          --min-delay=0.0
-          --max-delay=0.0
-          -l /dev/stdout
-          --config-file-path=/etc/chbenchmark/mz-default.cfg
-          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+      - step: workflow
+        workflow: heavy-load
       - step: start-services
         services: [dashboard, metabase]
       - step: run
@@ -266,31 +253,26 @@ mzconduct:
     load-test:
       steps:
       - step: workflow
-        workflow: bring-up-source-data
-      - step: run
-        service: chbench
-        daemon: true
-        command: >-
-         run
-         --dsn=mysql --gen-dir=/var/lib/mysql-files
-         --analytic-threads=0
-         --transactional-threads=1
-         --run-seconds=432000
-         -l /dev/stdout
-         --config-file-path=/etc/chbenchmark/mz-default.cfg
-         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
-      - step: run
-        service: peeker
-        daemon: true
-        command: --queries loadtest
-      - step: ensure-stays-up
-        container: peeker
-        seconds: 10
+        workflow: nightly
       - step: start-services
         services: [dashboard]
       - step: ensure-stays-up
         container: dashboard
         seconds: 1
+
+    nightly:
+      steps:
+      - step: workflow
+        workflow: bring-up-source-data
+      - step: workflow
+        workflow: heavy-load
+      - step: run
+        service: peeker
+        daemon: true
+        command: --queries ${PEEKER_QUERIES:-loadtest}
+      - step: ensure-stays-up
+        container: peeker
+        seconds: 10
 
     # Helper workflows
 
@@ -320,3 +302,18 @@ mzconduct:
           gen
           --warehouses=1
           --config-file-path=/etc/chbenchmark/mz-default.cfg
+
+    heavy-load:
+      steps:
+      - step: run
+        service: chbench
+        daemon: true
+        command: >-
+         run
+         --dsn=mysql --gen-dir=/var/lib/mysql-files
+         --analytic-threads=0
+         --transactional-threads=1
+         --run-seconds=864000
+         -l /dev/stdout
+         --config-file-path=/etc/chbenchmark/mz-default.cfg
+         --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
