@@ -9,7 +9,7 @@
 
 use lazy_static::lazy_static;
 
-use prometheus::{register_int_counter_vec, register_int_gauge_vec, IntCounterVec, IntGaugeVec};
+use prometheus::{register_int_counter_vec, IntCounterVec};
 use prometheus_static_metric::make_static_metric;
 
 make_static_metric! {
@@ -27,16 +27,4 @@ lazy_static! {
     )
     .unwrap();
     pub static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
-    pub static ref SCHEDULING_ELAPSED_NS: IntGaugeVec = register_int_gauge_vec!(
-        "mz_dataflow_operator_scheduling_elapsed_ns",
-        "Nanoseconds spent in each operator",
-        &["worker_id", "operator_id"]
-    )
-    .unwrap();
-    pub static ref SCHEDULING_HISTOGRAM: IntGaugeVec = register_int_gauge_vec!(
-        "mz_dataflow_operator_scheduling_histogram",
-        "How many times each operator completed in at most le_ns nanoseconds, but at least one power of two below le_ns",
-        &["worker_id", "operator_id", "le_ns"]
-    )
-    .unwrap();
 }
