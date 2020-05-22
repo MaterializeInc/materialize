@@ -97,6 +97,54 @@ SELECT * FROM iv_ish
 1 year
 03:00:00
 
+# Date-time literals
+
+query T
+SELECT DATE '2000-01-01'
+----
+2000-01-01
+
+query T
+SELECT DATE '2000 01-01'
+----
+2000-01-01
+
+query T
+SELECT DATE '2000 01 01'
+----
+2000-01-01
+
+query T
+SELECT DATE '20000101'
+----
+2000-01-01
+
+statement error
+SELECT DATE '2000-01 01'
+
+query T
+SELECT TIMESTAMP '2000-01-01 01:02:03'
+----
+2000-01-01 01:02:03
+
+query T
+SELECT TIMESTAMP '2000 01-01 01:02:03'
+----
+2000-01-01 01:02:03
+
+query T
+SELECT TIMESTAMP '2000 01 01 01:02:03'
+----
+2000-01-01 01:02:03
+
+query T
+SELECT TIMESTAMP '20010101 01:02:03';
+----
+2001-01-01 01:02:03
+
+statement error
+SELECT TIMESTAMP '2000-01 01 01:02:03'
+
 # Date arithmetic with month intervals.
 
 query T

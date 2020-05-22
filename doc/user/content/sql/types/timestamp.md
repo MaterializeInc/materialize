@@ -29,7 +29,7 @@ Field | Use
 ------|-----
 **WITH TIME ZONE** | Apply the _tz&lowbar;offset_ field. If not specified, don't.
 **TIMESTAMPTZ** | Apply the _tz&lowbar;offset_ field.
-_date&lowbar;str_ | A string representing a date in `Y-M-D` format.
+_date&lowbar;str_ | _date&lowbar;str_ | A string representing a date in `Y-M-D`, `Y M-D`, `Y M D` or `YMD` format.
 _time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
 _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
 
