@@ -257,7 +257,7 @@ where
     let mut partial = if !prepend_key {
         let mut packer = RowPacker::new();
         ok_input.map(move |(key, row)| {
-            let value = row.iter().skip(index).next().unwrap();
+            let value = row.iter().nth(index).unwrap();
             packer.push(value);
             (key, packer.finish_and_reuse())
         })
