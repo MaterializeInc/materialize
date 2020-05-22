@@ -315,6 +315,16 @@ where
             },
             &op_name,
         ),
+        (DataEncoding::Bytes, DataEncoding::Text) => decode_upsert_inner(
+            stream,
+            OffsetDecoderState {
+                datum_func: bytes_to_datum,
+            },
+            OffsetDecoderState {
+                datum_func: text_to_datum,
+            },
+            &op_name,
+        ),
         (DataEncoding::Bytes, DataEncoding::Bytes) => decode_upsert_inner(
             stream,
             OffsetDecoderState {
@@ -335,7 +345,7 @@ where
             },
             &op_name,
         ),
-        _ => unreachable!(),
+        _ => unreachable!("Unsupported encoding combination"),
     };
     decoded_stream.map(|(key, value, timestamp)| {
         if let Some(value) = value {

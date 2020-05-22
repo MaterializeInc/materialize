@@ -1426,12 +1426,16 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 },
             };
 
-            if let dataflow_types::Envelope::Upsert(_) = envelope {
+            if let dataflow_types::Envelope::Upsert(key_encoding) = &envelope {
                 match &mut encoding {
                     DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
                         *key_schema = None;
                     }
-                    DataEncoding::Bytes | DataEncoding::Text => {}
+                    DataEncoding::Bytes | DataEncoding::Text => {
+                        if let DataEncoding::Avro(_) = &key_encoding {
+                            unsupported!("Avro key for this format");
+                        }
+                    }
                     _ => unsupported!("upsert envelope for this format"),
                 }
             }
