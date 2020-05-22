@@ -200,6 +200,14 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), failur
 
     let (ts_string, tz_string) = crate::datetime::split_timestamp_string(s);
 
+    // Reformat date strings into desired form of 'YYYY-MM-DD', including:
+    // - YYYY MM-DD
+    // - YYYY MM DD
+    // - YYYYMMDD
+    let date_formatter =
+        regex::Regex::new(r"^(?P<y>\d{4})\s*?(?P<m>\d{2})(?:\-|\s+)?(?P<d>\d{2})").unwrap();
+    let ts_string = date_formatter.replace_all(ts_string, "$y-$m-$d");
+
     let pdt = ParsedDateTime::build_parsed_datetime_timestamp(&ts_string)?;
     let d: NaiveDate = pdt.compute_date()?;
     let t: NaiveTime = pdt.compute_time()?;
