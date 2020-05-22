@@ -689,6 +689,10 @@ lazy_static! {
             "ascii" => {
                 params!(String) => Unary(UnaryFunc::Ascii)
             },
+            "btrim" => {
+                params!(String) => Unary(UnaryFunc::TrimWhitespace),
+                params!(String, String) => Binary(BinaryFunc::Trim)
+            },
             "ceil" => {
                 params!(Float32) => Unary(UnaryFunc::CeilFloat32),
                 params!(Float64) => Unary(UnaryFunc::CeilFloat64),
@@ -735,6 +739,10 @@ lazy_static! {
                 params!(String) => Variadic(VariadicFunc::LengthString),
                 params!(String, String) => Variadic(VariadicFunc::LengthString)
             },
+            "ltrim" => {
+                params!(String) => Unary(UnaryFunc::TrimLeadingWhitespace),
+                params!(String, String) => Binary(BinaryFunc::TrimLeading)
+            },
             "replace" => {
                 params!(String, String, String) => Variadic(VariadicFunc::Replace)
             },
@@ -743,6 +751,10 @@ lazy_static! {
                 params!(Float64) => Unary(UnaryFunc::RoundFloat64),
                 params!(Decimal(0,0)) => Unary(UnaryFunc::RoundDecimal(0)),
                 params!(Decimal(0,0), Int64) => Binary(BinaryFunc::RoundDecimal(0))
+            },
+            "rtrim" => {
+                params!(String) => Unary(UnaryFunc::TrimTrailingWhitespace),
+                params!(String, String) => Binary(BinaryFunc::TrimTrailing)
             },
             "substr" => {
                 params!(String, Int64) => Variadic(VariadicFunc::Substr),
