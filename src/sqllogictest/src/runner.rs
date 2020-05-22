@@ -55,43 +55,52 @@ use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::{Session, Statement};
 use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
-use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
+use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
 
 #[derive(Debug)]
 pub enum Outcome<'a> {
     Unsupported {
         error: failure::Error,
+        location: Location,
     },
     ParseFailure {
         error: SqlParserError,
+        location: Location,
     },
     PlanFailure {
         error: failure::Error,
+        location: Location,
     },
     UnexpectedPlanSuccess {
         expected_error: &'a str,
+        location: Location,
     },
     WrongNumberOfRowsInserted {
         expected_count: usize,
         actual_count: usize,
+        location: Location,
     },
     InferenceFailure {
         expected_types: &'a [Type],
         inferred_types: Vec<ColumnType>,
         message: String,
+        location: Location,
     },
     WrongColumnNames {
         expected_column_names: &'a Vec<ColumnName>,
         inferred_column_names: Vec<ColumnName>,
+        location: Location,
     },
     OutputFailure {
         expected_output: &'a Output,
         actual_raw_output: Vec<Row>,
         actual_output: Output,
+        location: Location,
     },
     Bail {
         cause: Box<Outcome<'a>>,
+        location: Location,
     },
     Success,
 }
@@ -128,32 +137,44 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error } => write_err("Unsupported", error, f),
-            ParseFailure { error } => write_err("ParseFailure", error, f),
-            PlanFailure { error } => write_err("PlanFailure", error, f),
-            UnexpectedPlanSuccess { expected_error } => write!(
+            Unsupported { error, location } => {
+                write_err(&format!("Unsupported:{}", location), error, f)
+            }
+            ParseFailure { error, location } => {
+                write_err(&format!("ParseFailure:{}", location), error, f)
+            }
+            PlanFailure { error, location } => {
+                write_err(&format!("PlanFailure:{}", location), error, f)
+            }
+            UnexpectedPlanSuccess {
+                expected_error,
+                location,
+            } => write!(
                 f,
-                "UnexpectedPlanSuccess! expected error: {}",
-                expected_error
+                "UnexpectedPlanSuccess:{} expected error: {}",
+                location, expected_error
             ),
             WrongNumberOfRowsInserted {
                 expected_count,
                 actual_count,
+                location,
             } => write!(
                 f,
-                "WrongNumberOfRowsInserted!{}expected: {}{}actually: {}",
-                INDENT, expected_count, INDENT, actual_count
+                "WrongNumberOfRowsInserted:{}{}expected: {}{}actually: {}",
+                location, INDENT, expected_count, INDENT, actual_count
             ),
             InferenceFailure {
                 expected_types,
                 inferred_types,
                 message,
+                location,
             } => write!(
                 f,
-                "Inference Failure!{}\
+                "Inference Failure:{}{}\
                  expected types: {}{}\
                  inferred types: {}{}\
                  message: {}",
+                location,
                 INDENT,
                 expected_types
                     .iter()
@@ -172,9 +193,11 @@ impl fmt::Display for Outcome<'_> {
             WrongColumnNames {
                 expected_column_names,
                 inferred_column_names,
+                location,
             } => write!(
                 f,
-                "Wrong Column Names:{}expected column names: {}{}inferred column names: {}",
+                "Wrong Column Names:{}:{}expected column names: {}{}inferred column names: {}",
+                location,
                 INDENT,
                 expected_column_names
                     .iter()
@@ -192,12 +215,13 @@ impl fmt::Display for Outcome<'_> {
                 expected_output,
                 actual_raw_output,
                 actual_output,
+                location,
             } => write!(
                 f,
-                "OutputFailure!{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
-                INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
+                "OutputFailure:{}{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
+                location, INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
-            Bail { cause } => write!(f, "Bail! {}", cause),
+            Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             Success => f.write_str("Success"),
         }
     }
@@ -437,22 +461,30 @@ impl State {
                 expected_error,
                 rows_affected,
                 sql,
-            } => match self.run_statement(*expected_error, *rows_affected, sql)? {
-                Outcome::Success => Ok(Outcome::Success),
-                other => {
-                    if expected_error.is_some() {
-                        Ok(other)
-                    } else {
-                        // If we failed to execute a statement that was supposed to succeed,
-                        // running the rest of the tests in this file will probably cause
-                        // false positives, so just give up on the file entirely.
-                        Ok(Outcome::Bail {
-                            cause: Box::new(other),
-                        })
+                location,
+            } => {
+                match self.run_statement(*expected_error, *rows_affected, sql, location.clone())? {
+                    Outcome::Success => Ok(Outcome::Success),
+                    other => {
+                        if expected_error.is_some() {
+                            Ok(other)
+                        } else {
+                            // If we failed to execute a statement that was supposed to succeed,
+                            // running the rest of the tests in this file will probably cause
+                            // false positives, so just give up on the file entirely.
+                            Ok(Outcome::Bail {
+                                cause: Box::new(other),
+                                location: location.clone(),
+                            })
+                        }
                     }
                 }
-            },
-            Record::Query { sql, output } => self.run_query(sql, output),
+            }
+            Record::Query {
+                sql,
+                output,
+                location,
+            } => self.run_query(sql, output, location.clone()),
             _ => Ok(Outcome::Success),
         }
     }
@@ -462,6 +494,7 @@ impl State {
         expected_error: Option<&'a str>,
         expected_rows_affected: Option<usize>,
         sql: &'a str,
+        location: Location,
     ) -> Result<Outcome<'a>, failure::Error> {
         lazy_static! {
             static ref UNSUPPORTED_INDEX_STATEMENT_REGEX: Regex =
@@ -475,7 +508,10 @@ impl State {
         match self.run_sql(sql) {
             Ok((_desc, resp)) => {
                 if let Some(expected_error) = expected_error {
-                    return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
+                    return Ok(Outcome::UnexpectedPlanSuccess {
+                        expected_error,
+                        location,
+                    });
                 }
                 match expected_rows_affected {
                     None => Ok(Outcome::Success),
@@ -487,6 +523,7 @@ impl State {
                                 Ok(Outcome::WrongNumberOfRowsInserted {
                                     expected_count: expected,
                                     actual_count: actual,
+                                    location,
                                 })
                             } else {
                                 Ok(Outcome::Success)
@@ -498,6 +535,7 @@ impl State {
                                 "Query did not insert any rows, expected {}",
                                 expected,
                             ),
+                            location,
                         }),
                     },
                 }
@@ -508,7 +546,7 @@ impl State {
                         return Ok(Outcome::Success);
                     }
                 }
-                Ok(Outcome::PlanFailure { error })
+                Ok(Outcome::PlanFailure { error, location })
             }
         }
     }
@@ -517,6 +555,7 @@ impl State {
         &mut self,
         sql: &'a str,
         output: &'a Result<QueryOutput, &'a str>,
+        location: Location,
     ) -> Result<Outcome<'a>, failure::Error> {
         // get statement
         let statements = match SqlParser::parse_sql(sql.to_string()) {
@@ -525,7 +564,7 @@ impl State {
                 if output.is_err() {
                     return Ok(Outcome::Success);
                 } else {
-                    return Ok(Outcome::ParseFailure { error });
+                    return Ok(Outcome::ParseFailure { error, location });
                 }
             }
         };
@@ -565,6 +604,7 @@ impl State {
                         "Query did not result in SendingRows, instead got {:?}",
                         other
                     ),
+                    location,
                 });
             }
             Err(e) => (RelationDesc::empty(), Err(e)),
@@ -578,16 +618,16 @@ impl State {
                         let error_string = format!("{}", error);
                         if error_string.contains("supported") || error_string.contains("overload") {
                             // this is a failure, but it's caused by lack of support rather than by bugs
-                            Ok(Outcome::Unsupported { error })
+                            Ok(Outcome::Unsupported { error, location })
                         } else {
-                            Ok(Outcome::PlanFailure { error })
+                            Ok(Outcome::PlanFailure { error, location })
                         }
                     }
                     Err(expected_error) => {
                         if Regex::new(expected_error)?.is_match(&error.to_string()) {
                             Ok(Outcome::Success)
                         } else {
-                            Ok(Outcome::PlanFailure { error })
+                            Ok(Outcome::PlanFailure { error, location })
                         }
                     }
                 };
@@ -604,7 +644,10 @@ impl State {
             ..
         } = match output {
             Err(expected_error) => {
-                return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
+                return Ok(Outcome::UnexpectedPlanSuccess {
+                    expected_error,
+                    location,
+                });
             }
             Ok(query_output) => query_output,
         };
@@ -622,6 +665,7 @@ impl State {
                     expected_types.len(),
                     inferred_types.len()
                 ),
+                location,
             });
         }
 
@@ -637,6 +681,7 @@ impl State {
                         inferred_types.len(),
                         row
                     ),
+                    location,
                 });
             }
             for (inferred_type, datum) in inferred_types.iter().zip(row.iter()) {
@@ -648,6 +693,7 @@ impl State {
                             "Inferred type {:?}, got datum {:?}",
                             inferred_type, datum,
                         ),
+                        location,
                     });
                 }
             }
@@ -663,6 +709,7 @@ impl State {
                 return Ok(Outcome::WrongColumnNames {
                     expected_column_names,
                     inferred_column_names,
+                    location,
                 });
             }
         }
@@ -690,6 +737,7 @@ impl State {
                         expected_output,
                         actual_raw_output: raw_output,
                         actual_output: Output::Values(values),
+                        location,
                     });
                 }
             }
@@ -711,6 +759,7 @@ impl State {
                             num_values: values.len(),
                             md5,
                         },
+                        location,
                     });
                 }
             }
@@ -787,8 +836,9 @@ fn print_record(record: &Record) {
 pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcomes, failure::Error> {
     let mut outcomes = Outcomes::default();
     let mut state = State::start().unwrap();
+    let mut parser = crate::parser::Parser::new(source, input);
     println!("==> {}", source);
-    for record in crate::parser::parse_records(&input)? {
+    for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
@@ -846,8 +896,9 @@ pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), failure::E
     let mut buf = RewriteBuffer::new(&input);
 
     let mut state = State::start()?;
+    let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     println!("==> {}", filename.display());
-    for record in crate::parser::parse_records(&input)? {
+    for record in parser.parse_records()? {
         let record = record;
         let outcome = state.run_record(&record)?;
 

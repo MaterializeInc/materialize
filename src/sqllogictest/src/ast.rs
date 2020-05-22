@@ -9,6 +9,21 @@
 
 //! Abstract syntax tree nodes for sqllogictest.
 
+use std::fmt;
+
+/// A location in a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    pub file: String,
+    pub line: usize,
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}:{}", self.file, self.line)
+    }
+}
+
 /// The declared type of an output column in a query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -98,12 +113,14 @@ pub struct QueryOutput<'a> {
 pub enum Record<'a> {
     // A `statement` directive.
     Statement {
+        location: Location,
         expected_error: Option<&'a str>,
         rows_affected: Option<usize>,
         sql: &'a str,
     },
     /// A `query` directive.
     Query {
+        location: Location,
         sql: &'a str,
         output: Result<QueryOutput<'a>, &'a str>,
     },
