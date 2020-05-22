@@ -896,19 +896,22 @@ impl PendingPeek {
         while cursor.key_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
             while cursor.val_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
                 let row = cursor.val(&storage);
-                datums.clear();
-                datums.extend(row.iter());
-                // Before (expensively) determining how many copies of a row
-                // we have, let's eliminate rows that we don't care about.
+
                 let mut retain = true;
-                let temp_storage = RowArena::new();
-                for predicate in &self.filter {
-                    let d = predicate
-                        .eval(&datums, &temp_storage)
-                        .map_err(|e| e.to_string())?;
-                    if d != Datum::True {
-                        retain = false;
-                        break;
+                if !self.filter.is_empty() {
+                    datums.clear();
+                    datums.extend(row.iter());
+                    // Before (expensively) determining how many copies of a row
+                    // we have, let's eliminate rows that we don't care about.
+                    let temp_storage = RowArena::new();
+                    for predicate in &self.filter {
+                        let d = predicate
+                            .eval(&datums, &temp_storage)
+                            .map_err(|e| e.to_string())?;
+                        if d != Datum::True {
+                            retain = false;
+                            break;
+                        }
                     }
                 }
                 if retain {
