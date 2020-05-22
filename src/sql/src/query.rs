@@ -33,7 +33,7 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, FunctionArgs, Ident, JoinConstraint,
     JoinOperator, ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
-    TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    TableAlias, TableFactor, TableWithJoins, TrimSide, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -1465,6 +1465,15 @@ fn plan_expr_returning_name<'a>(
                         None,
                     )
                 }
+            }
+            Expr::Trim { side, exprs } => {
+                let ident = match side {
+                    TrimSide::Both => "btrim",
+                    TrimSide::Leading => "ltrim",
+                    TrimSide::Trailing => "rtrim",
+                };
+
+                (super::func::select_scalar_func(ecx, ident, exprs)?, None)
             }
             Expr::Extract { field, expr } => {
                 // No type hint passed to `plan_expr`, because `expr` can be

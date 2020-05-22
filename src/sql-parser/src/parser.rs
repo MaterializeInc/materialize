@@ -307,6 +307,7 @@ impl Parser {
                     op: UnaryOperator::Not,
                     expr: Box::new(self.parse_subexpr(Precedence::UnaryNot)?),
                 }),
+                "TRIM" => self.parse_trim_expr(),
                 // Here `w` is a word, check if it's a part of a multi-part
                 // identifier, a function call, or a simple identifier:
                 w if keywords::RESERVED_FOR_EXPRESSIONS.contains(&w) => {
@@ -583,6 +584,43 @@ impl Parser {
             Ok(f) => Ok(f),
             Err(_) => self.expected(self.peek_prev_range(), "valid extract field", tok)?,
         }
+    }
+
+    // Parse calls to trim(), which can take the form:
+    // - trim(side 'chars' from 'string')
+    // - trim('chars' from 'string')
+    // - trim(side from 'string')
+    // - trim(from 'string')
+    // - trim('string')
+    // - trim(side 'string')
+    pub fn parse_trim_expr(&mut self) -> Result<Expr, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let mut exprs = Vec::new();
+        let side = self.parse_trim_side();
+        if self.parse_keyword("FROM") {
+            // 'string'
+            exprs.push(self.parse_expr()?);
+        } else {
+            // Either 'chars' or 'string'
+            exprs.push(self.parse_expr()?);
+            if self.parse_keyword("FROM") {
+                // 'string'; previous must be 'chars'
+                // Swap 'chars' and 'string' for compatibility with btrim, ltrim, and rtrim.
+                exprs.insert(0, self.parse_expr()?);
+            }
+        }
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::Trim { side, exprs })
+    }
+
+    pub fn parse_trim_side(&mut self) -> TrimSide {
+        if let Some(Token::Word(ref k)) = self.peek_token() {
+            if let Ok(f) = k.keyword.parse() {
+                self.next_token();
+                return f;
+            }
+        }
+        TrimSide::Both
     }
 
     /// Parse an INTERVAL literal.

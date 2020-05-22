@@ -97,6 +97,12 @@
   - signature: 'ascii(s: str) -> int'
     description: The ASCII value of `s`'s left-most character
 
+  - signature: 'btrim(s: str) -> str'
+    description: Trim all spaces from both sides of `s`.
+
+  - signature: 'btrim(s: str, c: str) -> str'
+    description: Trim any character in `c` from both sides of `s`.
+
   - signature: 'length(s: str) -> int'
     description: Number of graphemes in `s`
     url: length
@@ -105,8 +111,23 @@
     description: Number of graphemes in `s` using `encoding_name`
     url: length
 
+  - signature: 'ltrim(s: str) -> str'
+    description: Trim all spaces from the left side of `s`.
+
+  - signature: 'btrim(s: str, c: str) -> str'
+    description: Trim any character in `c` from the left sides of `s`.
+
+  - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
+    description: Values of the capture groups of `regex` as matched in `haystack`
+
   - signature: 'replace(s: str, f: str, r: str) -> str'
     description: "`s` with all instances of `f` replaced with `r`"
+
+  - signature: 'rtrim(s: str) -> str'
+    description: Trim all spaces from the right side of `s`.
+
+  - signature: 'rtrim(s: str, c: str) -> str'
+    description: Trim any character in `c` from the right side of `s`.
 
   - signature: 'substring(s: str, start_pos: int) -> str'
     description: Substring of `s` starting at `start_pos`
@@ -116,8 +137,10 @@
     description: Substring starting at `start_pos` of length `l`
     url: substring
 
-  - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
-    description: Values of the capture groups of `regex` as matched in `haystack`
+  - signature: "trim([BOTH | LEADING | TRAILING]? 'c'? FROM 's') -> str"
+    description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
+      &bull; Side: `BOTH`<br/>
+      &bull; `'c'`: `' '` (space)"
 
 - type: Scalar
   description: Scalar functions take a list of scalar expressions

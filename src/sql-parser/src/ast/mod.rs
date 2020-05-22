@@ -63,7 +63,7 @@ pub use self::query::{
     Cte, Fetch, Join, JoinConstraint, JoinOperator, OrderByExpr, Query, Select, SelectItem,
     SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Values,
 };
-pub use self::value::{ExtractField, IntervalValue, Value};
+pub use self::value::{ExtractField, IntervalValue, TrimSide, Value};
 use std::path::PathBuf;
 
 use crate::keywords::is_reserved_keyword;
@@ -239,7 +239,10 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// Unary operation e.g. `NOT foo`
-    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
+    UnaryOp {
+        op: UnaryOperator,
+        expr: Box<Expr>,
+    },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr>,
@@ -248,6 +251,10 @@ pub enum Expr {
     Extract {
         field: ExtractField,
         expr: Box<Expr>,
+    },
+    Trim {
+        side: TrimSide,
+        exprs: Vec<Expr>,
     },
     /// `expr COLLATE collation`
     Collate {
@@ -376,6 +383,16 @@ impl AstDisplay for Expr {
                 f.write_node(field);
                 f.write_str(" FROM ");
                 f.write_node(&expr);
+                f.write_str(")");
+            }
+            Expr::Trim { side, exprs } => {
+                f.write_node(side);
+                f.write_str("(");
+                f.write_node(&exprs[0]);
+                if exprs.len() == 2 {
+                    f.write_str(", ");
+                    f.write_node(&exprs[1]);
+                }
                 f.write_str(")");
             }
             Expr::Collate { expr, collation } => {

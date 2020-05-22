@@ -3009,6 +3009,54 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     Datum::Timestamp(timestamp)
 }
 
+fn trim_both<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    match datums.len() {
+        1 => Datum::from(datums[0].unwrap_str().trim_matches(' ')),
+        2 => {
+            let trim_chars = datums[1].unwrap_str();
+
+            Datum::from(
+                datums[0]
+                    .unwrap_str()
+                    .trim_matches(|c| trim_chars.contains(c)),
+            )
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn trim_leading<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    match datums.len() {
+        1 => Datum::from(datums[0].unwrap_str().trim_start_matches(' ')),
+        2 => {
+            let trim_chars = datums[1].unwrap_str();
+
+            Datum::from(
+                datums[0]
+                    .unwrap_str()
+                    .trim_start_matches(|c| trim_chars.contains(c)),
+            )
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn trim_trailing<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    match datums.len() {
+        1 => Datum::from(datums[0].unwrap_str().trim_end_matches(' ')),
+        2 => {
+            let trim_chars = datums[1].unwrap_str();
+
+            Datum::from(
+                datums[0]
+                    .unwrap_str()
+                    .trim_end_matches(|c| trim_chars.contains(c)),
+            )
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -3023,6 +3071,9 @@ pub enum VariadicFunc {
         // we need to know this to type exprs with empty lists
         elem_type: ScalarType,
     },
+    TrimBoth,
+    TrimLeading,
+    TrimTrailing,
 }
 
 impl VariadicFunc {
@@ -3054,6 +3105,9 @@ impl VariadicFunc {
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
             VariadicFunc::ListCreate { .. } => Ok(eager!(list_create, temp_storage)),
+            VariadicFunc::TrimBoth => Ok(eager!(trim_both)),
+            VariadicFunc::TrimLeading => Ok(eager!(trim_leading)),
+            VariadicFunc::TrimTrailing => Ok(eager!(trim_trailing)),
         }
     }
 
@@ -3080,7 +3134,9 @@ impl VariadicFunc {
                     known_types.into_first().clone().nullable(true)
                 }
             }
-            Concat => ColumnType::new(ScalarType::String).nullable(true),
+            Concat | TrimBoth | TrimLeading | TrimTrailing => {
+                ColumnType::new(ScalarType::String).nullable(true)
+            }
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
@@ -3106,7 +3162,10 @@ impl VariadicFunc {
             | VariadicFunc::Concat
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
-            | VariadicFunc::ListCreate { .. } => false,
+            | VariadicFunc::ListCreate { .. }
+            | VariadicFunc::TrimBoth
+            | VariadicFunc::TrimLeading
+            | VariadicFunc::TrimTrailing => false,
             _ => true,
         }
     }
@@ -3124,6 +3183,9 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
+            VariadicFunc::TrimBoth => f.write_str("btrim"),
+            VariadicFunc::TrimLeading => f.write_str("ltrim"),
+            VariadicFunc::TrimTrailing => f.write_str("rtrim"),
         }
     }
 }

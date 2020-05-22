@@ -318,3 +318,66 @@ FROM (
 )
 ----
 NULL
+
+query T
+SELECT trim(LEADING 'xy' FROM 'yxytrimyxy');
+----
+trimyxy
+
+query T
+SELECT ltrim('yxytrimyxy', 'xy');
+----
+trimyxy
+
+query T
+SELECT rtrim('yxytrimyxy', 'xy');
+----
+yxytrim
+
+query T
+SELECT btrim('yxytrimyxy', 'xy');
+----
+trim
+
+query T
+SELECT btrim('  yxytrimyxy  ');
+----
+yxytrimyxy
+
+query T
+SELECT rtrim('yxytrimyxy  ');
+----
+yxytrimyxy
+
+query T
+SELECT ltrim('   yxytrimyxy');
+----
+yxytrimyxy
+
+query T
+SELECT trim('xy' FROM 'yxytrimyxy');
+----
+trim
+
+query T
+SELECT trim(TRAILING FROM 'yxytrimyxy  ');
+----
+yxytrimyxy
+
+query T
+SELECT trim(FROM '  yxytrimyxy  ');
+----
+yxytrimyxy
+
+query T
+SELECT trim('   yxytrimyxy  ');
+----
+yxytrimyxy
+
+query T
+SELECT trim(LEADING '   yxytrimyxy');
+----
+yxytrimyxy
+
+statement error
+SELECT trim('c' 'ccccdogcc');
