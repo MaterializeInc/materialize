@@ -28,6 +28,7 @@ use std::{f32, f64};
 use chrono::offset::TimeZone;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use failure::{bail, format_err};
+use lazy_static::lazy_static;
 
 use ore::fmt::FormatBuffer;
 
@@ -199,6 +200,16 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), failur
     }
 
     let (ts_string, tz_string) = crate::datetime::split_timestamp_string(s);
+
+    // Reformat date strings into desired form of 'YYYY-MM-DD', including:
+    // - YYYY MM-DD
+    // - YYYY MM DD
+    // - YYYYMMDD
+    lazy_static! {
+        static ref DATE_FORMATTER: regex::Regex =
+            regex::Regex::new(r"^(?P<y>\d{4})\s*?(?P<m>\d{2})(?:\-|\s+)?(?P<d>\d{2})").unwrap();
+    }
+    let ts_string = DATE_FORMATTER.replace_all(ts_string, "$y-$m-$d");
 
     let pdt = ParsedDateTime::build_parsed_datetime_timestamp(&ts_string)?;
     let d: NaiveDate = pdt.compute_date()?;

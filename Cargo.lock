@@ -2671,6 +2671,7 @@ dependencies = [
  "criterion",
  "failure",
  "hex",
+ "lazy_static",
  "ordered-float",
  "ore",
  "rand",
