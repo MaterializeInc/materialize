@@ -42,7 +42,7 @@ records         YES jsonb
     records->1->'measurements'->1->'measured_value',
     records->1->>'meter'
   FROM billing
-  WHERE id = 2
+  WHERE id = '2'
 25.0  5.0  user  125.0  256.0  user
 
 # Do some destructuring over the nested records
