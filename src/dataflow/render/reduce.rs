@@ -20,11 +20,10 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
-use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr};
+use expr::{AggregateExpr, AggregateFunc, RelationExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
-use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Arrangement;
 
 impl<G, T> Context<G, RelationExpr, Row, T>
@@ -64,34 +63,99 @@ where
             let keys_clone = group_key.clone();
             let relation_expr_clone = relation_expr.clone();
 
-            let (ok_input, err_input) = self.collection(input).unwrap();
+            // Our first step is to extract `(key, vals)` from `input`.
+            // We do this carefully, attempting to avoid unneccesary allocations
+            // that would result from cloning rows in input arrangements.
+            let group_key_owned = group_key.to_vec();
+            let aggregates_owned = aggregates.to_vec();
+
+            let mut support = 0;
+            for key in group_key.iter() {
+                for column in key.support() {
+                    if column > support {
+                        support = column;
+                    }
+                }
+            }
+            for aggr in aggregates.iter() {
+                for column in aggr.expr.support() {
+                    if column > support {
+                        support = column;
+                    }
+                }
+            }
+
+            let mut row_packer = RowPacker::new();
+            let (key_input, mut err_input): (
+                Collection<_, Result<(Row, Row), DataflowError>, _>,
+                _,
+            ) = self
+                .flat_map_ref(input, move |row| {
+                    let temp_storage = RowArena::new();
+                    let mut results = Vec::new();
+                    // First, evaluate the key selector expressions.
+                    // If any error we produce their errors as output and note
+                    // the fact that the key was not correctly produced.
+                    let datums = row.iter().take(support + 1).collect::<Vec<_>>();
+                    for expr in group_key_owned.iter() {
+                        match expr.eval(&datums, &temp_storage) {
+                            Ok(val) => row_packer.push(val),
+                            Err(e) => {
+                                results.push(Err(e.into()));
+                            }
+                        }
+                    }
+
+                    // Second, evaluate the value selector.
+                    // If any error occurs we produce both the error as output,
+                    // but also a `Datum::Null` value to avoid causing the later
+                    // "ReduceCollation" operator to panic due to absent aggregates.
+                    if results.is_empty() {
+                        let key = row_packer.finish_and_reuse();
+                        for aggr in aggregates_owned.iter() {
+                            match aggr.expr.eval(&datums, &temp_storage) {
+                                Ok(val) => {
+                                    row_packer.push(val);
+                                }
+                                Err(e) => {
+                                    row_packer.push(Datum::Null);
+                                    results.push(Err(e.into()));
+                                }
+                            }
+                        }
+                        let row = row_packer.finish_and_reuse();
+                        results.push(Ok((key, row)));
+                    }
+                    // Return accumulated results.
+                    results
+                })
+                .unwrap();
+
+            // Demux out the potential errors from key and value selector evaluation.
+            use timely::dataflow::operators::ok_err::OkErr;
+            let (ok, err) = key_input.inner.ok_err(|(x, t, d)| match x {
+                Ok(x) => Ok((x, t, d)),
+                Err(x) => Err((x, t, d)),
+            });
+
+            let ok_input = ok.as_collection();
+            err_input = err.as_collection().concat(&err_input);
 
             // Distinct is a special case, as there are no aggregates to aggregate.
             // In this case, we use a special implementation that does not rely on
             // collating aggregates.
             let (oks, errs) = if aggregates.is_empty() {
-                let (ok_collection, err_collection) = ok_input.map_fallible({
-                    let group_key = group_key.clone();
-                    move |row| {
-                        let temp_storage = RowArena::new();
-                        let datums = row.unpack();
-                        let key = Row::try_pack(
-                            group_key.iter().map(|i| i.eval(&datums, &temp_storage)),
-                        )?;
-                        Ok::<_, DataflowError>((key, ()))
-                    }
-                });
                 (
-                    ok_collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
+                    ok_input.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
                         |key, _input, output| {
                             output.push((key.clone(), 1));
                         }
                     }),
-                    err_input.concat(&err_collection),
+                    err_input,
                 )
             } else if aggregates.len() == 1 {
                 // If we have a single aggregate, we need not stage aggregations separately.
-                build_aggregate_stage(ok_input, err_input, group_key, &aggregates[0], true)
+                build_aggregate_stage(ok_input, err_input, 0, &aggregates[0], true)
             } else {
                 // We'll accumulate partial aggregates here, where each contains updates
                 // of the form `(key, (index, value))`. This is eventually concatenated,
@@ -108,7 +172,7 @@ where
                         let (ok_partial, err_partial) = build_aggregate_stage(
                             ok_input.enter(region),
                             err_input.enter(region),
-                            group_key,
+                            index,
                             aggr,
                             false,
                         );
@@ -155,7 +219,7 @@ where
                         result.extend(key.iter());
                         for ((_pos, val), cnt) in input.iter() {
                             assert_eq!(*cnt, 1);
-                            result.push(val.unpack().pop().unwrap());
+                            result.push(val.unpack_first());
                         }
                         output.push((result.finish(), 1));
                     }
@@ -174,9 +238,9 @@ where
 /// This method accommodates in-place aggregations like sums, hierarchical aggregations like min and max,
 /// and other aggregations that may be neither of those things. It also applies distinctness if required.
 fn build_aggregate_stage<G>(
-    ok_input: Collection<G, Row>,
+    ok_input: Collection<G, (Row, Row)>,
     err_input: Collection<G, DataflowError>,
-    group_key: &[ScalarExpr],
+    index: usize,
     aggr: &AggregateExpr,
     prepend_key: bool,
 ) -> (Arrangement<G, Row>, Collection<G, DataflowError>)
@@ -186,69 +250,20 @@ where
 {
     let AggregateExpr {
         func,
-        expr,
+        expr: _,
         distinct,
     } = aggr.clone();
 
-    // It is important that in the case of an error in the value selector we still provide a
-    // value, so that the aggregation produces an aggregate with the correct key. If we do not,
-    // the `ReduceCollation` operator panics.
-    use timely::dataflow::channels::pact::Pipeline;
-    let (partial, err_partial) =
+    let mut partial = if !prepend_key {
+        let mut packer = RowPacker::new();
+        ok_input.map(move |(key, row)| {
+            let value = row.iter().skip(index).next().unwrap();
+            packer.push(value);
+            (key, packer.finish_and_reuse())
+        })
+    } else {
         ok_input
-            .inner
-            .unary_fallible(Pipeline, "ReduceStagePreparation", |_cap, _info| {
-                let group_key = group_key.to_vec();
-                let mut storage = Vec::new();
-                move |input, ok_output, err_output| {
-                    input.for_each(|time, data| {
-                        let temp_storage = RowArena::new();
-                        let mut ok_session = ok_output.session(&time);
-                        let mut err_session = err_output.session(&time);
-                        data.swap(&mut storage);
-                        for (row, t, diff) in storage.drain(..) {
-                            // First, evaluate the key selector expressions.
-                            // If any error we produce their errors as output and note
-                            // the fact that the key was not correctly produced.
-                            let mut key_packer = RowPacker::new();
-                            let mut error_free = true;
-                            let datums = row.unpack();
-                            for expr in group_key.iter() {
-                                match expr.eval(&datums, &temp_storage) {
-                                    Ok(val) => key_packer.push(val),
-                                    Err(e) => {
-                                        err_session.give((e.into(), t.clone(), diff));
-                                        error_free = false;
-                                    }
-                                }
-                            }
-                            // Second, evaluate the value selector.
-                            // If any error occurs we produce both the error as output,
-                            // but also a `Datum::Null` value to avoid causing the later
-                            // "ReduceCollation" operator to panic due to absent aggregates.
-                            if error_free {
-                                let key = key_packer.finish();
-                                match expr.eval(&datums, &temp_storage) {
-                                    Ok(val) => {
-                                        ok_session.give(((key, Row::pack(Some(val))), t, diff));
-                                    }
-                                    Err(e) => {
-                                        ok_session.give((
-                                            (key, Row::pack(Some(Datum::Null))),
-                                            t.clone(),
-                                            diff,
-                                        ));
-                                        err_session.give((e.into(), t, diff));
-                                    }
-                                }
-                            }
-                        }
-                    })
-                }
-            });
-
-    let mut partial = partial.as_collection();
-    let err_partial = err_partial.as_collection();
+    };
 
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
@@ -301,7 +316,7 @@ where
         })
     };
 
-    (ok_out, err_input.concat(&err_partial))
+    (ok_out, err_input)
 }
 
 /// Builds the dataflow for a reduction that can be performed in-place.
@@ -319,6 +334,7 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
+    use differential_dataflow::operators::consolidate::ConsolidateStream;
     use timely::dataflow::operators::map::Map;
 
     let float_scale = f64::from(1 << 24);
@@ -330,7 +346,7 @@ where
         .explode({
             let aggr = aggr.clone();
             move |(key, row)| {
-                let datum = row.unpack()[0];
+                let datum = row.unpack_first();
                 let (aggs, nonnulls) = match aggr {
                     AggregateFunc::CountAll => {
                         // Nothing beyond the accumulated count is needed.
@@ -373,6 +389,7 @@ where
                 ))
             }
         })
+        .consolidate_stream()
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
             "ReduceAccumulable",
             move |key, input, output| {

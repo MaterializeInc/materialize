@@ -138,6 +138,45 @@ where
         }
     }
 
+    /// Applies logic to elements of a collection and returns the results.
+    ///
+    /// This method allows savvy users to avoid the potential allocation
+    /// required by `self.collection(expr)` when converting data from an
+    /// arrangement; if less data are required, the `logic` argument is able
+    /// to use a reference and produce the minimal amount of data instead.
+    pub fn flat_map_ref<I, L>(
+        &self,
+        relation_expr: &P,
+        mut logic: L,
+    ) -> Option<(
+        Collection<S, I::Item, Diff>,
+        Collection<S, DataflowError, Diff>,
+    )>
+    where
+        I: IntoIterator,
+        I::Item: Data,
+        L: FnMut(&V) -> I + 'static,
+    {
+        if let Some((oks, err)) = self.collections.get(relation_expr) {
+            Some((oks.flat_map(move |v| logic(&v)), err.clone()))
+        } else if let Some(local) = self.local.get(relation_expr) {
+            let (oks, errs) = local.values().next().expect("Empty arrangement");
+            Some((
+                oks.flat_map_ref(move |_k, v| logic(v)),
+                errs.as_collection(|k, _v| k.clone()),
+            ))
+        } else if let Some(trace) = self.trace.get(relation_expr) {
+            let (_id, oks, errs) = trace.values().next().expect("Empty arrangement");
+            Some((
+                // oks.as_collection(|_k, v| v.clone()),
+                oks.flat_map_ref(move |_k, v| logic(v)),
+                errs.as_collection(|k, _v| k.clone()),
+            ))
+        } else {
+            None
+        }
+    }
+
     /// Convenience method for accessing `arrangement` when all keys are plain columns
     pub fn arrangement_columns(
         &self,
