@@ -155,13 +155,15 @@ where
                 )
             } else if aggregates.len() == 1 {
                 // If we have a single aggregate, we need not stage aggregations separately.
-                build_aggregate_stage(ok_input, err_input, 0, &aggregates[0], true)
+                (
+                    build_aggregate_stage(ok_input, 0, &aggregates[0], true),
+                    err_input,
+                )
             } else {
                 // We'll accumulate partial aggregates here, where each contains updates
                 // of the form `(key, (index, value))`. This is eventually concatenated,
                 // and fed into a final reduce to put the elements in order.
                 let mut ok_partials = Vec::with_capacity(aggregates.len());
-                let mut err_partials = Vec::with_capacity(aggregates.len());
                 // Bound the complex dataflow in a region, for better interpretability.
                 scope.region(|region| {
                     // Create an iterator over collections, where each is the application
@@ -169,19 +171,13 @@ where
                     // position in the final results. To be followed by a merge reduction.
                     for (index, aggr) in aggregates.iter().enumerate() {
                         // Collect the now-aggregated partial result, annotated with its position.
-                        let (ok_partial, err_partial) = build_aggregate_stage(
-                            ok_input.enter(region),
-                            err_input.enter(region),
-                            index,
-                            aggr,
-                            false,
-                        );
+                        let ok_partial =
+                            build_aggregate_stage(ok_input.enter(region), index, aggr, false);
                         ok_partials.push(
                             ok_partial
                                 .as_collection(move |key, val| (key.clone(), (index, val.clone())))
                                 .leave(),
                         );
-                        err_partials.push(err_partial.leave());
                     }
                 });
 
@@ -224,8 +220,7 @@ where
                         output.push((result.finish(), 1));
                     }
                 });
-                let errs = differential_dataflow::collection::concatenate(scope, err_partials);
-                (oks, errs)
+                (oks, err_input)
             };
             let index = (0..keys_clone.len()).collect::<Vec<_>>();
             self.set_local_columns(relation_expr, &index[..], (oks, errs.arrange()));
@@ -239,11 +234,10 @@ where
 /// and other aggregations that may be neither of those things. It also applies distinctness if required.
 fn build_aggregate_stage<G>(
     ok_input: Collection<G, (Row, Row)>,
-    err_input: Collection<G, DataflowError>,
     index: usize,
     aggr: &AggregateExpr,
     prepend_key: bool,
-) -> (Arrangement<G, Row>, Collection<G, DataflowError>)
+) -> Arrangement<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -316,7 +310,7 @@ where
         })
     };
 
-    (ok_out, err_input)
+    ok_out
 }
 
 /// Builds the dataflow for a reduction that can be performed in-place.
