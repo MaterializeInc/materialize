@@ -21,7 +21,6 @@ EXPLAIN PLAN FOR SELECT b FROM (SELECT b, not(b) as neg FROM x) WHERE NOT(neg)
 %0 =
 | Get materialize.public.x (u1)
 | Filter #2
-| Map null
 | Project (#2)
 
 EOF
@@ -32,7 +31,6 @@ EXPLAIN PLAN FOR SELECT b FROM (SELECT b, b = false as neg FROM x) WHERE NOT(neg
 %0 =
 | Get materialize.public.x (u1)
 | Filter (#2 != false)
-| Map null
 | Project (#2)
 
 EOF
@@ -46,7 +44,6 @@ EXPLAIN PLAN FOR
 %0 =
 | Get materialize.public.x (u1)
 | Filter (#1 = 2), (#0 != 3)
-| Map false, null
 | Project (#0)
 
 EOF

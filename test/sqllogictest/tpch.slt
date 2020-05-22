@@ -1661,7 +1661,7 @@ ORDER BY
 
 %11 =
 | Get %9
-| ArrangeBy (#7, #0)
+| ArrangeBy (#0, #7)
 
 %12 =
 | Get %10
@@ -1690,7 +1690,7 @@ ORDER BY
 
 %18 =
 | Join %11 %16 %17 (= #0 #39 #41) (= #7 #38 #40)
-| | implementation = Differential %16 %17.(#0, #1) %11.(#7, #0)
+| | implementation = Differential %16 %17.(#0, #1) %11.(#0, #7)
 | | demand = (#1)
 | Reduce group=(#1) countall(null)
 

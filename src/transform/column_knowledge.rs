@@ -44,15 +44,10 @@ impl ColumnKnowledge {
     ) -> Result<Vec<DatumKnowledge>, crate::TransformError> {
         Ok(match expr {
             RelationExpr::ArrangeBy { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
-            RelationExpr::Get { id, typ } => knowledge.get(id).cloned().unwrap_or_else(|| {
-                typ.column_types
-                    .iter()
-                    .map(|ct| DatumKnowledge {
-                        value: None,
-                        nullable: ct.nullable,
-                    })
-                    .collect()
-            }),
+            RelationExpr::Get { id, typ } => knowledge
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| typ.column_types.iter().map(DatumKnowledge::from).collect()),
             RelationExpr::Constant { rows, typ } => {
                 if rows.len() == 1 {
                     rows[0]
@@ -65,13 +60,7 @@ impl ColumnKnowledge {
                         })
                         .collect()
                 } else {
-                    typ.column_types
-                        .iter()
-                        .map(|ct| DatumKnowledge {
-                            value: None,
-                            nullable: ct.nullable,
-                        })
-                        .collect()
+                    typ.column_types.iter().map(DatumKnowledge::from).collect()
                 }
             }
             RelationExpr::Let { id, value, body } => {
@@ -111,21 +100,57 @@ impl ColumnKnowledge {
                     optimize(expr, &input.typ(), &input_knowledge[..])?;
                 }
                 let func_typ = func.output_type();
-                input_knowledge.extend(func_typ.column_types.into_iter().map(|typ| {
-                    DatumKnowledge {
-                        value: None,
-                        nullable: typ.nullable,
-                    }
-                }));
+                input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
                 input_knowledge
             }
             RelationExpr::Filter { input, predicates } => {
-                let input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
+                let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 for predicate in predicates.iter_mut() {
                     optimize(predicate, &input.typ(), &input_knowledge[..])?;
                 }
                 // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
-                // I guess we implement that later on.
+                for predicate in predicates.iter() {
+                    // Equality tests allow us to unify the column knowledge of each input.
+                    if let ScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
+                        if func == &expr::BinaryFunc::Eq {
+                            // Collect knowledge about the inputs (for columns and literals).
+                            let mut knowledge = DatumKnowledge::default();
+                            if let ScalarExpr::Column(c) = &**expr1 {
+                                knowledge.absorb(&input_knowledge[*c]);
+                            }
+                            if let ScalarExpr::Column(c) = &**expr2 {
+                                knowledge.absorb(&input_knowledge[*c]);
+                            }
+                            // Absorb literal knowledge about columns.
+                            knowledge.absorb(&DatumKnowledge::from(&**expr1));
+                            knowledge.absorb(&DatumKnowledge::from(&**expr2));
+
+                            // Write back unified knowledge to each column.
+                            if let ScalarExpr::Column(c) = &**expr1 {
+                                input_knowledge[*c].absorb(&knowledge);
+                            }
+                            if let ScalarExpr::Column(c) = &**expr2 {
+                                input_knowledge[*c].absorb(&knowledge);
+                            }
+                        }
+                    }
+                    if let ScalarExpr::CallUnary {
+                        func: UnaryFunc::Not,
+                        expr,
+                    } = predicate
+                    {
+                        if let ScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull,
+                            expr,
+                        } = &**expr
+                        {
+                            if let ScalarExpr::Column(c) = &**expr {
+                                input_knowledge[*c].nullable = false;
+                            }
+                        }
+                    }
+                }
+
                 input_knowledge
             }
             RelationExpr::Join {
@@ -141,16 +166,14 @@ impl ColumnKnowledge {
                 }
 
                 for equivalence in equivalences.iter_mut() {
-                    let mut knowledge = DatumKnowledge {
-                        value: None,
-                        nullable: true,
-                    };
+                    let mut knowledge = DatumKnowledge::default();
 
                     // We can produce composite knowledge for everything in the equivalence class.
                     for expr in equivalence.iter_mut() {
                         if let ScalarExpr::Column(c) = expr {
                             knowledge.absorb(&knowledges[*c]);
                         }
+                        knowledge.absorb(&DatumKnowledge::from(&*expr));
                     }
                     for expr in equivalence.iter_mut() {
                         if let ScalarExpr::Column(c) = expr {
@@ -171,12 +194,52 @@ impl ColumnKnowledge {
                     .iter_mut()
                     .map(|k| optimize(k, &input.typ(), &input_knowledge[..]))
                     .collect::<Result<Vec<_>, _>>()?;
-                for _aggregate in aggregates {
+                for aggregate in aggregates.iter_mut() {
+                    use expr::AggregateFunc;
+                    let knowledge =
+                        optimize(&mut aggregate.expr, &input.typ(), &input_knowledge[..])?;
                     // This could be improved.
-                    output.push(DatumKnowledge {
-                        value: None,
-                        nullable: true,
-                    });
+                    let knowledge = match aggregate.func {
+                        AggregateFunc::MaxInt32
+                        | AggregateFunc::MaxInt64
+                        | AggregateFunc::MaxFloat32
+                        | AggregateFunc::MaxFloat64
+                        | AggregateFunc::MaxDecimal
+                        | AggregateFunc::MaxBool
+                        | AggregateFunc::MaxString
+                        | AggregateFunc::MaxDate
+                        | AggregateFunc::MaxTimestamp
+                        | AggregateFunc::MaxTimestampTz
+                        | AggregateFunc::MaxNull
+                        | AggregateFunc::MinInt32
+                        | AggregateFunc::MinInt64
+                        | AggregateFunc::MinFloat32
+                        | AggregateFunc::MinFloat64
+                        | AggregateFunc::MinDecimal
+                        | AggregateFunc::MinBool
+                        | AggregateFunc::MinString
+                        | AggregateFunc::MinDate
+                        | AggregateFunc::MinTimestamp
+                        | AggregateFunc::MinTimestampTz
+                        | AggregateFunc::MinNull
+                        | AggregateFunc::Any
+                        | AggregateFunc::All => {
+                            // These methods propagate constant values exactly.
+                            knowledge
+                        }
+                        AggregateFunc::CountAll => DatumKnowledge {
+                            value: None,
+                            nullable: false,
+                        },
+                        _ => {
+                            // All aggregates are non-null if their inputs are non-null.
+                            DatumKnowledge {
+                                value: None,
+                                nullable: knowledge.nullable,
+                            }
+                        }
+                    };
+                    output.push(knowledge);
                 }
                 output
             }
@@ -214,10 +277,42 @@ pub struct DatumKnowledge {
 }
 
 impl DatumKnowledge {
+    // Intersects the two knowledge about a column.
     fn absorb(&mut self, other: &Self) {
         self.nullable &= other.nullable;
         if self.value.is_none() {
             self.value = other.value.clone()
+        }
+    }
+}
+
+impl Default for DatumKnowledge {
+    fn default() -> Self {
+        Self {
+            value: None,
+            nullable: true,
+        }
+    }
+}
+
+impl From<&ScalarExpr> for DatumKnowledge {
+    fn from(expr: &ScalarExpr) -> Self {
+        if let ScalarExpr::Literal(Ok(l), t) = expr {
+            Self {
+                value: Some((l.clone(), t.clone())),
+                nullable: expr.is_literal_null(),
+            }
+        } else {
+            Self::default()
+        }
+    }
+}
+
+impl From<&ColumnType> for DatumKnowledge {
+    fn from(typ: &ColumnType) -> Self {
+        Self {
+            value: None,
+            nullable: typ.nullable,
         }
     }
 }
@@ -262,10 +357,7 @@ pub fn optimize(
                 );
                 optimize(expr, input_type, column_knowledge)?
             } else {
-                DatumKnowledge {
-                    value: None,
-                    nullable: true,
-                }
+                DatumKnowledge::default()
             }
         }
         ScalarExpr::CallBinary {
@@ -279,10 +371,7 @@ pub fn optimize(
                 expr.reduce(input_type);
                 optimize(expr, input_type, column_knowledge)?
             } else {
-                DatumKnowledge {
-                    value: None,
-                    nullable: true,
-                }
+                DatumKnowledge::default()
             }
         }
         ScalarExpr::CallVariadic { func: _, exprs } => {
@@ -295,10 +384,7 @@ pub fn optimize(
                 expr.reduce(input_type);
                 optimize(expr, input_type, column_knowledge)?
             } else {
-                DatumKnowledge {
-                    value: None,
-                    nullable: true,
-                }
+                DatumKnowledge::default()
             }
         }
         ScalarExpr::If { cond, then, els } => {
@@ -310,10 +396,7 @@ pub fn optimize(
                 }
                 optimize(expr, input_type, column_knowledge)?
             } else {
-                DatumKnowledge {
-                    value: None,
-                    nullable: true,
-                }
+                DatumKnowledge::default()
             }
         }
     })
