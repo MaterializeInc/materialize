@@ -52,7 +52,7 @@ visually match.
 You can see how commonly rendered elements look by going to
 [`localhost:1313/stylesheet`](http://localhost:1313/stylesheet).
 
-You can use this as a scratch area by editing `content/stylesheet.md`.
+You can use this as a scratch area by editing [content/stylesheet.md](/doc/user/content/stylesheet.md).
 
 ### Railroad diagrams for SQL grammar
 
@@ -81,9 +81,11 @@ You can now include the diagram on a page using:
 
 ## Function + Operator docs
 
-The **Functions** you see at `www/docs/sql/functions/` are populated from
-`www/data/sql_funcs.yml`. Unfortunately this means that they're ad hoc and are
-not actually generated from the Materialize source code.
+The **Functions** you see at
+[content/sql/functions/](/doc/user/content/sql/functions) are populated from
+[data/sql_funcs.yml](/doc/user/data/sql_funcs.yml). Unfortunately this means
+that they're ad hoc and are not actually generated from the Materialize source
+code.
 
 As new functions get added, this file must be manually updated. The idea here is
 to structure functions by their input type (whereas operators are grouped by
@@ -108,7 +110,7 @@ each meaningfully distinct combination of connector and format), and leveraged
 Hugo partials and shortcodes to simplify page creation and resuse content across
 pages.
 
-You can find all of the `CREATE SOURCE` docs at `/doc/user/sql/create-source/`.
+You can find all of the `CREATE SOURCE` docs at [content/sql/create-source](/doc/user/content/sql/create-source/).
 
 ### Hugo shortcodes and partials
 
@@ -116,11 +118,14 @@ Hugo partials are template components, and shortcodes are designed to provide
 a dynamic interface for using those components.
 
 In the case of Materialize, we rely on shortcodes in
-`/www/layouts/shortcodes/create-source` to simplify generating our many
-`CREATE SOURCE` pages, namely `syntax-details`.  This provides an interface
-to dynamically display content from `www/layouts/partials/create-source`.
+[layouts/shortcodes/create-source](/doc/user/layouts/shortcodes/create-source)
+to simplify generating our many
+`CREATE SOURCE` pages, namely `syntax-details`. This provides an interface
+to dynamically display content from
+[layouts/partials/create-source](/doc/user/layouts/partials/create-source).
 
-`...partials/create-source` is structured like:
+[layouts/partials/create-source](/doc/user/layouts/partials/create-source)
+is structured like:
 
 ```
 <component>
@@ -187,7 +192,8 @@ highlighting Materialized extensions to the SQL standard, as well as generally
 beautifying the syntax highlighting color scheme––but for right now, what's
 there suffices.
 
-You can adjust the highlight colors as necessary in `assets/_highlight.scss`.
+You can adjust the highlight colors as necessary in
+[assets/sass/_highlight.scss](assets/sass/_highlight.scss).
 
 Most code samples contain two components: the SQL query you want to run and the
 expected output.
@@ -213,7 +219,8 @@ programming language). For expressivity, we chose `nofmt`.
 ## Miscellany, Trivia, & Footguns
 
 - Headers are automatically hyperlinked using [AnchorJS].
-- Railroad diagrams are managed in `layouts/partials/sql-grammar`.
+- Railroad diagrams are managed in
+[layouts/partials/sql-grammar](/doc/user/layouts/partials/sql-grammar).
 
 [AnchorJS]: https://www.bryanbraun.com/anchorjs/
 [Hugo]: https://gohugo.io/
