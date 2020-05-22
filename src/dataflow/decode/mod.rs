@@ -195,7 +195,7 @@ where
 /// can be used for different combinations of key-value decoders
 /// as opposed to dynamic dispatching
 fn decode_upsert_inner<G, K, V>(
-    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
+    stream: &Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>,
     mut key_decoder_state: K,
     mut value_decoder_state: V,
     op_name: &str,
@@ -206,13 +206,13 @@ where
     V: DecoderState + 'static,
 {
     stream.unary(
-        Exchange::new(|x: &(Vec<u8>, (_, _))| (x.0).hashed()),
+        Exchange::new(|x: &((Vec<u8>, (_, _)), _)| (x.0).hashed()),
         &op_name,
         move |_, _| {
             move |input, output| {
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);
-                    for (key, (payload, aux_num)) in data.iter() {
+                    for ((key, (payload, aux_num)), time) in data.iter() {
                         if key.is_empty() {
                             error!("{}", "Encountered empty key");
                             continue;
@@ -227,7 +227,7 @@ where
                                         payload,
                                         *aux_num,
                                         &mut session,
-                                        *cap.time(),
+                                        *time,
                                     ));
                                 }
                             }
@@ -245,7 +245,7 @@ where
 }
 
 pub fn decode_upsert<G>(
-    stream: &Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
+    stream: &Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>,
     value_encoding: DataEncoding,
     key_encoding: DataEncoding,
 ) -> Stream<G, (Row, Option<Row>, Timestamp)>
