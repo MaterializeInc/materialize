@@ -239,7 +239,10 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// Unary operation e.g. `NOT foo`
-    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
+    UnaryOp {
+        op: UnaryOperator,
+        expr: Box<Expr>,
+    },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr>,
@@ -248,6 +251,10 @@ pub enum Expr {
     Extract {
         field: ExtractField,
         expr: Box<Expr>,
+    },
+    Trim {
+        side: TrimSide,
+        exprs: Vec<Expr>,
     },
     /// `expr COLLATE collation`
     Collate {
@@ -376,6 +383,16 @@ impl AstDisplay for Expr {
                 f.write_node(field);
                 f.write_str(" FROM ");
                 f.write_node(&expr);
+                f.write_str(")");
+            }
+            Expr::Trim { side, exprs } => {
+                f.write_node(side);
+                f.write_str("(");
+                f.write_node(&exprs[0]);
+                if exprs.len() == 2 {
+                    f.write_str(", ");
+                    f.write_node(&exprs[1]);
+                }
                 f.write_str(")");
             }
             Expr::Collate { expr, collation } => {
@@ -1744,3 +1761,26 @@ pub enum IfExistsBehavior {
     Skip,
     Replace,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Expresses which side you want to trim characters from in `trim` function
+/// calls.
+pub enum TrimSide {
+    /// Equivalent to `trim`
+    Both,
+    /// Equivalent to `ltrim`
+    Leading,
+    /// Equivalent to `rtrim`
+    Trailing,
+}
+
+impl AstDisplay for TrimSide {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            TrimSide::Both => f.write_str("btrim"),
+            TrimSide::Leading => f.write_str("ltrim"),
+            TrimSide::Trailing => f.write_str("rtrim"),
+        }
+    }
+}
+impl_display!(TrimSide);

@@ -23,8 +23,10 @@ use std::fmt;
 use repr::datetime::DateTimeField;
 
 mod datetime;
+mod string;
 use crate::ast::display::{AstDisplay, AstFormatter};
 pub use datetime::{ExtractField, IntervalValue};
+pub use string::TrimSide;
 
 #[derive(Debug)]
 pub struct ValueError(String);

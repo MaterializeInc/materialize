@@ -237,6 +237,12 @@ macro_rules! make_visitor {
 
             fn visit_extract_field(&mut self, _field: &'ast $($mut)* ExtractField) {}
 
+            fn visit_trim(&mut self, side: &'ast $($mut)* TrimSide, exprs: &'ast $($mut)* [Expr]) {
+                visit_trim(self, side, exprs)
+            }
+
+            fn visit_trim_side(&mut self, _side: &'ast $($mut)* TrimSide) {}
+
             fn visit_nested(&mut self, expr: &'ast $($mut)* Expr) {
                 visit_nested(self, expr)
             }
@@ -1011,6 +1017,7 @@ macro_rules! make_visitor {
                 Expr::Cast { expr, data_type } => visitor.visit_cast(expr, data_type),
                 Expr::Collate { expr, collation } => visitor.visit_collate(expr, collation),
                 Expr::Extract { field, expr } => visitor.visit_extract(field, expr),
+                Expr::Trim { side, exprs } => visitor.visit_trim(side, exprs),
                 Expr::Nested(expr) => visitor.visit_nested(expr),
                 Expr::Value(val) => visitor.visit_value(val),
                 Expr::Function(func) => visitor.visit_function(func),
@@ -1167,6 +1174,17 @@ macro_rules! make_visitor {
         ) {
             visitor.visit_extract_field(field);
             visitor.visit_expr(expr);
+        }
+
+        pub fn visit_trim<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            side: &'ast $($mut)* TrimSide,
+            exprs: &'ast $($mut)* [Expr],
+        ) {
+            visitor.visit_trim_side(side);
+            for e in exprs {
+                visitor.visit_expr(e);
+            }
         }
 
         pub fn visit_nested<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, expr: &'ast $($mut)* Expr) {
