@@ -892,10 +892,12 @@ impl PendingPeek {
             None
         };
 
+        let mut datums = Vec::new();
         while cursor.key_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
             while cursor.val_valid(&storage) && limit.map(|l| results.len() < l).unwrap_or(true) {
                 let row = cursor.val(&storage);
-                let datums = row.unpack();
+                datums.clear();
+                datums.extend(row.iter());
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
                 let mut retain = true;
