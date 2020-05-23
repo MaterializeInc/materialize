@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="215" y="53">IF NOT EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#src_name"
-      xlink:title="src_name">
-      <rect x="365" y="3" width="80" height="32"/>
-      <rect x="363" y="1" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="373" y="21">src_name</text>
-   </a>
+   <rect x="365" y="3" width="80" height="32"/>
+   <rect x="363" y="1" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="373" y="21">src_name</text>
    <rect x="59" y="145" width="24" height="32" rx="10"/>
    <rect x="57"
          y="143"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="67" y="163">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#col_name"
-      xlink:title="col_name">
-      <rect x="123" y="145" width="80" height="32"/>
-      <rect x="121" y="143" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="131" y="163">col_name</text>
-   </a>
+   <rect x="123" y="145" width="80" height="32"/>
+   <rect x="121" y="143" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="131" y="163">col_name</text>
    <rect x="123" y="101" width="24" height="32" rx="10"/>
    <rect x="121"
          y="99"
@@ -71,13 +63,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="395" y="163">FILE</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#path"
-      xlink:title="path">
-      <rect x="455" y="145" width="48" height="32"/>
-      <rect x="453" y="143" width="48" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="463" y="163">path</text>
-   </a>
+   <rect x="455" y="145" width="48" height="32"/>
+   <rect x="453" y="143" width="48" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="463" y="163">path</text>
    <rect x="45" y="271" width="56" height="32" rx="10"/>
    <rect x="43"
          y="269"
@@ -94,13 +82,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="129" y="289">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#field"
-      xlink:title="field">
-      <rect x="185" y="271" width="46" height="32"/>
-      <rect x="183" y="269" width="46" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="193" y="289">field</text>
-   </a>
+   <rect x="185" y="271" width="46" height="32"/>
+   <rect x="183" y="269" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="193" y="289">field</text>
    <rect x="251" y="271" width="26" height="32" rx="10"/>
    <rect x="249"
          y="269"
@@ -109,13 +93,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="259" y="289">=</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#val"
-      xlink:title="val">
-      <rect x="297" y="271" width="38" height="32"/>
-      <rect x="295" y="269" width="38" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="305" y="289">val</text>
-   </a>
+   <rect x="297" y="271" width="38" height="32"/>
+   <rect x="295" y="269" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="305" y="289">val</text>
    <rect x="185" y="227" width="24" height="32" rx="10"/>
    <rect x="183"
          y="225"
@@ -148,13 +128,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="359" y="371">REGEX</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#regex"
-      xlink:title="regex">
-      <rect x="437" y="353" width="54" height="32"/>
-      <rect x="435" y="351" width="54" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="445" y="371">regex</text>
-   </a>
+   <rect x="437" y="353" width="54" height="32"/>
+   <rect x="435" y="351" width="54" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="445" y="371">regex</text>
    <rect x="351" y="397" width="54" height="32" rx="10"/>
    <rect x="349"
          y="395"

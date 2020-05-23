@@ -89,13 +89,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="325" y="21">FROM</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#val"
-      xlink:title="val">
-      <rect x="397" y="3" width="38" height="32"/>
-      <rect x="395" y="1" width="38" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="405" y="21">val</text>
-   </a>
+   <rect x="397" y="3" width="38" height="32"/>
+   <rect x="395" y="1" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="405" y="21">val</text>
    <rect x="455" y="3" width="24" height="32" rx="10"/>
    <rect x="453"
          y="1"

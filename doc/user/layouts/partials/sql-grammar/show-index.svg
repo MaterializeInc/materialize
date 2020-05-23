@@ -49,13 +49,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="281" y="65">IN</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#view_name"
-      xlink:title="view_name">
-      <rect x="373" y="3" width="88" height="32"/>
-      <rect x="371" y="1" width="88" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="381" y="21">view_name</text>
-   </a>
+   <rect x="373" y="3" width="88" height="32"/>
+   <rect x="371" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="381" y="21">view_name</text>
    <rect x="299" y="157" width="50" height="32" rx="10"/>
    <rect x="297"
          y="155"
@@ -80,13 +76,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="307" y="219">WHERE</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#expr"
-      xlink:title="expr">
-      <rect x="389" y="201" width="46" height="32"/>
-      <rect x="387" y="199" width="46" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="397" y="219">expr</text>
-   </a>
+   <rect x="389" y="201" width="46" height="32"/>
+   <rect x="387" y="199" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="397" y="219">expr</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m62 0 h10 m20 0 h10 m62 0 h10 m0 0 h18 m-120 0 h20 m100 0 h20 m-140 0 q10 0 10 10 m120 0 q0 -10 10 -10 m-130 10 v24 m120 0 v-24 m-120 24 q0 10 10 10 m100 0 q10 0 10 -10 m-110 10 h10 m80 0 h10 m-110 -10 v20 m120 0 v-20 m-120 20 v24 m120 0 v-24 m-120 24 q0 10 10 10 m100 0 q10 0 10 -10 m-110 10 h10 m56 0 h10 m0 0 h24 m40 -88 h10 m60 0 h10 m-100 0 h20 m80 0 h20 m-120 0 q10 0 10 10 m100 0 q0 -10 10 -10 m-110 10 v24 m100 0 v-24 m-100 24 q0 10 10 10 m80 0 q10 0 10 -10 m-90 10 h10 m34 0 h10 m0 0 h26 m20 -44 h10 m88 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-226 154 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m50 0 h10 m0 0 h10 m66 0 h10 m-176 0 h20 m156 0 h20 m-196 0 q10 0 10 10 m176 0 q0 -10 10 -10 m-186 10 v24 m176 0 v-24 m-176 24 q0 10 10 10 m156 0 q10 0 10 -10 m-166 10 h10 m70 0 h10 m0 0 h10 m46 0 h10 m23 -44 h-3"/>
    <polygon points="473 171 481 167 481 175"/>

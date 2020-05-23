@@ -9,13 +9,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="39" y="21">TAIL</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#object_name"
-      xlink:title="object_name">
-      <rect x="101" y="3" width="100" height="32"/>
-      <rect x="99" y="1" width="100" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="109" y="21">object_name</text>
-   </a>
+   <rect x="101" y="3" width="100" height="32"/>
+   <rect x="99" y="1" width="100" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="109" y="21">object_name</text>
    <rect x="241" y="35" width="136" height="32" rx="10"/>
    <rect x="239"
          y="33"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="141" y="139">AS OF</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#timestamp_expression"
-      xlink:title="timestamp_expression">
-      <rect x="213" y="121" width="158" height="32"/>
-      <rect x="211" y="119" width="158" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="221" y="139">timestamp_expression</text>
-   </a>
+   <rect x="213" y="121" width="158" height="32"/>
+   <rect x="211" y="119" width="158" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="221" y="139">timestamp_expression</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m50 0 h10 m0 0 h10 m100 0 h10 m20 0 h10 m0 0 h146 m-176 0 h20 m156 0 h20 m-196 0 q10 0 10 10 m176 0 q0 -10 10 -10 m-186 10 v12 m176 0 v-12 m-176 12 q0 10 10 10 m156 0 q10 0 10 -10 m-166 10 h10 m136 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-328 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h248 m-278 0 h20 m258 0 h20 m-298 0 q10 0 10 10 m278 0 q0 -10 10 -10 m-288 10 v12 m278 0 v-12 m-278 12 q0 10 10 10 m258 0 q10 0 10 -10 m-268 10 h10 m60 0 h10 m0 0 h10 m158 0 h10 m23 -32 h-3"/>
    <polygon points="409 103 417 99 417 107"/>

@@ -2,8 +2,8 @@
 title: "text Data Type"
 description: "Expresses a Unicode string"
 aliases:
-    - /docs/sql/types/string
-    - /docs/sql/types/varchar
+    - /sql/types/string
+    - /sql/types/varchar
 menu:
   main:
     parent: 'sql-types'

@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="151" y="53">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#precision"
-      xlink:title="precision">
-      <rect x="187" y="35" width="76" height="32"/>
-      <rect x="185" y="33" width="76" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="195" y="53">precision</text>
-   </a>
+   <rect x="187" y="35" width="76" height="32"/>
+   <rect x="185" y="33" width="76" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="195" y="53">precision</text>
    <rect x="283" y="35" width="24" height="32" rx="10"/>
    <rect x="281"
          y="33"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="291" y="53">,</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#scale"
-      xlink:title="scale">
-      <rect x="327" y="35" width="52" height="32"/>
-      <rect x="325" y="33" width="52" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="335" y="53">scale</text>
-   </a>
+   <rect x="327" y="35" width="52" height="32"/>
+   <rect x="325" y="33" width="52" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="335" y="53">scale</text>
    <rect x="399" y="35" width="24" height="32" rx="10"/>
    <rect x="397"
          y="33"

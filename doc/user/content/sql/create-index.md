@@ -22,7 +22,7 @@ Indexes assemble and maintain in memory a query's results, which can
 provide future queries the data they need pre-arranged in a format they can immediately use.
 In particular, this can be very helpful for the [`JOIN`](../join) operator which needs
 to build and maintain the appropriate indexes if they do not otherwise exist.
-For more information, see [API Components: Indexes](../../overview/api-components#indexes).
+For more information, see [API Components: Indexes](/overview/api-components#indexes).
 
 ### When to create indexes
 

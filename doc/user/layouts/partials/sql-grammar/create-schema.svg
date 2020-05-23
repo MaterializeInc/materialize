@@ -25,13 +25,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="253" y="53">IF NOT EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#schema_name"
-      xlink:title="schema_name">
-      <rect x="403" y="3" width="110" height="32"/>
-      <rect x="401" y="1" width="110" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="411" y="21">schema_name</text>
-   </a>
+   <rect x="403" y="3" width="110" height="32"/>
+   <rect x="401" y="1" width="110" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="411" y="21">schema_name</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m74 0 h10 m0 0 h10 m80 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m20 -32 h10 m110 0 h10 m3 0 h-3"/>
    <polygon points="531 17 539 13 539 21"/>

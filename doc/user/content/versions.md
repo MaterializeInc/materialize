@@ -9,7 +9,7 @@ weight: 300
 
 Binary tarballs for all stable releases are provided below. Other installation
 options are available for the latest stable release on the [Install
-page](../install).
+page](/install).
 
 {{< version-list >}}
 

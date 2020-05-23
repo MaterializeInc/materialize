@@ -9,13 +9,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="59" y="21">CONFLUENT SCHEMA REGISTRY</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#url"
-      xlink:title="url">
-      <rect x="311" y="3" width="36" height="32"/>
-      <rect x="309" y="1" width="36" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="319" y="21">url</text>
-   </a>
+   <rect x="311" y="3" width="36" height="32"/>
+   <rect x="309" y="1" width="36" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="319" y="21">url</text>
    <rect x="51" y="47" width="80" height="32" rx="10"/>
    <rect x="49"
          y="45"
@@ -32,20 +28,12 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="179" y="65">FILE</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#schema_file_path"
-      xlink:title="schema_file_path">
-      <rect x="239" y="47" width="128" height="32"/>
-      <rect x="237" y="45" width="128" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="247" y="65">schema_file_path</text>
-   </a>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#inline_schema"
-      xlink:title="inline_schema">
-      <rect x="171" y="91" width="108" height="32"/>
-      <rect x="169" y="89" width="108" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="179" y="109">inline_schema</text>
-   </a>
+   <rect x="239" y="47" width="128" height="32"/>
+   <rect x="237" y="45" width="128" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="247" y="65">schema_file_path</text>
+   <rect x="171" y="91" width="108" height="32"/>
+   <rect x="169" y="89" width="108" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="179" y="109">inline_schema</text>
    <path class="line"
          d="m17 17 h2 m20 0 h10 m240 0 h10 m0 0 h10 m36 0 h10 m0 0 h40 m-376 0 h20 m356 0 h20 m-396 0 q10 0 10 10 m376 0 q0 -10 10 -10 m-386 10 v24 m376 0 v-24 m-376 24 q0 10 10 10 m356 0 q10 0 10 -10 m-366 10 h10 m80 0 h10 m20 0 h10 m48 0 h10 m0 0 h10 m128 0 h10 m-236 0 h20 m216 0 h20 m-256 0 q10 0 10 10 m236 0 q0 -10 10 -10 m-246 10 v24 m236 0 v-24 m-236 24 q0 10 10 10 m216 0 q10 0 10 -10 m-226 10 h10 m108 0 h10 m0 0 h88 m43 -88 h-3"/>
    <polygon points="425 17 433 13 433 21"/>

@@ -52,7 +52,7 @@ Field | Value type | Description
 - Materialize currently only supports Avro formatted sinks that write to either a single partition topic or a Avro object container file.
 - On each restart, Materialize creates new, distinct topics and files for each sink.
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
-- Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](../../overview/api-components/#envelopes) to capture changes in the input view or source.
+- Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](/overview/api-components/#envelopes) to capture changes in the input view or source.
 
 ### Kafka sinks
 

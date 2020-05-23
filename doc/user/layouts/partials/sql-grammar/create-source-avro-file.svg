@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="215" y="53">IF NOT EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#src_name"
-      xlink:title="src_name">
-      <rect x="365" y="3" width="80" height="32"/>
-      <rect x="363" y="1" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="373" y="21">src_name</text>
-   </a>
+   <rect x="365" y="3" width="80" height="32"/>
+   <rect x="363" y="1" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="373" y="21">src_name</text>
    <rect x="45" y="145" width="24" height="32" rx="10"/>
    <rect x="43"
          y="143"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="53" y="163">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#col_name"
-      xlink:title="col_name">
-      <rect x="109" y="145" width="80" height="32"/>
-      <rect x="107" y="143" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="117" y="163">col_name</text>
-   </a>
+   <rect x="109" y="145" width="80" height="32"/>
+   <rect x="107" y="143" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="117" y="163">col_name</text>
    <rect x="109" y="101" width="24" height="32" rx="10"/>
    <rect x="107"
          y="99"
@@ -71,13 +63,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="381" y="163">AVRO OCF</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#path"
-      xlink:title="path">
-      <rect x="485" y="145" width="48" height="32"/>
-      <rect x="483" y="143" width="48" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="493" y="163">path</text>
-   </a>
+   <rect x="485" y="145" width="48" height="32"/>
+   <rect x="483" y="143" width="48" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="493" y="163">path</text>
    <rect x="102" y="271" width="56" height="32" rx="10"/>
    <rect x="100"
          y="269"
@@ -94,13 +82,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="186" y="289">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#field"
-      xlink:title="field">
-      <rect x="242" y="271" width="46" height="32"/>
-      <rect x="240" y="269" width="46" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="250" y="289">field</text>
-   </a>
+   <rect x="242" y="271" width="46" height="32"/>
+   <rect x="240" y="269" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="250" y="289">field</text>
    <rect x="308" y="271" width="26" height="32" rx="10"/>
    <rect x="306"
          y="269"
@@ -109,13 +93,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="316" y="289">=</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#val"
-      xlink:title="val">
-      <rect x="354" y="271" width="38" height="32"/>
-      <rect x="352" y="269" width="38" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="362" y="289">val</text>
-   </a>
+   <rect x="354" y="271" width="38" height="32"/>
+   <rect x="352" y="269" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="362" y="289">val</text>
    <rect x="242" y="227" width="24" height="32" rx="10"/>
    <rect x="240"
          y="225"

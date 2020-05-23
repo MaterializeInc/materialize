@@ -5,8 +5,8 @@ menu:
   main:
     parent: 'sql'
 aliases:
-    - /docs/sql/show-indexes
-    - /docs/sql/show-keys
+    - /sql/show-indexes
+    - /sql/show-keys
 ---
 
 `SHOW INDEX` provides details about a materialized view's indexes.

@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="215" y="53">IF NOT EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#src_name"
-      xlink:title="src_name">
-      <rect x="365" y="3" width="80" height="32"/>
-      <rect x="363" y="1" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="373" y="21">src_name</text>
-   </a>
+   <rect x="365" y="3" width="80" height="32"/>
+   <rect x="363" y="1" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="373" y="21">src_name</text>
    <rect x="48" y="145" width="24" height="32" rx="10"/>
    <rect x="46"
          y="143"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="56" y="163">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#col_name"
-      xlink:title="col_name">
-      <rect x="112" y="145" width="80" height="32"/>
-      <rect x="110" y="143" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="120" y="163">col_name</text>
-   </a>
+   <rect x="112" y="145" width="80" height="32"/>
+   <rect x="110" y="143" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="120" y="163">col_name</text>
    <rect x="112" y="101" width="24" height="32" rx="10"/>
    <rect x="110"
          y="99"
@@ -71,13 +63,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="384" y="163">KAFKA BROKER</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#host"
-      xlink:title="host">
-      <rect x="522" y="145" width="46" height="32"/>
-      <rect x="520" y="143" width="46" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="530" y="163">host</text>
-   </a>
+   <rect x="522" y="145" width="46" height="32"/>
+   <rect x="520" y="143" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="530" y="163">host</text>
    <rect x="25" y="271" width="62" height="32" rx="10"/>
    <rect x="23"
          y="269"
@@ -86,13 +74,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="33" y="289">TOPIC</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#topic"
-      xlink:title="topic">
-      <rect x="107" y="271" width="50" height="32"/>
-      <rect x="105" y="269" width="50" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="115" y="289">topic</text>
-   </a>
+   <rect x="107" y="271" width="50" height="32"/>
+   <rect x="105" y="269" width="50" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="115" y="289">topic</text>
    <rect x="197" y="271" width="56" height="32" rx="10"/>
    <rect x="195"
          y="269"
@@ -109,13 +93,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="281" y="289">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#field"
-      xlink:title="field">
-      <rect x="337" y="271" width="46" height="32"/>
-      <rect x="335" y="269" width="46" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="345" y="289">field</text>
-   </a>
+   <rect x="337" y="271" width="46" height="32"/>
+   <rect x="335" y="269" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="345" y="289">field</text>
    <rect x="403" y="271" width="26" height="32" rx="10"/>
    <rect x="401"
          y="269"
@@ -124,13 +104,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="411" y="289">=</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#val"
-      xlink:title="val">
-      <rect x="449" y="271" width="38" height="32"/>
-      <rect x="447" y="269" width="38" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="457" y="289">val</text>
-   </a>
+   <rect x="449" y="271" width="38" height="32"/>
+   <rect x="447" y="269" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="457" y="289">val</text>
    <rect x="337" y="227" width="24" height="32" rx="10"/>
    <rect x="335"
          y="225"

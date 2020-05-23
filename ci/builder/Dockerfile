@@ -95,7 +95,7 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.1.0/au
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
-# Step 2c. Install Rust. This is done separately from 2c because we bump the
+# Step 2c. Install Rust. This is done separately from 2b because we bump the
 # Rust version frequently, and we want to reuse the cache up through 2b when
 # possible.
 
@@ -148,12 +148,24 @@ RUN pip3 install \
     -r /workdir/requirements-ci.txt \
     && rm /workdir/requirements*.txt
 
-# Step 2f. Hardcode some known SSH hosts, or else SSH will ask whether the host
+# Step 2f. Install docs site dependencies. These are towards the end for the
+# same reason as the Python dependencies.
+
+RUN curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmltest_0.12.1_linux_amd64.tar.gz > htmltest.tar.gz \
+    && echo '04d4be5097b98cd28de469f8856b3fbe82669f57b482a4cf3092a55e9e8e9e0d  htmltest.tar.gz' | sha256sum --check \
+    && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
+    && rm htmltest.tar.gz \
+    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.68.3/hugo_extended_0.68.3_Linux-64bit.tar.gz > hugo.tar.gz \
+    && echo 'd93d0deac782a4dd8afc2bbc5d96b30590ce47e8afb9810bbe7551eb3acf9189  hugo.tar.gz' | sha256sum --check \
+    && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
+    && rm hugo.tar.gz
+
+# Step 2g. Hardcode some known SSH hosts, or else SSH will ask whether the host
 # is trustworthy on the first connection.
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
-# Step 2g. Set the necessary environment variables to point Cargo and C/C++
+# Step 2h. Set the necessary environment variables to point Cargo and C/C++
 # build systems at our cross-compiling toolchain.
 
 ENV AR=x86_64-unknown-linux-gnu-ar
@@ -169,10 +181,10 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 # https://github.com/rust-lang/cargo/issues/7529
 ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
 
-# Step 2h. Set a environment variable that tools can check to see if they're in
+# Step 2i. Set a environment variable that tools can check to see if they're in
 # the builder or not.
 
 ENV MZ_DEV_CI_BUILDER=1
 
-# Step 2i. Make the image as small as possible.
+# Step 2j. Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +

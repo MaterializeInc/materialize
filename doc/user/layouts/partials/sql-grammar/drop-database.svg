@@ -25,13 +25,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="251" y="53">IF EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#database_name"
-      xlink:title="database_name">
-      <rect x="367" y="3" width="118" height="32"/>
-      <rect x="365" y="1" width="118" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="375" y="21">database_name</text>
-   </a>
+   <rect x="367" y="3" width="118" height="32"/>
+   <rect x="365" y="1" width="118" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="375" y="21">database_name</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m58 0 h10 m0 0 h10 m94 0 h10 m20 0 h10 m0 0 h94 m-124 0 h20 m104 0 h20 m-144 0 q10 0 10 10 m124 0 q0 -10 10 -10 m-134 10 v12 m124 0 v-12 m-124 12 q0 10 10 10 m104 0 q10 0 10 -10 m-114 10 h10 m84 0 h10 m20 -32 h10 m118 0 h10 m3 0 h-3"/>
    <polygon points="503 17 511 13 511 21"/>

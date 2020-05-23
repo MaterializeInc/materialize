@@ -153,7 +153,7 @@ Implicit in this design are a few key points:
 Check out:
 
 - [API components](../api-components) to better understand Materialize's API
-- [Get started](../../get-started) to try out Materialize
+- [Get started](/get-started) to try out Materialize
 
 [1]:
 https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm

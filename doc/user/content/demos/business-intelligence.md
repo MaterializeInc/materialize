@@ -112,7 +112,7 @@ Putting this all together, our deployment looks like this:
 ### Preparing the environment
 
 1. Start the Docker daemon for your machine, and [follow our Docker integration
-   guide](../../third-party/docker).
+   guide](/third-party/docker).
 
 1. Clone the Materialize repo:
 
@@ -301,7 +301,7 @@ Materialize to maintain for us.
     repository, and provide a link to the repository as a comment. Those with
     direct access to the `materialized` process through a SQL client can find
     the underlying queries using [`SHOW CREATE
-    VIEW`](../../sql/show-create-view).
+    VIEW`](/sql/show-create-view).
 
 1. Click the large **>** button.
 
@@ -363,4 +363,4 @@ etc. but this is a reasonable workflow.
 
 -   [Microservice demo](../microservice)
 -   [Log parsing demo](../log-parsing)
--   [`CREATE SOURCE`](../../sql/create-source)
+-   [`CREATE SOURCE`](/sql/create-source)

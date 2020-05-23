@@ -16,13 +16,13 @@ To help you get started with Materialize, we'll:
 To complete this demo, you need:
 
 - Command line and network access.
-- A [Materialize-compatible CLI](../connect/cli/). If you have Materialize installed `psql` works.
+- A [Materialize-compatible CLI](/connect/cli/). If you have Materialize installed `psql` works.
 
-We also highly recommend checking out [What is Materialize?](../overview/what-is-materialize)
+We also highly recommend checking out [What is Materialize?](/overview/what-is-materialize)
 
 ## Install, run, connect
 
-1. Install the `materialized` binary using [these instructions](../install).
+1. Install the `materialized` binary using [these instructions](/install).
 
 1. Run the `materialized` binary. For example, if you installed it in your `$PATH`:
 
@@ -146,7 +146,7 @@ Materialize is built to handle streams of data, and provide incredibly low-laten
     SHOW COLUMNS FROM wikirecent;
     ```
 
-1. Because this stream comes in as JSON, we'll need to normalize the data to perform aggregations on it. Materialize offers the ability to do this easily using our built-in [`jsonb` functions](/docs/sql/functions/#json).
+1. Because this stream comes in as JSON, we'll need to normalize the data to perform aggregations on it. Materialize offers the ability to do this easily using our built-in [`jsonb` functions](/sql/functions/#json).
 
     ```sql
     CREATE MATERIALIZED VIEW recentchanges AS
@@ -214,4 +214,4 @@ Once you're done, don't forget to stop `curl` and `rm wikirecent`.
 
 ## Up next
 
-Check out our [architecture overview](../overview/architecture).
+Check out our [architecture overview](/overview/architecture).

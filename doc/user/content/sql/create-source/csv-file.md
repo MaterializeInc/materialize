@@ -5,8 +5,8 @@ menu:
   main:
     parent: 'create-source'
 aliases:
-    - /docs/sql/create-source/csv
-    - /docs/sql/create-source/csv-source
+    - /sql/create-source/csv
+    - /sql/create-source/csv-source
 ---
 
 {{% create-source/intro %}}

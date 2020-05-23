@@ -14,7 +14,7 @@ feature.
 ## Conceptual framework
 
 `CREATE MATERIALIZED VIEW` computes and maintains the results of a `SELECT`
-query in memory. For more information, see [API Components: Materialized views](../../overview/api-components#materialized-views).
+query in memory. For more information, see [API Components: Materialized views](/overview/api-components#materialized-views).
 
 ## Syntax
 

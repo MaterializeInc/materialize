@@ -60,11 +60,4 @@
     fill: scale-color($purple-10, $saturation: -50%);
     stroke: $off-black;
   }
-
-  // The interdiagram links don't presently work, so just visually hide them
-  // for now.
-  a:hover {
-    cursor: default;
-    opacity: 1;
-  }
 }

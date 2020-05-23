@@ -5,7 +5,7 @@ menu:
   main:
     parent: 'sql'
 aliases:
-    - /docs/sql/show-sink
+    - /sql/show-sink
 ---
 
 `SHOW SINKS` returns a list of all sinks available to your Materialize instances.

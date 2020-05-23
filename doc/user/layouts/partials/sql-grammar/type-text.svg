@@ -9,13 +9,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="39" y="21">'</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#text"
-      xlink:title="text">
-      <rect x="73" y="3" width="42" height="32"/>
-      <rect x="71" y="1" width="42" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="81" y="21">text</text>
-   </a>
+   <rect x="73" y="3" width="42" height="32"/>
+   <rect x="71" y="1" width="42" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="81" y="21">text</text>
    <rect x="135" y="3" width="22" height="32" rx="10"/>
    <rect x="133"
          y="1"

@@ -8,7 +8,7 @@ weight: 2
 You can access Materialize through the `materialized` binary, which you can
 install on macOS and Linux. These instructions install the latest release of
 Materialize, **{{< version >}}**. For prior releases, see the [Versions
-page](../versions).
+page](/versions).
 
 **Note**: We have unofficial support for other operating systems, e.g. FreeBSD, if you [build from source](#build-from-source).
 
@@ -78,7 +78,7 @@ You can start the `materialized` process by simply running the binary, e.g.
 ./materialized --w=1
 ```
 
-`--w=1` specifies that the process will use 1 worker. You can also find more detail about our [command line flags](../cli/#command-line-flags).
+`--w=1` specifies that the process will use 1 worker. You can also find more detail about our [command line flags](/cli/#command-line-flags).
 
 By default `materialized` uses:
 
@@ -87,8 +87,8 @@ Detail | Info
 **Database** | `materialize`
 **Port** | `6875`
 
-For more information, see [CLI Connections](../connect/cli/).
+For more information, see [CLI Connections](/connect/cli/).
 
 ## Up next
 
-With `materialized` installed, let's [get started](../get-started).
+With `materialized` installed, let's [get started](/get-started).

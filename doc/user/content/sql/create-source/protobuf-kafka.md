@@ -5,9 +5,9 @@ menu:
   main:
     parent: 'create-source'
 aliases:
-    - /docs/sql/create-source/proto
-    - /docs/sql/create-source/protobuf
-    - /docs/sql/create-source/protobuf-source
+    - /sql/create-source/proto
+    - /sql/create-source/protobuf
+    - /sql/create-source/protobuf-source
 ---
 
 {{% create-source/intro %}}

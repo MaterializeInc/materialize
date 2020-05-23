@@ -11,7 +11,7 @@ This page details changes between versions of Materialize, including:
 - Major bug fixes
 - Substantial API changes
 
-For information about available versions, see our [Versions page](../versions).
+For information about available versions, see our [Versions page](/versions).
 
 {{< comment >}}
 # How to write a good release note
@@ -39,19 +39,19 @@ change in behavior.
 Strive for some variety of verbs. "Support new feature" gets boring as a release
 note.
 
-Use relative links (../path/to/doc), not absolute links
+Use relative links (/path/to/doc), not absolute links
 (https://materialize.io/docs/path/to/doc).
 
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-<span id="0.2.3"></span>
+<span id="v0.2.3"></span>
 ## 0.2.2 &rarr; 0.2.3 (Unreleased)
 
-- Support [TLS encryption](../cli/#tls-encryption) for SQL and HTTP connections.
+- Support [TLS encryption](/cli/#tls-encryption) for SQL and HTTP connections.
 
 - Automatically refresh
-  [AWS credentials for Kinesis sources](../sql/create-source/json-kinesis/#with-options)
+  [AWS credentials for Kinesis sources](/sql/create-source/json-kinesis/#with-options)
   when credentials are sourced from an IAM instance or container profile.
 
 - Fix bug causing primary keys in Debezium Avro sources not to be respected ([#3011])
@@ -59,21 +59,21 @@ Wrap your release notes at the 80 character mark.
 - Add option `WITH (ignore_source_keys = true)` to disable automatically
   respecting primary source information in source formats ([#3012])
 
-<span id="0.2.2"></span>
+<span id="v0.2.2"></span>
 ## 0.2.1 &rarr; 0.2.2
 
 - Introduce an "upsert" envelope for sources that follow the Kafka key–value
   convention for representing inserts, upserts, and deletes. See the [Upsert
-  envelope](../sql/create-source/avro-kafka/#upsert-envelope-details) section of
+  envelope](/sql/create-source/avro-kafka/#upsert-envelope-details) section of
   the `CREATE SOURCE` docs for details.
 
 - Enable connections to Kafka brokers using either
-  [SSL authentication](../sql/create-source/avro-kafka/#ssl-encrypted-kafka-details)
-  or [Kerberos authentication](../sql/create-source/avro-kafka/#kerberized-kafka-details).
+  [SSL authentication](/sql/create-source/avro-kafka/#ssl-encrypted-kafka-details)
+  or [Kerberos authentication](/sql/create-source/avro-kafka/#kerberized-kafka-details).
   This includes support for SSL authentication with Confluent Schema Registries.
 
-- Introduce the [`AS OF`](../sql/tail/#as-of) and
-  [`WITH SNAPSHOT`](../sql/tail/#with-snapshot) options for `TAIL` to provide
+- Introduce the [`AS OF`](/sql/tail/#as-of) and
+  [`WITH SNAPSHOT`](/sql/tail/#with-snapshot) options for `TAIL` to provide
   more control over what data `TAIL` will produce.
 
 - Improve reliability of Kinesis sources by rate-limiting Kinesis API calls.
@@ -83,7 +83,7 @@ Wrap your release notes at the 80 character mark.
   partitions evenly, rather than processing partitions sequentially, one after
   the next. {{% gh 2936 %}}
 
-- Add two [`WITH` options](../sql/create-source/avro-kafka/#with-options)
+- Add two [`WITH` options](/sql/create-source/avro-kafka/#with-options)
   to Kafka sources:
   - The `group_id_prefix` option affords some control over the consumer group
     ID Materialize uses when consuming from Kafka.
@@ -103,7 +103,7 @@ Wrap your release notes at the 80 character mark.
 - Humanize the output of [`SHOW CREATE VIEW`] by avoiding quotes around
   identifiers that do not require them. {{% gh 2667 %}}
 
-- Add the [`generate_series`](../sql/functions/#table) table function. {{% gh 2857 %}}
+- Add the [`generate_series`](/sql/functions/#table-func) table function. {{% gh 2857 %}}
 
 - Fix several bugs in the query optimizer that could cause crashes or incorrect
   query plans. {{% gh 2731 2724 %}}
@@ -116,11 +116,11 @@ Wrap your release notes at the 80 character mark.
   `SELECT a, b, "from" AS table`, which would result in a confusing error about
   the unknown column `"from"`. {{% gh 2893 %}}
 
-<span id="0.2.1"></span>
+<span id="v0.2.1"></span>
 ## 0.2.0 &rarr; 0.2.1
 
 - Allow query parameters (`$1`, `$2`, etc) to appear in
-  [`EXPLAIN`](../sql/explain) statements.
+  [`EXPLAIN`](/sql/explain) statements.
 
 - Avoid crashing if queries are executed without a value for each parameter in
   the query.
@@ -133,48 +133,48 @@ Wrap your release notes at the 80 character mark.
 - Permit filtering the output of several `SHOW` commands with a `WHERE` or
   `LIKE` clause:
 
-  - [SHOW DATABASES](../sql/show-databases)
-  - [SHOW INDEXES](../sql/show-index)
-  - [SHOW COLUMNS](../sql/show-index)
+  - [SHOW DATABASES](/sql/show-databases)
+  - [SHOW INDEXES](/sql/show-index)
+  - [SHOW COLUMNS](/sql/show-index)
 
 - Support reading from Kinesis streams with multiple shards. For details, about
-  Kinesis sources, see [CREATE SOURCE: JSON over Kinesis](../sql/create-source/json-kinesis).
+  Kinesis sources, see [CREATE SOURCE: JSON over Kinesis](/sql/create-source/json-kinesis).
 
 <span id="v0.2.0"></span>
 ## 0.1.3 &rarr; v0.2.0
 
 - Require the `-w` / `--threads` command-line option. Consult the [CLI
-  documentation](../cli/#worker-threads) to determine the correct value for your
+  documentation](/cli/#worker-threads) to determine the correct value for your
   deployment.
 
-- Introduce the [`--listen-addr`](../cli/#listen-address) command-line option to
+- Introduce the [`--listen-addr`](/cli/#listen-address) command-line option to
   control the address and port that `materialized` binds to.
 
-- Make formatting and parsing for [`real`](../sql/types/float) and
-  [`double precision`](../sql/types/float) numbers more
+- Make formatting and parsing for [`real`](/sql/types/float) and
+  [`double precision`](/sql/types/float) numbers more
   consistent with PostgreSQL. The strings `NaN`, and `[+-]Infinity` are
   accepted as input, to select the special not-a-number and infinity states,
   respectively,  of floating-point numbers.
 
-- Allow [CSV-formatted sources](../sql/create-source/csv-source/#csv-format-details)
+- Allow [CSV-formatted sources](/sql/create-source/csv-file/#csv-format-details)
   to include a header row (`CREATE SOURCE ... FORMAT CSV WITH HEADER`).
 
 - Provide the option to name columns in sources (e.g. [`CREATE SOURCE foo
-  (col_foo, col_bar)...`](../sql/create-source/csv-source/#creating-a-source-from-a-dynamic-csv)).
+  (col_foo, col_bar)...`](/sql/create-source/csv-file/#creating-a-source-from-a-dynamic-csv)).
 
 - Improve conformance of the Avro parser, enabling support for
-  a wider variety of Avro schemas in [Avro sources](../sql/create-source/avro-kafka).
+  a wider variety of Avro schemas in [Avro sources](/sql/create-source/avro-kafka).
 
-- Introduce [Avro Object Container File (OCF) sinks](../sql/create-sink/#avro-ocf-sinks).
+- Introduce [Avro Object Container File (OCF) sinks](/sql/create-sink/#avro-ocf-sinks).
 
-- Make [sink](../sql/create-sink/) output more correct and consistent by
+- Make [sink](/sql/create-sink/) output more correct and consistent by
   writing to a new Kafka topic or file on every restart.
 
-- Add the [`jsonb_agg()`](../sql/functions/#aggregate-func) aggregate function.
+- Add the [`jsonb_agg()`](/sql/functions/#aggregate-func) aggregate function.
 
-- Support [casts](../sql/functions/cast/) for `time`->`text`,`time`->`interval`, `interval`->`time`.
+- Support [casts](/sql/functions/cast/) for `time`->`text`,`time`->`interval`, `interval`->`time`.
 
-- Improve the usability of the [`EXPLAIN` statement](../sql/explain):
+- Improve the usability of the [`EXPLAIN` statement](/sql/explain):
 
   - Change the output format of to make large plans more readable by avoiding
     nesting.
@@ -188,14 +188,14 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.1.3"></span>
 ## 0.1.2 &rarr; 0.1.3
 
-- Support [Amazon Kinesis Data Stream sources](../sql/create-source/kinesis-source/).
+- Support [Amazon Kinesis Data Stream sources](/sql/create-source/json-kinesis/).
 
 - Support the number functions `round(x: N)` and `round(x: N, y: N)`, which
   round `x` to the `y`th digit after the decimal. (Default 0).
 
 - Support addition and subtraction between [`interval`]s.
 
-- Support the [string concatenation operator, `||`](../sql/functions/#string).
+- Support the [string concatenation operator, `||`](/sql/functions/#string).
 
 - In the event of a crash, print the stack trace to the log file, if logging to
   a file is enabled, as well as the standard error stream.
@@ -223,16 +223,16 @@ Wrap your release notes at the 80 character mark.
 
 - Improve CSV parsing speed by 5-6x.
 
-[`CREATE SOURCE`]: ../sql/create-source
-[`SHOW CREATE SOURCE`]: ../sql/show-create-source
-[`SHOW CREATE VIEW`]: ../sql/show-create-view
-[`CREATE MATERIALIZED VIEW`]: ../sql/create-materialized-view
-[`CREATE VIEW`]: ../sql/create-view
-[`text`]: ../sql/types/text
-[`date`]: ../sql/types/date
-[`timestamp`]: ../sql/types/timestamp
-[`timestamptz`]: ../sql/types/timestamptz
-[`interval`]: ../sql/types/interval
+[`CREATE SOURCE`]: /sql/create-source
+[`SHOW CREATE SOURCE`]: /sql/show-create-source
+[`SHOW CREATE VIEW`]: /sql/show-create-view
+[`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
+[`CREATE VIEW`]: /sql/create-view
+[`text`]: /sql/types/text
+[`date`]: /sql/types/date
+[`timestamp`]: /sql/types/timestamp
+[`timestamptz`]: /sql/types/timestamptz
+[`interval`]: /sql/types/interval
 
 <span id="v0.1.1"></span>
 ## 0.1.0 &rarr; 0.1.1
@@ -245,8 +245,8 @@ Wrap your release notes at the 80 character mark.
   you would have to create a source, and then create a materialized view that
   selected all of the source's content.
 
-<span id="v0.1.1"></span>
+<span id="v0.1.0"></span>
 ## _NULL_ &rarr; 0.1.0
 
-- [What is Materialize?](../overview/what-is-materialize/)
-- [Architecture overview](../overview/architecture/)
+- [What is Materialize?](/overview/what-is-materialize/)
+- [Architecture overview](/overview/architecture/)

@@ -1,0 +1,4 @@
+{{$url := .Destination | safeURL}}
+<a href="{{if hasPrefix $url "/"}}{{$url | relURL}}{{else}}{{$url}}{{end}}"{{with .Title}} title="{{.}}"{{end}}>
+    {{.Text | safeHTML}}
+</a>

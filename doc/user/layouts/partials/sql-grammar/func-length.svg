@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="119" y="21">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#str"
-      xlink:title="str">
-      <rect x="155" y="3" width="36" height="32"/>
-      <rect x="153" y="1" width="36" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="163" y="21">str</text>
-   </a>
+   <rect x="155" y="3" width="36" height="32"/>
+   <rect x="153" y="1" width="36" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="163" y="21">str</text>
    <rect x="231" y="35" width="24" height="32" rx="10"/>
    <rect x="229"
          y="33"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="239" y="53">,</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#encoding_name"
-      xlink:title="encoding_name">
-      <rect x="275" y="35" width="118" height="32"/>
-      <rect x="273" y="33" width="118" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="283" y="53">encoding_name</text>
-   </a>
+   <rect x="275" y="35" width="118" height="32"/>
+   <rect x="273" y="33" width="118" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="283" y="53">encoding_name</text>
    <rect x="433" y="3" width="24" height="32" rx="10"/>
    <rect x="431"
          y="1"

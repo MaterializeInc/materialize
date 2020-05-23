@@ -33,13 +33,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="261" y="53">EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#sink_name"
-      xlink:title="sink_name">
-      <rect x="361" y="3" width="86" height="32"/>
-      <rect x="359" y="1" width="86" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="369" y="21">sink_name</text>
-   </a>
+   <rect x="361" y="3" width="86" height="32"/>
+   <rect x="359" y="1" width="86" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="369" y="21">sink_name</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m58 0 h10 m0 0 h10 m52 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m32 0 h10 m0 0 h10 m68 0 h10 m20 -32 h10 m86 0 h10 m3 0 h-3"/>
    <polygon points="465 17 473 13 473 21"/>
