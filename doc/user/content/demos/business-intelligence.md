@@ -102,8 +102,10 @@ tool represents a client, and Materialize represents a server.
 
 Putting this all together, our deployment looks like this:
 
-![Materialize deployment diagram with
-Metabase](/images/demos/bi_architecture_diagram.png)
+{{< figure
+    src="/images/demos/bi_architecture_diagram.png"
+    alt="Materialize deployment diagram with Metabase"
+>}}
 
 ## Run the demo
 
