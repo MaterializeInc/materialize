@@ -69,19 +69,16 @@ where
             let group_key_owned = group_key.to_vec();
             let aggregates_owned = aggregates.to_vec();
 
-            let mut support = 0;
+            // Tracks the required number of columns to extract.
+            let mut columns_needed = 0;
             for key in group_key.iter() {
                 for column in key.support() {
-                    if column > support {
-                        support = column;
-                    }
+                    columns_needed = std::cmp::max(columns_needed, column + 1);
                 }
             }
             for aggr in aggregates.iter() {
                 for column in aggr.expr.support() {
-                    if column > support {
-                        support = column;
-                    }
+                    columns_needed = std::cmp::max(columns_needed, column + 1);
                 }
             }
 
@@ -96,7 +93,7 @@ where
                     // First, evaluate the key selector expressions.
                     // If any error we produce their errors as output and note
                     // the fact that the key was not correctly produced.
-                    let datums = row.iter().take(support + 1).collect::<Vec<_>>();
+                    let datums = row.iter().take(columns_needed).collect::<Vec<_>>();
                     for expr in group_key_owned.iter() {
                         match expr.eval(&datums, &temp_storage) {
                             Ok(val) => row_packer.push(val),
