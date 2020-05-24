@@ -665,28 +665,28 @@ fn fill_pdt_date(
 ) -> Result<()> {
     use TimeStrToken::*;
 
-    // Rewrite tokens that are in the format YYYYMMDDD into YYYY-MM-DD.
-    let retokenize_front = if let Some(Num(val)) = actual.front() {
-        // i.e. has 8 digits
-        *val > 9_999_999 && *val < 100_000_000
-    } else {
-        false
-    };
-
-    if retokenize_front {
-        let mut retokenized_front = if let Num(val) = actual.pop_front().unwrap() {
-            let ymd_string = val.to_string();
-            let y = &ymd_string[0..4];
-            let m = &ymd_string[4..6];
-            let d = &ymd_string[6..8];
-            tokenize_time_str(&format!("{}-{}-{}", y, m, d))?
-        } else {
-            VecDeque::new()
-        };
-
-        while !retokenized_front.is_empty() {
-            actual.push_front(retokenized_front.pop_back().unwrap());
+    // Check for one number that represents YYYYMMDDD.
+    match actual.front() {
+        Some(Num(mut val)) if val > 9_999_999 && val < 100_000_000 /* i.e. has 8 digits */ => {
+            pdt.day = Some(DateTimeFieldValue::new(val % 100, 0));
+            val /= 100;
+            pdt.month = Some(DateTimeFieldValue::new(val % 100, 0));
+            val /= 100;
+            pdt.year = Some(DateTimeFieldValue::new(val, 0));
+            actual.pop_front();
+            // Trim remaining optional tokens
+            if let Some(Space) = actual.front() {
+                actual.pop_front();
+            }
+            if let Some(DateTimeDelimiter) = actual.front() {
+                actual.pop_front();
+            }
+            if let Some(Space) = actual.front() {
+                actual.pop_front();
+            }
+            return Ok(());
         }
+        _ => (),
     }
 
     let valid_formats = vec![
