@@ -987,3 +987,9 @@ query T
 SELECT interval '-01:02:03.04'::time;
 ----
 22:57:56.96
+
+# Test using date as a column name.
+query T
+SELECT date FROM (SELECT column1 AS date FROM (VALUES ('2020-01-01')))
+----
+2020-01-01

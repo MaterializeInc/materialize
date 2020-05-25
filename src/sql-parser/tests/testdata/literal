@@ -74,62 +74,62 @@ Value(HexStringLiteral("deadBEEF"))
 parse-scalar
 DATE '1999-01-01'
 ----
-Value(Date("1999-01-01"))
+Cast { expr: Value(SingleQuotedString("1999-01-01")), data_type: Date }
 
 parse-scalar
 DATE 'invalid date'
 ----
-Value(Date("invalid date"))
+Cast { expr: Value(SingleQuotedString("invalid date")), data_type: Date }
 
 parse-scalar
 TIME '01:23:34'
 ----
-Value(Time("01:23:34"))
+Cast { expr: Value(SingleQuotedString("01:23:34")), data_type: Time }
 
 parse-scalar
 TIME 'invalid time'
 ----
-Value(Time("invalid time"))
+Cast { expr: Value(SingleQuotedString("invalid time")), data_type: Time }
 
 parse-scalar
 TIMESTAMP '1999-01-01 01:23:34.555'
 ----
-Value(Timestamp("1999-01-01 01:23:34.555"))
+Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: Timestamp }
 
 parse-scalar
 TIMESTAMPTZ '1999-01-01 01:23:34.555'
 ----
-Value(TimestampTz("1999-01-01 01:23:34.555"))
+Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Value(TimestampTz("1999-01-01 01:23:34.555"))
+Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Value(Timestamp("1999-01-01 01:23:34.555"))
+Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: Timestamp }
 
 parse-scalar
 TIMESTAMP 'invalid timestamptx'
 ----
-Value(Timestamp("invalid timestamptx"))
+Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: Timestamp }
 
 parse-scalar
 TIMESTAMPTZ 'invalid timestamptx'
 ----
-Value(TimestampTz("invalid timestamptx"))
+Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE 'invalid timestamptx'
 ----
-Value(TimestampTz("invalid timestamptx"))
+Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE 'invalid timestamptx'
 ----
-Value(Timestamp("invalid timestamptx"))
+Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: Timestamp }
 
 parse-scalar
 INTERVAL '1' YEAR

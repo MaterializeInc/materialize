@@ -3233,16 +3233,6 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
         },
-        Value::Date(d) => (Datum::Date(strconv::parse_date(d)?), ScalarType::Date),
-        Value::Timestamp(ts) => (
-            Datum::Timestamp(strconv::parse_timestamp(ts)?),
-            ScalarType::Timestamp,
-        ),
-        Value::TimestampTz(ts) => (
-            Datum::TimestampTz(strconv::parse_timestamptz(ts)?),
-            ScalarType::TimestampTz,
-        ),
-        Value::Time(t) => (Datum::Time(strconv::parse_time(t)?), ScalarType::Time),
         Value::Interval(iv) => {
             let mut i = strconv::parse_interval_w_disambiguator(&iv.value, iv.precision_low)?;
             i.truncate_high_fields(iv.precision_high);
