@@ -1350,6 +1350,15 @@ fn plan_expr_returning_name<'a>(
                 (ScalarExpr::Column(i), Some(name.clone()))
             }
             Expr::Value(val) => (plan_literal(val)?, None),
+            Expr::TypedString { data_type, value } => {
+                let to_scalar_type = scalar_type_from_sql(data_type)?;
+                let value = ScalarExpr::literal(
+                    Datum::String(value),
+                    ColumnType::new(ScalarType::String).nullable(false),
+                );
+                let expr = plan_cast_internal(ecx, CastContext::Explicit, value, to_scalar_type)?;
+                (expr, None)
+            }
             Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
             Expr::Parameter(n) => {
                 if !ecx.allow_subqueries {
@@ -3229,16 +3238,6 @@ fn sql_value_to_datum<'a>(l: &'a Value) -> Result<(Datum<'a>, ScalarType), failu
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
         },
-        Value::Date(d) => (Datum::Date(strconv::parse_date(d)?), ScalarType::Date),
-        Value::Timestamp(ts) => (
-            Datum::Timestamp(strconv::parse_timestamp(ts)?),
-            ScalarType::Timestamp,
-        ),
-        Value::TimestampTz(ts) => (
-            Datum::TimestampTz(strconv::parse_timestamptz(ts)?),
-            ScalarType::TimestampTz,
-        ),
-        Value::Time(t) => (Datum::Time(strconv::parse_time(t)?), ScalarType::Time),
         Value::Interval(iv) => {
             let mut i = strconv::parse_interval_w_disambiguator(&iv.value, iv.precision_low)?;
             i.truncate_high_fields(iv.precision_high);

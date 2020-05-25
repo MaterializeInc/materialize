@@ -1362,76 +1362,83 @@ fn parse_literal_string() {
 // strconv.
 #[test]
 fn parse_literal_timelike() {
-    let sql = "SELECT DATE '1999-01-01'";
+    let sql = "SELECT date '1999-01-01'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Date("1999-01-01".into())),
+        &Expr::TypedString {
+            data_type: DataType::Date,
+            value: "1999-01-01".into()
+        },
         expr_from_projection(only(&select.projection)),
     );
-    let sql = "SELECT DATE 'invalid date'";
+    let sql = "SELECT date 'invalid date'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Date("invalid date".into())),
+        &Expr::TypedString {
+            data_type: DataType::Date,
+            value: "invalid date".into()
+        },
         expr_from_projection(only(&select.projection)),
     );
-    let sql = "SELECT TIME '01:23:34'";
+    let sql = "SELECT time '01:23:34'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Time("01:23:34".into(),)),
+        &Expr::TypedString {
+            data_type: DataType::Time,
+            value: "01:23:34".into()
+        },
         expr_from_projection(only(&select.projection)),
     );
-    let sql = "SELECT TIME 'invalid time'";
+    let sql = "SELECT time 'invalid time'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Time("invalid time".into(),)),
+        &Expr::TypedString {
+            data_type: DataType::Time,
+            value: "invalid time".into()
+        },
         expr_from_projection(only(&select.projection)),
     );
 
-    let sql = "SELECT TIMESTAMP '1999-01-01 01:23:34.555'";
+    let sql = "SELECT timestamp '1999-01-01 01:23:34.555'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Timestamp("1999-01-01 01:23:34.555".into(),)),
+        &Expr::TypedString {
+            data_type: DataType::Timestamp,
+            value: "1999-01-01 01:23:34.555".into()
+        },
         expr_from_projection(only(&select.projection)),
     );
 
-    let sql = "SELECT TIMESTAMP 'invalid timestamp'";
+    let sql = "SELECT timestamp 'invalid timestamp'";
     let select = verified_only_select(sql);
     assert_eq!(
-        &Expr::Value(Value::Timestamp("invalid timestamp".into(),)),
+        &Expr::TypedString {
+            data_type: DataType::Timestamp,
+            value: "invalid timestamp".into()
+        },
         expr_from_projection(only(&select.projection)),
     );
     let time_formats = [
-        "TIMESTAMP",
-        "TIMESTAMPTZ",
-        "TIMESTAMP WITH TIME ZONE",
-        "TIMESTAMP WITHOUT TIME ZONE",
+        ("timestamp", DataType::Timestamp),
+        ("timestamp without time zone", DataType::Timestamp),
+        ("timestamptz", DataType::TimestampTz),
+        ("timestamp with time zone", DataType::TimestampTz),
     ];
 
-    #[rustfmt::skip]
-    let test_cases = vec!(
-        "1999-01-01 01:23:34.555",
-        "invalid timestamptx"
-    );
+    let test_cases = vec!["1999-01-01 01:23:34.555", "invalid timestamptz"];
 
-    for test in test_cases.iter() {
-        for format in time_formats.iter() {
+    for test in test_cases.iter().cloned() {
+        for (format, data_type) in time_formats.iter().cloned() {
             let sql = format!("SELECT {} '{}'", format, test);
             println!("{}", sql);
             let select = unverified_only_select(&sql);
-
-            if *format == "TIMESTAMPTZ" || *format == "TIMESTAMP WITH TIME ZONE" {
-                let value = Value::TimestampTz((*test).to_string());
-                assert_eq!(
-                    &Expr::Value(value),
-                    expr_from_projection(only(&select.projection))
-                );
-            } else {
-                let value = Value::Timestamp((*test).to_string());
-                assert_eq!(
-                    &Expr::Value(value),
-                    expr_from_projection(only(&select.projection))
-                );
-            }
+            assert_eq!(
+                &Expr::TypedString {
+                    data_type,
+                    value: test.to_owned()
+                },
+                expr_from_projection(only(&select.projection))
+            );
         }
     }
 }

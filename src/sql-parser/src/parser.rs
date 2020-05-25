@@ -43,6 +43,14 @@ macro_rules! parser_err {
     };
 }
 
+macro_rules! maybe {
+    ($e:expr) => {{
+        if let Some(v) = $e {
+            return Ok(v);
+        }
+    }};
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {
     /// Original query (so we can easily print an error)
@@ -245,6 +253,34 @@ impl Parser {
 
     /// Parse an expression prefix
     pub fn parse_prefix(&mut self) -> Result<Expr, ParserError> {
+        // PostgreSQL allows any string literal to be preceded by a type name,
+        // indicating that the string literal represents a literal of that type.
+        // Some examples:
+        //
+        //     DATE '2020-05-20'
+        //     TIMESTAMP WITH TIME ZONE '2020-05-20 7:43:54'
+        //     BOOL 'true'
+        //
+        // The first two are standard SQL, while the latter is a PostgreSQL
+        // extension. Complicating matters is the fact that INTERVAL string
+        // literals may optionally be followed by some special keywords, e.g.:
+        //
+        //     INTERVAL '7' DAY
+        //
+        // Note also that naively `SELECT date` looks like a syntax error
+        // because the `date` type name is not followed by a string literal, but
+        // in fact is a valid expression that should parse as the column name
+        // "date".
+        maybe!(self.maybe_parse(|parser| {
+            match parser.parse_data_type()? {
+                DataType::Interval => parser.parse_literal_interval(),
+                data_type => Ok(Expr::TypedString {
+                    data_type,
+                    value: parser.parse_literal_string()?,
+                }),
+            }
+        }));
+
         let tok = self
             .next_token()
             .ok_or_else(|| self.error(self.peek_prev_range(), "Unexpected EOF".to_string()))?;
@@ -257,7 +293,6 @@ impl Parser {
                 "LIST" => self.parse_list(),
                 "CASE" => self.parse_case_expr(),
                 "CAST" => self.parse_cast_expr(),
-                "DATE" => Ok(Expr::Value(self.parse_date()?)),
                 "EXISTS" => self.parse_exists_expr(),
                 "EXTRACT" => self.parse_extract_expr(),
                 "INTERVAL" => self.parse_literal_interval(),
@@ -265,9 +300,6 @@ impl Parser {
                     op: UnaryOperator::Not,
                     expr: Box::new(self.parse_subexpr(Precedence::UnaryNot)?),
                 }),
-                "TIME" => Ok(Expr::Value(self.parse_time()?)),
-                "TIMESTAMP" => self.parse_timestamp(),
-                "TIMESTAMPTZ" => self.parse_timestamptz(),
                 // Here `w` is a word, check if it's a part of a multi-part
                 // identifier, a function call, or a simple identifier:
                 w if keywords::RESERVED_FOR_EXPRESSIONS.contains(&w) => {
@@ -544,33 +576,6 @@ impl Parser {
             Ok(f) => Ok(f),
             Err(_) => self.expected(self.peek_prev_range(), "valid extract field", tok)?,
         }
-    }
-
-    fn parse_date(&mut self) -> Result<Value, ParserError> {
-        let value = self.parse_literal_string()?;
-        Ok(Value::Date(value))
-    }
-
-    fn parse_time(&mut self) -> Result<Value, ParserError> {
-        let value = self.parse_literal_string()?;
-        Ok(Value::Time(value))
-    }
-
-    fn parse_timestamp(&mut self) -> Result<Expr, ParserError> {
-        if self.parse_keyword("WITH") {
-            self.expect_keywords(&["TIME", "ZONE"])?;
-            let value = self.parse_literal_string()?;
-            return Ok(Expr::Value(Value::TimestampTz(value)));
-        } else if self.parse_keyword("WITHOUT") {
-            self.expect_keywords(&["TIME", "ZONE"])?;
-        }
-        let value = self.parse_literal_string()?;
-        Ok(Expr::Value(Value::Timestamp(value)))
-    }
-
-    fn parse_timestamptz(&mut self) -> Result<Expr, ParserError> {
-        let value = self.parse_literal_string()?;
-        Ok(Expr::Value(Value::TimestampTz(value)))
     }
 
     /// Parse an INTERVAL literal.
@@ -1101,6 +1106,20 @@ impl Parser {
             }
         }
         Ok(values)
+    }
+
+    #[must_use]
+    fn maybe_parse<T, F>(&mut self, mut f: F) -> Option<T>
+    where
+        F: FnMut(&mut Parser) -> Result<T, ParserError>,
+    {
+        let index = self.index;
+        if let Ok(t) = f(self) {
+            Some(t)
+        } else {
+            self.index = index;
+            None
+        }
     }
 
     /// Parse a SQL CREATE statement
@@ -1895,7 +1914,7 @@ impl Parser {
                 }
                 // Interval types can be followed by a complicated interval
                 // qualifier that we don't currently support. See
-                // parse_interval_literal for a taste.
+                // parse_literal_interval for a taste.
                 "INTERVAL" => DataType::Interval,
                 "REGCLASS" => DataType::Regclass,
                 "TEXT" | "STRING" => DataType::Text,
@@ -2498,7 +2517,6 @@ impl Parser {
         }
 
         if self.consume_token(&Token::LParen) {
-            let index = self.index;
             // A left paren introduces either a derived table (i.e., a subquery)
             // or a nested join. It's nearly impossible to determine ahead of
             // time which it is... so we just try to parse both.
@@ -2515,39 +2533,36 @@ impl Parser {
             //                   | (2) starts a nested join
             //                   (1) an additional set of parens around a nested join
             //
-            match self.parse_derived_table_factor(NotLateral) {
-                // The recently consumed '(' started a derived table, and we've
-                // parsed the subquery, followed by the closing ')', and the
-                // alias of the derived table. In the example above this is
-                // case (3), and the next token would be `NATURAL`.
-                Ok(table_factor) => Ok(table_factor),
-                Err(_) => {
-                    // The '(' we've recently consumed does not start a derived
-                    // table. For valid input this can happen either when the
-                    // token following the paren can't start a query (e.g. `foo`
-                    // in `FROM (foo NATURAL JOIN bar)`, or when the '(' we've
-                    // consumed is followed by another '(' that starts a
-                    // derived table, like (3), or another nested join (2).
-                    //
-                    // Ignore the error and back up to where we were before.
-                    // Either we'll be able to parse a valid nested join, or
-                    // we won't, and we'll return that error instead.
-                    self.index = index;
-                    let table_and_joins = self.parse_table_and_joins()?;
-                    match table_and_joins.relation {
-                        TableFactor::NestedJoin { .. } => (),
-                        _ => {
-                            if table_and_joins.joins.is_empty() {
-                                // The SQL spec prohibits derived tables and bare
-                                // tables from appearing alone in parentheses.
-                                self.expected(self.peek_range(), "joined table", self.peek_token())?
-                            }
-                        }
+
+            // Check if the recently consumed '(' started a derived table, in
+            // which case we've parsed the subquery, followed by the closing
+            // ')', and the alias of the derived table. In the example above
+            // this is case (3), and the next token would be `NATURAL`.
+            maybe!(self.maybe_parse(|parser| parser.parse_derived_table_factor(NotLateral)));
+
+            // The '(' we've recently consumed does not start a derived table.
+            // For valid input this can happen either when the token following
+            // the paren can't start a query (e.g. `foo` in `FROM (foo NATURAL
+            // JOIN bar)`, or when the '(' we've consumed is followed by another
+            // '(' that starts a derived table, like (3), or another nested join
+            // (2).
+            //
+            // Ignore the error and back up to where we were before. Either
+            // we'll be able to parse a valid nested join, or we won't, and
+            // we'll return that error instead.
+            let table_and_joins = self.parse_table_and_joins()?;
+            match table_and_joins.relation {
+                TableFactor::NestedJoin { .. } => (),
+                _ => {
+                    if table_and_joins.joins.is_empty() {
+                        // The SQL spec prohibits derived tables and bare
+                        // tables from appearing alone in parentheses.
+                        self.expected(self.peek_range(), "joined table", self.peek_token())?
                     }
-                    self.expect_token(&Token::RParen)?;
-                    Ok(TableFactor::NestedJoin(Box::new(table_and_joins)))
                 }
             }
+            self.expect_token(&Token::RParen)?;
+            Ok(TableFactor::NestedJoin(Box::new(table_and_joins)))
         } else {
             let name = self.parse_object_name()?;
             // Postgres, MSSQL: table-valued functions:

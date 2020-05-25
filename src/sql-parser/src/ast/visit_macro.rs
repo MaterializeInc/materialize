@@ -243,6 +243,10 @@ macro_rules! make_visitor {
 
             fn visit_value(&mut self, _val: &'ast $($mut)* Value) {}
 
+            fn visit_typed_string(&mut self, data_type: &'ast $($mut)* DataType, value: &'ast $($mut)* String) {
+                visit_typed_string(self, data_type, value);
+            }
+
             fn visit_function(&mut self, func: &'ast $($mut)* Function) {
                 visit_function(self, func)
             }
@@ -1013,6 +1017,7 @@ macro_rules! make_visitor {
                 Expr::Extract { field, expr } => visitor.visit_extract(field, expr),
                 Expr::Nested(expr) => visitor.visit_nested(expr),
                 Expr::Value(val) => visitor.visit_value(val),
+                Expr::TypedString { data_type, value } => visitor.visit_typed_string(data_type, value),
                 Expr::Function(func) => visitor.visit_function(func),
                 Expr::Case {
                     operand,
@@ -1171,6 +1176,10 @@ macro_rules! make_visitor {
 
         pub fn visit_nested<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, expr: &'ast $($mut)* Expr) {
             visitor.visit_expr(expr);
+        }
+
+        pub fn visit_typed_string<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, data_type: &'ast $($mut)* DataType, _value: &'ast $($mut)* String) {
+            visitor.visit_type(data_type);
         }
 
         pub fn visit_function<'ast, V: $name<'ast> + ?Sized>(visitor: &mut V, func: &'ast $($mut)* Function) {

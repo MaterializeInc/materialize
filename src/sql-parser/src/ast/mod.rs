@@ -239,7 +239,10 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// Unary operation e.g. `NOT foo`
-    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
+    UnaryOp {
+        op: UnaryOperator,
+        expr: Box<Expr>,
+    },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr>,
@@ -258,6 +261,10 @@ pub enum Expr {
     Nested(Box<Expr>),
     /// A literal value, such as string, number, date or NULL
     Value(Value),
+    TypedString {
+        data_type: DataType,
+        value: String,
+    },
     /// Scalar function call e.g. `LEFT(foo, 5)`
     Function(Function),
     /// `CASE [<operand>] WHEN <condition> THEN <result> ... [ELSE <result>] END`
@@ -392,6 +399,12 @@ impl AstDisplay for Expr {
             }
             Expr::Value(v) => {
                 f.write_node(v);
+            }
+            Expr::TypedString { data_type, value } => {
+                f.write_node(data_type);
+                f.write_str(" '");
+                f.write_node(&value::escape_single_quote_string(value));
+                f.write_str("'");
             }
             Expr::Function(fun) => {
                 f.write_node(fun);
