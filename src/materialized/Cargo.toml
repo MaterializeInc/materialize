@@ -32,7 +32,7 @@ jemallocator = { version = "0.3.0", features = ["profiling"] }
 krb5-src = { version = "0.2.1", features = ["binaries"] }
 lazy_static = "1.4.0"
 log = "0.4.8"
-once_cell = "1.3.1"
+once_cell = "1.4.0"
 openssl = { version = "0.10.29", features = ["vendored"] }
 openssl-sys = { version = "0.9.56", features = ["vendored"] }
 ore = { path = "../ore" }
