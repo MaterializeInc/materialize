@@ -412,6 +412,16 @@ SELECT length('你好', 'iso-8859-5')
 ----
 6
 
+query I
+SELECT octet_length('你好');
+----
+6
+
+query I
+SELECT bit_length('你好');
+----
+48
+
 # encoding name conversion FROM pg to WHATWG
 query I
 SELECT length('你好', 'ISO_8859_5')

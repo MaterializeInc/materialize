@@ -676,6 +676,50 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     }
 }
 
+fn bit_length<'a, B>(bytes: B) -> Datum<'a>
+where
+    B: AsRef<[u8]>,
+{
+    Datum::from((bytes.as_ref().len() * 8) as i32)
+}
+
+fn byte_length<'a, B>(bytes: B) -> Datum<'a>
+where
+    B: AsRef<[u8]>,
+{
+    Datum::from(bytes.as_ref().len() as i32)
+}
+
+fn char_length<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_str().chars().count() as i32)
+}
+
+fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
+    // which the encoding library uses[3].
+    // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
+    // [2]: https://encoding.spec.whatwg.org/
+    // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
+    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
+
+    let enc = match encoding_from_whatwg_label(&encoding_name) {
+        Some(enc) => enc,
+        None => return Err(EvalError::InvalidEncodingName(encoding_name)),
+    };
+
+    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(EvalError::InvalidByteSequence {
+                byte_sequence: e.to_string(),
+                encoding_name,
+            })
+        }
+    };
+
+    Ok(Datum::from(decoded_string.chars().count() as i32))
+}
+
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     add_timestamp_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
@@ -1782,6 +1826,7 @@ pub enum BinaryFunc {
     Trim,
     TrimLeading,
     TrimTrailing,
+    EncodedBytesCharLength,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1950,6 +1995,7 @@ impl BinaryFunc {
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
+            BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
         }
     }
 
@@ -1974,7 +2020,7 @@ impl BinaryFunc {
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Trim | TrimLeading
             | TrimTrailing => ColumnType::new(ScalarType::String).nullable(false),
 
-            AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
+            AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 | EncodedBytesCharLength => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
             }
 
@@ -2132,9 +2178,19 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString
             | TextConcat => true,
-            MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTruncTimestamp
-            | DateTruncTimestampTz | CastFloat32ToDecimal | CastFloat64ToDecimal
-            | RoundDecimal(_) | ConvertFrom | Trim | TrimLeading | TrimTrailing => false,
+            MatchLikePattern
+            | ToCharTimestamp
+            | ToCharTimestampTz
+            | DateTruncTimestamp
+            | DateTruncTimestampTz
+            | CastFloat32ToDecimal
+            | CastFloat64ToDecimal
+            | RoundDecimal(_)
+            | ConvertFrom
+            | Trim
+            | TrimLeading
+            | TrimTrailing
+            | EncodedBytesCharLength => false,
         }
     }
 }
@@ -2210,6 +2266,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Trim => f.write_str("btrim"),
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
+            BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
         }
     }
 }
@@ -2300,7 +2357,11 @@ pub enum UnaryFunc {
     FloorFloat64,
     FloorDecimal(u8),
     Ascii,
-    LengthBytes,
+    BitLengthBytes,
+    BitLengthString,
+    ByteLengthBytes,
+    ByteLengthString,
+    CharLength,
     MatchRegex(Regex),
     ExtractIntervalEpoch,
     ExtractIntervalYear,
@@ -2445,7 +2506,11 @@ impl UnaryFunc {
             UnaryFunc::SqrtFloat32 => Ok(sqrt_float32(a)),
             UnaryFunc::SqrtFloat64 => Ok(sqrt_float64(a)),
             UnaryFunc::Ascii => Ok(ascii(a)),
-            UnaryFunc::LengthBytes => Ok(length_bytes(a)),
+            UnaryFunc::BitLengthString => Ok(bit_length(a.unwrap_str())),
+            UnaryFunc::BitLengthBytes => Ok(bit_length(a.unwrap_bytes())),
+            UnaryFunc::ByteLengthString => Ok(byte_length(a.unwrap_str())),
+            UnaryFunc::ByteLengthBytes => Ok(byte_length(a.unwrap_bytes())),
+            UnaryFunc::CharLength => Ok(char_length(a)),
             UnaryFunc::MatchRegex(regex) => Ok(match_regex(a, &regex)),
             UnaryFunc::ExtractIntervalEpoch => Ok(extract_interval_epoch(a)),
             UnaryFunc::ExtractIntervalYear => Ok(extract_interval_year(a)),
@@ -2524,7 +2589,8 @@ impl UnaryFunc {
         match self {
             IsNull | CastInt32ToBool | CastInt64ToBool => ColumnType::new(ScalarType::Bool),
 
-            Ascii | LengthBytes => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
+            Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
+            | ByteLengthString => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
 
             MatchRegex(_) => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
 
@@ -2803,7 +2869,11 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
-            UnaryFunc::LengthBytes => f.write_str("lengthbytes"),
+            UnaryFunc::CharLength => f.write_str("char_length"),
+            UnaryFunc::BitLengthBytes => f.write_str("bit_length"),
+            UnaryFunc::BitLengthString => f.write_str("bit_length"),
+            UnaryFunc::ByteLengthBytes => f.write_str("byte_length"),
+            UnaryFunc::ByteLengthString => f.write_str("byte_length"),
             UnaryFunc::MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
             UnaryFunc::ExtractIntervalEpoch => f.write_str("ivextractepoch"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
@@ -2910,42 +2980,6 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     } else {
         Datum::String(&string[start_in_bytes..])
     }
-}
-
-fn length_string<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let string = datums[0].unwrap_str();
-
-    if datums.len() == 2 {
-        // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
-        // which the encoding library uses[3].
-        // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
-        // [2]: https://encoding.spec.whatwg.org/
-        // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-        let encoding_name = datums[1].unwrap_str().to_lowercase().replace("_", "-");
-
-        let enc = match encoding_from_whatwg_label(&encoding_name) {
-            Some(enc) => enc,
-            None => return Err(EvalError::InvalidEncodingName(encoding_name)),
-        };
-
-        let decoded_string = match enc.decode(string.as_bytes(), DecoderTrap::Strict) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(EvalError::InvalidByteSequence {
-                    byte_sequence: e.to_string(),
-                    encoding_name,
-                })
-            }
-        };
-
-        Ok(Datum::from(decoded_string.chars().count() as i32))
-    } else {
-        Ok(Datum::from(string.chars().count() as i32))
-    }
-}
-
-fn length_bytes<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Int32(a.unwrap_bytes().len() as i32)
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -3059,7 +3093,6 @@ pub enum VariadicFunc {
     Concat,
     MakeTimestamp,
     Substr,
-    LengthString,
     Replace,
     JsonbBuildArray,
     JsonbBuildObject,
@@ -3093,7 +3126,6 @@ impl VariadicFunc {
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
             VariadicFunc::Substr => Ok(eager!(substr)),
-            VariadicFunc::LengthString => eager!(length_string),
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
@@ -3118,7 +3150,6 @@ impl VariadicFunc {
             Concat => ColumnType::new(ScalarType::String).nullable(true),
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
-            LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
             JsonbBuildArray | JsonbBuildObject => ColumnType::new(ScalarType::Jsonb).nullable(true),
             ListCreate { elem_type } => {
@@ -3151,7 +3182,6 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Concat => f.write_str("concat"),
             VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::Substr => f.write_str("substr"),
-            VariadicFunc::LengthString => f.write_str("lengthstr"),
             VariadicFunc::Replace => f.write_str("replace"),
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
