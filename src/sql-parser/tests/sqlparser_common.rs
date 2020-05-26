@@ -968,7 +968,7 @@ fn parse_limit_accepts_all() {
 
 #[test]
 fn parse_cast() {
-    let sql = "SELECT CAST(id AS bigint) FROM customer";
+    let sql = "SELECT id::bigint FROM customer";
     let select = verified_only_select(sql);
     assert_eq!(
         &Expr::Cast {
@@ -979,19 +979,31 @@ fn parse_cast() {
     );
     one_statement_parses_to(
         "SELECT CAST(id AS BIGINT) FROM customer",
-        "SELECT CAST(id AS bigint) FROM customer",
+        "SELECT id::bigint FROM customer",
     );
 
-    verified_stmt("SELECT CAST(id AS numeric) FROM customer");
+    one_statement_parses_to(
+        "SELECT id::double precision FROM customer",
+        "SELECT id::double FROM customer",
+    );
+
+    verified_stmt("SELECT id::timestamp with time zone FROM customer");
+
+    one_statement_parses_to(
+        "SELECT (id::timestamp with time zone::timestamp without time zone  )  ::  double precision::text FROM customer",
+        "SELECT (id::timestamp with time zone::timestamp)::double::text FROM customer",
+    );
+
+    verified_stmt("SELECT id::numeric FROM customer");
 
     one_statement_parses_to(
         "SELECT CAST(id AS dec) FROM customer",
-        "SELECT CAST(id AS numeric) FROM customer",
+        "SELECT id::numeric FROM customer",
     );
 
     one_statement_parses_to(
         "SELECT CAST(id AS decimal) FROM customer",
-        "SELECT CAST(id AS numeric) FROM customer",
+        "SELECT id::numeric FROM customer",
     );
 }
 
@@ -4551,7 +4563,7 @@ fn parse_create_table_with_defaults() {
                         options: vec![
                             ColumnOptionDef {
                                 name: None,
-                                option: ColumnOption::Default(verified_expr("CAST(now() AS text)"))
+                                option: ColumnOption::Default(verified_expr("now()::text"))
                             },
                             ColumnOptionDef {
                                 name: None,
@@ -4617,32 +4629,21 @@ fn parse_create_table_with_defaults() {
 
 #[test]
 fn parse_create_table_from_pg_dump() {
-    let sql = "CREATE TABLE public.customer (
-            customer_id integer DEFAULT nextval('public.customer_customer_id_seq'::regclass) NOT NULL,
-            store_id smallint NOT NULL,
-            first_name character varying(45) NOT NULL,
-            last_name character varying(45) NOT NULL,
-            info text,
-            address_id smallint NOT NULL,
-            activebool boolean DEFAULT true NOT NULL,
-            create_date date DEFAULT now()::date NOT NULL,
-            create_date1 date DEFAULT 'now'::text::date NOT NULL,
-            last_update timestamp without time zone DEFAULT now(),
-            active integer
-        )";
-    one_statement_parses_to(sql, "CREATE TABLE public.customer (\
-            customer_id int DEFAULT nextval(CAST('public.customer_customer_id_seq' AS regclass)) NOT NULL, \
+    verified_stmt(
+        "CREATE TABLE public.customer (\
+            customer_id int DEFAULT nextval('public.customer_customer_id_seq'::regclass) NOT NULL, \
             store_id smallint NOT NULL, \
             first_name character varying(45) NOT NULL, \
             last_name character varying(45) NOT NULL, \
             info text, \
             address_id smallint NOT NULL, \
             activebool boolean DEFAULT true NOT NULL, \
-            create_date date DEFAULT CAST(now() AS date) NOT NULL, \
-            create_date1 date DEFAULT CAST(CAST('now' AS text) AS date) NOT NULL, \
+            create_date date DEFAULT now()::date NOT NULL, \
+            create_date1 date DEFAULT 'now'::text::date NOT NULL, \
             last_update timestamp DEFAULT now(), \
             active int\
-        )");
+        )",
+    );
 }
 
 #[test]
