@@ -19,8 +19,8 @@
 //!
 //! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
 use super::{
-    AggregateExpr, EvalError, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr,
-    RowSetFinishing, ScalarExpr,
+    AggregateExpr, Id, IdHumanizer, JoinImplementation, LocalId, RelationExpr, RowSetFinishing,
+    ScalarExpr,
 };
 use repr::RelationType;
 use std::collections::HashMap;
@@ -400,29 +400,6 @@ impl std::fmt::Display for AggregateExpr {
             if self.distinct { "distinct " } else { "" },
             self.expr
         )
-    }
-}
-
-impl std::fmt::Display for EvalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            EvalError::DivisionByZero => f.write_str("division by zero"),
-            EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
-            EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
-            EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
-            EvalError::InvalidByteSequence {
-                byte_sequence,
-                encoding_name,
-            } => write!(
-                f,
-                "invalid byte sequence '{}' for encoding '{}'",
-                byte_sequence, encoding_name
-            ),
-            EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
-            EvalError::UnterminatedLikeEscapeSequence => {
-                f.write_str("unterminated escape sequence in LIKE")
-            }
-        }
     }
 }
 

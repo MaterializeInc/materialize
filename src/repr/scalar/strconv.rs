@@ -28,6 +28,7 @@ use std::fmt;
 
 use chrono::offset::TimeZone;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use serde::{Deserialize, Serialize};
 
 use ore::fmt::FormatBuffer;
 
@@ -680,20 +681,24 @@ where
     }
 }
 
-#[derive(Debug)]
+/// An error while parsing input as a type.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ParseError {
-    type_name: &'static str,
+    type_name: String,
     input: String,
     details: Option<String>,
 }
 
 impl ParseError {
+    // To ensure that reversing the parameters causes a compile-time error, we
+    // require that `type_name` be a string literal, even though `ParseError`
+    // itself stores the type name as a `String`.
     fn new<S>(type_name: &'static str, input: S) -> ParseError
     where
         S: Into<String>,
     {
         ParseError {
-            type_name,
+            type_name: type_name.into(),
             input: input.into(),
             details: None,
         }
