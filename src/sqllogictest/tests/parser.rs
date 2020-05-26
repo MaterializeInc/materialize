@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use sqllogictest::ast::Record;
+use sqllogictest::ast::{Location, Record};
 use sqllogictest::parser;
 
 #[test]
@@ -15,6 +15,13 @@ fn test_parser() {
     struct TestCase {
         input: &'static str,
         output: Vec<Record<'static>>,
+    }
+
+    fn linenum(n: usize) -> Location {
+        Location {
+            file: "<test>".to_string(),
+            line: n,
+        }
     }
 
     let test_cases = vec![
@@ -25,6 +32,7 @@ SELECT 1",
                 expected_error: None,
                 rows_affected: None,
                 sql: "SELECT 1",
+                location: linenum(2),
             }],
         },
         TestCase {
@@ -34,6 +42,7 @@ SELECT 1",
                 expected_error: None,
                 rows_affected: None,
                 sql: "SELECT 1",
+                location: linenum(2),
             }],
         },
         TestCase {
@@ -43,6 +52,7 @@ SELECT 1",
                 expected_error: None,
                 rows_affected: Some(7),
                 sql: "SELECT 1",
+                location: linenum(2),
             }],
         },
         TestCase {
@@ -52,6 +62,7 @@ SELECT blargh",
                 expected_error: Some("this statement is wrong"),
                 rows_affected: None,
                 sql: "SELECT blargh",
+                location: linenum(2),
             }],
         },
         TestCase {
@@ -94,23 +105,27 @@ SELECT disappear",
                     expected_error: None,
                     rows_affected: None,
                     sql: "SELECT only_postgresql",
+                    location: linenum(7),
                 },
                 Record::Statement {
                     expected_error: None,
                     rows_affected: None,
                     sql: "SELECT everybody",
+                    location: linenum(10),
                 },
                 Record::Statement {
                     expected_error: None,
                     rows_affected: None,
                     sql: "SELECT multiskip_not_us",
+                    location: linenum(15),
                 },
             ],
         },
     ];
 
     for tc in test_cases {
-        let records = parser::parse_records(tc.input).unwrap();
+        let mut parser = crate::parser::Parser::new("<test>", tc.input);
+        let records = parser.parse_records().unwrap();
         assert_eq!(records, tc.output);
     }
 }

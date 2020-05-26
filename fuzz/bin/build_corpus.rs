@@ -29,8 +29,9 @@ fn main() {
                 .unwrap()
                 .read_to_string(&mut contents)
                 .unwrap();
-            for record in sqllogictest::parser::parse_records(&contents).unwrap_or_else(|_| vec![])
-            {
+            let mut parser =
+                sqllogictest::parser::Parser::new(entry.path().to_str().unwrap_or(""), &contents);
+            for record in parser.parse_records().unwrap_or_else(|_| vec![]) {
                 match record {
                     sqllogictest::ast::Record::Query { sql, .. }
                     | sqllogictest::ast::Record::Statement { sql, .. } => {
