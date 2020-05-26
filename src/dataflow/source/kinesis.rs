@@ -18,7 +18,7 @@ use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 
 use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
-use dataflow_types::{ExternalSourceConnector, KinesisSourceConnector, Timestamp};
+use dataflow_types::{KinesisSourceConnector, Timestamp};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;

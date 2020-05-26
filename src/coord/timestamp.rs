@@ -873,10 +873,6 @@ impl Timestamper {
             // (this will ensure that the next timestamping round will timestamp a greater offset)
             if let Some(last_offset) = consumer.last_partition_offset.get_mut(&pid) {
                 if *last_offset < offset {
-                    info!(
-                        "Fast-forwarding source {}, partition: {} from MzOffset: {} to MzOffset: {}",
-                        id, pid, last_offset, offset
-                    );
                     *last_offset = offset;
                 } // else has already caught up
             }

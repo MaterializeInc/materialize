@@ -47,8 +47,10 @@ pub struct SourceConfig<'a, G> {
     pub timestamp_histories: TimestampHistories,
     /// Metadata channel to propagate timestamping control information to coordinator/timestamper
     pub timestamp_tx: TimestampChanges,
-    /// Source consitency type: BYO or RT
+    /// Source consistency type: BYO or RT
     pub consistency: Consistency,
+    /// Maximum Batch Size for this source (determines the maximum number of messages that can be timestamped at once)
+    pub max_ts_batch_size: i64,
 }
 
 /// A `SourceToken` manages interest in a source.

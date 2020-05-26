@@ -29,14 +29,12 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::{Activator, SyncActivator};
 use url::Url;
 
-use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
-};
+use dataflow_types::{KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 
 use super::util::source;
 use super::{SourceConfig, SourceStatus, SourceToken};
-use crate::server::{TimestampHistories, TimestampChanges, TimestampMetadataChange};
+use crate::server::{TimestampChanges, TimestampHistories, TimestampMetadataChange};
 
 // Global Kafka metrics.
 lazy_static! {
@@ -548,11 +546,17 @@ struct ControlPlaneInfo {
     /// Optional: Materialize Offset from which source should start reading (default is 0)
     start_offset: MzOffset,
     /// Timestamp channel to communicate timestamp metadata updates back to coordinator/timestamper
-    timestamp_tx: TimestampChanges
+    timestamp_tx: TimestampChanges,
+    /// Max number of messages that can be timestamped at once
+    max_ts_batch_size: i64,
 }
 
 impl ControlPlaneInfo {
-    fn new(start_offset: MzOffset, timestamp_tx: TimestampChanges) -> ControlPlaneInfo {
+    fn new(
+        start_offset: MzOffset,
+        max_ts_batch_size: i64,
+        timestamp_tx: TimestampChanges,
+    ) -> ControlPlaneInfo {
         ControlPlaneInfo {
             last_closed_ts: 0,
             partition_metadata: vec![ConsInfo {
@@ -561,8 +565,9 @@ impl ControlPlaneInfo {
                 },
                 ts: 0,
             }],
+            max_ts_batch_size,
             start_offset,
-            timestamp_tx
+            timestamp_tx,
         }
     }
 
@@ -593,6 +598,27 @@ impl ControlPlaneInfo {
         );
         assert_eq!(expected_pcount, self.get_partition_count());
     }
+
+    fn request_fast_forward(
+        &self,
+        id: SourceInstanceId,
+        pid: i32,
+        current_offset: MzOffset,
+        timestamps: &TimestampHistories,
+    ) {
+        let last_offset = peek_highest_offset(&id, pid, timestamps);
+        if current_offset.offset - last_offset.offset > self.max_ts_batch_size {
+            // Data processing is more than one batch ahead of timestamp processing,
+            // request fast-forward
+            self.timestamp_tx.as_ref().borrow_mut().push(
+                TimestampMetadataChange::FastForwardTimestamping(
+                    id,
+                    PartitionId::Kafka(pid),
+                    current_offset,
+                ),
+            );
+        } // else do nothing
+    }
 }
 
 /// This function activates the necessary timestamping information when a source is first created
@@ -600,7 +626,7 @@ impl ControlPlaneInfo {
 /// 1) it inserts an entry in the timestamp_history datastructure
 /// 2) it notifies the coordinator that timestamping should begin by inserting an entry in the
 /// timestamp_tx channel
-fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSourceConnector) {
+fn activate_source_timestamping<G>(config: &SourceConfig<G>) {
     if config.active {
         let prev = config
             .timestamp_histories
@@ -608,7 +634,11 @@ fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSou
             .insert(config.id.clone(), HashMap::new());
         // Check that this is the first time this source id is registered
         assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push(TimestampMetadataChange::StartTimestamping(config.id));
+        config
+            .timestamp_tx
+            .as_ref()
+            .borrow_mut()
+            .push(TimestampMetadataChange::StartTimestamping(config.id));
     }
 }
 
@@ -629,9 +659,9 @@ where
         config_options,
         start_offset,
         group_id_prefix,
-    } = connector.clone();
+    } = connector;
 
-    activate_source_timestamping(&config, connector);
+    activate_source_timestamping(&config);
 
     let SourceConfig {
         name,
@@ -640,12 +670,17 @@ where
         active,
         timestamp_histories,
         timestamp_tx,
+        max_ts_batch_size,
         ..
     } = config;
 
     let (stream, capability) = source(
         id,
-        if active { Some(timestamp_tx.clone())} else { None },
+        if active {
+            Some(timestamp_tx.clone())
+        } else {
+            None
+        },
         scope,
         &name.clone(),
         move |info| {
@@ -653,9 +688,13 @@ where
             let activator = scope.activator_for(&info.address[..]);
 
             // Create control plane information (Consistency-related information)
-            let mut cp_info = ControlPlaneInfo::new(MzOffset {
-                offset: start_offset,
-            }, timestamp_tx);
+            let mut cp_info = ControlPlaneInfo::new(
+                MzOffset {
+                    offset: start_offset,
+                },
+                max_ts_batch_size,
+                timestamp_tx,
+            );
 
             // Create dataplane information (Kafka-related information)
             let mut dp_info = if active {
@@ -708,6 +747,12 @@ where
                             None => {
                                 // We have not yet decided on a timestamp for this message,
                                 // we need to buffer the message
+                                cp_info.request_fast_forward(
+                                    id,
+                                    partition,
+                                    offset,
+                                    &timestamp_histories,
+                                );
                                 dp_info.buffer_message(message);
                                 activator.activate();
                                 return SourceStatus::Alive;
@@ -764,6 +809,27 @@ where
         (stream, Some(capability))
     } else {
         (stream, None)
+    }
+}
+
+/// Returns the highest offset for which a timestamp exists
+fn peek_highest_offset(
+    id: &SourceInstanceId,
+    partition: i32,
+    timestamp_histories: &TimestampHistories,
+) -> MzOffset {
+    match timestamp_histories.borrow().get(id) {
+        None => MzOffset { offset: 0 },
+        Some(entries) => match entries.get(&PartitionId::Kafka(partition)) {
+            None => MzOffset { offset: 0 },
+            Some(entries) => {
+                if let Some((_, _, offset)) = entries.front() {
+                    offset.clone()
+                } else {
+                    MzOffset { offset: 0 }
+                }
+            }
+        },
     }
 }
 
