@@ -58,7 +58,7 @@ tests=(
     test/sqllogictest/cockroach/alias_types.slt
     test/sqllogictest/cockroach/alter_column_type.slt
     test/sqllogictest/cockroach/alter_table.slt
-    # test/sqllogictest/cockroach/apply_join.slt
+    test/sqllogictest/cockroach/apply_join.slt
     test/sqllogictest/cockroach/array.slt
     test/sqllogictest/cockroach/as_of.slt
     test/sqllogictest/cockroach/bit.slt
