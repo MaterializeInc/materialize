@@ -367,11 +367,9 @@ impl AstDisplay for Expr {
                 f.write_node(&expr);
             }
             Expr::Cast { expr, data_type } => {
-                f.write_str("CAST(");
                 f.write_node(&expr);
-                f.write_str(" AS ");
+                f.write_str("::");
                 f.write_node(data_type);
-                f.write_str(")");
             }
             Expr::Extract { field, expr } => {
                 f.write_str("EXTRACT(");
