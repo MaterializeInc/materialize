@@ -322,13 +322,13 @@ where
     })
 }
 
-pub fn decode_list(elem_type: &Type, raw: &str) -> Result<Vec<Option<Value>>, failure::Error> {
-    strconv::parse_list(
+pub fn decode_list(
+    elem_type: &Type,
+    raw: &str,
+) -> Result<Vec<Option<Value>>, Box<dyn Error + Sync + Send>> {
+    Ok(strconv::parse_list(
         raw,
         || None,
-        |elem_text| match Value::decode_text(elem_type, elem_text.as_bytes()) {
-            Ok(elem) => Ok(Some(elem)),
-            Err(e) => Err(failure::Error::from_boxed_compat(e)),
-        },
-    )
+        |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
+    )?)
 }

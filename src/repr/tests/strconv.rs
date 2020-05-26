@@ -27,23 +27,23 @@ fn test_parse_date() {
 fn test_parse_date_errors() {
     run_test_parse_date_errors(
         "2001-01",
-        "Invalid DATE \'2001-01\': YEAR, MONTH, DAY are all required",
+        "invalid input syntax for date: YEAR, MONTH, DAY are all required: \"2001-01\"",
     );
     run_test_parse_date_errors(
         "2001",
-        "Invalid DATE \'2001\': YEAR, MONTH, DAY are all required",
+        "invalid input syntax for date: YEAR, MONTH, DAY are all required: \"2001\"",
     );
     run_test_parse_date_errors(
         "2001-13-01",
-        "Invalid DATE \'2001-13-01\': MONTH must be (1, 12), got 13",
+        "invalid input syntax for date: MONTH must be (1, 12), got 13: \"2001-13-01\"",
     );
     run_test_parse_date_errors(
         "2001-12-32",
-        "Invalid DATE \'2001-12-32\': DAY must be (1, 31), got 32",
+        "invalid input syntax for date: DAY must be (1, 31), got 32: \"2001-12-32\"",
     );
     run_test_parse_date_errors(
         "2001-01-02 04",
-        "Invalid DATE '2001-01-02 04': Unknown format",
+        "invalid input syntax for date: unknown format: \"2001-01-02 04\"",
     );
     fn run_test_parse_date_errors(s: &str, e: &str) {
         assert_eq!(
@@ -71,17 +71,20 @@ fn test_parse_time() {
 fn test_parse_time_errors() {
     run_test_parse_time_errors(
         "26:01:02.345",
-        "Invalid TIME \'26:01:02.345\': HOUR must be (0, 23), got 26",
+        "invalid input syntax for time: HOUR must be (0, 23), got 26: \"26:01:02.345\"",
     );
     run_test_parse_time_errors(
         "01:60:02.345",
-        "Invalid TIME \'01:60:02.345\': MINUTE must be (0, 59), got 60",
+        "invalid input syntax for time: MINUTE must be (0, 59), got 60: \"01:60:02.345\"",
     );
     run_test_parse_time_errors(
         "01:02:61.345",
-        "Invalid TIME \'01:02:61.345\': SECOND must be (0, 60), got 61",
+        "invalid input syntax for time: SECOND must be (0, 60), got 61: \"01:02:61.345\"",
     );
-    run_test_parse_time_errors("03.456", "Invalid TIME \'03.456\': Unknown format");
+    run_test_parse_time_errors(
+        "03.456",
+        "invalid input syntax for time: unknown format: \"03.456\"",
+    );
 
     fn run_test_parse_time_errors(s: &str, e: &str) {
         assert_eq!(
@@ -123,36 +126,36 @@ fn test_parse_timestamp() {
 fn test_parse_timestamp_errors() {
     run_test_parse_timestamp_errors(
         "2001-01",
-        "Invalid TIMESTAMP \'2001-01\': YEAR, MONTH, DAY are all required",
+        "invalid input syntax for timestamp: YEAR, MONTH, DAY are all required: \"2001-01\"",
     );
     run_test_parse_timestamp_errors(
         "2001",
-        "Invalid TIMESTAMP \'2001\': YEAR, MONTH, DAY are all required",
+        "invalid input syntax for timestamp: YEAR, MONTH, DAY are all required: \"2001\"",
     );
     run_test_parse_timestamp_errors(
         "2001-13-01",
-        "Invalid TIMESTAMP \'2001-13-01\': MONTH must be (1, 12), got 13",
+        "invalid input syntax for timestamp: MONTH must be (1, 12), got 13: \"2001-13-01\"",
     );
     run_test_parse_timestamp_errors(
         "2001-12-32",
-        "Invalid TIMESTAMP \'2001-12-32\': DAY must be (1, 31), got 32",
+        "invalid input syntax for timestamp: DAY must be (1, 31), got 32: \"2001-12-32\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 04",
-        "Invalid TIMESTAMP \'2001-01-02 04\': Unknown format",
+        "invalid input syntax for timestamp: unknown format: \"2001-01-02 04\"",
     );
 
     run_test_parse_timestamp_errors(
         "2001-01-02 26:01:02.345",
-        "Invalid TIMESTAMP \'2001-01-02 26:01:02.345\': HOUR must be (0, 23), got 26",
+        "invalid input syntax for timestamp: HOUR must be (0, 23), got 26: \"2001-01-02 26:01:02.345\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 01:60:02.345",
-        "Invalid TIMESTAMP \'2001-01-02 01:60:02.345\': MINUTE must be (0, 59), got 60",
+        "invalid input syntax for timestamp: MINUTE must be (0, 59), got 60: \"2001-01-02 01:60:02.345\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 01:02:61.345",
-        "Invalid TIMESTAMP \'2001-01-02 01:02:61.345\': SECOND must be (0, 60), got 61",
+        "invalid input syntax for timestamp: SECOND must be (0, 60), got 61: \"2001-01-02 01:02:61.345\"",
     );
 
     fn run_test_parse_timestamp_errors(s: &str, e: &str) {
@@ -208,17 +211,18 @@ fn test_parse_timestamptz() {
 fn test_parse_timestamptz_errors() {
     run_test_parse_timestamptz_errors(
         "1999-01-01 01:23:34.555 +25:45",
-        "Invalid TIMESTAMPTZ \'1999-01-01 01:23:34.555 +25:45\': Invalid timezone string \
-         (+25:45): timezone hour invalid 25",
+        "invalid input syntax for timestamptz: Invalid timezone string \
+         (+25:45): timezone hour invalid 25: \"1999-01-01 01:23:34.555 +25:45\"",
     );
     run_test_parse_timestamptz_errors(
         "1999-01-01 01:23:34.555 +21:61",
-        "Invalid TIMESTAMPTZ \'1999-01-01 01:23:34.555 +21:61\': Invalid timezone string \
-         (+21:61): timezone minute invalid 61",
+        "invalid input syntax for timestamptz: Invalid timezone string \
+         (+21:61): timezone minute invalid 61: \"1999-01-01 01:23:34.555 +21:61\"",
     );
     run_test_parse_timestamptz_errors(
         "1999-01-01 01:23:34.555 4",
-        "Invalid TIMESTAMPTZ \'1999-01-01 01:23:34.555 4\': Cannot parse timezone offset 4",
+        "invalid input syntax for timestamptz: Cannot parse timezone offset 4: \
+         \"1999-01-01 01:23:34.555 4\"",
     );
 
     fn run_test_parse_timestamptz_errors(s: &str, e: &str) {
@@ -457,8 +461,8 @@ fn parse_interval_error() {
 
     run_test_parse_interval_errors(
         "1 1-1",
-        "Invalid INTERVAL '1 1-1': Cannot determine format of all parts. Add explicit time \
-         components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY",
+        "invalid input syntax for interval: Cannot determine format of all parts. Add explicit time \
+         components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY: \"1 1-1\"",
     );
 }
 

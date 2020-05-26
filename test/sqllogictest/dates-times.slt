@@ -904,13 +904,13 @@ SELECT DATE '2007-02-01   T  15:04:05+00'
 ----
 2007-02-01
 
-statement error Invalid DATE '2007-02-01X15:04:05': invalid DateTimeField: X
+statement error invalid input syntax for date: invalid DateTimeField: X: "2007-02-01X15:04:05"
 SELECT DATE '2007-02-01X15:04:05'
 
-statement error Invalid DATE '2007-02-01TT15:04:05': invalid DateTimeField: TT
+statement error invalid input syntax for date: invalid DateTimeField: TT: "2007-02-01TT15:04:05"
 SELECT DATE '2007-02-01TT15:04:05'
 
-statement error Invalid DATE '2007-02-01  T  T  15:04:05': Cannot determine format of all parts
+statement error invalid input syntax for date: Cannot determine format of all parts: "2007-02-01  T  T  15:04:05"
 SELECT DATE '2007-02-01  T  T  15:04:05'
 
 # Test casting time to interval & vice versa
