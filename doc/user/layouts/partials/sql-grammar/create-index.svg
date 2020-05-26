@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="133" y="21">INDEX</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#index_name"
-      xlink:title="index_name">
-      <rect x="207" y="3" width="94" height="32"/>
-      <rect x="205" y="1" width="94" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="215" y="21">index_name</text>
-   </a>
+   <rect x="207" y="3" width="94" height="32"/>
+   <rect x="205" y="1" width="94" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="215" y="21">index_name</text>
    <rect x="321" y="3" width="40" height="32" rx="10"/>
    <rect x="319"
          y="1"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="329" y="21">ON</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#view_name"
-      xlink:title="view_name">
-      <rect x="381" y="3" width="88" height="32"/>
-      <rect x="379" y="1" width="88" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="389" y="21">view_name</text>
-   </a>
+   <rect x="381" y="3" width="88" height="32"/>
+   <rect x="379" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="389" y="21">view_name</text>
    <rect x="489" y="3" width="24" height="32" rx="10"/>
    <rect x="487"
          y="1"
@@ -47,13 +39,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="497" y="21">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#col_ref"
-      xlink:title="col_ref">
-      <rect x="381" y="113" width="62" height="32"/>
-      <rect x="379" y="111" width="62" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="389" y="131">col_ref</text>
-   </a>
+   <rect x="381" y="113" width="62" height="32"/>
+   <rect x="379" y="111" width="62" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="389" y="131">col_ref</text>
    <rect x="381" y="69" width="24" height="32" rx="10"/>
    <rect x="379"
          y="67"

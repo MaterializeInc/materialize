@@ -41,13 +41,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="263" y="65">WHERE</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#expr"
-      xlink:title="expr">
-      <rect x="345" y="47" width="46" height="32"/>
-      <rect x="343" y="45" width="46" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="353" y="65">expr</text>
-   </a>
+   <rect x="345" y="47" width="46" height="32"/>
+   <rect x="343" y="45" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="353" y="65">expr</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m62 0 h10 m0 0 h10 m102 0 h10 m20 0 h10 m50 0 h10 m0 0 h10 m66 0 h10 m-176 0 h20 m156 0 h20 m-196 0 q10 0 10 10 m176 0 q0 -10 10 -10 m-186 10 v24 m176 0 v-24 m-176 24 q0 10 10 10 m156 0 q10 0 10 -10 m-166 10 h10 m70 0 h10 m0 0 h10 m46 0 h10 m23 -44 h-3"/>
    <polygon points="429 17 437 13 437 21"/>

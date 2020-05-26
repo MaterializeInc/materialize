@@ -156,7 +156,7 @@ From here, we'll start publishing these messages on a Kafka topic.
 Requirement | Purpose | Demo value
 ------------|---------|-----------
 **Source URL** | Where to listen for new messages (`hostname/topic_name`) | `kafka://localhost/events`
-**Schema** | How to decode messages | [Generated `FileDescriptorSet`](#generating-protobuf-schema-filedescriptorset)
+**Schema** | How to decode messages | [Generated `FileDescriptorSet`](#generating-protobuf-schemafiledescriptorset)
 **Message name** | The top-level message to decode | `billing.Batch`
 
 #### Generating `protobuf` schema/`FileDescriptorSet`
@@ -288,7 +288,7 @@ CREATE MATERIALIZED VIEW billing_prices AS
 	FROM price_source;
 ```
 
-For more details on how CSV sources work, see [`CREATE SOURCES`](../../sql/create-source/#csv-sources).
+For more details on how CSV sources work, see [`CREATE SOURCES`](/sql/create-source/csv-file).
 
 ### Aggregating data
 
@@ -401,7 +401,7 @@ In a future iteration, we'll make this demo more interactive.
 ### Preparing the environment
 
 1. Start the Docker daemon for your machine, and [follow our Docker integration
-   guide](../../third-party/docker).
+   guide](/third-party/docker).
 
 1. Clone the Materialize repo:
 
@@ -555,4 +555,4 @@ In this demo, we saw:
 
 - [Business intelligence demo](../business-intelligence)
 - [Log parsing demo](../log-parsing)
-- [`CREATE SOURCE`](../../sql/create-source)
+- [`CREATE SOURCE`](/sql/create-source)

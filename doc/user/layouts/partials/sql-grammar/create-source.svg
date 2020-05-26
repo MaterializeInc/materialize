@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="217" y="53">IF NOT EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#src_name"
-      xlink:title="src_name">
-      <rect x="367" y="3" width="80" height="32"/>
-      <rect x="365" y="1" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="375" y="21">src_name</text>
-   </a>
+   <rect x="367" y="3" width="80" height="32"/>
+   <rect x="365" y="1" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="375" y="21">src_name</text>
    <rect x="65" y="145" width="24" height="32" rx="10"/>
    <rect x="63"
          y="143"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="73" y="163">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#col_name"
-      xlink:title="col_name">
-      <rect x="129" y="145" width="80" height="32"/>
-      <rect x="127" y="143" width="80" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="137" y="163">col_name</text>
-   </a>
+   <rect x="129" y="145" width="80" height="32"/>
+   <rect x="127" y="143" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="137" y="163">col_name</text>
    <rect x="129" y="101" width="24" height="32" rx="10"/>
    <rect x="127"
          y="99"
@@ -63,13 +55,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="321" y="163">FROM</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#connector_spec"
-      xlink:title="connector_spec">
-      <rect x="393" y="145" width="118" height="32"/>
-      <rect x="391" y="143" width="118" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="401" y="163">connector_spec</text>
-   </a>
+   <rect x="393" y="145" width="118" height="32"/>
+   <rect x="391" y="143" width="118" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="401" y="163">connector_spec</text>
    <rect x="25" y="227" width="78" height="32" rx="10"/>
    <rect x="23"
          y="225"
@@ -78,13 +66,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="33" y="245">FORMAT</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#format_spec"
-      xlink:title="format_spec">
-      <rect x="123" y="227" width="96" height="32"/>
-      <rect x="121" y="225" width="96" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="131" y="245">format_spec</text>
-   </a>
+   <rect x="123" y="227" width="96" height="32"/>
+   <rect x="121" y="225" width="96" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="131" y="245">format_spec</text>
    <rect x="259" y="259" width="92" height="32" rx="10"/>
    <rect x="257"
          y="257"

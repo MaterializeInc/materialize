@@ -33,13 +33,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="287" y="53">EXISTS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#source_name"
-      xlink:title="source_name">
-      <rect x="387" y="3" width="102" height="32"/>
-      <rect x="385" y="1" width="102" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="395" y="21">source_name</text>
-   </a>
+   <rect x="387" y="3" width="102" height="32"/>
+   <rect x="385" y="1" width="102" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="395" y="21">source_name</text>
    <rect x="375" y="121" width="88" height="32" rx="10"/>
    <rect x="373"
          y="119"

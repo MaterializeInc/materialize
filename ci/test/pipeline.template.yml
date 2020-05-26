@@ -40,6 +40,13 @@ steps:
     agents:
       queue: builder
 
+  - id: lint-docs
+    label: ":briefcase: lint docs"
+    command: bin/ci-builder run stable ci/www/lint.sh
+    inputs:
+      - doc/user
+    timeout_in_minutes: 30
+
   - id: cargo-test
     label: ":cargo: test"
     depends_on: build

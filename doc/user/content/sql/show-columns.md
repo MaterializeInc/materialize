@@ -5,7 +5,7 @@ menu:
   main:
     parent: 'sql'
 aliases:
-    - /docs/sql/show-column
+    - /sql/show-column
 ---
 
 `SHOW COLUMNS` lists the columns available from an item&mdash;either sources, materialized views, or non-materialized views.

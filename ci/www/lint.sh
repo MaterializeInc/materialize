@@ -9,8 +9,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# build.sh — builds the Netlify website.
+# lint.sh — checks for broken links and other HTML errors.
 
 set -euo pipefail
 
-hugo --gc --baseURL "$1"/docs --source doc/user --destination ../../ci/www/public/docs
+git clean -ffdX ci/www/public
+hugo --gc --baseURL https://ci.materialize.io/docs --source doc/user --destination ../../ci/www/public/docs
+echo "<!doctype html>" > ci/www/public/index.html
+htmltest -s ci/www/public -c doc/user/.htmltest.yml

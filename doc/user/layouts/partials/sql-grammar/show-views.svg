@@ -41,13 +41,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="149" y="183">FROM</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#schema_name"
-      xlink:title="schema_name">
-      <rect x="221" y="165" width="110" height="32"/>
-      <rect x="219" y="163" width="110" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="229" y="183">schema_name</text>
-   </a>
+   <rect x="221" y="165" width="110" height="32"/>
+   <rect x="219" y="163" width="110" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="229" y="183">schema_name</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m62 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m-150 -10 v20 m160 0 v-20 m-160 20 v24 m160 0 v-24 m-160 24 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m52 0 h10 m0 0 h68 m20 -76 h10 m64 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-280 130 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h200 m-230 0 h20 m210 0 h20 m-250 0 q10 0 10 10 m230 0 q0 -10 10 -10 m-240 10 v12 m230 0 v-12 m-230 12 q0 10 10 10 m210 0 q10 0 10 -10 m-220 10 h10 m60 0 h10 m0 0 h10 m110 0 h10 m23 -32 h-3"/>
    <polygon points="369 147 377 143 377 151"/>

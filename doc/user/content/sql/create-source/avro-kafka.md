@@ -5,9 +5,9 @@ menu:
   main:
     parent: 'create-source'
 aliases:
-    - /docs/sql/create-source/kafka
-    - /docs/sql/create-source/avro
-    - /docs/sql/create-source/avro-source
+    - /sql/create-source/kafka
+    - /sql/create-source/avro
+    - /sql/create-source/avro-source
 ---
 
 {{% create-source/intro %}}

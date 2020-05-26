@@ -162,7 +162,8 @@ FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "
 ```
 
 While you can find more details about this statement in [`CREATE
-SOURCES`](../../sql/create-source/text-source), here's an explanation of the arguments:
+SOURCES`](/sql/create-source/text-file), here's an explanation of the
+arguments:
 
 Argument | Function
 ---------|---------
@@ -237,7 +238,7 @@ In a future iteration, we'll make this demo more interactive.
 ### Preparing the environment
 
 1. Start the Docker daemon for your machine, and [follow our Docker integration
-   guide](../../third-party/docker).
+   guide](/third-party/docker).
 
 1. Verify that you have Python 3 or greater installed.
 
@@ -370,7 +371,7 @@ get a chance to see how Materialize can handle queries on our data.
     generator uses more different IP addresses.
 
     Now that you've seen how this is done, feel free to explore the other views
-    or use [`CREATE MATERIALIZED VIEW`](../../sql/create-materialized-view) to
+    or use [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view) to
     explore Materialize's capabilities yourself.
 
 ## Recap
@@ -386,5 +387,5 @@ In this demo, we saw:
 
 - [Microservice demo](../microservice)
 - [Business intelligence demo](../business-intelligence)
-- [`CREATE SOURCE`](../../sql/create-source)
-- [Functions + Operators](../../sql/functions)
+- [`CREATE SOURCE`](/sql/create-source)
+- [Functions + Operators](/sql/functions)

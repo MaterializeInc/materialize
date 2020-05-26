@@ -33,13 +33,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="395" y="21">'</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#date_str"
-      xlink:title="date_str">
-      <rect x="429" y="3" width="70" height="32"/>
-      <rect x="427" y="1" width="70" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="437" y="21">date_str</text>
-   </a>
+   <rect x="429" y="3" width="70" height="32"/>
+   <rect x="427" y="1" width="70" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="437" y="21">date_str</text>
    <rect x="75" y="177" width="24" height="32" rx="10"/>
    <rect x="73"
          y="175"
@@ -56,13 +52,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="83" y="239">T</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#time_str"
-      xlink:title="time_str">
-      <rect x="143" y="177" width="70" height="32"/>
-      <rect x="141" y="175" width="70" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="151" y="195">time_str</text>
-   </a>
+   <rect x="143" y="177" width="70" height="32"/>
+   <rect x="141" y="175" width="70" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="151" y="195">time_str</text>
    <rect x="293" y="177" width="26" height="32" rx="10"/>
    <rect x="291"
          y="175"
@@ -79,13 +71,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="301" y="239">-</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#tz_offset"
-      xlink:title="tz_offset">
-      <rect x="359" y="177" width="72" height="32"/>
-      <rect x="357" y="175" width="72" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="367" y="195">tz_offset</text>
-   </a>
+   <rect x="359" y="177" width="72" height="32"/>
+   <rect x="357" y="175" width="72" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="367" y="195">tz_offset</text>
    <rect x="471" y="145" width="22" height="32" rx="10"/>
    <rect x="469"
          y="143"

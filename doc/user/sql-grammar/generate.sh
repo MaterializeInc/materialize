@@ -22,7 +22,7 @@ rm -rf scratch $dest
 
 # Run the railroad diagram generator, using a pinned version from our custom
 # fork.
-docker run --rm -i materialize/rr:0.0.2 -nostyles -svg -width:600 - < sql-grammar.bnf > diagrams.zip
+docker run --rm -i materialize/rr:0.0.3 -nostyles -svg -width:600 - < sql-grammar.bnf > diagrams.zip
 
 # Extract the SVGs we care about and move them into place.
 mkdir scratch

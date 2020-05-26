@@ -113,6 +113,7 @@ header {
   a {
     display: block;
     color: $purple;
+    cursor: pointer;
 
     &.active {
       font-weight: bold;

@@ -41,13 +41,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="281" y="97">VIEW</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#view_name"
-      xlink:title="view_name">
-      <rect x="417" y="3" width="88" height="32"/>
-      <rect x="415" y="1" width="88" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="425" y="21">view_name</text>
-   </a>
+   <rect x="417" y="3" width="88" height="32"/>
+   <rect x="415" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="425" y="21">view_name</text>
    <rect x="525" y="3" width="38" height="32" rx="10"/>
    <rect x="523"
          y="1"
@@ -56,13 +52,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="533" y="21">AS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#select_stmt"
-      xlink:title="select_stmt">
-      <rect x="467" y="145" width="90" height="32"/>
-      <rect x="465" y="143" width="90" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="475" y="163">select_stmt</text>
-   </a>
+   <rect x="467" y="145" width="90" height="32"/>
+   <rect x="465" y="143" width="90" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="475" y="163">select_stmt</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m74 0 h10 m20 0 h10 m54 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m-252 -32 h20 m252 0 h20 m-292 0 q10 0 10 10 m272 0 q0 -10 10 -10 m-282 10 v56 m272 0 v-56 m-272 56 q0 10 10 10 m252 0 q10 0 10 -10 m-262 10 h10 m108 0 h10 m0 0 h10 m54 0 h10 m0 0 h50 m20 -76 h10 m88 0 h10 m0 0 h10 m38 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-140 142 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m3 0 h-3"/>
    <polygon points="575 159 583 155 583 163"/>

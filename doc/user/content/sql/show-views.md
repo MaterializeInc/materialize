@@ -34,7 +34,7 @@ Field | Meaning
 ------|--------
 **VIEWS** | The name of the view
 **TYPE** | Whether the view was created by the user or the system
-**QUERYABLE** | Can the view process [`SELECT`](../select) statements? You can always `SELECT FROM...` materialized views, but non-materialized views [have a specific set of requirements](../create-view/#selecting-from-non-materialized-views).
+**QUERYABLE** | Can the view process [`SELECT`](../select) statements? You can always `SELECT FROM...` materialized views, but non-materialized views [have a specific set of requirements](../create-view/#querying-non-materialized-views).
 **MATERIALIZED** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index)
 
 ## Examples

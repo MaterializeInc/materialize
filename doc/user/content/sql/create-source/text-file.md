@@ -5,12 +5,12 @@ menu:
   main:
     parent: 'create-source'
 aliases:
-    - /docs/sql/create-source/text
-    - /docs/sql/create-source/text-source
-    - /docs/sql/create-source/byte
-    - /docs/sql/create-source/bytes
-    - /docs/sql/create-source/file
-    - /docs/sql/create-source/files
+    - /sql/create-source/text
+    - /sql/create-source/text-source
+    - /sql/create-source/byte
+    - /sql/create-source/bytes
+    - /sql/create-source/file
+    - /sql/create-source/files
 ---
 
 {{% create-source/intro %}}

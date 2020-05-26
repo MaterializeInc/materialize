@@ -1,8 +1,8 @@
 ### Byte format details (JSON)
 
 Materialize receives all data from Kinesis streams as bytes, which you must
-convert to [`text`](/docs/sql/types/text), and then to
-[`jsonb`](/docs/sql/types/jsonb).
+convert to [`text`](/sql/types/text), and then to
+[`jsonb`](/sql/types/jsonb).
 
 Here is an example of using a Kinesis source, converting the streams bytes into
 `jsonb` data:

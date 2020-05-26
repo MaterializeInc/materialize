@@ -5,10 +5,10 @@ menu:
   main:
     parent: 'sql-types'
 aliases:
-    - /docs/sql/types/real
-    - /docs/sql/types/double
-    - /docs/sql/types/double-precision
-    - /docs/sql/types/float64
+    - /sql/types/real
+    - /sql/types/double
+    - /sql/types/double-precision
+    - /sql/types/float64
 ---
 
 `real` and `double precision` data express a variable-precision, inexact number

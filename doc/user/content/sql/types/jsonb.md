@@ -5,7 +5,7 @@ menu:
   main:
     parent: 'sql-types'
 aliases:
-  - /docs/sql/types/json
+  - /sql/types/json
 ---
 
 `jsonb` data expresses a JavaScript Object Notation (JSON) object similar to PostgreSQL's implementation.

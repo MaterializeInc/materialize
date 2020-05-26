@@ -16,7 +16,7 @@ VIEW`](../create-materialized-view).
 ## Conceptual framework
 
 `CREATE VIEW` simply stores the verbatim `SELECT` query, and provides a
-shorthand for performing the query. For more information, see [API Components: Sources](../../overview/api-components#non-materialized-views).
+shorthand for performing the query. For more information, see [API Components: Sources](/overview/api-components#non-materialized-views).
 
 ## Syntax
 
@@ -73,7 +73,7 @@ latency and computation needed to answer queries.
 ### Converting to materialized view
 
 You can convert a non-materialized view into a materialized view by [adding an
-index](../create-index/#converting-views-to-materialized-views).
+index](../create-index/#materializing-views).
 
 ## Examples
 

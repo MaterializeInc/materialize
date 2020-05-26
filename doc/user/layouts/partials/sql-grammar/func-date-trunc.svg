@@ -145,13 +145,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="443" y="21">,</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#ts_val"
-      xlink:title="ts_val">
-      <rect x="479" y="3" width="56" height="32"/>
-      <rect x="477" y="1" width="56" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="487" y="21">ts_val</text>
-   </a>
+   <rect x="479" y="3" width="56" height="32"/>
+   <rect x="477" y="1" width="56" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="487" y="21">ts_val</text>
    <rect x="505" y="597" width="24" height="32" rx="10"/>
    <rect x="503"
          y="595"

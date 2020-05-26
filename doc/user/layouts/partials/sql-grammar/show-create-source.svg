@@ -25,13 +25,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="215" y="21">SOURCE</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#source_name"
-      xlink:title="source_name">
-      <rect x="305" y="3" width="102" height="32"/>
-      <rect x="303" y="1" width="102" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="313" y="21">source_name</text>
-   </a>
+   <rect x="305" y="3" width="102" height="32"/>
+   <rect x="303" y="1" width="102" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="313" y="21">source_name</text>
    <path class="line"
          d="m17 17 h2 m0 0 h10 m62 0 h10 m0 0 h10 m74 0 h10 m0 0 h10 m78 0 h10 m0 0 h10 m102 0 h10 m3 0 h-3"/>
    <polygon points="425 17 433 13 433 21"/>

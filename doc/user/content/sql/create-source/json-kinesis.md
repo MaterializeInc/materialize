@@ -5,8 +5,8 @@ menu:
   main:
     parent: 'create-source'
 aliases:
-    - /docs/sql/create-source/kinesis
-    - /docs/sql/create-source/kinesis-source
+    - /sql/create-source/kinesis
+    - /sql/create-source/kinesis-source
 ---
 
 {{% create-source/intro %}}
@@ -43,7 +43,7 @@ This creates a source that...
 - Has one column, `data`, which represents the stream's incoming bytes.
 
 To use this data in views, you can decode its bytes into
-[`jsonb`](/docs/sql/types/jsonb). For example:
+[`jsonb`](/sql/types/jsonb). For example:
 
 ```sql
 CREATE MATERIALIZED VIEW jsonified_kinesis_source AS

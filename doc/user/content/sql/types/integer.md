@@ -5,10 +5,10 @@ menu:
   main:
     parent: 'sql-types'
 aliases:
-  - /docs/sql/types/bigint
-  - /docs/sql/types/int
-  - /docs/sql/types/int4
-  - /docs/sql/types/int8
+  - /sql/types/bigint
+  - /sql/types/int
+  - /sql/types/int4
+  - /sql/types/int8
 ---
 
 `integer` and `bigint` data express signed integers.

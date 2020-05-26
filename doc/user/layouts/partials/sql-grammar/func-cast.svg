@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="115" y="21">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#val"
-      xlink:title="val">
-      <rect x="151" y="3" width="38" height="32"/>
-      <rect x="149" y="1" width="38" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="159" y="21">val</text>
-   </a>
+   <rect x="151" y="3" width="38" height="32"/>
+   <rect x="149" y="1" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="159" y="21">val</text>
    <rect x="209" y="3" width="38" height="32" rx="10"/>
    <rect x="207"
          y="1"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="217" y="21">AS</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#type"
-      xlink:title="type">
-      <rect x="267" y="3" width="46" height="32"/>
-      <rect x="265" y="1" width="46" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="275" y="21">type</text>
-   </a>
+   <rect x="267" y="3" width="46" height="32"/>
+   <rect x="265" y="1" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="275" y="21">type</text>
    <rect x="333" y="3" width="24" height="32" rx="10"/>
    <rect x="331"
          y="1"

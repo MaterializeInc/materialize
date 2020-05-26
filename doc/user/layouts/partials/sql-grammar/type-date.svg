@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="115" y="21">'</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#date_str"
-      xlink:title="date_str">
-      <rect x="149" y="3" width="70" height="32"/>
-      <rect x="147" y="1" width="70" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="157" y="21">date_str</text>
-   </a>
+   <rect x="149" y="3" width="70" height="32"/>
+   <rect x="147" y="1" width="70" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="157" y="21">date_str</text>
    <rect x="279" y="67" width="28" height="32" rx="10"/>
    <rect x="277"
          y="65"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="287" y="85">T</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#time_str"
-      xlink:title="time_str">
-      <rect x="347" y="35" width="70" height="32"/>
-      <rect x="345" y="33" width="70" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="355" y="53">time_str</text>
-   </a>
+   <rect x="347" y="35" width="70" height="32"/>
+   <rect x="345" y="33" width="70" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="355" y="53">time_str</text>
    <rect x="231" y="165" width="26" height="32" rx="10"/>
    <rect x="229"
          y="163"
@@ -55,13 +47,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="239" y="227">-</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#tz_offset"
-      xlink:title="tz_offset">
-      <rect x="297" y="165" width="72" height="32"/>
-      <rect x="295" y="163" width="72" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="305" y="183">tz_offset</text>
-   </a>
+   <rect x="297" y="165" width="72" height="32"/>
+   <rect x="295" y="163" width="72" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="305" y="183">tz_offset</text>
    <rect x="409" y="133" width="22" height="32" rx="10"/>
    <rect x="407"
          y="131"

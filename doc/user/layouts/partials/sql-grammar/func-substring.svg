@@ -17,13 +17,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="139" y="21">(</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#str"
-      xlink:title="str">
-      <rect x="175" y="3" width="36" height="32"/>
-      <rect x="173" y="1" width="36" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="183" y="21">str</text>
-   </a>
+   <rect x="175" y="3" width="36" height="32"/>
+   <rect x="173" y="1" width="36" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="183" y="21">str</text>
    <rect x="231" y="3" width="24" height="32" rx="10"/>
    <rect x="229"
          y="1"
@@ -32,13 +28,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="239" y="21">,</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#start_pos"
-      xlink:title="start_pos">
-      <rect x="275" y="3" width="76" height="32"/>
-      <rect x="273" y="1" width="76" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="283" y="21">start_pos</text>
-   </a>
+   <rect x="275" y="3" width="76" height="32"/>
+   <rect x="273" y="1" width="76" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="283" y="21">start_pos</text>
    <rect x="391" y="35" width="24" height="32" rx="10"/>
    <rect x="389"
          y="33"
@@ -47,13 +39,9 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="399" y="53">,</text>
-   <a xmlns:xlink="http://www.w3.org/1999/xlink"
-      xlink:href="#len"
-      xlink:title="len">
-      <rect x="435" y="35" width="38" height="32"/>
-      <rect x="433" y="33" width="38" height="32" class="nonterminal"/>
-      <text class="nonterminal" x="443" y="53">len</text>
-   </a>
+   <rect x="435" y="35" width="38" height="32"/>
+   <rect x="433" y="33" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="443" y="53">len</text>
    <rect x="513" y="3" width="24" height="32" rx="10"/>
    <rect x="511"
          y="1"
