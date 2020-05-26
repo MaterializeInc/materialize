@@ -14,11 +14,10 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{NaiveDate, NaiveTime};
-use failure::{bail, ensure, format_err};
 
 use super::Interval;
 
-type Result<T> = std::result::Result<T, failure::Error>;
+type Result<T> = std::result::Result<T, String>;
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
@@ -248,7 +247,7 @@ impl ParsedDateTime {
                     .checked_mul(12)
                     .and_then(|y_m| months.checked_add(y_m))
                     .ok_or_else(|| {
-                        format_err!(
+                        format!(
                             "Overflows maximum months; \
                              cannot exceed {} months",
                             std::i64::MAX
@@ -260,7 +259,7 @@ impl ParsedDateTime {
                     .checked_mul(12)
                     .and_then(|y_f_m| months.checked_add(y_f_m / 1_000_000_000))
                     .ok_or_else(|| {
-                        format_err!(
+                        format!(
                             "Overflows maximum months; \
                              cannot exceed {} months",
                             std::i64::MAX
@@ -275,7 +274,7 @@ impl ParsedDateTime {
                 };
 
                 *months = m.checked_add(*months).ok_or_else(|| {
-                    format_err!(
+                    format!(
                         "Overflows maximum months; \
                          cannot exceed {} months",
                         std::i64::MAX
@@ -284,11 +283,11 @@ impl ParsedDateTime {
 
                 let m_f_ns = m_f
                     .checked_mul(30 * seconds_multiplier(Day))
-                    .ok_or_else(|| format_err!("Intermediate overflow in MONTH fraction"))?;
+                    .ok_or_else(|| "Intermediate overflow in MONTH fraction".to_owned())?;
 
                 // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000
                 *seconds = seconds.checked_add(m_f_ns / 1_000_000_000).ok_or_else(|| {
-                    format_err!(
+                    format!(
                         "Overflows maximum seconds; \
                          cannot exceed {} seconds",
                         std::i64::MAX
@@ -308,7 +307,7 @@ impl ParsedDateTime {
                     .checked_mul(seconds_multiplier(d))
                     .and_then(|t_s| seconds.checked_add(t_s))
                     .ok_or_else(|| {
-                        format_err!(
+                        format!(
                             "Overflows maximum seconds; \
                              cannot exceed {} seconds",
                             std::i64::MAX
@@ -317,11 +316,11 @@ impl ParsedDateTime {
 
                 let t_f_ns = t_f
                     .checked_mul(seconds_multiplier(dhms))
-                    .ok_or_else(|| format_err!("Intermediate overflow in {} fraction", dhms))?;
+                    .ok_or_else(|| format!("Intermediate overflow in {} fraction", dhms))?;
 
                 // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000
                 *seconds = seconds.checked_add(t_f_ns / 1_000_000_000).ok_or_else(|| {
-                    format_err!(
+                    format!(
                         "Overflows maximum seconds; \
                          cannot exceed {} seconds",
                         std::i64::MAX
@@ -342,13 +341,13 @@ impl ParsedDateTime {
     pub fn compute_date(&self) -> Result<chrono::NaiveDate> {
         match (self.year, self.month, self.day) {
             (Some(year), Some(month), Some(day)) => {
-                let p_err = |e, field| format_err!("{} in date is invalid: {}", field, e);
+                let p_err = |e, field| format!("{} in date is invalid: {}", field, e);
                 let year = year.unit.try_into().map_err(|e| p_err(e, "Year"))?;
                 let month = month.unit.try_into().map_err(|e| p_err(e, "Month"))?;
                 let day = day.unit.try_into().map_err(|e| p_err(e, "Day"))?;
                 Ok(NaiveDate::from_ymd(year, month, day))
             }
-            (_, _, _) => bail!("YEAR, MONTH, DAY are all required"),
+            (_, _, _) => Err("YEAR, MONTH, DAY are all required".into()),
         }
     }
 
@@ -357,7 +356,7 @@ impl ParsedDateTime {
     /// # Errors
     /// - If hour, minute, or second (both `unit` and `fraction`) overflow `u32`.
     pub fn compute_time(&self) -> Result<chrono::NaiveTime> {
-        let p_err = |e, field| format_err!("invalid {}: {}", field, e);
+        let p_err = |e, field| format!("invalid {}: {}", field, e);
         let hour = match self.hour {
             Some(hour) => hour.unit.try_into().map_err(|e| p_err(e, "HOUR"))?,
             None => 0,
@@ -450,10 +449,11 @@ impl ParsedDateTime {
                     fmt,
                     tokens: part.clone(),
                 }),
-                None => bail!(
-                    "Cannot determine format of all parts. Add \
-                     explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY"
-                ),
+                None => {
+                    return Err("Cannot determine format of all parts. Add \
+                        explicit time components, e.g. INTERVAL '1 day' or INTERVAL '1' DAY"
+                        .into());
+                }
             }
         }
 
@@ -531,51 +531,42 @@ impl ParsedDateTime {
             Second if self.second.is_none() => {
                 self.second = u;
             }
-            _ => failure::bail!("{} field set twice", f),
+            _ => return Err(format!("{} field set twice", f)),
         }
         Ok(())
     }
     pub fn check_datelike_bounds(&self) -> Result<()> {
         if let Some(month) = self.month {
-            ensure!(
-                month.unit < 13 && month.unit > 0,
-                "MONTH must be (1, 12), got {}",
-                month.unit
-            );
+            if month.unit < 1 || month.unit > 12 {
+                return Err(format!("MONTH must be (1, 12), got {}", month.unit));
+            };
         }
         if let Some(day) = self.day {
-            ensure!(
-                day.unit < 32 && day.unit > 0,
-                "DAY must be (1, 31), got {}",
-                day.unit
-            );
+            if day.unit < 1 || day.unit > 31 {
+                return Err(format!("DAY must be (1, 31), got {}", day.unit));
+            };
         }
         if let Some(hour) = self.hour {
-            ensure!(
-                hour.unit < 24 && hour.unit >= 0,
-                "HOUR must be (0, 23), got {}",
-                hour.unit
-            );
+            if hour.unit < 0 || hour.unit > 23 {
+                return Err(format!("HOUR must be (0, 23), got {}", hour.unit));
+            };
         }
         if let Some(minute) = self.minute {
-            ensure!(
-                minute.unit < 60 && minute.unit >= 0,
-                "MINUTE must be (0, 59), got {}",
-                minute.unit
-            );
+            if minute.unit < 0 || minute.unit > 59 {
+                return Err(format!("MINUTE must be (0, 59), got {}", minute.unit));
+            };
         }
 
         if let Some(second) = self.second {
-            ensure!(
-                second.unit < 61 && second.unit >= 0,
-                "SECOND must be (0, 60), got {}",
-                second.unit
-            );
-            ensure!(
-                second.fraction < 1_000_000_001 && second.fraction >= 0,
-                "NANOSECOND must be (0, 1_000_000_000), got {}",
-                second.fraction
-            );
+            if second.unit < 0 || second.unit > 60 {
+                return Err(format!("SECOND must be (0, 60), got {}", second.unit));
+            };
+            if second.fraction < 0 || second.fraction > 1_000_000_000 {
+                return Err(format!(
+                    "NANOSECOND must be (0, 1_000_000_000), got {}",
+                    second.fraction
+                ));
+            };
         }
 
         Ok(())
@@ -586,32 +577,27 @@ impl ParsedDateTime {
         match d {
             Year | Month => {
                 if let Some(month) = self.month {
-                    ensure!(
-                        month.unit < 13 && month.unit > -13,
-                        "MONTH must be (-12, 12), got {}",
-                        month.unit
-                    );
+                    if month.unit < -12 || month.unit > 12 {
+                        return Err(format!("MONTH must be (-12, 12), got {}", month.unit));
+                    };
                 }
             }
             Hour | Minute | Second => {
                 if let Some(minute) = self.minute {
-                    ensure!(
-                        minute.unit < 60 && minute.unit > -60,
-                        "MINUTE must be (-59, 59), got {}",
-                        minute.unit
-                    );
+                    if minute.unit < -59 || minute.unit > 59 {
+                        return Err(format!("MINUTE must be (-59, 59), got {}", minute.unit));
+                    };
                 }
                 if let Some(second) = self.second {
-                    ensure!(
-                        second.unit < 61 && second.unit > -61,
-                        "SECOND must be (-60, 60), got {}",
-                        second.unit
-                    );
-                    ensure!(
-                        second.fraction < 1_000_000_001 && second.fraction > -1_000_000_001,
-                        "NANOSECOND must be (-1_000_000_000, 1_000_000_000), got {}",
-                        second.fraction
-                    );
+                    if second.unit < -60 || second.unit > 60 {
+                        return Err(format!("SECOND must be (-60, 60), got {}", second.unit));
+                    };
+                    if second.fraction < -1_000_000_000 || second.fraction > 1_000_000_000 {
+                        return Err(format!(
+                            "NANOSECOND must be (-1_000_000_000, 1_000_000_000), got {}",
+                            second.fraction
+                        ));
+                    };
                 }
             }
             Day => {}
@@ -735,7 +721,7 @@ fn fill_pdt_date(
         }
     }
 
-    bail!("does not match any format for date component")
+    Err("does not match any format for date component".into())
 }
 
 /// Fills the hour, minute, and second fields of `pdt` using the `TimeStrToken`s in
@@ -758,7 +744,7 @@ fn fill_pdt_time(
 
             Ok(())
         }
-        _ => bail!("Unknown format"),
+        _ => Err("unknown format".into()),
     }
 }
 
@@ -783,17 +769,17 @@ fn fill_pdt_interval_sql(
     match leading_field {
         Year | Month => {
             if pdt.year.is_some() || pdt.month.is_some() {
-                bail!("YEAR or MONTH field set twice")
+                return Err("YEAR or MONTH field set twice".into());
             }
         }
         Day => {
             if pdt.day.is_some() {
-                bail!("DAY field set twice",)
+                return Err("DAY field set twice".into());
             }
         }
         Hour | Minute | Second => {
             if pdt.hour.is_some() || pdt.minute.is_some() || pdt.second.is_some() {
-                bail!("HOUR, MINUTE, SECOND field set twice")
+                return Err("HOUR, MINUTE, SECOND field set twice".into());
             }
         }
     }
@@ -921,20 +907,19 @@ fn fill_pdt_from_tokens(
                 }
                 (TimeUnit(f), TimeUnit(_)) if unit_buf.is_some() => {
                     if *f != current_field {
-                        failure::bail!(
+                        return Err(format!(
                             "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
                             i,
                             f,
                             current_field
-                        );
+                        ));
                     }
                 }
                 (TimeUnit(f), TimeUnit(_)) if unit_buf.is_none() => {
-                    failure::bail!(
+                    return Err(format!(
                         "Invalid syntax: {} must be preceeded by a number, e.g. \'1{}\'",
-                        f,
-                        f
-                    );
+                        f, f
+                    ));
                 }
                 // Dots do not denote terminating a field, so should not trigger a write.
                 (Dot, Dot) => {}
@@ -949,9 +934,11 @@ fn fill_pdt_from_tokens(
                     break;
                 }
                 (Num(val), Num(_)) => match unit_buf {
-                    Some(_) => failure::bail!(
-                        "Invalid syntax; parts must be separated by '-', ':', or ' '"
-                    ),
+                    Some(_) => {
+                        return Err(
+                            "Invalid syntax; parts must be separated by '-', ':', or ' '".into(),
+                        )
+                    }
                     None => {
                         unit_buf = Some(DateTimeFieldValue {
                             unit: *val * sign,
@@ -1011,21 +998,20 @@ fn fill_pdt_from_tokens(
                     expected.pop_front();
                     continue;
                 }
-                (provided, expected) => failure::bail!(
-                    "Invalid syntax at offset {}: provided {:?} but expected {:?}",
-                    i,
-                    provided,
-                    expected
-                ),
+                (provided, expected) => {
+                    return Err(format!(
+                        "Invalid syntax at offset {}: provided {:?} but expected {:?}",
+                        i, provided, expected
+                    ))
+                }
             }
             i += 1;
         } else {
             // actual has more tokens than expected.
-            failure::bail!(
+            return Err(format!(
                 "Invalid syntax at offset {}: provided {:?} but expected None",
-                i,
-                atok,
-            )
+                i, atok,
+            ));
         };
 
         actual.pop_front();
@@ -1112,12 +1098,12 @@ fn determine_format_w_datetimefield(
                 Some(Colon) | Some(Space) | None => Ok(Some(SqlStandard(Hour))),
                 // Implies {M:S.NS}
                 Some(Dot) => Ok(Some(SqlStandard(Minute))),
-                _ => bail!("Cannot determine format of all parts"),
+                _ => Err("Cannot determine format of all parts".into()),
             }
         }
         // Implies {Num}?{TimeUnit}
         Some(TimeUnit(f)) => Ok(Some(PostgreSql(f))),
-        _ => bail!("Cannot determine format of all parts"),
+        _ => Err("Cannot determine format of all parts".into()),
     }
 }
 
@@ -1144,10 +1130,12 @@ fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken
         Hour => 0,
         Minute => 2,
         Second => 4,
-        _ => bail!(
-            "expected_dur_like_tokens can only be called with HOUR, MINUTE, SECOND; got {}",
-            from
-        ),
+        _ => {
+            return Err(format!(
+                "expected_dur_like_tokens can only be called with HOUR, MINUTE, SECOND; got {}",
+                from
+            ))
+        }
     };
 
     Ok(VecDeque::from(all_toks[start..all_toks.len()].to_vec()))
@@ -1236,7 +1224,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
     let mut char_buf = String::with_capacity(7);
     fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken> {
         Ok(TimeStrToken::Num(n.parse().map_err(|e| {
-            format_err!("Unable to parse value as a number at index {}: {}", idx, e)
+            format!("Unable to parse value as a number at index {}: {}", idx, e)
         })?))
     };
     fn maybe_tokenize_num_buf(
@@ -1256,13 +1244,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
             if c == "T" || c == "t" {
                 t.push_back(TimeStrToken::DateTimeDelimiter);
             } else {
-                let tu = match DateTimeField::from_str(&c.to_uppercase()) {
-                    Ok(tu) => tu,
-                    // DateTimeField::from_str's errors are String, but we
-                    // need failure::Error, so cannot rely on ? for conversion.
-                    Err(e) => bail!("{}", e),
-                };
-                t.push_back(TimeStrToken::TimeUnit(tu));
+                t.push_back(TimeStrToken::TimeUnit(c.to_uppercase().parse()?));
             }
             c.clear();
         }
@@ -1271,7 +1253,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
     let mut last_field_is_frac = false;
     for (i, chr) in value.chars().enumerate() {
         if !num_buf.is_empty() && !char_buf.is_empty() {
-            bail!("Could not tokenize")
+            return Err("Could not tokenize".into());
         }
         match chr {
             '+' => {
@@ -1308,7 +1290,12 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
                 maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
                 char_buf.push(chr)
             }
-            chr => bail!("Invalid character at offset {} in {}: {:?}", i, value, chr),
+            chr => {
+                return Err(format!(
+                    "Invalid character at offset {} in {}: {:?}",
+                    i, value, chr
+                ))
+            }
         }
     }
     if !num_buf.is_empty() {
@@ -1325,7 +1312,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
             }
             let raw: i64 = num_buf
                 .parse()
-                .map_err(|e| format_err!("couldn't parse fraction {}: {}", num_buf, e))?;
+                .map_err(|e| format!("couldn't parse fraction {}: {}", num_buf, e))?;
             let multiplicand = 1_000_000_000 / 10_i64.pow(chars as u32);
 
             toks.push_back(TimeStrToken::Nanos(raw * multiplicand));
@@ -1369,21 +1356,17 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>> {
         };
 
         toks.push(TimeStrToken::Num(first.parse().map_err(|e| {
-            format_err!(
+            format!(
                 "Unable to tokenize value {} as a number at index {}: {}",
-                first,
-                idx,
-                e
+                first, idx, e
             )
         })?));
 
         if let Some(second) = second {
             toks.push(TimeStrToken::Num(second.parse().map_err(|e| {
-                format_err!(
+                format!(
                     "Unable to tokenize value {} as a number at index {}: {}",
-                    second,
-                    idx,
-                    e
+                    second, idx, e
                 )
             })?));
         }
@@ -1424,12 +1407,12 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>> {
                 toks.push(TimeStrToken::TzName(substring.to_string()));
                 return Ok(toks);
             }
-            chr => bail!(
-                "Error tokenizing timezone string ('{}'): invalid character {:?} at offset {}",
-                value,
-                chr,
-                i
-            ),
+            chr => {
+                return Err(format!(
+                    "Error tokenizing timezone string ('{}'): invalid character {:?} at offset {}",
+                    value, chr, i
+                ))
+            }
         }
     }
     parse_num(&mut toks, &num_buf, split_nums, 0)?;
@@ -1476,45 +1459,41 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                                 // We can return an error here because in all the
                                 // formats with numbers we require the first number
                                 // to be an hour and we require it to be <= 24
-                                bail!(
+                                return Err(format!(
                                     "Invalid timezone string ({}): timezone hour invalid {}",
-                                    value,
-                                    val
-                                )
+                                    value, val
+                                ));
                             }
                         }
                         (Some(_), None) => {
                             if val <= 60 {
                                 minute_offset = Some(val as i64);
                             } else {
-                                bail!(
+                                return Err(format!(
                                     "Invalid timezone string ({}): timezone minute invalid {}",
-                                    value,
-                                    val
-                                )
+                                    value, val
+                                ));
                             }
                         }
                         // We've already seen an hour and a minute so we should
                         // never see another number
-                        (Some(_), Some(_)) => bail!(
-                            "Invalid timezone string ({}): invalid value {} at token index {}",
-                            value,
-                            val,
-                            i
-                        ),
+                        (Some(_), Some(_)) => {
+                            return Err(format!(
+                                "Invalid timezone string ({}): invalid value {} at token index {}",
+                                value, val, i
+                            ))
+                        }
                         (None, Some(_)) => unreachable!("parsed a minute before an hour!"),
                     }
                 }
                 (Zulu, Zulu) => return Ok(0 as i64),
                 (TzName(val), TzName(_)) => {
                     // For now, we don't support named timezones
-                    bail!(
+                    return Err(format!(
                         "Invalid timezone string ({}): named timezones are not supported. \
                          Failed to parse {} at token index {}",
-                        value,
-                        val,
-                        i
-                    )
+                        value, val, i
+                    ));
                 }
                 (_, _) => {
                     // Theres a mismatch between this format and the actual
@@ -1543,7 +1522,7 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
         }
     }
 
-    bail!("Cannot parse timezone offset {}", value)
+    Err(format!("Cannot parse timezone offset {}", value))
 }
 
 /// Takes a 'date timezone' 'date time timezone' string and splits it into 'date

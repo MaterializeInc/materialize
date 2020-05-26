@@ -81,7 +81,9 @@ describe("query api", () => {
       ).rejects.toThrow(
         expect.objectContaining({
           code: "22023",
-          message: "unable to decode parameter: invalid digit found in string",
+          message: expect.stringMatching(
+            /unable to decode parameter:.*invalid digit found in string/,
+          ),
         }),
       );
     });
