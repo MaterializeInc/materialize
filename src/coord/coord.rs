@@ -478,14 +478,18 @@ where
                     }
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
-                                    worker_id: _,
-                                    message: WorkerFeedback::FastForwardSource(source_id, partition_id, offset),
-                                }) => {
-                        ts_tx
-                          .send(TimestampMessage::FastForward(source_id, partition_id, offset))
-                          .expect("Failed to send CREATE Instance notice to timestamper");
+                    worker_id: _,
+                    message: WorkerFeedback::FastForwardSource(source_id, partition_id, offset),
+                }) => {
+                    ts_tx
+                        .send(TimestampMessage::FastForward(
+                            source_id,
+                            partition_id,
+                            offset,
+                        ))
+                        .expect("Failed to send CREATE Instance notice to timestamper");
                 }
-                Message::AdvanceSourceTimestamp{
+                Message::AdvanceSourceTimestamp {
                     id,
                     partition_count,
                     pid,

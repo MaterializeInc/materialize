@@ -196,7 +196,7 @@ pub enum WorkerFeedback {
     /// The id of a source whose source connector has been created
     CreateSource(SourceInstanceId),
     /// The id of a source whose timestamping should be forwarded to include (pid, offset)
-    FastForwardSource(SourceInstanceId,PartitionId,MzOffset)
+    FastForwardSource(SourceInstanceId, PartitionId, MzOffset),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -295,7 +295,7 @@ pub enum TimestampMetadataChange {
     /// Request to stop timestamping a source wth given id
     StopTimestamping(SourceInstanceId),
     /// Requests to fast forward a source to timestamp a message with (pid,offset) for a given id
-    FastForwardTimestamping(SourceInstanceId, PartitionId, MzOffset)
+    FastForwardTimestamping(SourceInstanceId, PartitionId, MzOffset),
 }
 
 /// State maintained for each worker thread.
@@ -498,8 +498,8 @@ where
                         worker_id: self.inner.index(),
                         message: WorkerFeedback::CreateSource(*id),
                     }))
-                        .unwrap();
-                },
+                    .unwrap();
+                }
                 TimestampMetadataChange::StopTimestamping(id) => {
                     self.ts_histories.borrow_mut().remove(&id);
                     self.ts_source_mapping.remove(&id);
@@ -508,20 +508,20 @@ where
                         worker_id: self.inner.index(),
                         message: WorkerFeedback::DroppedSource(*id),
                     }))
-                        .unwrap();
-                },
+                    .unwrap();
+                }
                 TimestampMetadataChange::FastForwardTimestamping(id, pid, offset) => {
                     let connector = self.feedback_tx.as_mut().unwrap();
                     block_on(connector.send(WorkerFeedbackWithMeta {
                         worker_id: self.inner.index(),
-                        message: WorkerFeedback::FastForwardSource(*id,pid.clone(),*offset),
+                        message: WorkerFeedback::FastForwardSource(*id, pid.clone(), *offset),
                     }))
-                        .unwrap();
+                    .unwrap();
                 }
             }
         }
         updates.clear();
-   }
+    }
 
     /// Send progress information to the coordinator.
     fn report_frontiers(&mut self) {

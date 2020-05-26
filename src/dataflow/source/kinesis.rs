@@ -62,17 +62,20 @@ where
 {
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.
-    let ts = if config.active {
-        let prev = config
-            .timestamp_histories
-            .borrow_mut()
-            .insert(config.id.clone(), HashMap::new());
-        assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push(TimestampMetadataChange::StartTimestamping(config.id.clone()));
-        Some(config.timestamp_tx)
-    } else {
-        None
-    };
+    let ts =
+        if config.active {
+            let prev = config
+                .timestamp_histories
+                .borrow_mut()
+                .insert(config.id.clone(), HashMap::new());
+            assert!(prev.is_none());
+            config.timestamp_tx.as_ref().borrow_mut().push(
+                TimestampMetadataChange::StartTimestamping(config.id.clone()),
+            );
+            Some(config.timestamp_tx)
+        } else {
+            None
+        };
 
     let mut state = block_on(create_state(connector));
     let mut last_checked_shards = std::time::Instant::now();

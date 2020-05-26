@@ -307,7 +307,11 @@ where
             .borrow_mut()
             .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push(TimestampMetadataChange::StartTimestamping(config.id));
+        config
+            .timestamp_tx
+            .as_ref()
+            .borrow_mut()
+            .push(TimestampMetadataChange::StartTimestamping(config.id));
         Some(config.timestamp_tx)
     } else {
         None
