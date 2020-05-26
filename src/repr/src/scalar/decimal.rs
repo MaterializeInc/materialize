@@ -303,6 +303,13 @@ impl Decimal {
         self.scale
     }
 
+    pub fn abs(&self) -> Decimal {
+        Decimal {
+            significand: self.significand.abs(),
+            scale: self.scale,
+        }
+    }
+
     /// Computes the floor of this decimal: the nearest integer less than or
     /// equal to this decimal. The returned decimal will have the same scale as
     /// this decimal.

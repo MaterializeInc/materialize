@@ -96,6 +96,10 @@ fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64().abs())
 }
 
+fn abs_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
+    Datum::from(a.unwrap_decimal().with_scale(scale).abs().significand())
+}
+
 fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().abs())
 }
@@ -2229,6 +2233,7 @@ pub enum UnaryFunc {
     SqrtFloat64,
     AbsInt32,
     AbsInt64,
+    AbsDecimal(u8),
     AbsFloat32,
     AbsFloat64,
     CastBoolToStringExplicit,
@@ -2364,6 +2369,7 @@ impl UnaryFunc {
             UnaryFunc::NegInterval => Ok(neg_interval(a)),
             UnaryFunc::AbsInt32 => Ok(abs_int32(a)),
             UnaryFunc::AbsInt64 => Ok(abs_int64(a)),
+            UnaryFunc::AbsDecimal(scale) => Ok(abs_decimal(a, *scale)),
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
             UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
@@ -2620,7 +2626,7 @@ impl UnaryFunc {
             SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
-            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
+            | AbsInt32 | AbsInt64 | AbsDecimal(_) | AbsFloat32 | AbsFloat64 => input_type,
 
             ExtractIntervalEpoch
             | ExtractIntervalYear
@@ -2719,6 +2725,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::NegInterval => f.write_str("-"),
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
+            UnaryFunc::AbsDecimal(_) => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),

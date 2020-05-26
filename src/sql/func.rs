@@ -837,6 +837,10 @@ impl<'a> ArgImplementationMatcher<'a> {
     fn rewrite_enum_field_ops(op: OperationType, types: &[ParameterType]) -> OperationType {
         use OperationType::*;
         match op {
+            Unary(UnaryFunc::AbsDecimal(_)) => match types[0] {
+                ParameterType::Decimal(_, s) => Unary(UnaryFunc::AbsDecimal(s)),
+                _ => unreachable!(),
+            },
             Unary(UnaryFunc::CeilDecimal(_)) => match types[0] {
                 ParameterType::Decimal(_, s) => Unary(UnaryFunc::CeilDecimal(s)),
                 _ => unreachable!(),
@@ -935,6 +939,7 @@ pub fn select_scalar_func(
             implementations! {
                 vec![Int32] => Unary(UnaryFunc::AbsInt32),
                 vec![Int64] => Unary(UnaryFunc::AbsInt64),
+                vec![Decimal(0, 0)] => Unary(UnaryFunc::AbsDecimal(0)),
                 vec![Float32] => Unary(UnaryFunc::AbsFloat32),
                 vec![Float64] => Unary(UnaryFunc::AbsFloat64)
             }
