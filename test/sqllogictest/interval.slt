@@ -632,3 +632,9 @@ SELECT INTERVAL '9223372036854775808 seconds';
 
 statement error Unable to parse value as a number at index 0: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 seconds';
+
+# 0 interval equality
+query B
+SELECT (interval '-1' day + interval '1' day) = (interval '1' day + interval '-1' day)
+----
+true

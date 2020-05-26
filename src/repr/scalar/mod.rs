@@ -745,7 +745,7 @@ impl fmt::Display for ColumnType {
 /// An interval of time meant to express SQL intervals.
 ///
 /// Obtained by parsing an `INTERVAL '<value>' <unit> [TO <precision>]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
     pub months: i64,
@@ -761,6 +761,26 @@ impl Default for Interval {
             duration: std::time::Duration::default(),
             is_positive_dur: true,
         }
+    }
+}
+
+impl PartialEq for Interval {
+    fn eq(&self, other: &Self) -> bool {
+        let dur_match = if self.duration.as_nanos() == other.duration.as_nanos() {
+            self.duration.as_nanos() == 0 || (self.is_positive_dur == other.is_positive_dur)
+        } else {
+            false
+        };
+
+        dur_match && (self.months == other.months)
+    }
+}
+
+impl Hash for Interval {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.months.hash(state);
+        self.duration.hash(state);
+        self.is_positive_dur.hash(state);
     }
 }
 
