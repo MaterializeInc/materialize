@@ -417,15 +417,7 @@ impl From<Significand> for Datum<'static> {
 
 impl From<chrono::Duration> for Datum<'static> {
     fn from(duration: chrono::Duration) -> Datum<'static> {
-        let n_secs = duration.num_seconds();
-        Datum::Interval(Interval {
-            months: 0,
-            is_positive_dur: n_secs >= 0,
-            duration: std::time::Duration::new(
-                n_secs.abs() as u64,
-                (duration.num_nanoseconds().unwrap_or(0) % 1_000_000_000) as u32,
-            ),
-        })
+        Datum::Interval(Interval::new(0, 0, duration.num_nanoseconds().unwrap_or(0)))
     }
 }
 
@@ -749,39 +741,28 @@ impl fmt::Display for ColumnType {
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
     pub months: i64,
-    /// An actual timespan, possibly negative, because why not
-    pub duration: std::time::Duration,
-    pub is_positive_dur: bool,
+    /// A timespan represented in nanoseconds.
+    ///
+    /// Irrespective of values, will not be carried over into months.
+    pub duration: i128,
 }
 
 impl Default for Interval {
     fn default() -> Self {
         Self {
             months: 0,
-            duration: std::time::Duration::default(),
-            is_positive_dur: true,
+            duration: 0,
         }
     }
 }
 
 impl std::ops::Add for Interval {
     type Output = Self;
-    // Since durations can only be positive, we need subtraction and boolean
-    // operators inside the Add impl
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn add(self, other: Self) -> Self {
-        let (is_positive_dur, duration) = if self.is_positive_dur == other.is_positive_dur {
-            (self.is_positive_dur, self.duration + other.duration)
-        } else if self.duration > other.duration {
-            (self.is_positive_dur, self.duration - other.duration)
-        } else {
-            (other.is_positive_dur, other.duration - self.duration)
-        };
-
         Self {
             months: self.months + other.months,
-            duration,
-            is_positive_dur,
+            duration: self.duration + other.duration,
         }
     }
 }
@@ -798,13 +779,36 @@ impl std::ops::Neg for Interval {
     fn neg(self) -> Self {
         Self {
             months: -self.months,
-            duration: self.duration,
-            is_positive_dur: !self.is_positive_dur,
+            duration: -self.duration,
         }
     }
 }
 
 impl Interval {
+    /// Constructs a new `Interval` with the specified units of time.
+    ///
+    /// Units more significant than seconds but less significant than months can
+    /// be converted into seconds or nanoseconds using this module's `seconds_multiplier` or
+    /// `nanos_multiplier` function, respectively.
+    ///
+    /// `nanos` in excess of `999_999_999` are carried over into seconds.
+    pub fn new(months: i64, seconds: i64, nanos: i64) -> Interval {
+        Interval {
+            months,
+            duration: seconds as i128 * 1_000_000_000 + nanos as i128,
+        }
+    }
+
+    /// Returns the total number of whole seconds in the `Interval`'s duration.
+    pub fn dur_as_secs(&self) -> i64 {
+        (self.duration / 1_000_000_000) as i64
+    }
+
+    /// Returns the number of sub-second nanoseconds in the `Interval`'s duration.
+    pub fn dur_subsec_nanos(&self) -> i32 {
+        (self.duration % 1_000_000_000) as i32
+    }
+
     /// Computes the year part of the interval.
     ///
     /// The year part is the number of whole years in the interval. For example,
@@ -828,7 +832,7 @@ impl Interval {
     /// this function returns `5.0` for the interval `5 days 4 hours 3 minutes
     /// 2.1 seconds`.
     pub fn days(&self) -> f64 {
-        (self.duration.as_secs() / (60 * 60 * 24)) as f64
+        (self.dur_as_secs() / (60 * 60 * 24)) as f64
     }
 
     /// Computes the hour part of the interval.
@@ -837,7 +841,7 @@ impl Interval {
     /// For example, this function returns `4.0` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
     pub fn hours(&self) -> f64 {
-        ((self.duration.as_secs() / (60 * 60)) % 24) as f64
+        ((self.dur_as_secs() / (60 * 60)) % 24) as f64
     }
 
     /// Computes the minute part of the interval.
@@ -846,7 +850,7 @@ impl Interval {
     /// 60. For example, this function returns `3.0` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
     pub fn minutes(&self) -> f64 {
-        ((self.duration.as_secs() / 60) % 60) as f64
+        ((self.dur_as_secs() / 60) % 60) as f64
     }
 
     /// Computes the second part of the interval.
@@ -854,40 +858,32 @@ impl Interval {
     /// The second part is the number of fractional seconds in the interval,
     /// modulo 60.0.
     pub fn seconds(&self) -> f64 {
-        let s = (self.duration.as_secs() % 60) as f64;
-        let ns = f64::from(self.duration.subsec_nanos()) / 1e9;
+        let s = (self.dur_as_secs() % 60) as f64;
+        let ns = f64::from(self.dur_subsec_nanos()) / 1e9;
         s + ns
     }
 
     /// Computes the nanosecond part of the interval.
-    pub fn nanoseconds(&self) -> i64 {
-        if self.is_positive_dur {
-            self.duration.subsec_nanos() as i64
-        } else {
-            -(self.duration.subsec_nanos() as i64)
-        }
+    pub fn nanoseconds(&self) -> i32 {
+        self.dur_subsec_nanos()
     }
 
     /// Computes the total number of seconds in the interval.
     pub fn as_seconds(&self) -> f64 {
         (self.months as f64) * 60.0 * 60.0 * 24.0 * 30.0
-            + (self.duration.as_secs() as f64)
-            + f64::from(self.duration.subsec_micros()) / 1e6
+            + (self.dur_as_secs() as f64)
+            + f64::from(self.dur_subsec_nanos()) / 1e9
     }
 
     /// Truncate the "head" of the interval, removing all time units greater than `f`.
     pub fn truncate_high_fields(&mut self, f: DateTimeField) {
-        use std::time::Duration;
         match f {
             DateTimeField::Year => {}
             DateTimeField::Month => self.months %= 12,
             DateTimeField::Day => self.months = 0,
             hms => {
                 self.months = 0;
-                self.duration = Duration::new(
-                    self.duration.as_secs() % seconds_multiplier(hms.next_largest()),
-                    self.duration.subsec_nanos(),
-                );
+                self.duration %= nanos_multiplier(hms.next_largest()) as i128
             }
         }
     }
@@ -905,15 +901,14 @@ impl Interval {
         f: DateTimeField,
         fsec_max_precision: Option<u64>,
     ) -> Result<(), failure::Error> {
-        use std::time::Duration;
         use DateTimeField::*;
         match f {
             Year => {
                 self.months -= self.months % 12;
-                self.duration = Duration::new(0, 0);
+                self.duration = 0;
             }
             Month => {
-                self.duration = Duration::new(0, 0);
+                self.duration = 0;
             }
             // Round nanoseconds.
             Second => {
@@ -930,29 +925,29 @@ impl Interval {
                     )
                 }
 
-                let mut nanos = self.duration.subsec_nanos();
-
                 // Check if value should round up to nearest fractional place.
-                let remainder = nanos % 10_u32.pow(9 - precision as u32);
-                if remainder / 10_u32.pow(8 - precision as u32) > 4 {
-                    nanos += 10_u32.pow(9 - precision as u32);
+                let remainder = self.duration % 10_i128.pow(9 - precision as u32);
+                if remainder / 10_i128.pow(8 - precision as u32) > 4 {
+                    self.duration += 10_i128.pow(9 - precision as u32);
                 }
 
-                self.duration = Duration::new(self.duration.as_secs(), nanos - remainder);
+                self.duration -= remainder;
             }
             dhm => {
-                self.duration = Duration::new(
-                    self.duration.as_secs() - self.duration.as_secs() % (seconds_multiplier(dhm)),
-                    0,
-                );
+                self.duration -= self.duration % nanos_multiplier(dhm) as i128;
             }
         }
         Ok(())
     }
 }
 
+/// Returns the number of nanoseconds in a single unit of `field`.
+pub fn nanos_multiplier(field: DateTimeField) -> i64 {
+    seconds_multiplier(field) * 1_000_000_000
+}
+
 /// Returns the number of seconds in a single unit of `field`.
-fn seconds_multiplier(field: DateTimeField) -> u64 {
+pub fn seconds_multiplier(field: DateTimeField) -> i64 {
     use DateTimeField::*;
     match field {
         Day => 60 * 60 * 24,
@@ -977,8 +972,8 @@ impl fmt::Display for Interval {
         months = months.abs();
         let years = months / 12;
         months %= 12;
-        let mut secs = self.duration.as_secs();
-        let mut nanos = self.duration.subsec_nanos();
+        let mut secs = self.dur_as_secs().abs();
+        let mut nanos = self.dur_subsec_nanos().abs();
         let days = secs / (24 * 60 * 60);
         secs %= 24 * 60 * 60;
         let hours = secs / (60 * 60);
@@ -1013,7 +1008,7 @@ impl fmt::Display for Interval {
             if years > 0 || months > 0 {
                 f.write_char(' ')?;
             }
-            if !self.is_positive_dur {
+            if self.duration < 0 {
                 f.write_char('-')?;
             } else if neg_mos {
                 f.write_char('+')?;
@@ -1030,7 +1025,7 @@ impl fmt::Display for Interval {
             if years > 0 || months > 0 || days > 0 {
                 f.write_char(' ')?;
             }
-            if !self.is_positive_dur && non_zero_hmsn {
+            if self.duration < 0 && non_zero_hmsn {
                 f.write_char('-')?;
             } else if neg_mos {
                 f.write_char('+')?;
@@ -1071,166 +1066,126 @@ mod test {
         assert_eq!(mon(25), "2 years 1 month");
         assert_eq!(mon(26), "2 years 2 months");
 
-        fn dur(is_positive_dur: bool, d: u64) -> String {
-            Interval {
-                months: 0,
-                duration: std::time::Duration::from_secs(d),
-                is_positive_dur,
-            }
-            .to_string()
+        fn dur(d: i64) -> String {
+            Interval::new(0, d, 0).to_string()
         }
-        assert_eq!(&dur(true, 86_400 * 2), "2 days");
-        assert_eq!(&dur(true, 86_400 * 2 + 3_600 * 3), "2 days 03:00:00");
+        assert_eq!(&dur(86_400 * 2), "2 days");
+        assert_eq!(&dur(86_400 * 2 + 3_600 * 3), "2 days 03:00:00");
         assert_eq!(
-            &dur(true, 86_400 * 2 + 3_600 * 3 + 60 * 45 + 6),
+            &dur(86_400 * 2 + 3_600 * 3 + 60 * 45 + 6),
             "2 days 03:45:06"
         );
-        assert_eq!(
-            &dur(true, 86_400 * 2 + 3_600 * 3 + 60 * 45),
-            "2 days 03:45:00"
-        );
-        assert_eq!(&dur(true, 86_400 * 2 + 6), "2 days 00:00:06");
-        assert_eq!(&dur(true, 86_400 * 2 + 60 * 45 + 6), "2 days 00:45:06");
-        assert_eq!(&dur(true, 86_400 * 2 + 3_600 * 3 + 6), "2 days 03:00:06");
-        assert_eq!(&dur(true, 3_600 * 3 + 60 * 45 + 6), "03:45:06");
-        assert_eq!(&dur(true, 3_600 * 3 + 6), "03:00:06");
-        assert_eq!(&dur(true, 3_600 * 3), "03:00:00");
-        assert_eq!(&dur(true, 60 * 45 + 6), "00:45:06");
-        assert_eq!(&dur(true, 60 * 45), "00:45:00");
-        assert_eq!(&dur(true, 6), "00:00:06");
+        assert_eq!(&dur(86_400 * 2 + 3_600 * 3 + 60 * 45), "2 days 03:45:00");
+        assert_eq!(&dur(86_400 * 2 + 6), "2 days 00:00:06");
+        assert_eq!(&dur(86_400 * 2 + 60 * 45 + 6), "2 days 00:45:06");
+        assert_eq!(&dur(86_400 * 2 + 3_600 * 3 + 6), "2 days 03:00:06");
+        assert_eq!(&dur(3_600 * 3 + 60 * 45 + 6), "03:45:06");
+        assert_eq!(&dur(3_600 * 3 + 6), "03:00:06");
+        assert_eq!(&dur(3_600 * 3), "03:00:00");
+        assert_eq!(&dur(60 * 45 + 6), "00:45:06");
+        assert_eq!(&dur(60 * 45), "00:45:00");
+        assert_eq!(&dur(6), "00:00:06");
 
-        assert_eq!(&dur(false, 86_400 * 2 + 6), "-2 days -00:00:06");
-        assert_eq!(&dur(false, 86_400 * 2 + 60 * 45 + 6), "-2 days -00:45:06");
-        assert_eq!(&dur(false, 86_400 * 2 + 3_600 * 3 + 6), "-2 days -03:00:06");
-        assert_eq!(&dur(false, 3_600 * 3 + 60 * 45 + 6), "-03:45:06");
-        assert_eq!(&dur(false, 3_600 * 3 + 6), "-03:00:06");
-        assert_eq!(&dur(false, 3_600 * 3), "-03:00:00");
-        assert_eq!(&dur(false, 60 * 45 + 6), "-00:45:06");
-        assert_eq!(&dur(false, 60 * 45), "-00:45:00");
-        assert_eq!(&dur(false, 6), "-00:00:06");
+        assert_eq!(&dur(-(86_400 * 2 + 6)), "-2 days -00:00:06");
+        assert_eq!(&dur(-(86_400 * 2 + 60 * 45 + 6)), "-2 days -00:45:06");
+        assert_eq!(&dur(-(86_400 * 2 + 3_600 * 3 + 6)), "-2 days -03:00:06");
+        assert_eq!(&dur(-(3_600 * 3 + 60 * 45 + 6)), "-03:45:06");
+        assert_eq!(&dur(-(3_600 * 3 + 6)), "-03:00:06");
+        assert_eq!(&dur(-(3_600 * 3)), "-03:00:00");
+        assert_eq!(&dur(-(60 * 45 + 6)), "-00:45:06");
+        assert_eq!(&dur(-(60 * 45)), "-00:45:00");
+        assert_eq!(&dur(-6), "-00:00:06");
 
-        fn mon_dur(mon: i64, is_positive_dur: bool, d: u64) -> String {
-            Interval {
-                months: mon,
-                duration: std::time::Duration::from_secs(d),
-                is_positive_dur,
-            }
-            .to_string()
+        fn mon_dur(mon: i64, d: i64) -> String {
+            Interval::new(mon, d, 0).to_string()
         }
-        assert_eq!(&mon_dur(1, true, 86_400 * 2 + 6), "1 month 2 days 00:00:06");
+        assert_eq!(&mon_dur(1, 86_400 * 2 + 6), "1 month 2 days 00:00:06");
         assert_eq!(
-            &mon_dur(1, true, 86_400 * 2 + 60 * 45 + 6),
+            &mon_dur(1, 86_400 * 2 + 60 * 45 + 6),
             "1 month 2 days 00:45:06"
         );
         assert_eq!(
-            &mon_dur(1, true, 86_400 * 2 + 3_600 * 3 + 6),
+            &mon_dur(1, 86_400 * 2 + 3_600 * 3 + 6),
             "1 month 2 days 03:00:06"
         );
         assert_eq!(
-            &mon_dur(26, true, 3_600 * 3 + 60 * 45 + 6),
+            &mon_dur(26, 3_600 * 3 + 60 * 45 + 6),
             "2 years 2 months 03:45:06"
         );
-        assert_eq!(
-            &mon_dur(26, true, 3_600 * 3 + 6),
-            "2 years 2 months 03:00:06"
-        );
-        assert_eq!(&mon_dur(26, true, 3_600 * 3), "2 years 2 months 03:00:00");
-        assert_eq!(&mon_dur(26, true, 60 * 45 + 6), "2 years 2 months 00:45:06");
-        assert_eq!(&mon_dur(26, true, 60 * 45), "2 years 2 months 00:45:00");
-        assert_eq!(&mon_dur(26, true, 6), "2 years 2 months 00:00:06");
+        assert_eq!(&mon_dur(26, 3_600 * 3 + 6), "2 years 2 months 03:00:06");
+        assert_eq!(&mon_dur(26, 3_600 * 3), "2 years 2 months 03:00:00");
+        assert_eq!(&mon_dur(26, 60 * 45 + 6), "2 years 2 months 00:45:06");
+        assert_eq!(&mon_dur(26, 60 * 45), "2 years 2 months 00:45:00");
+        assert_eq!(&mon_dur(26, 6), "2 years 2 months 00:00:06");
 
         assert_eq!(
-            &mon_dur(26, false, 86_400 * 2 + 6),
+            &mon_dur(26, -(86_400 * 2 + 6)),
             "2 years 2 months -2 days -00:00:06"
         );
         assert_eq!(
-            &mon_dur(26, false, 86_400 * 2 + 60 * 45 + 6),
+            &mon_dur(26, -(86_400 * 2 + 60 * 45 + 6)),
             "2 years 2 months -2 days -00:45:06"
         );
         assert_eq!(
-            &mon_dur(26, false, 86_400 * 2 + 3_600 * 3 + 6),
+            &mon_dur(26, -(86_400 * 2 + 3_600 * 3 + 6)),
             "2 years 2 months -2 days -03:00:06"
         );
         assert_eq!(
-            &mon_dur(26, false, 3_600 * 3 + 60 * 45 + 6),
+            &mon_dur(26, -(3_600 * 3 + 60 * 45 + 6)),
             "2 years 2 months -03:45:06"
         );
-        assert_eq!(
-            &mon_dur(26, false, 3_600 * 3 + 6),
-            "2 years 2 months -03:00:06"
-        );
-        assert_eq!(&mon_dur(26, false, 3_600 * 3), "2 years 2 months -03:00:00");
-        assert_eq!(
-            &mon_dur(26, false, 60 * 45 + 6),
-            "2 years 2 months -00:45:06"
-        );
-        assert_eq!(&mon_dur(26, false, 60 * 45), "2 years 2 months -00:45:00");
-        assert_eq!(&mon_dur(26, false, 6), "2 years 2 months -00:00:06");
+        assert_eq!(&mon_dur(26, -(3_600 * 3 + 6)), "2 years 2 months -03:00:06");
+        assert_eq!(&mon_dur(26, -(3_600 * 3)), "2 years 2 months -03:00:00");
+        assert_eq!(&mon_dur(26, -(60 * 45 + 6)), "2 years 2 months -00:45:06");
+        assert_eq!(&mon_dur(26, -(60 * 45)), "2 years 2 months -00:45:00");
+        assert_eq!(&mon_dur(26, -6), "2 years 2 months -00:00:06");
 
+        assert_eq!(&mon_dur(-1, 86_400 * 2 + 6), "-1 month +2 days +00:00:06");
         assert_eq!(
-            &mon_dur(-1, true, 86_400 * 2 + 6),
-            "-1 month +2 days +00:00:06"
-        );
-        assert_eq!(
-            &mon_dur(-1, true, 86_400 * 2 + 60 * 45 + 6),
+            &mon_dur(-1, 86_400 * 2 + 60 * 45 + 6),
             "-1 month +2 days +00:45:06"
         );
         assert_eq!(
-            &mon_dur(-1, true, 86_400 * 2 + 3_600 * 3 + 6),
+            &mon_dur(-1, 86_400 * 2 + 3_600 * 3 + 6),
             "-1 month +2 days +03:00:06"
         );
         assert_eq!(
-            &mon_dur(-26, true, 3_600 * 3 + 60 * 45 + 6),
+            &mon_dur(-26, 3_600 * 3 + 60 * 45 + 6),
             "-2 years -2 months +03:45:06"
         );
-        assert_eq!(
-            &mon_dur(-26, true, 3_600 * 3 + 6),
-            "-2 years -2 months +03:00:06"
-        );
-        assert_eq!(
-            &mon_dur(-26, true, 3_600 * 3),
-            "-2 years -2 months +03:00:00"
-        );
-        assert_eq!(
-            &mon_dur(-26, true, 60 * 45 + 6),
-            "-2 years -2 months +00:45:06"
-        );
-        assert_eq!(&mon_dur(-26, true, 60 * 45), "-2 years -2 months +00:45:00");
-        assert_eq!(&mon_dur(-26, true, 6), "-2 years -2 months +00:00:06");
+        assert_eq!(&mon_dur(-26, 3_600 * 3 + 6), "-2 years -2 months +03:00:06");
+        assert_eq!(&mon_dur(-26, 3_600 * 3), "-2 years -2 months +03:00:00");
+        assert_eq!(&mon_dur(-26, 60 * 45 + 6), "-2 years -2 months +00:45:06");
+        assert_eq!(&mon_dur(-26, 60 * 45), "-2 years -2 months +00:45:00");
+        assert_eq!(&mon_dur(-26, 6), "-2 years -2 months +00:00:06");
 
         assert_eq!(
-            &mon_dur(-26, false, 86_400 * 2 + 6),
+            &mon_dur(-26, -(86_400 * 2 + 6)),
             "-2 years -2 months -2 days -00:00:06"
         );
         assert_eq!(
-            &mon_dur(-26, false, 86_400 * 2 + 60 * 45 + 6),
+            &mon_dur(-26, -(86_400 * 2 + 60 * 45 + 6)),
             "-2 years -2 months -2 days -00:45:06"
         );
         assert_eq!(
-            &mon_dur(-26, false, 86_400 * 2 + 3_600 * 3 + 6),
+            &mon_dur(-26, -(86_400 * 2 + 3_600 * 3 + 6)),
             "-2 years -2 months -2 days -03:00:06"
         );
         assert_eq!(
-            &mon_dur(-26, false, 3_600 * 3 + 60 * 45 + 6),
+            &mon_dur(-26, -(3_600 * 3 + 60 * 45 + 6)),
             "-2 years -2 months -03:45:06"
         );
         assert_eq!(
-            &mon_dur(-26, false, 3_600 * 3 + 6),
+            &mon_dur(-26, -(3_600 * 3 + 6)),
             "-2 years -2 months -03:00:06"
         );
+        assert_eq!(&mon_dur(-26, -(3_600 * 3)), "-2 years -2 months -03:00:00");
         assert_eq!(
-            &mon_dur(-26, false, 3_600 * 3),
-            "-2 years -2 months -03:00:00"
-        );
-        assert_eq!(
-            &mon_dur(-26, false, 60 * 45 + 6),
+            &mon_dur(-26, -(60 * 45 + 6)),
             "-2 years -2 months -00:45:06"
         );
-        assert_eq!(
-            &mon_dur(-26, false, 60 * 45),
-            "-2 years -2 months -00:45:00"
-        );
-        assert_eq!(&mon_dur(-26, false, 6), "-2 years -2 months -00:00:06");
+        assert_eq!(&mon_dur(-26, -(60 * 45)), "-2 years -2 months -00:45:00");
+        assert_eq!(&mon_dur(-26, -6), "-2 years -2 months -00:00:06");
     }
 
     #[test]
@@ -1279,16 +1234,8 @@ mod test {
         ];
 
         for test in test_cases.iter_mut() {
-            let mut i = Interval {
-                months: (test.2).0,
-                duration: std::time::Duration::new((test.2).1, (test.2).2),
-                is_positive_dur: true,
-            };
-            let j = Interval {
-                months: (test.3).0,
-                duration: std::time::Duration::new((test.3).1, (test.3).2),
-                is_positive_dur: true,
-            };
+            let mut i = Interval::new((test.2).0, (test.2).1, (test.2).2);
+            let j = Interval::new((test.3).0, (test.3).1, (test.3).2);
 
             i.truncate_low_fields(test.0, test.1).unwrap();
 
@@ -1315,24 +1262,16 @@ mod test {
         ];
 
         for test in test_cases.iter_mut() {
-            let mut i = Interval {
-                months: (test.1).0,
-                duration: std::time::Duration::new((test.1).1 as u64, 123),
-                is_positive_dur: true,
-            };
-            let j = Interval {
-                months: (test.2).0,
-                duration: std::time::Duration::new((test.2).1 as u64, 123),
-                is_positive_dur: true,
-            };
+            let mut i = Interval::new((test.1).0, (test.1).1, 123);
+            let j = Interval::new((test.2).0, (test.2).1, 123);
 
             i.truncate_high_fields(test.0);
 
             if i != j {
                 panic!(
-                "test_interval_value_truncate_high_fields failed on {} \n actual: {:?} \n expected: {:?}",
-                test.0, i, j
-            );
+                    "test_interval_value_truncate_high_fields failed on {} \n actual: {:?} \n expected: {:?}",
+                    test.0, i, j
+                );
             }
         }
     }

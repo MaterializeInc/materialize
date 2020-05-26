@@ -929,12 +929,15 @@ impl Encoder {
                     ScalarType::TimestampTz => {
                         Value::Timestamp(datum.unwrap_timestamptz().naive_utc())
                     }
+                    // Duration Avro format: https://avro.apache.org/docs/current/spec.html#Duration
                     ScalarType::Interval => Value::Fixed(12, {
                         let iv = datum.unwrap_interval();
                         let mut buf = Vec::with_capacity(12);
+                        let days = iv.days() as i128;
+                        let sub_day_ns = iv.duration % (days * 24 * 60 * 60 * 1_000_000_000);
                         buf.extend(&(iv.months as i32).to_le_bytes());
-                        buf.extend(&0i32.to_le_bytes());
-                        buf.extend(&(iv.duration.as_millis() as i32).to_le_bytes());
+                        buf.extend(&(days as i32).to_le_bytes());
+                        buf.extend(&((sub_day_ns / 1_000_000) as i32).to_le_bytes());
                         debug_assert_eq!(buf.len(), 12);
                         buf
                     }),

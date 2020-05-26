@@ -383,10 +383,11 @@ fn cast_time_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
 
 fn cast_time_to_interval<'a>(a: Datum<'a>) -> Datum<'a> {
     let t = a.unwrap_time();
-    Datum::Interval(repr::Interval {
-        duration: std::time::Duration::new(t.num_seconds_from_midnight() as u64, t.nanosecond()),
-        ..Default::default()
-    })
+    Datum::Interval(repr::Interval::new(
+        0,
+        t.num_seconds_from_midnight() as i64,
+        t.nanosecond() as i64,
+    ))
 }
 
 fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -425,11 +426,8 @@ fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datu
 
 fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
     let mut i = a.unwrap_interval();
-    if !i.is_positive_dur {
-        i = i + repr::Interval {
-            duration: std::time::Duration::from_secs(86400),
-            ..Default::default()
-        };
+    if i.duration < 0 {
+        i = i + repr::Interval::new(0, 86400, 0);
     }
 
     Datum::Time(NaiveTime::from_hms_nano(
@@ -543,7 +541,7 @@ fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(match b {
         Datum::Interval(i) => {
             let dt = add_timestamp_months(dt, i.months);
-            add_timestamp_duration(dt, i.is_positive_dur, i.duration)
+            add_timestamp_duration(dt, i.duration)
         }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     })
@@ -555,7 +553,7 @@ fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let new_ndt = match b {
         Datum::Interval(i) => {
             let dt = add_timestamp_months(dt, i.months);
-            add_timestamp_duration(dt, i.is_positive_dur, i.duration)
+            add_timestamp_duration(dt, i.duration)
         }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     };
@@ -583,30 +581,22 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months);
-    Datum::Timestamp(add_timestamp_duration(
-        dt,
-        interval.is_positive_dur,
-        interval.duration,
-    ))
+    Datum::Timestamp(add_timestamp_duration(dt, interval.duration))
 }
 
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
-    let date = match chrono::Duration::from_std(interval.duration) {
-        Ok(d) => d,
-        Err(_) => return Datum::Null,
-    };
 
-    let time = if interval.is_positive_dur {
-        let (t, _) = time.overflowing_add_signed(date);
-        t
+    // TODO(sploiselle): Convert this into https://github.com/chronotope/chrono/pull/426
+    let dur = if interval.duration > std::i64::MAX as i128 {
+        chrono::Duration::seconds(interval.dur_as_secs())
     } else {
-        let (t, _) = time.overflowing_sub_signed(date);
-        t
+        chrono::Duration::nanoseconds(interval.duration as i64)
     };
 
-    Datum::Time(time)
+    let (t, _) = time.overflowing_add_signed(dur);
+    Datum::Time(t)
 }
 
 fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -682,35 +672,11 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
 }
 
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let inverse = match b {
-        Datum::Interval(i) => {
-            let mut res = i;
-            res.months = -res.months;
-            res.is_positive_dur = !res.is_positive_dur;
-            Datum::Interval(res)
-        }
-        _ => panic!(
-            "Tried to do timestamptz subtraction with non-interval: {:?}",
-            b
-        ),
-    };
-    add_timestamp_interval(a, inverse)
+    add_timestamp_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
 fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let inverse = match b {
-        Datum::Interval(i) => {
-            let mut res = i;
-            res.months = -res.months;
-            res.is_positive_dur = !res.is_positive_dur;
-            Datum::Interval(res)
-        }
-        _ => panic!(
-            "Tried to do timestamptz subtraction with non-interval: {:?}",
-            b
-        ),
-    };
-    add_timestamptz_interval(a, inverse)
+    add_timestamptz_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
@@ -749,17 +715,15 @@ fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
     new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
 }
 
-fn add_timestamp_duration(
-    dt: NaiveDateTime,
-    is_positive: bool,
-    duration: std::time::Duration,
-) -> NaiveDateTime {
-    let d = chrono::Duration::from_std(duration).expect("a duration that fits into i64 seconds");
-    if is_positive {
-        dt + d
+fn add_timestamp_duration(dt: NaiveDateTime, duration: i128) -> NaiveDateTime {
+    // TODO(sploiselle): Convert this into https://github.com/chronotope/chrono/pull/426
+    let dur = if duration > std::i64::MAX as i128 {
+        chrono::Duration::seconds((duration / 1_000_000_000) as i64)
     } else {
-        dt - d
-    }
+        chrono::Duration::nanoseconds(duration as i64)
+    };
+
+    dt + dur
 }
 
 fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -822,30 +786,21 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, -interval.months);
-    Datum::Timestamp(add_timestamp_duration(
-        dt,
-        !interval.is_positive_dur,
-        interval.duration,
-    ))
+    Datum::Timestamp(add_timestamp_duration(dt, -interval.duration))
 }
 
 fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
-    let date = match chrono::Duration::from_std(interval.duration) {
-        Ok(d) => d,
-        Err(_) => return Datum::Null,
-    };
-
-    let time = if interval.is_positive_dur {
-        let (t, _) = time.overflowing_sub_signed(date);
-        t
+    // TODO(sploiselle): Convert this into https://github.com/chronotope/chrono/pull/426
+    let dur = if interval.duration > std::i64::MAX as i128 {
+        chrono::Duration::seconds(interval.dur_as_secs())
     } else {
-        let (t, _) = time.overflowing_add_signed(date);
-        t
+        chrono::Duration::nanoseconds(interval.duration as i64)
     };
 
-    Datum::Time(time)
+    let (t, _) = time.overflowing_sub_signed(dur);
+    Datum::Time(t)
 }
 
 fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {

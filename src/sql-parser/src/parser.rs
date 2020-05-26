@@ -1893,9 +1893,6 @@ impl Parser {
                         DataType::Time
                     }
                 }
-                // Interval types can be followed by a complicated interval
-                // qualifier that we don't currently support. See
-                // parse_interval_literal for a taste.
                 "INTERVAL" => DataType::Interval,
                 "REGCLASS" => DataType::Regclass,
                 "TEXT" | "STRING" => DataType::Text,

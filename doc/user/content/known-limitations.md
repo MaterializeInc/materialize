@@ -28,6 +28,10 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
   supported ([#1805](https://github.com/MaterializeInc/materialize/issues/1805))
 - Cannot cast from string to time-like types
   ([#1378](https://github.com/MaterializeInc/materialize/issues/1378))
+- `interval` data whose [total value converted to
+  nanoseconds(https://www.wolframalpha.com/input/?i=9%2C223%2C372%2C036%2C854%2C775%2C807+nanoseconds)
+  exceeds the max value of `i64`] lose nanosecond precision when added to or
+  subtracted from `date`, `time`, or `timestamp` data.
 
 ### Syntax & Semantics
 
