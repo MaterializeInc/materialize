@@ -842,13 +842,21 @@ impl Interval {
         (self.months % 12) as f64
     }
 
+    fn dur_sign(&self) -> f64 {
+        if self.is_positive_dur {
+            1f64
+        } else {
+            -1f64
+        }
+    }
+
     /// Computes the day part of the interval.
     ///
     /// The day part is the number of whole days in the interval. For example,
     /// this function returns `5.0` for the interval `5 days 4 hours 3 minutes
     /// 2.1 seconds`.
     pub fn days(&self) -> f64 {
-        (self.duration.as_secs() / (60 * 60 * 24)) as f64
+        self.dur_sign() * (self.duration.as_secs() / (60 * 60 * 24)) as f64
     }
 
     /// Computes the hour part of the interval.
@@ -857,7 +865,7 @@ impl Interval {
     /// For example, this function returns `4.0` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
     pub fn hours(&self) -> f64 {
-        ((self.duration.as_secs() / (60 * 60)) % 24) as f64
+        self.dur_sign() * ((self.duration.as_secs() / (60 * 60)) % 24) as f64
     }
 
     /// Computes the minute part of the interval.
@@ -866,7 +874,7 @@ impl Interval {
     /// 60. For example, this function returns `3.0` for the interval `5 days 4
     /// hours 3 minutes 2.1 seconds`.
     pub fn minutes(&self) -> f64 {
-        ((self.duration.as_secs() / 60) % 60) as f64
+        self.dur_sign() * ((self.duration.as_secs() / 60) % 60) as f64
     }
 
     /// Computes the second part of the interval.
@@ -876,23 +884,19 @@ impl Interval {
     pub fn seconds(&self) -> f64 {
         let s = (self.duration.as_secs() % 60) as f64;
         let ns = f64::from(self.duration.subsec_nanos()) / 1e9;
-        s + ns
+        self.dur_sign() * (s + ns)
     }
 
     /// Computes the nanosecond part of the interval.
-    pub fn nanoseconds(&self) -> i64 {
-        if self.is_positive_dur {
-            self.duration.subsec_nanos() as i64
-        } else {
-            -(self.duration.subsec_nanos() as i64)
-        }
+    pub fn nanoseconds(&self) -> f64 {
+        self.dur_sign() * self.duration.subsec_nanos() as f64
     }
 
     /// Computes the total number of seconds in the interval.
     pub fn as_seconds(&self) -> f64 {
         (self.months as f64) * 60.0 * 60.0 * 24.0 * 30.0
-            + (self.duration.as_secs() as f64)
-            + f64::from(self.duration.subsec_micros()) / 1e6
+            + (self.dur_sign() * self.duration.as_secs() as f64)
+            + f64::from(self.dur_sign() * self.duration.subsec_micros() as f64) / 1e6
     }
 
     /// Truncate the "head" of the interval, removing all time units greater than `f`.
