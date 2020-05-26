@@ -788,6 +788,11 @@ SELECT EXTRACT(doy FROM DATE '2000-01-01'), EXTRACT(doy FROM DATE '2000-12-31')
 ----
 1 366
 
+query RR
+SELECT EXTRACT(EPOCH from INTERVAL '-1' MINUTE), EXTRACT(MINUTE from INTERVAL '-1' MINUTE)
+----
+-60 -1
+
 query T
 SELECT to_char(TIMESTAMPTZ '1997-02-03 11:12:59.9', 'YYYY-MM-DD HH24:MI:SS.MS TZ')
 ----
@@ -987,6 +992,11 @@ query T
 SELECT interval '-01:02:03.04'::time;
 ----
 22:57:56.96
+
+query T
+SELECT interval '-3 days -2 hours'::time;
+----
+22:00:00
 
 # Test using date as a column name.
 query T

@@ -936,13 +936,16 @@ impl Encoder {
                     ScalarType::TimestampTz => {
                         Value::Timestamp(datum.unwrap_timestamptz().naive_utc())
                     }
-                    ScalarType::Interval => Value::Fixed(12, {
+                    // This feature isn't actually supported by the Avro Java
+                    // client (https://issues.apache.org/jira/browse/AVRO-2123),
+                    // so no one is likely to be using it, so we're just using
+                    // our own very convenient format.
+                    ScalarType::Interval => Value::Fixed(20, {
                         let iv = datum.unwrap_interval();
-                        let mut buf = Vec::with_capacity(12);
-                        buf.extend(&(iv.months as i32).to_le_bytes());
-                        buf.extend(&0i32.to_le_bytes());
-                        buf.extend(&(iv.duration.as_millis() as i32).to_le_bytes());
-                        debug_assert_eq!(buf.len(), 12);
+                        let mut buf = Vec::with_capacity(24);
+                        buf.extend(&iv.months.to_le_bytes());
+                        buf.extend(&iv.duration.to_le_bytes());
+                        debug_assert_eq!(buf.len(), 20);
                         buf
                     }),
                     ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),

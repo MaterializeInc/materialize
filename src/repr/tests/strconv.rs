@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
 use repr::datetime::DateTimeField;
@@ -274,90 +272,40 @@ fn test_parse_interval_monthlike() {
 fn test_parse_interval_durationlike() {
     use DateTimeField::*;
 
-    run_test_parse_interval_durationlike(
-        "10",
-        Interval {
-            duration: Duration::new(10, 0),
-            ..Default::default()
-        },
-    );
+    run_test_parse_interval_durationlike("10", Interval::new(0, 10, 0).unwrap());
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Day,
-        Interval {
-            duration: Duration::new(10 * 24 * 60 * 60, 0),
-            ..Default::default()
-        },
+        Interval::new(0, 10 * 24 * 60 * 60, 0).unwrap(),
     );
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Hour,
-        Interval {
-            duration: Duration::new(10 * 60 * 60, 0),
-            ..Default::default()
-        },
+        Interval::new(0, 10 * 60 * 60, 0).unwrap(),
     );
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Minute,
-        Interval {
-            duration: Duration::new(10 * 60, 0),
-            ..Default::default()
-        },
+        Interval::new(0, 10 * 60, 0).unwrap(),
     );
 
-    run_test_parse_interval_durationlike_from_sql(
-        "10",
-        Second,
-        Interval {
-            duration: Duration::new(10, 0),
-            ..Default::default()
-        },
-    );
+    run_test_parse_interval_durationlike_from_sql("10", Second, Interval::new(0, 10, 0).unwrap());
 
-    run_test_parse_interval_durationlike(
-        "0.01",
-        Interval {
-            duration: Duration::new(0, 10_000_000),
-            ..Default::default()
-        },
-    );
+    run_test_parse_interval_durationlike("0.01", Interval::new(0, 0, 10_000_000).unwrap());
 
     run_test_parse_interval_durationlike(
         "1 2:3:4.5",
-        Interval {
-            duration: Duration::new(93_784, 500_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, 93_784, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_durationlike(
         "-1 2:3:4.5",
-        Interval {
-            duration: Duration::new(79_015, 500_000_000),
-            is_positive_dur: false,
-            ..Default::default()
-        },
+        Interval::new(0, -79_015, -500_000_000).unwrap(),
     );
 
-    run_test_parse_interval_durationlike(
-        "1 -2:3:4.5",
-        Interval {
-            duration: Duration::new(79_015, 500_000_000),
-            ..Default::default()
-        },
-    );
-
-    run_test_parse_interval_durationlike(
-        "1 2:3",
-        Interval {
-            duration: Duration::new(93_780, 0),
-            ..Default::default()
-        },
-    );
     fn run_test_parse_interval_durationlike(s: &str, expected: Interval) {
         let actual = strconv::parse_interval(s).unwrap();
         assert_eq!(actual, expected);
@@ -378,67 +326,35 @@ fn test_parse_interval_full() {
 
     run_test_parse_interval_full(
         "6-7 1 2:3:4.5",
-        Interval {
-            months: 79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: true,
-        },
+        Interval::new(79, 93_784, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 1 2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: true,
-        },
+        Interval::new(-79, 93_784, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "6-7 -1 -2:3:4.5",
-        Interval {
-            months: 79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: false,
-        },
+        Interval::new(79, -93_784, -500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 -1 -2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: false,
-        },
+        Interval::new(-79, -93_784, -500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 1 -2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(79_015, 500_000_000),
-            is_positive_dur: true,
-        },
+        Interval::new(-79, 79_015, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 -1 2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(79_015, 500_000_000),
-            is_positive_dur: false,
-        },
+        Interval::new(-79, -79_015, -500_000_000).unwrap(),
     );
 
-    run_test_parse_interval_full_from_sql(
-        "-6-7 1",
-        Minute,
-        Interval {
-            months: -79,
-            duration: Duration::new(60, 0),
-            is_positive_dur: true,
-        },
-    );
+    run_test_parse_interval_full_from_sql("-6-7 1", Minute, Interval::new(-79, 60, 0).unwrap());
 
     fn run_test_parse_interval_full(s: &str, expected: Interval) {
         let actual = strconv::parse_interval(s).unwrap();

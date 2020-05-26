@@ -258,15 +258,9 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::TimestampTz(t)
         }
         Tag::Interval => {
-            let months = read_copy::<i64>(data, offset);
-            let secs = read_copy::<u64>(data, offset);
-            let nanosecs = read_copy::<u32>(data, offset);
-            let is_positive_dur = read_copy::<bool>(data, offset);
-            Datum::Interval(Interval {
-                months,
-                duration: std::time::Duration::new(secs, nanosecs),
-                is_positive_dur,
-            })
+            let months = read_copy::<i32>(data, offset);
+            let duration = read_copy::<i128>(data, offset);
+            Datum::Interval(Interval { months, duration })
         }
         Tag::Decimal => {
             let s = read_copy::<Significand>(data, offset);
@@ -354,10 +348,8 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval as u8);
-            push_copy!(data, i.months, i64);
-            push_copy!(data, i.duration.as_secs(), u64);
-            push_copy!(data, i.duration.subsec_nanos(), u32);
-            push_copy!(data, i.is_positive_dur, bool);
+            push_copy!(data, i.months, i32);
+            push_copy!(data, i.duration, i128);
         }
         Datum::Decimal(s) => {
             data.push(Tag::Decimal as u8);
@@ -399,9 +391,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Time(_) => 1 + size_of::<NaiveTime>(),
         Datum::Timestamp(_) => 1 + size_of::<NaiveDateTime>(),
         Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
-        Datum::Interval(_) => {
-            1 + size_of::<i64>() + size_of::<u64>() + size_of::<u32>() + size_of::<bool>()
-        }
+        Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i128>(),
         Datum::Decimal(_) => 1 + size_of::<Significand>(),
         Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
         Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),
@@ -1066,10 +1056,7 @@ mod tests {
                 months: 312,
                 ..Default::default()
             }),
-            Datum::Interval(Interval {
-                duration: std::time::Duration::from_nanos(1_012_312),
-                ..Default::default()
-            }),
+            Datum::Interval(Interval::new(0, 0, 1_012_312).unwrap()),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1, 255]),
             Datum::String(""),
