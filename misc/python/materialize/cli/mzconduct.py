@@ -618,7 +618,7 @@ class WaitForTcpStep(WorkflowStep):
             f"waiting for {self._host}:{self._port}", "C",
         )
         for remaining in ui.timeout_loop(self._timeout_secs):
-            cmd = f"docker run --rm -it --network {comp.name}_default ubuntu:bionic-20200403".split()
+            cmd = f"docker run --rm -t --network {comp.name}_default ubuntu:bionic-20200403".split()
             cmd.extend(
                 [
                     "timeout",
@@ -661,7 +661,7 @@ class DropKafkaTopicsStep(WorkflowStep):
                 [
                     "docker",
                     "exec",
-                    "-it",
+                    "-t",
                     self._container,
                     "kafka-topics",
                     "--delete",
