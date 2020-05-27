@@ -452,23 +452,8 @@ fn handle_show_objects(
             &make_show_objects_desc(object_type, materialized, full),
         )
     } else {
-        let items = if let Some(mut from) = from {
-            if from.0.len() > 2 {
-                bail!(
-                    "schema name '{}' cannot have more than two components",
-                    from
-                );
-            }
-            let schema_name = normalize::ident(from.0.pop().unwrap());
-            let database_spec = from
-                .0
-                .pop()
-                .map(|n| DatabaseSpecifier::Name(normalize::ident(n)));
-            let database_spec = scx.catalog.resolve_schema(
-                &scx.session.database(),
-                database_spec.as_ref(),
-                &schema_name,
-            )?;
+        let items = if let Some(from) = from {
+            let (database_spec, schema_name) = scx.resolve_schema(from)?;
             scx.catalog
                 .get_items(&database_spec, &schema_name)
                 .expect("schema known to exist")
@@ -1539,18 +1524,8 @@ fn handle_drop_schema(
     if names.len() != 1 {
         unsupported!("DROP SCHEMA with multiple schemas");
     }
-    let mut name = names.into_element();
-    let schema_name = normalize::ident(name.0.pop().unwrap());
-    let database_name = name
-        .0
-        .pop()
-        .map(|n| DatabaseSpecifier::Name(normalize::ident(n)));
-    let database_name = match scx.catalog.resolve_schema(
-        &scx.session.database(),
-        database_name.as_ref(),
-        &schema_name,
-    ) {
-        Ok(database_spec) => {
+    match scx.resolve_schema(names.into_element()) {
+        Ok((database_spec, schema_name)) => {
             if let DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary = database_spec {
                 bail!(
                     "cannot drop schema {} because it is required by the database system",
@@ -1568,19 +1543,23 @@ fn handle_drop_schema(
                     schema_name
                 );
             }
-            database_spec
+            Ok(Plan::DropSchema {
+                database_name: database_spec,
+                schema_name,
+            })
         }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the
             // database does not exist.
-            scx.session.database()
+            // TODO(benesch): adjust the types here properly, rather than making
+            // up a nonexistent database.
+            Ok(Plan::DropSchema {
+                database_name: DatabaseSpecifier::Ambient,
+                schema_name: "noexist".into(),
+            })
         }
-        Err(e) => return Err(e),
-    };
-    Ok(Plan::DropSchema {
-        database_name,
-        schema_name,
-    })
+        Err(e) => Err(e),
+    }
 }
 
 fn handle_drop_items(
@@ -1837,6 +1816,26 @@ impl<'a> StatementContext<'a> {
             schema: "mz_temp".to_owned(),
             item: name.item,
         }
+    }
+
+    pub fn resolve_schema(&self, mut name: ObjectName) -> Result<(DatabaseSpecifier, String), failure::Error> {
+        if name.0.len() > 2 {
+            bail!(
+                "schema name '{}' cannot have more than two components",
+                name
+            );
+        }
+        let schema_name = normalize::ident(name.0.pop().unwrap());
+        let database_spec = name
+            .0
+            .pop()
+            .map(|n| DatabaseSpecifier::Name(normalize::ident(n)));
+        let database_spec = self.catalog.resolve_schema(
+            &self.session.database(),
+            database_spec.as_ref(),
+            &schema_name,
+        )?;
+        Ok((database_spec, schema_name))
     }
 
     pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
