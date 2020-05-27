@@ -216,10 +216,13 @@ mzconduct:
           --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
       - step: ensure-stays-up
         container: chbench
-        seconds: 60
+        seconds: 10
       - step: run
         service: peeker
         command: --only-initialize --queries q01
+      - step: ensure-stays-up
+        container: chbench
+        seconds: 50
       - step: wait-for-mz
         query: 'select count(*) from q01'
         timeout_secs: 20
