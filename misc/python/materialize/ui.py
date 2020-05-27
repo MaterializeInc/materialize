@@ -10,11 +10,15 @@
 """Utilities for interacting with humans
 """
 
+import datetime
 import os
 import shlex
 import sys
 import time
 from typing import Any, Callable, Generator, Iterable, Optional
+
+
+HOME = os.environ["HOME"]
 
 
 class Verbosity:
@@ -28,9 +32,7 @@ class Verbosity:
 
         The only values that this gets set to false for are the empty string, 0, or no
         """
-        env = os.getenv("MZ_QUIET")
-        if env is not None:
-            cls.quiet = env not in ("", "0", "no")
+        cls.quiet = env_is_truthy("MZ_QUIET")
         if explicit is not None:
             cls.quiet = explicit
 
@@ -88,6 +90,14 @@ def timeout_loop(timeout: int, tick: int = 1) -> Generator[float, None, None]:
                 time.sleep(tick - (after - before))
 
 
+def log_in_automation(msg: str) -> None:
+    """Log to a file, if we're running in automation"""
+    if env_is_truthy("MZ_IN_AUTOMATION"):
+        with open(f"{HOME}/mzconduct.log", "a") as fh:
+            now = datetime.datetime.now().isoformat()
+            print(f"[{now}] {msg}", file=fh)
+
+
 def shell_quote(args: Iterable[Any]) -> str:
     """Return shell-escaped string of all the parameters
 
@@ -97,3 +107,11 @@ def shell_quote(args: Iterable[Any]) -> str:
         "one 'two three'"
     """
     return " ".join(shlex.quote(str(arg)) for arg in args)
+
+
+def env_is_truthy(env_var: str) -> bool:
+    """Return true if `env_var` is set and is not one of: 0, n, no"""
+    env = os.getenv(env_var)
+    if env is not None:
+        return env not in ("", "0", "no")
+    return False

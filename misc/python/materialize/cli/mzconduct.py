@@ -630,7 +630,17 @@ class WaitForTcpStep(WorkflowStep):
             )
             try:
                 spawn.capture(cmd, unicode=True, stderr_too=True)
-            except subprocess.CalledProcessError:
+            except subprocess.CalledProcessError as e:
+                ui.log_in_automation(
+                    "wait-for-tcp ({}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
+                        self._host,
+                        self._port,
+                        ui.shell_quote(cmd),
+                        e,
+                        e.stdout,
+                        e.stderr,
+                    )
+                )
                 ui.progress(" {}".format(int(remaining)))
             else:
                 ui.progress(" success!", finish=True)
