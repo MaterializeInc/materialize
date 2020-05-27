@@ -430,7 +430,7 @@ fn handle_show_objects(
         };
 
         let mut rows = vec![];
-        for name in schemas.keys() {
+        for name in schemas {
             rows.push(make_row(name, "USER"));
         }
         if extended {
@@ -438,7 +438,7 @@ fn handle_show_objects(
                 .catalog
                 .get_schemas(&DatabaseSpecifier::Ambient)
                 .expect("ambient database should always exist");
-            for name in ambient_schemas.keys() {
+            for name in ambient_schemas {
                 rows.push(make_row(name, "SYSTEM"));
             }
         }

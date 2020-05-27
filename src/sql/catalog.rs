@@ -27,7 +27,10 @@ pub trait PlanCatalog: fmt::Debug {
 
     fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry;
 
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Result<&dyn SchemaMap, failure::Error>;
+    fn get_schemas<'a>(
+        &'a self,
+        _: &DatabaseSpecifier,
+    ) -> Result<Box<dyn Iterator<Item = &'a str> + 'a>, failure::Error>;
 
     fn database_resolver<'a>(
         &'a self,
@@ -92,10 +95,6 @@ pub trait PlanSchema {
     fn is_system(&self) -> bool;
 }
 
-pub trait SchemaMap {
-    fn keys<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a>;
-}
-
 pub trait ItemMap {
     fn is_empty(&self) -> bool;
     fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (&'a String, &'a GlobalId)> + 'a>;
@@ -125,7 +124,10 @@ impl PlanCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn get_schemas(&self, _: &DatabaseSpecifier) -> Result<&dyn SchemaMap, failure::Error> {
+    fn get_schemas<'a>(
+        &'a self,
+        _: &DatabaseSpecifier,
+    ) -> Result<Box<dyn Iterator<Item = &'a str> + 'a>, failure::Error> {
         unimplemented!();
     }
 

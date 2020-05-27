@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 
 use ::sql::catalog::{
     CatalogItemType, ItemMap, PlanCatalog, PlanCatalogEntry, PlanDatabaseResolver, PlanSchema,
-    SchemaMap,
 };
 use ::sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
@@ -530,7 +529,7 @@ impl Catalog {
             DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
                 Some(db) => Ok(&db.schemas),
                 None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
-            }
+            },
         }
     }
 
@@ -550,7 +549,7 @@ impl Catalog {
             DatabaseSpecifier::Name(name) => match self.by_name.get_mut(name) {
                 Some(db) => Ok(&mut db.schemas),
                 None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
-            }
+            },
         }
     }
 
@@ -1166,9 +1165,12 @@ impl PlanCatalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Result<&dyn SchemaMap, failure::Error> {
+    fn get_schemas<'a>(
+        &'a self,
+        database_spec: &DatabaseSpecifier,
+    ) -> Result<Box<dyn Iterator<Item = &'a str> + 'a>, failure::Error> {
         match self.catalog.get_schemas(database_spec, self.conn_id) {
-            Ok(schemas) => Ok(schemas as &dyn SchemaMap),
+            Ok(schemas) => Ok(Box::new(schemas.0.keys().map(|s| s.as_str()))),
             Err(e) => Err(e.into()),
         }
     }
@@ -1271,12 +1273,6 @@ impl PlanSchema for Schema {
 
     fn is_system(&self) -> bool {
         self.is_system
-    }
-}
-
-impl SchemaMap for Schemas {
-    fn keys<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.0.keys().map(|k| k.as_str()))
     }
 }
 
