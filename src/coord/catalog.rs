@@ -21,9 +21,7 @@ use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use ::sql::catalog::{
-    CatalogItemType, ItemMap, PlanCatalog, PlanCatalogEntry, PlanDatabaseResolver, PlanSchema,
-};
+use ::sql::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry};
 use ::sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
@@ -502,6 +500,7 @@ impl Catalog {
             .get("mz_temp")
             .expect("missing temporary schema mz_temp for conn_id: {}")
             .items
+            .0
             .is_empty()
         {
             error!(
@@ -1175,11 +1174,24 @@ impl PlanCatalog for ConnCatalog<'_> {
         }
     }
 
-    fn database_resolver<'a>(
+    fn get_items<'a>(
         &'a self,
-        database_spec: DatabaseSpecifier,
-    ) -> Result<Box<dyn PlanDatabaseResolver<'a> + 'a>, failure::Error> {
-        Ok(Box::new(self.catalog.database_resolver(database_spec)?))
+        database_spec: &DatabaseSpecifier,
+        schema_name: &str,
+    ) -> Result<Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>, failure::Error> {
+        match self
+            .catalog
+            .get_schemas(database_spec, self.conn_id)?
+            .0
+            .get(schema_name)
+        {
+            Some(schema) => {
+                Ok(Box::new(schema.items.0.values().map(move |id| {
+                    self.catalog.get_by_id(id) as &dyn PlanCatalogEntry
+                })))
+            }
+            None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into())).into()),
+        }
     }
 
     fn resolve(
@@ -1193,8 +1205,32 @@ impl PlanCatalog for ConnCatalog<'_> {
             .resolve(current_database, search_path, name, self.conn_id)?)
     }
 
-    fn empty_item_map(&self) -> Box<dyn ItemMap> {
-        Box::new(Items(BTreeMap::new()))
+    fn resolve_schema(
+        &self,
+        current_database: &DatabaseSpecifier,
+        database: Option<&DatabaseSpecifier>,
+        schema_name: &str,
+    ) -> Result<DatabaseSpecifier, failure::Error> {
+        let database_specs = if let Some(database) = database {
+            vec![database]
+        } else {
+            vec![
+                current_database,
+                &DatabaseSpecifier::Ambient,
+                &DatabaseSpecifier::Temporary,
+            ]
+        };
+        for database_spec in database_specs {
+            if self
+                .catalog
+                .get_schemas(&database_spec, self.conn_id)?
+                .0
+                .contains_key(schema_name)
+            {
+                return Ok(database_spec.clone());
+            }
+        }
+        Err(Error::new(ErrorKind::UnknownSchema(schema_name.into())).into())
     }
 }
 
@@ -1252,36 +1288,5 @@ impl PlanCatalogEntry for CatalogEntry {
 
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
-    }
-}
-
-impl<'a> PlanDatabaseResolver<'a> for DatabaseResolver<'a> {
-    fn resolve_schema(&self, schema_name: &str) -> Option<&'a dyn PlanSchema> {
-        self.database
-            .schemas
-            .0
-            .get(schema_name)
-            .or_else(|| self.ambient_schemas.0.get(schema_name))
-            .map(|s| s as &dyn PlanSchema)
-    }
-}
-
-impl PlanSchema for Schema {
-    fn items(&self) -> &dyn ItemMap {
-        &self.items
-    }
-
-    fn is_system(&self) -> bool {
-        self.is_system
-    }
-}
-
-impl ItemMap for Items {
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (&String, &GlobalId)> + 'a> {
-        Box::new(self.0.iter())
     }
 }

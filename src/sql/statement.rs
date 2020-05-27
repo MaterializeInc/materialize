@@ -12,6 +12,7 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::HashMap;
+use std::iter;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -451,7 +452,6 @@ fn handle_show_objects(
             &make_show_objects_desc(object_type, materialized, full),
         )
     } else {
-        let empty_schema = scx.catalog.empty_item_map();
         let items = if let Some(mut from) = from {
             if from.0.len() > 2 {
                 bail!(
@@ -463,27 +463,24 @@ fn handle_show_objects(
             let database_spec = from
                 .0
                 .pop()
-                .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
-                .unwrap_or_else(|| scx.session.database());
+                .map(|n| DatabaseSpecifier::Name(normalize::ident(n)));
+            let database_spec = scx.catalog.resolve_schema(
+                &scx.session.database(),
+                database_spec.as_ref(),
+                &schema_name,
+            )?;
             scx.catalog
-                .database_resolver(database_spec)?
-                .resolve_schema(&schema_name)
-                .ok_or_else(|| format_err!("schema '{}' does not exist", schema_name))?
-                .items()
+                .get_items(&database_spec, &schema_name)
+                .expect("schema known to exist")
         } else {
-            let resolver = scx.catalog.database_resolver(scx.session.database())?;
-            scx.session
-                .search_path()
-                .iter()
-                .filter_map(|schema_name| resolver.resolve_schema(schema_name))
-                .find(|schema| !schema.is_system())
-                .map_or_else(|| &*empty_schema, |schema| schema.items())
+            scx.catalog
+                .get_items(&scx.session.database(), "public")
+                .ok()
+                .unwrap_or_else(|| Box::new(iter::empty()))
         };
 
-        let filtered_items = items
-            .iter()
-            .map(|(name, id)| (name, scx.catalog.get_by_id(id)))
-            .filter(|(_name, entry)| object_type_matches(object_type, entry.item_type()));
+        let filtered_items =
+            items.filter(|entry| object_type_matches(object_type, entry.item_type()));
 
         if object_type == ObjectType::View || object_type == ObjectType::Source {
             // TODO(justin): we can't handle SHOW ... WHERE here yet because the coordinator adds
@@ -495,11 +492,11 @@ fn handle_show_objects(
                 None => like_pattern::build_regex("%")?,
             };
 
-            let filtered_items = filtered_items
-                .filter(|(_name, entry)| like_regex.is_match(&entry.name().to_string()));
+            let filtered_items =
+                filtered_items.filter(|entry| like_regex.is_match(&entry.name().item));
             Ok(Plan::ShowViews {
                 ids: filtered_items
-                    .map(|(name, entry)| (name.clone(), entry.id()))
+                    .map(|entry| (entry.name().item.clone(), entry.id()))
                     .collect::<Vec<_>>(),
                 full,
                 show_queryable: object_type == ObjectType::View,
@@ -507,7 +504,7 @@ fn handle_show_objects(
             })
         } else {
             let rows = filtered_items
-                .map(|(name, entry)| make_row(name, classify_id(entry.id())))
+                .map(|entry| make_row(&entry.name().item, classify_id(entry.id())))
                 .collect::<Vec<_>>();
 
             finish_show_where(
@@ -1547,34 +1544,39 @@ fn handle_drop_schema(
     let database_name = name
         .0
         .pop()
-        .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
-        .unwrap_or_else(|| scx.session.database());
-    match scx.catalog.database_resolver(database_name.clone()) {
-        Ok(resolver) => {
-            match resolver.resolve_schema(&schema_name) {
-                None if if_exists => {
-                    // TODO(benesch): generate a notice indicating that
-                    // the schema does not exist.
-                }
-                None => bail!("schema '{}.{}' does not exist", database_name, schema_name),
-                Some(schema) if schema.is_system() => {
-                    bail!(
-                        "cannot drop schema {} because it is required by the database system",
-                        schema_name
-                    );
-                }
-                Some(schema) if !cascade && !schema.items().is_empty() => {
-                    bail!("schema '{}.{}' cannot be dropped without CASCADE while it contains objects", database_name, schema_name);
-                }
-                _ => (),
+        .map(|n| DatabaseSpecifier::Name(normalize::ident(n)));
+    let database_name = match scx.catalog.resolve_schema(
+        &scx.session.database(),
+        database_name.as_ref(),
+        &schema_name,
+    ) {
+        Ok(database_spec) => {
+            if let DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary = database_spec {
+                bail!(
+                    "cannot drop schema {} because it is required by the database system",
+                    schema_name
+                );
             }
+            let mut items = scx
+                .catalog
+                .get_items(&database_spec, &schema_name)
+                .expect("schema known to exist");
+            if !cascade && items.next().is_some() {
+                bail!(
+                    "schema '{}.{}' cannot be dropped without CASCADE while it contains objects",
+                    database_spec,
+                    schema_name
+                );
+            }
+            database_spec
         }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the
             // database does not exist.
+            scx.session.database()
         }
-        Err(err) => return Err(err),
-    }
+        Err(e) => return Err(e),
+    };
     Ok(Plan::DropSchema {
         database_name,
         schema_name,
