@@ -725,7 +725,7 @@ fn plan_table_factor<'a>(
                 plan_table_function(ecx, left, &name, Some(alias), args)
             } else {
                 let name = qcx.scx.resolve_name(name.clone())?;
-                let item = qcx.scx.get(&name)?;
+                let item = qcx.scx.catalog.get(&name)?;
                 let expr = RelationExpr::Get {
                     id: Id::Global(item.id()),
                     typ: item.desc()?.typ().clone(),
