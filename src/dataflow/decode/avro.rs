@@ -30,9 +30,10 @@ impl AvroDecoderState {
         schema_registry_config: Option<ccsr::ClientConfig>,
         envelope: EnvelopeType,
         reject_non_inserts: bool,
+        debug_name: String,
     ) -> Result<Self, failure::Error> {
         Ok(AvroDecoderState {
-            decoder: Decoder::new(reader_schema, schema_registry_config, envelope)?,
+            decoder: Decoder::new(reader_schema, schema_registry_config, envelope, debug_name)?,
             events_success: 0,
             events_error: 0,
             reject_non_inserts,

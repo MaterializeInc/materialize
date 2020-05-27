@@ -460,6 +460,8 @@ pub struct DebeziumDecodeState {
     /// Messages that are not ahead of the last recorded offset will be skipped.
     binlog_offsets: HashMap<String, (usize, usize)>,
     binlog_schema_indices: Option<BinlogSchemaIndices>,
+    /// Human-readable name used for printing debug information
+    debug_name: String,
 }
 
 fn field_indices(node: SchemaNode) -> Option<HashMap<String, usize>> {
@@ -499,7 +501,7 @@ fn take_field_by_index(
 }
 
 impl DebeziumDecodeState {
-    pub fn new_from_schema(schema: &Schema) -> Option<Self> {
+    pub fn new_from_schema(schema: &Schema, debug_name: String) -> Option<Self> {
         let top_node = schema.top_node();
         let top_indices = field_indices(top_node)?;
         let before_idx = *top_indices.get("before")?;
@@ -511,6 +513,7 @@ impl DebeziumDecodeState {
             after_idx,
             binlog_offsets: Default::default(),
             binlog_schema_indices,
+            debug_name,
         })
     }
 
@@ -578,12 +581,12 @@ impl DebeziumDecodeState {
                                 let (old_max_pos, old_max_row) = *oe.get();
                                 if old_max_pos > pos || (old_max_pos == pos && old_max_row >= row) {
                                     let offset_string = if let Some(coord) = coord {
-                                        format!(" at position {}", coord)
+                                        format!(" at offset {}", coord)
                                     } else {
                                         format!("")
                                     };
-                                    warn!("Debezium did not advance: previously read ({}, {}), now read ({}, {}). Skipping record{}.",
-                                          old_max_pos, old_max_row, pos, row, offset_string);
+                                    warn!("Debezium for source {} did not advance: previously read ({}, {}), now read ({}, {}). Skipping record{}.",
+                                          self.debug_name, old_max_pos, old_max_row, pos, row, offset_string);
                                     return Ok(DiffPair {
                                         before: None,
                                         after: None,
@@ -648,6 +651,7 @@ impl Decoder {
         reader_schema: &str,
         schema_registry: Option<ccsr::ClientConfig>,
         envelope: EnvelopeType,
+        debug_name: String,
     ) -> Result<Decoder> {
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
@@ -657,7 +661,7 @@ impl Decoder {
 
         let debezium = if envelope == EnvelopeType::Debezium {
             Some(
-                DebeziumDecodeState::new_from_schema(&reader_schema)
+                DebeziumDecodeState::new_from_schema(&reader_schema, debug_name)
                     .ok_or_else(|| format_err!("Failed to extract Debezium schema information!"))?,
             )
         } else {
