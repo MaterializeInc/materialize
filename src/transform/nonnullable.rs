@@ -41,9 +41,11 @@ impl NonNullable {
         match relation {
             RelationExpr::Map { input, scalars } => {
                 if scalars.iter().any(|s| scalar_contains_isnull(s)) {
-                    let metadata = input.typ();
+                    let mut metadata = input.typ();
                     for scalar in scalars.iter_mut() {
                         scalar_nonnullable(scalar, &metadata);
+                        let typ = scalar.typ(&metadata);
+                        metadata.column_types.push(typ);
                     }
                 }
             }

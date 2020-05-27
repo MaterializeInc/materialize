@@ -29,6 +29,7 @@ use expr::{EvalError, GlobalId, IdGen, OptimizedRelationExpr, RelationExpr, Scal
 
 // pub mod binding;
 pub mod column_knowledge;
+pub mod cse;
 pub mod demand;
 pub mod empty_map;
 pub mod filter_lets;
@@ -228,6 +229,7 @@ impl Default for Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
                     Box::new(crate::reduction::NegatePredicate),
+                    Box::new(crate::cse::map::Map),
                     Box::new(crate::demand::Demand),
                 ],
             }),
