@@ -68,10 +68,10 @@ query I
 SELECT generate_series FROM generate_series(null, null)
 ----
 
-statement error first generate_series argument has non-integer type
+statement error invalid input syntax for int8: invalid digit found in string: "foo"
 SELECT generate_series FROM generate_series('foo', 2)
 
-statement error second generate_series argument has non-integer type
+statement error invalid input syntax for int8: invalid digit found in string: "foo"
 SELECT generate_series FROM generate_series(1, 'foo')
 
 statement error requires exactly two arguments

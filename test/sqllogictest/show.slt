@@ -33,8 +33,8 @@ SHOW DATABASES WHERE (SELECT true)
 ----
 materialize
 
-statement error WHERE clause must have boolean type, not String
-SHOW DATABASES WHERE 'hello'
+statement error WHERE clause must have boolean type, not Int32
+SHOW DATABASES WHERE 7
 ----
 
 statement ok

@@ -244,7 +244,6 @@ impl Value {
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
             Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
-            Type::Unknown => panic!("cannot decode unknown type"),
         })
     }
 
@@ -270,7 +269,6 @@ impl Value {
                 // just using the text encoding for now
                 Value::decode_text(ty, raw)
             }
-            Type::Unknown => panic!("cannot decode unknown type"),
         }
     }
 }
@@ -296,7 +294,6 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
             let (_, elem_type) = null_datum(t);
             ScalarType::List(Box::new(elem_type))
         }
-        Type::Unknown => ScalarType::Unknown,
     };
     (Datum::Null, ty)
 }
