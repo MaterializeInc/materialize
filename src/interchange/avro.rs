@@ -514,7 +514,12 @@ impl DebeziumDecodeState {
         })
     }
 
-    pub fn extract(&mut self, v: Value, n: SchemaNode) -> Result<DiffPair<Row>> {
+    pub fn extract(
+        &mut self,
+        v: Value,
+        n: SchemaNode,
+        coord: Option<i64>,
+    ) -> Result<DiffPair<Row>> {
         fn is_snapshot(v: Value) -> Result<Option<bool>> {
             let answer = match v {
                 Value::Union(_idx, inner) => is_snapshot(*inner)?,
@@ -572,8 +577,13 @@ impl DebeziumDecodeState {
                             Entry::Occupied(mut oe) => {
                                 let (old_max_pos, old_max_row) = *oe.get();
                                 if old_max_pos > pos || (old_max_pos == pos && old_max_row >= row) {
-                                    warn!("Debezium did not advance: previously read ({}, {}), now read ({}, {}). Skipping record.",
-                                      old_max_pos, old_max_row, pos, row);
+                                    let offset_string = if let Some(coord) = coord {
+                                        format!(" at position {}", coord)
+                                    } else {
+                                        format!("")
+                                    };
+                                    warn!("Debezium did not advance: previously read ({}, {}), now read ({}, {}). Skipping record{}.",
+                                          old_max_pos, old_max_row, pos, row, offset_string);
                                     return Ok(DiffPair {
                                         before: None,
                                         after: None,
@@ -662,7 +672,7 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `DiffPair`.
-    pub async fn decode(&mut self, mut bytes: &[u8]) -> Result<DiffPair<Row>> {
+    pub async fn decode(&mut self, mut bytes: &[u8], coord: Option<i64>) -> Result<DiffPair<Row>> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a big
         // endian 32-bit schema ID.
@@ -698,7 +708,7 @@ impl Decoder {
                 format_err!("Debezium schema extraction failed; can't decode message.")
             })?;
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            dbz_state.extract(val, self.reader_schema.top_node())?
+            dbz_state.extract(val, self.reader_schema.top_node(), coord)?
         } else {
             let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
             let row = extract_row(val, iter::empty(), self.reader_schema.top_node())?;
