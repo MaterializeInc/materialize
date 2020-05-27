@@ -229,7 +229,6 @@ impl Default for Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
                     Box::new(crate::reduction::NegatePredicate),
-                    Box::new(crate::cse::map::Map),
                     Box::new(crate::demand::Demand),
                 ],
             }),
@@ -254,6 +253,7 @@ impl Default for Optimizer {
             }),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
+            Box::new(crate::cse::map::Map),
             Box::new(crate::reduction::FoldConstants),
         ];
         Self { transforms }

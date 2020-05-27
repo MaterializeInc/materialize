@@ -7,14 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Re-orders Map expressions based on complexity, and performs common
-//! sub-expression elimination.
+//! Performs common sub-expression elimination.
+//!
+//! This transform identifies common `ScalarExpr` expressions across
+//! and within expressions that are arguments to `Map` operators, and
+//! reforms the operator to build each distinct expression at most once
+//! and to re-use expressions instead of re-evaluating them.
+//!
+//! The re-use policy at the moment is severe and re-uses everything.
+//! It may be worth considering relations of this if it results in more
+//! busywork and less efficiency, but the wins can be substantial when
+//! expressions re-use complex subexpressions.
 
 use crate::TransformArgs;
 use expr::{RelationExpr, ScalarExpr};
 
-/// Re-orders Map expressions based on complexity, and performs common
-/// sub-expression elimination.
+/// Performs common sub-expression elimination.
 #[derive(Debug)]
 pub struct Map;
 
@@ -32,25 +40,39 @@ impl crate::Transform for Map {
 }
 
 impl Map {
-    /// Re-orders Map expressions based on complexity, and performs common
-    /// sub-expression elimination.
+    /// Performs common sub-expression elimination.
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Map { input, scalars } = relation {
             let input_arity = input.arity();
-            let (scalars, projection) = flatten_and_cse(scalars, input_arity);
-            *relation = input.take_dangerous().map(scalars).project(projection);
+            let scalars_len = scalars.len();
+            let (scalars, projection) = memoize_and_reuse(scalars, input_arity);
+            let mut expression = input.take_dangerous().map(scalars);
+            if projection.len() != (input_arity + scalars_len)
+                || projection.iter().enumerate().any(|(a, b)| a != *b)
+            {
+                expression = expression.project(projection);
+            }
+            *relation = expression;
         }
     }
 }
 
-fn flatten_and_cse(exprs: &mut [ScalarExpr], arity: usize) -> (Vec<ScalarExpr>, Vec<usize>) {
-    let mut projection = (0..arity).collect::<Vec<_>>();
+/// Memoize expressions in `exprs` and re-use where possible.
+///
+/// This method extracts all expression AST nodes as individual expressions,
+/// and builds others out of column references to them, avoiding any duplication.
+/// Once complete, expressions which are referred to only once are re-inlined.
+fn memoize_and_reuse(
+    exprs: &mut [ScalarExpr],
+    input_arity: usize,
+) -> (Vec<ScalarExpr>, Vec<usize>) {
+    let mut projection = (0..input_arity).collect::<Vec<_>>();
     let mut scalars = Vec::new();
     for expr in exprs.iter_mut() {
         expr.visit_mut(&mut |node| {
             match node {
                 ScalarExpr::Column(index) => {
-                    // Column references need to be rewritten, but no not
+                    // Column references need to be rewritten, but do not
                     // need to be memoized.
                     *index = projection[*index];
                 }
@@ -61,13 +83,13 @@ fn flatten_and_cse(exprs: &mut [ScalarExpr], arity: usize) -> (Vec<ScalarExpr>, 
                     if let Some(position) = scalars.iter().position(|e| e == node) {
                         // Any complex expression that already exists as a prior column can
                         // be replaced by a reference to that column.
-                        *node = ScalarExpr::Column(arity + position);
+                        *node = ScalarExpr::Column(input_arity + position);
                     } else {
                         // A complex expression that does not exist should be memoized, and
                         // replaced by a reference to the column.
                         scalars.push(std::mem::replace(
                             node,
-                            ScalarExpr::Column(arity + scalars.len()),
+                            ScalarExpr::Column(input_arity + scalars.len()),
                         ));
                     }
                 }
@@ -81,27 +103,25 @@ fn flatten_and_cse(exprs: &mut [ScalarExpr], arity: usize) -> (Vec<ScalarExpr>, 
             ScalarExpr::Column(index) => *index,
             ScalarExpr::Literal(_, _) => {
                 scalars.push(expr.clone());
-                arity + scalars.len() - 1
+                input_arity + scalars.len() - 1
             }
-            e => {
-                arity
-                    + scalars
-                        .iter()
-                        .position(|r| r == e)
-                        .expect("Failed to find memoized complex expression")
-            }
+            _ => unreachable!("Non column/literal expression found"),
         };
 
         projection.push(position);
     }
 
-    inline_single_use(&mut scalars, &mut projection[..], arity);
+    inline_single_use(&mut scalars, &mut projection[..], input_arity);
     (scalars, projection)
 }
 
-fn inline_single_use(exprs: &mut Vec<ScalarExpr>, projection: &mut [usize], arity: usize) {
+/// Replaces column references that occur once with the referenced expression.
+///
+/// This method in-lines expressions that are only referenced once, and then
+/// collects expressions that are no longer referenced, updating column indexes.
+fn inline_single_use(exprs: &mut Vec<ScalarExpr>, projection: &mut [usize], input_arity: usize) {
     // Determine which columns are referred to by which others.
-    let mut referenced = vec![0; arity + exprs.len()];
+    let mut referenced = vec![0; input_arity + exprs.len()];
     for column in projection.iter() {
         referenced[*column] += 1;
     }
@@ -121,37 +141,34 @@ fn inline_single_use(exprs: &mut Vec<ScalarExpr>, projection: &mut [usize], arit
         let (prior, expr) = exprs.split_at_mut(index);
         expr[0].visit_mut(&mut |e| {
             if let ScalarExpr::Column(i) = e {
-                if *i >= arity && referenced[*i] == 1 {
+                if *i >= input_arity && referenced[*i] == 1 {
                     referenced[*i] -= 1;
-                    *e = prior[*i - arity].clone();
+                    *e = prior[*i - input_arity].clone();
                 }
             }
         });
     }
 
     // Remove unreferenced columns, update column references.
+    let mut column_rename = std::collections::HashMap::new();
+    for column in 0..input_arity {
+        column_rename.insert(column, column);
+    }
     let mut results = Vec::new();
     for (index, mut expr) in exprs.drain(..).enumerate() {
-        if referenced[arity + index] > 0 {
+        if referenced[input_arity + index] > 0 {
             // keep the expression, but update column references.
             expr.visit_mut(&mut |e| {
                 if let ScalarExpr::Column(i) = e {
-                    // Subtract from i the number of unreferenced columns before it
-                    if *i >= arity {
-                        *i -= referenced[arity..*i].iter().filter(|x| x == &&0).count();
-                    }
+                    *i = column_rename[i];
                 }
             });
             results.push(expr);
+            column_rename.insert(input_arity + index, input_arity + results.len() - 1);
         }
     }
     *exprs = results;
     for column in projection.iter_mut() {
-        if *column >= arity {
-            *column -= referenced[arity..*column]
-                .iter()
-                .filter(|x| x == &&0)
-                .count()
-        }
+        *column = column_rename[column];
     }
 }

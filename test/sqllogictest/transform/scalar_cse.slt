@@ -46,8 +46,6 @@ FROM x
 
 EOF
 
-
-
 query T multiline
 EXPLAIN PLAN FOR SELECT
     a::json->'Field1'->'Foo',
