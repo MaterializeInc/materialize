@@ -22,6 +22,7 @@ pipeline.template.yml and the docstring on `trim_pipeline` below.
 from collections import OrderedDict
 from materialize import mzbuild
 from materialize import spawn
+from materialize.cli.mzconduct import Composition
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import Any, List, Set, Sequence
@@ -110,6 +111,13 @@ def trim_pipeline(pipeline: Any) -> None:
                             find_compose_images(images, plugin_config["config"])
                         )
                         step.manual_inputs.add(plugin_config["config"])
+                    elif name == "./ci/plugins/mzconduct":
+                        comp = Composition.find(plugin_config["test"]).path
+                        config = comp / "mzcompose.yml"
+                        step.image_dependencies.update(
+                            find_compose_images(images, config)
+                        )
+                        step.manual_inputs.add(str(config))
         steps[step.id] = step
 
     # Make sure we have an up to date view of master.
