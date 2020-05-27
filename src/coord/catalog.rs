@@ -62,7 +62,7 @@ pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ambient_schemas: Schemas,
+    ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     storage: Arc<Mutex<sql::Connection>>,
     creation_time: SystemTime,
@@ -84,28 +84,21 @@ impl ConnCatalog<'_> {
 #[derive(Debug, Serialize)]
 struct Database {
     id: i64,
-    schemas: Schemas,
+    schemas: BTreeMap<String, Schema>,
 }
 
 lazy_static! {
     static ref EMPTY_DATABASE: Database = Database {
         id: 0,
-        schemas: Schemas(BTreeMap::new()),
+        schemas: BTreeMap::new(),
     };
 }
 
 #[derive(Debug, Serialize)]
-struct Schemas(BTreeMap<String, Schema>);
-
-#[derive(Debug, Serialize)]
 pub struct Schema {
     id: i64,
-    is_system: bool,
-    items: Items,
+    items: BTreeMap<String, GlobalId>,
 }
-
-#[derive(Debug, Serialize)]
-struct Items(BTreeMap<String, GlobalId>);
 
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
@@ -273,7 +266,7 @@ impl Catalog {
             by_name: BTreeMap::new(),
             by_id: BTreeMap::new(),
             indexes: HashMap::new(),
-            ambient_schemas: Schemas(BTreeMap::new()),
+            ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             creation_time: SystemTime::now(),
@@ -286,7 +279,7 @@ impl Catalog {
                 name,
                 Database {
                     id,
-                    schemas: Schemas(BTreeMap::new()),
+                    schemas: BTreeMap::new(),
                 },
             );
         }
@@ -303,13 +296,11 @@ impl Catalog {
                 }
                 None => &mut catalog.ambient_schemas,
             };
-            let is_system = is_system_schema_name(&schema_name);
-            schemas.0.insert(
+            schemas.insert(
                 schema_name,
                 Schema {
                     id,
-                    is_system,
-                    items: Items(BTreeMap::new()),
+                    items: BTreeMap::new(),
                 },
             );
         }
@@ -416,7 +407,7 @@ impl Catalog {
     pub fn try_get(&self, name: &FullName, conn_id: u32) -> Option<&CatalogEntry> {
         self.get_schema(&name.database, &name.schema, conn_id)
             .ok()
-            .and_then(|schema| schema.items.0.get(&name.item))
+            .and_then(|schema| schema.items.get(&name.item))
             .map(|id| &self.by_id[id])
     }
 
@@ -471,8 +462,7 @@ impl Catalog {
             conn_id,
             Schema {
                 id: -1,
-                is_system: true,
-                items: Items(BTreeMap::new()),
+                items: BTreeMap::new(),
             },
         );
     }
@@ -480,14 +470,13 @@ impl Catalog {
     pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
         self.temporary_schemas[&conn_id]
             .items
-            .0
             .values()
             .map(|id| Op::DropItem(*id))
             .collect()
     }
 
     pub fn drop_temporary_schema(&mut self, conn_id: u32) {
-        if self.temporary_schemas[&conn_id].items.0.is_empty() {
+        if self.temporary_schemas[&conn_id].items.is_empty() {
             error!(
                 "items leftover in temporary schema for conn_id: {}",
                 conn_id
@@ -509,12 +498,12 @@ impl Catalog {
             DatabaseSpecifier::Ambient if schema_name == "mz_temp" => {
                 Ok(&self.temporary_schemas[&conn_id])
             }
-            DatabaseSpecifier::Ambient => match self.ambient_schemas.0.get(schema_name) {
+            DatabaseSpecifier::Ambient => match self.ambient_schemas.get(schema_name) {
                 Some(schema) => Ok(schema),
                 None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
             },
             DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
-                Some(db) => match db.schemas.0.get(schema_name) {
+                Some(db) => match db.schemas.get(schema_name) {
                     Some(schema) => Ok(schema),
                     None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
                 },
@@ -535,12 +524,12 @@ impl Catalog {
             DatabaseSpecifier::Ambient if schema_name == "mz_temp" => {
                 Ok(self.temporary_schemas.get_mut(&conn_id).unwrap())
             }
-            DatabaseSpecifier::Ambient => match self.ambient_schemas.0.get_mut(schema_name) {
+            DatabaseSpecifier::Ambient => match self.ambient_schemas.get_mut(schema_name) {
                 Some(schema) => Ok(schema),
                 None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
             },
             DatabaseSpecifier::Name(name) => match self.by_name.get_mut(name) {
-                Some(db) => match db.schemas.0.get_mut(schema_name) {
+                Some(db) => match db.schemas.get_mut(schema_name) {
                     Some(schema) => Ok(schema),
                     None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
                 },
@@ -580,7 +569,6 @@ impl Catalog {
         self.get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
             .expect("catalog out of sync")
             .items
-            .0
             .insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
     }
@@ -588,7 +576,7 @@ impl Catalog {
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
         let mut ops = vec![];
         if let Some(database) = self.by_name.get(&name) {
-            for (schema_name, schema) in &database.schemas.0 {
+            for (schema_name, schema) in &database.schemas {
                 Self::drop_schema_items(schema, &self.by_id, &mut ops);
                 ops.push(Op::DropSchema {
                     database_name: DatabaseSpecifier::Name(name.clone()),
@@ -608,7 +596,7 @@ impl Catalog {
         let mut ops = vec![];
         if let DatabaseSpecifier::Name(database_name) = database_spec {
             if let Some(database) = self.by_name.get(&database_name) {
-                if let Some(schema) = database.schemas.0.get(&schema_name) {
+                if let Some(schema) = database.schemas.get(&schema_name) {
                     Self::drop_schema_items(schema, &self.by_id, &mut ops);
                     ops.push(Op::DropSchema {
                         database_name: DatabaseSpecifier::Name(database_name),
@@ -634,7 +622,7 @@ impl Catalog {
         ops: &mut Vec<Op>,
     ) {
         let mut seen = HashSet::new();
-        for &id in schema.items.0.values() {
+        for &id in schema.items.values() {
             Self::drop_item_cascade(id, by_id, ops, &mut seen)
         }
     }
@@ -785,7 +773,7 @@ impl Catalog {
                         name,
                         Database {
                             id,
-                            schemas: Schemas(BTreeMap::new()),
+                            schemas: BTreeMap::new(),
                         },
                     );
                     OpStatus::CreatedDatabase
@@ -801,13 +789,11 @@ impl Catalog {
                         .get_mut(&database_name)
                         .unwrap()
                         .schemas
-                        .0
                         .insert(
                             schema_name,
                             Schema {
                                 id,
-                                is_system: false,
-                                items: Items(BTreeMap::new()),
+                                items: BTreeMap::new(),
                             },
                         );
                     OpStatus::CreatedSchema
@@ -831,7 +817,6 @@ impl Catalog {
                         .get_mut(&database_name)
                         .unwrap()
                         .schemas
-                        .0
                         .remove(&schema_name);
                     OpStatus::DroppedSchema
                 }
@@ -856,7 +841,6 @@ impl Catalog {
                     self.get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
                         .expect("catalog out of sync")
                         .items
-                        .0
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
                     if let CatalogItem::Index(index) = &metadata.item {
@@ -1044,7 +1028,7 @@ pub enum OpStatus {
 pub struct DatabaseResolver<'a> {
     database_spec: DatabaseSpecifier,
     database: &'a Database,
-    ambient_schemas: &'a Schemas,
+    ambient_schemas: &'a BTreeMap<String, Schema>,
     temporary_schemas: &'a HashMap<u32, Schema>,
 }
 
@@ -1058,8 +1042,8 @@ impl<'a> DatabaseResolver<'a> {
         item_name: &str,
         conn_id: u32,
     ) -> Option<FullName> {
-        if let Some(schema) = self.database.schemas.0.get(schema_name) {
-            if schema.items.0.contains_key(item_name) {
+        if let Some(schema) = self.database.schemas.get(schema_name) {
+            if schema.items.contains_key(item_name) {
                 return Some(FullName {
                     database: self.database_spec.clone(),
                     schema: schema_name.to_owned(),
@@ -1067,8 +1051,8 @@ impl<'a> DatabaseResolver<'a> {
                 });
             }
         }
-        if let Some(schema) = self.ambient_schemas.0.get(schema_name) {
-            if schema.items.0.contains_key(item_name) {
+        if let Some(schema) = self.ambient_schemas.get(schema_name) {
+            if schema.items.contains_key(item_name) {
                 return Some(FullName {
                     database: DatabaseSpecifier::Ambient,
                     schema: schema_name.to_owned(),
@@ -1078,7 +1062,7 @@ impl<'a> DatabaseResolver<'a> {
         }
         if schema_name == "mz_temp" {
             let schema = &self.temporary_schemas[&conn_id];
-            if schema.items.0.contains_key(item_name) {
+            if schema.items.contains_key(item_name) {
                 return Some(FullName {
                     database: DatabaseSpecifier::Ambient,
                     schema: schema_name.to_owned(),
@@ -1152,13 +1136,12 @@ impl PlanCatalog for ConnCatalog<'_> {
             DatabaseSpecifier::Ambient => Ok(Box::new(
                 self.catalog
                     .ambient_schemas
-                    .0
                     .keys()
                     .map(|s| s.as_str())
                     .chain(iter::once("mz_temp")),
             )),
             DatabaseSpecifier::Name(n) => match self.catalog.by_name.get(n) {
-                Some(db) => Ok(Box::new(db.schemas.0.keys().map(|s| s.as_str()))),
+                Some(db) => Ok(Box::new(db.schemas.keys().map(|s| s.as_str()))),
                 None => Err(Error::new(ErrorKind::UnknownDatabase(n.into())).into()),
             },
         }
@@ -1172,7 +1155,7 @@ impl PlanCatalog for ConnCatalog<'_> {
         let schema = self
             .catalog
             .get_schema(database_spec, schema_name, self.conn_id)?;
-        Ok(Box::new(schema.items.0.values().map(move |id| {
+        Ok(Box::new(schema.items.values().map(move |id| {
             self.catalog.get_by_id(id) as &dyn PlanCatalogEntry
         })))
     }
