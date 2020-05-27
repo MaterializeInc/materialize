@@ -22,7 +22,7 @@ select LIST[LIST[1],LIST[2,3]]
 ----
 {{1},{2,3}}
 
-query error Cannot assign type to this empty list
+query error unable to infer type for empty list
 select LIST[]
 
 query T
@@ -30,10 +30,8 @@ select LIST[] :: INT LIST
 ----
 {}
 
-query T
+query error unable to infer type for NULL
 select LIST[null]
-----
-{NULL}
 
 query T
 select LIST[1, null]

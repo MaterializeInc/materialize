@@ -309,7 +309,6 @@ impl<'a> Datum<'a> {
             } else {
                 // sql type checking
                 match (datum, scalar_type) {
-                    (Datum::Null, ScalarType::Unknown) => true,
                     (Datum::Null, _) => false,
                     (Datum::False, ScalarType::Bool) => true,
                     (Datum::False, _) => false,
@@ -554,13 +553,6 @@ impl fmt::Display for Datum<'_> {
 /// of a datum's type.
 #[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ScalarType {
-    /// The type of an unknown datum. Whenever possible, this variant should be
-    /// avoided, as clients are typically unable to handle it.
-    ///
-    /// The usual situation in which this variant arises is in a SQL query like
-    /// `SELECT NULL`, where there is no additional hint about what type `NULL`
-    /// should take on.
-    Unknown,
     Bool,
     Int32,
     Int64,
@@ -601,7 +593,6 @@ impl<'a> ScalarType {
 
     pub fn dummy_datum(&self) -> Datum<'a> {
         match self {
-            ScalarType::Unknown => Datum::Null,
             ScalarType::Bool => Datum::False,
             ScalarType::Int32 => Datum::Int32(0),
             ScalarType::Int64 => Datum::Int64(0),
@@ -632,8 +623,7 @@ impl PartialEq for ScalarType {
         match (self, other) {
             (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
 
-            (Unknown, Unknown)
-            | (Bool, Bool)
+            (Bool, Bool)
             | (Int32, Int32)
             | (Int64, Int64)
             | (Float32, Float32)
@@ -649,8 +639,7 @@ impl PartialEq for ScalarType {
 
             (List(a), List(b)) => a.eq(b),
 
-            (Unknown, _)
-            | (Bool, _)
+            (Bool, _)
             | (Int32, _)
             | (Int64, _)
             | (Float32, _)
@@ -673,28 +662,27 @@ impl Hash for ScalarType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         use ScalarType::*;
         match self {
-            Unknown => state.write_u8(0),
-            Bool => state.write_u8(1),
-            Int32 => state.write_u8(2),
-            Int64 => state.write_u8(3),
-            Float32 => state.write_u8(4),
-            Float64 => state.write_u8(5),
+            Bool => state.write_u8(0),
+            Int32 => state.write_u8(1),
+            Int64 => state.write_u8(2),
+            Float32 => state.write_u8(3),
+            Float64 => state.write_u8(4),
             Decimal(_, s) => {
                 // TODO(benesch): we should properly implement decimal precision
                 // tracking, or just remove it.
-                state.write_u8(6);
+                state.write_u8(5);
                 state.write_u8(*s);
             }
-            Date => state.write_u8(7),
-            Time => state.write_u8(8),
-            Timestamp => state.write_u8(9),
-            TimestampTz => state.write_u8(10),
-            Interval => state.write_u8(11),
-            Bytes => state.write_u8(12),
-            String => state.write_u8(13),
-            Jsonb => state.write_u8(14),
+            Date => state.write_u8(6),
+            Time => state.write_u8(7),
+            Timestamp => state.write_u8(8),
+            TimestampTz => state.write_u8(9),
+            Interval => state.write_u8(10),
+            Bytes => state.write_u8(11),
+            String => state.write_u8(12),
+            Jsonb => state.write_u8(13),
             List(t) => {
-                state.write_u8(15);
+                state.write_u8(14);
                 t.hash(state);
             }
         }
@@ -710,7 +698,6 @@ impl fmt::Display for ScalarType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ScalarType::*;
         match self {
-            Unknown => f.write_str("null"),
             Bool => f.write_str("bool"),
             Int32 => f.write_str("i32"),
             Int64 => f.write_str("i64"),

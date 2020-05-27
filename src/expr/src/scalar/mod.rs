@@ -201,7 +201,7 @@ impl ScalarExpr {
     pub fn take(&mut self) -> Self {
         mem::replace(
             self,
-            ScalarExpr::literal_null(ColumnType::new(ScalarType::Unknown)),
+            ScalarExpr::literal_null(ColumnType::new(ScalarType::String)),
         )
     }
 
@@ -460,11 +460,8 @@ impl ScalarExpr {
                 let then_type = then.typ(relation_type);
                 let else_type = els.typ(relation_type);
                 let nullable = then_type.nullable || else_type.nullable;
-                if then_type.scalar_type != ScalarType::Unknown {
-                    then_type.nullable(nullable)
-                } else {
-                    else_type.nullable(nullable)
-                }
+                debug_assert!(then_type.scalar_type == else_type.scalar_type);
+                then_type.nullable(nullable)
             }
         }
     }
@@ -569,13 +566,6 @@ mod tests {
         }
 
         let test_cases = vec![
-            TestCase {
-                input: ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![],
-                },
-                output: ScalarExpr::literal_null(ColumnType::new(ScalarType::Unknown)),
-            },
             TestCase {
                 input: ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,

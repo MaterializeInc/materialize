@@ -210,7 +210,6 @@ impl ColumnKnowledge {
                         | AggregateFunc::MaxDate
                         | AggregateFunc::MaxTimestamp
                         | AggregateFunc::MaxTimestampTz
-                        | AggregateFunc::MaxNull
                         | AggregateFunc::MinInt32
                         | AggregateFunc::MinInt64
                         | AggregateFunc::MinFloat32
@@ -221,7 +220,6 @@ impl ColumnKnowledge {
                         | AggregateFunc::MinDate
                         | AggregateFunc::MinTimestamp
                         | AggregateFunc::MinTimestampTz
-                        | AggregateFunc::MinNull
                         | AggregateFunc::Any
                         | AggregateFunc::All => {
                             // These methods propagate constant values exactly.

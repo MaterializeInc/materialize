@@ -145,6 +145,48 @@ pub enum ScalarExpr {
     Select(Box<RelationExpr>),
 }
 
+#[derive(Clone)]
+pub enum CoercibleScalarExpr {
+    Coerced(ScalarExpr),
+    Parameter(usize),
+    LiteralNull,
+    LiteralList(Vec<CoercibleScalarExpr>),
+    LiteralString(String),
+}
+
+pub trait ScalarTypeable {
+    type Type;
+
+    fn typ(
+        &self,
+        outers: &[RelationType],
+        inner: &RelationType,
+        params: &BTreeMap<usize, ScalarType>,
+    ) -> Self::Type;
+}
+
+impl ScalarTypeable for CoercibleScalarExpr {
+    type Type = Option<ColumnType>;
+
+    fn typ(
+        &self,
+        outers: &[RelationType],
+        inner: &RelationType,
+        params: &BTreeMap<usize, ScalarType>,
+    ) -> Self::Type {
+        match self {
+            CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
+            _ => None,
+        }
+    }
+}
+
+impl From<ScalarExpr> for CoercibleScalarExpr {
+    fn from(expr: ScalarExpr) -> CoercibleScalarExpr {
+        CoercibleScalarExpr::Coerced(expr)
+    }
+}
+
 /// A leveled column reference.
 ///
 /// In the course of decorrelation, multiple levels of nested subqueries are
@@ -601,50 +643,6 @@ impl ScalarExpr {
         )
     }
 
-    pub fn typ(
-        &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
-    ) -> ColumnType {
-        match self {
-            ScalarExpr::Column(ColumnRef { level, column }) => {
-                if *level == 0 {
-                    inner.column_types[*column].clone()
-                } else {
-                    outers[outers.len() - *level].column_types[*column].clone()
-                }
-            }
-            ScalarExpr::Parameter(n) => ColumnType::new(params[&n].clone()).nullable(true),
-            ScalarExpr::Literal(_, typ) => typ.clone(),
-            ScalarExpr::CallNullary(func) => func.output_type(),
-            ScalarExpr::CallUnary { expr, func } => {
-                func.output_type(expr.typ(outers, inner, params))
-            }
-            ScalarExpr::CallBinary { expr1, expr2, func } => func.output_type(
-                expr1.typ(outers, inner, params),
-                expr2.typ(outers, inner, params),
-            ),
-            ScalarExpr::CallVariadic { exprs, func } => {
-                func.output_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect())
-            }
-            ScalarExpr::If { cond: _, then, els } => {
-                let then_type = then.typ(outers, inner, params);
-                let else_type = els.typ(outers, inner, params);
-                then_type.union(&else_type).unwrap()
-            }
-            ScalarExpr::Exists(_) => ColumnType::new(ScalarType::Bool).nullable(true),
-            ScalarExpr::Select(expr) => {
-                let mut outers = outers.to_vec();
-                outers.push(inner.clone());
-                expr.typ(&outers, params)
-                    .column_types
-                    .into_element()
-                    .nullable(true)
-            }
-        }
-    }
-
     pub fn call_unary(self, func: UnaryFunc) -> Self {
         ScalarExpr::CallUnary {
             func,
@@ -691,6 +689,54 @@ impl ScalarExpr {
                 f(els);
             }
             Exists(..) | Select(..) => (),
+        }
+    }
+}
+
+impl ScalarTypeable for ScalarExpr {
+    type Type = ColumnType;
+
+    fn typ(
+        &self,
+        outers: &[RelationType],
+        inner: &RelationType,
+        params: &BTreeMap<usize, ScalarType>,
+    ) -> Self::Type {
+        match self {
+            ScalarExpr::Column(ColumnRef { level, column }) => {
+                if *level == 0 {
+                    inner.column_types[*column].clone()
+                } else {
+                    outers[outers.len() - *level].column_types[*column].clone()
+                }
+            }
+            ScalarExpr::Parameter(n) => ColumnType::new(params[&n].clone()).nullable(true),
+            ScalarExpr::Literal(_, typ) => typ.clone(),
+            ScalarExpr::CallNullary(func) => func.output_type(),
+            ScalarExpr::CallUnary { expr, func } => {
+                func.output_type(expr.typ(outers, inner, params))
+            }
+            ScalarExpr::CallBinary { expr1, expr2, func } => func.output_type(
+                expr1.typ(outers, inner, params),
+                expr2.typ(outers, inner, params),
+            ),
+            ScalarExpr::CallVariadic { exprs, func } => {
+                func.output_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect())
+            }
+            ScalarExpr::If { cond: _, then, els } => {
+                let then_type = then.typ(outers, inner, params);
+                let else_type = els.typ(outers, inner, params);
+                then_type.union(&else_type).unwrap()
+            }
+            ScalarExpr::Exists(_) => ColumnType::new(ScalarType::Bool).nullable(true),
+            ScalarExpr::Select(expr) => {
+                let mut outers = outers.to_vec();
+                outers.push(inner.clone());
+                expr.typ(&outers, params)
+                    .column_types
+                    .into_element()
+                    .nullable(true)
+            }
         }
     }
 }

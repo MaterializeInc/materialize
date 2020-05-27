@@ -43,8 +43,6 @@ pub enum Type {
     TimestampTz,
     /// A list
     List(Box<Type>),
-    /// An unknown value.
-    Unknown,
 }
 
 lazy_static! {
@@ -75,7 +73,6 @@ impl Type {
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::List(_) => &LIST,
-            Type::Unknown => &postgres_types::Type::UNKNOWN,
         }
     }
 
@@ -110,7 +107,6 @@ impl Type {
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::List(_) => -1,
-            Type::Unknown => -1,
         }
     }
 }
@@ -118,7 +114,6 @@ impl Type {
 impl From<&ScalarType> for Type {
     fn from(typ: &ScalarType) -> Type {
         match typ {
-            ScalarType::Unknown => Type::Unknown,
             ScalarType::Bool => Type::Bool,
             ScalarType::Int32 => Type::Int4,
             ScalarType::Int64 => Type::Int8,
