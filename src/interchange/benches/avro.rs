@@ -298,7 +298,7 @@ pub fn bench_avro(c: &mut Criterion) {
         schema_str,
         None,
         EnvelopeType::Debezium,
-        Some("avro_bench".to_string()),
+        "avro_bench".to_string(),
     )
     .unwrap();
 
