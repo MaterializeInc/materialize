@@ -91,10 +91,7 @@ def trim_pipeline(pipeline: Any) -> None:
         step = PipelineStep(config["id"])
         if "inputs" in config:
             for inp in config["inputs"]:
-                if inp.startswith("#"):
-                    step.image_dependencies.add(images[inp[1:]])
-                else:
-                    step.extra_inputs.add(inp)
+                step.extra_inputs.add(inp)
         if "depends_on" in config:
             d = config["depends_on"]
             if isinstance(d, str):
