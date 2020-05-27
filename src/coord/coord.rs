@@ -52,7 +52,7 @@ use sql::{
 use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
-use crate::catalog::{self, Catalog, CatalogItem, ConnCatalog, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, ConnCatalog, SinkConnectorState, SYSTEM_CONN_ID};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
@@ -2204,7 +2204,7 @@ where
         let pcx = PlanContext::default();
         match sql::plan(
             &pcx,
-            &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
+            &ConnCatalog::new(&self.catalog, session.conn_id()),
             session,
             stmt.clone(),
             params,
@@ -2214,7 +2214,7 @@ where
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
                     let plan = block_on(postgres.execute(
                         &pcx,
-                        &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
+                        &ConnCatalog::new(&self.catalog, session.conn_id()),
                         session,
                         &stmt,
                     ))?;
@@ -2233,7 +2233,7 @@ where
     ) -> Result<(), failure::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
             match sql::describe(
-                &ConnCatalog::new(&self.catalog, Some(session.conn_id())),
+                &ConnCatalog::new(&self.catalog, session.conn_id()),
                 session,
                 stmt.clone(),
             ) {
@@ -2470,7 +2470,7 @@ fn open_catalog(
                     .into_element();
                 match sql::plan(
                     &pcx,
-                    &ConnCatalog::new(catalog, None),
+                    &ConnCatalog::new(catalog, SYSTEM_CONN_ID),
                     &sql::InternalSession,
                     stmt,
                     &params,
