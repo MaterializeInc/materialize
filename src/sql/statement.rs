@@ -1818,7 +1818,10 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn resolve_schema(&self, mut name: ObjectName) -> Result<(DatabaseSpecifier, String), failure::Error> {
+    pub fn resolve_schema(
+        &self,
+        mut name: ObjectName,
+    ) -> Result<(DatabaseSpecifier, String), failure::Error> {
         if name.0.len() > 2 {
             bail!(
                 "schema name '{}' cannot have more than two components",
