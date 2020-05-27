@@ -45,6 +45,10 @@ fi
 
 try "$root"/bin/pyactivate --dev -m mypy --pretty "${py_files[@]}"
 
+(
+    cd misc/python
+    try "$root"/bin/pyactivate --dev -m pytest -q
+)
 if $failed; then
     exit 1
 fi

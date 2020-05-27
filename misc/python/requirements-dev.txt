@@ -1,3 +1,4 @@
 black==19.10b0
 mypy==0.770
 pdoc3==0.8.1
+pytest==5.4.2
