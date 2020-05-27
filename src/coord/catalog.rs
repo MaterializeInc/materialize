@@ -478,8 +478,7 @@ impl Catalog {
 
     fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: String) -> bool {
         for schema in self.get_temp_schemas(conn_id).0.values() {
-            let keys: Vec<String> = schema.items.0.keys().cloned().collect();
-            if keys.contains(&item_name) {
+            if schema.items.0.contains_key(&item_name) {
                 return true;
             }
         }
@@ -670,20 +669,23 @@ impl Catalog {
         let mut creating = HashSet::new();
         let mut temporary_ids = Vec::new();
         for op in ops.iter() {
-            if let Op::CreateItem { id, name, item } = op {
-                if let CatalogItem::View(view) = item {
-                    if let Some(conn_id) = view.conn_id {
-                        if self.item_exists_in_temp_schemas(conn_id, name.item.clone())
-                            | creating.contains(&(conn_id, name.item.clone()))
-                        {
-                            return Err(Error::new(ErrorKind::ItemAlreadyExists(
-                                name.item.clone(),
-                            )));
-                        } else {
-                            creating.insert((conn_id, name.item.clone()));
-                            temporary_ids.push(id.clone());
-                        }
-                    }
+            if let Op::CreateItem {
+                id,
+                name,
+                item:
+                    CatalogItem::View(View {
+                        conn_id: Some(conn_id),
+                        ..
+                    }),
+            } = op
+            {
+                if self.item_exists_in_temp_schemas(*conn_id, name.item.clone())
+                    || creating.contains(&(conn_id, name.item.clone()))
+                {
+                    return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
+                } else {
+                    creating.insert((conn_id, name.item.clone()));
+                    temporary_ids.push(id.clone());
                 }
             }
         }
