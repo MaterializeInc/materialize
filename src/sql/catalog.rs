@@ -27,8 +27,6 @@ pub trait PlanCatalog: fmt::Debug {
 
     fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry;
 
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>;
-
     fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap>;
 
     fn database_resolver<'a>(
@@ -124,10 +122,6 @@ impl PlanCatalog for DummyCatalog {
     }
 
     fn get_by_id(&self, _: &GlobalId) -> &dyn PlanCatalogEntry {
-        unimplemented!();
-    }
-
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a> {
         unimplemented!();
     }
 

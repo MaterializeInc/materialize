@@ -1159,10 +1159,6 @@ impl PlanCatalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a> {
-        Box::new(self.catalog.iter().map(|e| e as &dyn PlanCatalogEntry))
-    }
-
     fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
         self.catalog
             .get_schemas(database_spec, self.conn_id)

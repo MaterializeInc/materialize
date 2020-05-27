@@ -546,9 +546,10 @@ fn handle_show_indexes(
         );
     }
     let arena = RowArena::new();
-    let rows = scx
-        .catalog
+    let rows = from_entry
+        .used_by()
         .iter()
+        .map(|id| scx.catalog.get_by_id(id))
         .filter(|entry| {
             object_type_matches(ObjectType::Index, entry.item_type())
                 && entry.uses() == vec![from_entry.id()]
