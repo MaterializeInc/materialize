@@ -9,10 +9,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
-use std::iter;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use dataflow_types::{
+    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
+};
+use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{error, info, log_enabled, warn};
 use prometheus::{
@@ -29,11 +32,6 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::activate::{Activator, SyncActivator};
 use url::Url;
-
-use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
-};
-use expr::{PartitionId, SourceInstanceId};
 
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
@@ -258,8 +256,11 @@ struct DataPlaneInfo {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partitions: VecDeque<PartitionConsumer>,
+    /// The current number of partitions. If needs_refresh is set to false, then
+    /// current_partition_count == expected_partition_count == consumers.len() == partition_metadata.len()
+    current_partition_count: i32,
     /// The expected number of partitions. If needs_refresh is set to false, then
-    /// expected_partition_count == consumers.len() == partition_metadata.len()
+    /// current_partition_count == expected_partition_count
     expected_partition_count: i32,
     /// Field is set to true when we have detected that metadata is out-of-date and needs
     /// to be refreshed
@@ -267,7 +268,11 @@ struct DataPlaneInfo {
     /// Per-source metrics.
     source_metrics: SourceMetrics,
     /// Per-partition metrics.
-    partition_metrics: Vec<PartitionMetrics>,
+    partition_metrics: HashMap<i32, PartitionMetrics>,
+    /// Worker ID
+    worker_id: i32,
+    /// Worker Count
+    worker_count: i32,
 }
 
 /// Refreshes metadata for a single consumer
@@ -309,6 +314,8 @@ impl DataPlaneInfo {
         source_id: SourceInstanceId,
         kafka_config: ClientConfig,
         consumer_activator: Arc<Mutex<SyncActivator>>,
+        worker_id: usize,
+        worker_count: usize,
     ) -> DataPlaneInfo {
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
@@ -316,20 +323,49 @@ impl DataPlaneInfo {
             .expect("Failed to create Kafka Consumer");
         DataPlaneInfo {
             source_metrics: SourceMetrics::new(&topic_name, &source_id),
-            partition_metrics: Vec::new(),
+            partition_metrics: HashMap::new(),
             topic_name,
             source_name,
             source_id,
             partitions: VecDeque::new(),
             needs_refresh: true,
+            current_partition_count: 0,
             expected_partition_count: 1,
             consumer: Arc::new(consumer),
+            worker_id: worker_id.try_into().unwrap(),
+            worker_count: worker_count.try_into().unwrap()
         }
     }
 
-    /// Returns a count of total number of partition queues for this source
+    /// Returns the number of partitions expected *for this worker*. Partitions are assigned
+    /// round-robin in worker id order
+    /// Ex: a partition count of 4 for 3 workers will assign worker 0 with partitions 0,3,
+    /// worker 1 with partition 1, and worker 2 with partition 2
+    fn get_worker_partition_count(&self) -> i32 {
+        let pcount = self.current_partition_count / self.worker_count;
+        if self.worker_id
+            < ((self.current_partition_count % self.worker_count)
+                .try_into()
+                .unwrap())
+        {
+            pcount + 1
+        } else {
+            pcount
+        }
+    }
+
+    /// Returns true if this worker is responsible for this partition
+    /// If multi-worker reading is not enabled, this worker is *always* responsible for the
+    /// partition
+    /// Ex: if pid=0 and worker_id = 0, then true
+    /// if pid=1 and worker_id = 0, then false
+    fn has_partition(&self, partition_id: i32) -> bool {
+        (partition_id % self.worker_count) == self.worker_id
+    }
+
+    /// Returns a count of total number of consumers for this source
     fn get_partition_count(&self) -> i32 {
-        // Note: the number of partition queues is guaranteed to always be smaller than
+        // Note: the number of consumers is guaranteed to always be smaller than
         // expected_partition_count (i32)
         self.partitions.len().try_into().unwrap()
     }
@@ -344,12 +380,11 @@ impl DataPlaneInfo {
     ) {
         if self.needs_refresh {
             info!(
-                "Refreshing Source Metadata for Source {} Partition Count: {}",
-                self.source_name, self.expected_partition_count
+                "Refreshing Source Metadata for Source {} Current Partition Count: {} Expected Partition Count: {}",
+                self.source_name, self.current_partition_count, self.expected_partition_count
             );
             self.source_metrics.metadata_refresh_counter.inc();
-            if self.update_partition_queue_list() {
-                cp_info.update_partition_metadata(self.expected_partition_count);
+            if self.update_partition_queue_list(cp_info) {
                 self.needs_refresh = false;
                 activator.activate();
             } else {
@@ -359,34 +394,44 @@ impl DataPlaneInfo {
         }
         // Verify that invariants hold if successfully refreshed
         assert!(
-            self.needs_refresh || cp_info.get_partition_count() == self.expected_partition_count
+            self.needs_refresh || cp_info.get_partition_count() == self.current_partition_count
         );
-        assert!(self.needs_refresh || self.get_partition_count() == self.expected_partition_count);
+        assert!(
+            self.needs_refresh || self.get_partition_count() == self.get_worker_partition_count()
+        );
     }
 
     /// Marks a source as needing refresh, along with the expected partition count
     pub fn set_needs_refresh(&mut self, expected_pcount: i32) {
         self.needs_refresh = true;
-        assert!(expected_pcount > self.expected_partition_count);
+        assert!(expected_pcount > self.current_partition_count);
         self.expected_partition_count = expected_pcount
     }
+
+
 
     /// Update the list of Kafka consumers to match the number of partitions
     /// We currently create one consumer per partition
     #[must_use]
-    fn update_partition_queue_list(&mut self) -> bool {
+    fn update_partition_queue_list(&mut self, cp_info: &mut ControlPlaneInfo) -> bool {
         let next_pid = self.get_partition_count();
         let to_add = self.expected_partition_count - next_pid;
-        // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
+       // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
         // starting from 0
         for i in 0..to_add {
             let pid: i32 = next_pid + i;
             if !self.create_partition_queue(pid) {
                 // If failed to create new partition queue, stop and exit
                 return false;
-            }
+           }
+            cp_info.update_partition_metadata(pid);
+            self.current_partition_count += 1;
         }
-        assert_eq!(self.expected_partition_count, self.get_partition_count());
+        assert_eq!(self.get_worker_partition_count(), self.get_partition_count());
+        assert_eq!(
+            self.current_partition_count as usize,
+            cp_info.partition_metadata.len()
+        );
         true
     }
 
@@ -421,7 +466,7 @@ impl DataPlaneInfo {
                         .len(),
                     self.partitions.len()
                 );
-                self.partition_metrics.push(PartitionMetrics::new(
+                self.partition_metrics.insert(partition_id,PartitionMetrics::new(
                     &self.topic_name,
                     &self.source_id,
                     &partition_id.to_string(),
@@ -447,7 +492,7 @@ impl DataPlaneInfo {
         cp_info: &ControlPlaneInfo,
         activator: &Activator,
     ) -> Option<MessageParts> {
-        assert!(self.needs_refresh || self.get_partition_count() == self.expected_partition_count);
+        assert!(self.needs_refresh || self.get_partition_count() == self.get_worker_partition_count());
         let mut next_message = None;
         let consumer_count = self.get_partition_count();
         let mut attempts = 0;
@@ -470,7 +515,7 @@ impl DataPlaneInfo {
                 // for a partition for which we have no metadata
                 assert!(cp_info.knows_of(partition));
 
-                let mut last_offset = cp_info.partition_metadata[partition as usize].offset;
+                let mut last_offset = cp_info.partition_metadata.get(&partition).unwrap().offset;
 
                 if offset <= last_offset {
                     warn!(
@@ -502,7 +547,9 @@ impl DataPlaneInfo {
                 attempts += 1;
             }
         }
-        assert!(self.needs_refresh || self.get_partition_count() == self.expected_partition_count);
+        assert!(
+            self.needs_refresh || self.get_partition_count() == self.get_worker_partition_count()
+        );
         next_message
     }
 
@@ -556,7 +603,7 @@ struct ControlPlaneInfo {
     last_closed_ts: u64,
     /// Per partition (a partition ID in Kafka is an i32), keep track of the last closed offset
     /// and the last closed timestamp
-    partition_metadata: Vec<ConsInfo>,
+    partition_metadata: HashMap<i32, ConsInfo>,
     /// Optional: Materialize Offset from which source should start reading (default is 0)
     start_offset: MzOffset,
 }
@@ -565,12 +612,7 @@ impl ControlPlaneInfo {
     fn new(start_offset: MzOffset) -> ControlPlaneInfo {
         ControlPlaneInfo {
             last_closed_ts: 0,
-            partition_metadata: vec![ConsInfo {
-                offset: MzOffset {
-                    offset: start_offset.offset,
-                },
-                ts: 0,
-            }],
+            partition_metadata: HashMap::new(),
             start_offset,
         }
     }
@@ -585,22 +627,21 @@ impl ControlPlaneInfo {
     /// Returns true if we currently know of particular partition. We know (and have updated the
     /// metadata for this partition) if there is an entry for it
     fn knows_of(&self, pid: i32) -> bool {
-        pid < self.get_partition_count()
+        self.partition_metadata.contains_key(&pid)
     }
 
-    /// Updates the underlying partition metadata structure ot the expected partition count.
+    /// Updates the underlying partition metadata structure to include the current partition.
     /// New partitions must always be added with a minimum closed offset of (last_closed_ts)
     /// They are guaranteed to only receive timestamp update greater than last_closed_ts (this
     /// is enforced in [coord::timestamp::is_ts_valid]
-    fn update_partition_metadata(&mut self, expected_pcount: i32) {
-        self.partition_metadata.extend(
-            iter::repeat(ConsInfo {
+    fn update_partition_metadata(&mut self, pid: i32) {
+        self.partition_metadata.insert(
+            pid,
+            ConsInfo {
                 offset: self.start_offset,
                 ts: self.last_closed_ts,
-            })
-            .take((expected_pcount - self.get_partition_count()) as usize),
+            },
         );
-        assert_eq!(expected_pcount, self.get_partition_count());
     }
 }
 
@@ -610,21 +651,19 @@ impl ControlPlaneInfo {
 /// 2) it notifies the coordinator that timestamping should begin by inserting an entry in the
 /// timestamp_tx channel
 fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSourceConnector) {
-    if config.active {
-        let prev = config
-            .timestamp_histories
-            .borrow_mut()
-            .insert(config.id.clone(), HashMap::new());
-        // Check that this is the first time this source id is registered
-        assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::Kafka(connector),
-                config.consistency.clone(),
-            )),
-        ));
-    }
+    let prev = config
+        .timestamp_histories
+        .borrow_mut()
+        .insert(config.id.clone(), HashMap::new());
+    // Check that this is the first time this source id is registered
+    assert!(prev.is_none());
+    config.timestamp_tx.as_ref().borrow_mut().push((
+        config.id,
+        Some((
+            ExternalSourceConnector::Kafka(connector),
+            config.consistency.clone(),
+        )),
+    ));
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
@@ -652,135 +691,117 @@ where
         name,
         id,
         scope,
-        active,
         timestamp_histories,
         timestamp_tx,
+        worker_id,
+        worker_count,
         ..
     } = config;
 
-    let (stream, capability) = source(
-        id,
-        if active { Some(timestamp_tx) } else { None },
-        scope,
-        &name.clone(),
-        move |info| {
-            // Create activator for source
-            let activator = scope.activator_for(&info.address[..]);
+    let (stream, capability) = source(id, Some(timestamp_tx), scope, &name.clone(), move |info| {
+        // Create activator for source
+        let activator = scope.activator_for(&info.address[..]);
 
-            // Create control plane information (Consistency-related information)
-            let mut cp_info = ControlPlaneInfo::new(MzOffset {
-                offset: start_offset,
-            });
+        // Create control plane information (Consistency-related information)
+        let mut cp_info = ControlPlaneInfo::new(MzOffset {
+            offset: start_offset,
+        });
 
-            // Create dataplane information (Kafka-related information)
-            let mut dp_info = if active {
-                let mut dp_info = DataPlaneInfo::new(
-                    topic.clone(),
-                    name.clone(),
-                    id.clone(),
-                    create_kafka_config(&name, &url, group_id_prefix, &config_options),
-                    Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
-                );
-                dp_info.refresh_source_information(&mut cp_info, &activator);
-                Some(dp_info)
-            } else {
-                None
-            };
+        // Create dataplane information (Kafka-related information)
+        let mut dp_info = DataPlaneInfo::new(
+            topic.clone(),
+            name.clone(),
+            id.clone(),
+            create_kafka_config(&name, &url, group_id_prefix, &config_options),
+            Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
+            worker_id,
+            worker_count,
+        );
+        dp_info.refresh_source_information(&mut cp_info, &activator);
 
-            move |cap, output| {
-                // Accumulate updates to BYTES_READ_COUNTER;
-                let mut bytes_read = 0;
-                if let Some(mut dp_info) = dp_info.as_mut() {
-                    dp_info.source_metrics.operator_scheduled_counter.inc();
-                    // Repeatedly interrogate Kafka for messages. Cease when
-                    // Kafka stops returning new data, or after 10 milliseconds.
-                    let timer = std::time::Instant::now();
+        move |cap, output| {
+            // Accumulate updates to BYTES_READ_COUNTER;
+            let mut bytes_read = 0;
+            dp_info.source_metrics.operator_scheduled_counter.inc();
+            // Repeatedly interrogate Kafka for messages. Cease when
+            // Kafka stops returning new data, or after 10 milliseconds.
+            let timer = std::time::Instant::now();
 
-                    // Check if the capability can be downgraded (this is independent of whether
-                    // there are new messages that can be processed) as timestamps can become
-                    // closed in the absence of messages
-                    downgrade_capability(
-                        &id,
-                        cap,
-                        &mut cp_info,
-                        &mut dp_info,
-                        &timestamp_histories,
-                    );
+            // Check if the capability can be downgraded (this is independent of whether
+            // there are new messages that can be processed) as timestamps can become
+            // closed in the absence of messages
+            downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
 
-                    dp_info.refresh_source_information(&mut cp_info, &activator);
+            dp_info.refresh_source_information(&mut cp_info, &activator);
 
-                    while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
-                        let partition = message.partition;
-                        let partition_metrics = &dp_info.partition_metrics[partition as usize];
-                        let offset = MzOffset::from(message.offset);
+            while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
+                let partition = message.partition;
+                let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
+                let offset = MzOffset::from(message.offset);
 
-                        partition_metrics.offset_received.set(offset.offset);
+                partition_metrics.offset_received.set(offset.offset);
 
-                        // Determine the timestamp to which we need to assign this message
-                        let ts =
-                            find_matching_timestamp(&id, partition, offset, &timestamp_histories);
-                        match ts {
-                            None => {
-                                // We have not yet decided on a timestamp for this message,
-                                // we need to buffer the message
-                                dp_info.buffer_message(message);
-                                activator.activate();
-                                return SourceStatus::Alive;
-                            }
-                            Some(ts) => {
-                                // Note: empty and null payload/keys are currently
-                                // treated as the same thing.
-                                let key = message.key.unwrap_or_default();
-                                let out = message.payload.unwrap_or_default();
-                                cp_info.partition_metadata[partition as usize].offset = offset;
-                                bytes_read += key.len() as i64;
-                                bytes_read += out.len() as i64;
-                                let ts_cap = cap.delayed(&ts);
-                                output.session(&ts_cap).give(SourceOutput::new(
-                                    key,
-                                    out,
-                                    Some(Into::<KafkaOffset>::into(offset).offset),
-                                ));
+                // Determine the timestamp to which we need to assign this message
+                let ts = find_matching_timestamp(&id, partition, offset, &timestamp_histories);
+                match ts {
+                    None => {
+                        // We have not yet decided on a timestamp for this message,
+                        // we need to buffer the message
+                        dp_info.buffer_message(message);
+                        activator.activate();
+                        return SourceStatus::Alive;
+                    }
+                    Some(ts) => {
+                        // Note: empty and null payload/keys are currently
+                        // treated as the same thing.
+                        let key = message.key.unwrap_or_default();
+                        let out = message.payload.unwrap_or_default();
+                        cp_info
+                            .partition_metadata
+                            .get_mut(&partition)
+                            .unwrap()
+                            .offset = offset;
+                        bytes_read += key.len() as i64;
+                        bytes_read += out.len() as i64;
+                        let ts_cap = cap.delayed(&ts);
+                        output.session(&ts_cap).give(SourceOutput::new(
+                            key,
+                            out,
+                            Some(Into::<KafkaOffset>::into(offset).offset),
+                        ));
 
-                                partition_metrics.offset_ingested.set(offset.offset);
-                                partition_metrics.messages_ingested.inc();
+                        partition_metrics.offset_ingested.set(offset.offset);
+                        partition_metrics.messages_ingested.inc();
 
-                                downgrade_capability(
-                                    &id,
-                                    cap,
-                                    &mut cp_info,
-                                    &mut dp_info,
-                                    &timestamp_histories,
-                                );
-                            }
-                        }
-
-                        if timer.elapsed().as_millis() > 10 {
-                            // We didn't drain the entire queue, so indicate that we
-                            // should run again. We suppress the activation when the
-                            // queue is drained, as in that case librdkafka is
-                            // configured to unpark our thread when a new message
-                            // arrives.
-                            activator.activate();
-                            return SourceStatus::Alive;
-                        }
+                        downgrade_capability(
+                            &id,
+                            cap,
+                            &mut cp_info,
+                            &mut dp_info,
+                            &timestamp_histories,
+                        );
                     }
                 }
-                // Ensure that we poll kafka more often than the eviction timeout
-                activator.activate_after(Duration::from_secs(60));
-                if bytes_read > 0 {
-                    KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
-                }
-                SourceStatus::Alive
-            }
-        },
-    );
 
-    if config.active {
-        (stream, Some(capability))
-    } else {
-        (stream, None)
-    }
+                if timer.elapsed().as_millis() > 10 {
+                    // We didn't drain the entire queue, so indicate that we
+                    // should run again. We suppress the activation when the
+                    // queue is drained, as in that case librdkafka is
+                    // configured to unpark our thread when a new message
+                    // arrives.
+                    activator.activate();
+                    return SourceStatus::Alive;
+                }
+            }
+            // Ensure that we poll kafka more often than the eviction timeout
+            activator.activate_after(Duration::from_secs(60));
+            if bytes_read > 0 {
+                KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
+            }
+            SourceStatus::Alive
+        }
+    });
+    (stream, Some(capability))
 }
 
 /// For a given offset, returns an option type returning the matching timestamp or None
@@ -854,14 +875,14 @@ fn downgrade_capability(
 
                 // There is an entry for a partition for which we have no metadata. Must refresh before
                 // continuing
-                if pid >= cp_info.get_partition_count() {
+                if pid >= dp_info.current_partition_count {
                     // PIDs in Kafka are monotonically increasing and 0-indexed. Finding a PID of x means there
                     // must be at least (x+1) partitions
                     dp_info.set_needs_refresh(pid + 1);
                     return;
                 }
 
-                let last_offset = cp_info.partition_metadata[pid as usize].offset;
+                let last_offset = cp_info.partition_metadata.get(&pid).unwrap().offset;
 
                 // Check whether timestamps can be closed on this partition
                 while let Some((partition_count, ts, offset)) = entries.front() {
@@ -884,15 +905,17 @@ fn downgrade_capability(
                         return;
                     }
 
-                    dp_info.partition_metrics[pid as usize]
-                        .closed_ts
-                        .set(cp_info.partition_metadata[pid as usize].ts);
+                    if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
+                        pmetrics
+                            .closed_ts
+                            .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
+                    }
 
-                    if last_offset >= *offset {
-                        // We have now seen all messages corresponding to this timestamp for this
-                        // partition. We
-                        // can close the timestamp (on this partition) and remove the associated metadata
-                        cp_info.partition_metadata[pid as usize].ts = *ts;
+                    if !dp_info.has_partition(pid) || last_offset >= *offset {
+                        // We have either 1) seen all messages corresponding to this timestamp for this
+                        // partition 2) do not own this partition.
+                        // We can close the timestamp (on this partition) and remove the associated metadata
+                        cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
                         entries.pop_front();
                         changed = true;
                     } else {
@@ -901,21 +924,27 @@ fn downgrade_capability(
                     }
                 }
             }
-        }
 
-        //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
-        //  timestamp across partitions.
-        let min = cp_info
-            .partition_metadata
-            .iter()
-            .map(|cons_info| cons_info.ts)
-            .min()
-            .expect("There should never be 0 partitions!");
-        // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-        if changed && min > 0 {
-            dp_info.source_metrics.capability.set(min);
-            cap.downgrade(&(&min + 1));
-            cp_info.last_closed_ts = min;
+            //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
+            //  timestamp
+            // across partitions.
+            let min = //match cp_info
+                cp_info.partition_metadata
+                .iter()
+                .map(|(_, cons_info)| cons_info.ts)
+                .min().unwrap();
+            /*{
+                Some(min) => min,
+                // This handles the case in which no partitions are assigned to this worker
+                None => 0,
+            };*/
+
+            // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
+            if changed && min > 0 {
+                dp_info.source_metrics.capability.set(min);
+                cap.downgrade(&(&min + 1));
+                cp_info.last_closed_ts = min;
+            }
         }
     }
 }

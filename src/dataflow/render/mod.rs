@@ -287,6 +287,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         timestamp_histories: timestamp_histories.clone(),
                         timestamp_tx: timestamp_channel.clone(),
                         consistency,
+                        worker_id: worker_index,
+                        // Assumption: worker.peers() == total number of workers in Materialize
+                        worker_count: worker_peers,
                     };
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {

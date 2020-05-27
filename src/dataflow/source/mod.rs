@@ -47,6 +47,10 @@ pub struct SourceConfig<'a, G> {
     /// IDs in sync, but only one worker will receive the data, to avoid
     /// duplicates.
     pub active: bool,
+    /// The ID of the worker on which this operator is executing
+    pub worker_id: usize,
+    /// The total count of workers
+    pub worker_count: usize,
     // Timestamping fields.
     // TODO: document these.
     /// TODO(ncrooks)
