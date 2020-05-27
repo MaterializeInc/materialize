@@ -70,7 +70,7 @@ where
                 }
                 Envelope::Debezium => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
-                        dbz_state.extract(value, top_node)
+                        dbz_state.extract(value, top_node, index)
                     } else {
                         Err(format_err!(
                             "No debezium schema information -- could not decode row"
