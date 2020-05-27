@@ -315,7 +315,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                                 // Deduplicate records by key, decode, and then upsert arrange them.
                                 let deduplicated = prepare_upsert_by_max_offset(&source);
-                                let decoded = decode_upsert(&deduplicated, encoding, key_encoding);
+                                let decoded = decode_upsert(
+                                    &deduplicated,
+                                    encoding,
+                                    key_encoding,
+                                    &dataflow.debug_name,
+                                );
                                 let arranged = arrange_from_upsert(
                                     &decoded,
                                     &format!("UpsertArrange: {}", src_id.to_string()),
@@ -368,7 +373,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         .as_collection(),
                                 );
                                 (
-                                    decode_avro_values(&source, &envelope, reader_schema),
+                                    decode_avro_values(
+                                        &source,
+                                        &envelope,
+                                        reader_schema,
+                                        &dataflow.debug_name,
+                                    ),
                                     capability,
                                 )
                             } else {

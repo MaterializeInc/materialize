@@ -43,6 +43,7 @@ pub fn decode_avro_values<G>(
     stream: &Stream<G, (Value, Option<i64>)>,
     envelope: &Envelope,
     schema: Schema,
+    debug_name: &str,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -53,7 +54,7 @@ where
     // See #2133
     let envelope = envelope.clone();
     let mut dbz_state = if envelope.get_avro_envelope_type() == EnvelopeType::Debezium {
-        DebeziumDecodeState::new_from_schema(&schema)
+        DebeziumDecodeState::new_from_schema(&schema, debug_name.to_string())
     } else {
         None
     };
@@ -248,6 +249,7 @@ pub fn decode_upsert<G>(
     stream: &Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>,
     value_encoding: DataEncoding,
     key_encoding: DataEncoding,
+    debug_name: &str,
 ) -> Stream<G, (Row, Option<Row>, Timestamp)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -269,6 +271,7 @@ where
                 val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
+                format!("{}-values", debug_name),
             )
             .expect(avro_err),
             &op_name,
@@ -283,6 +286,7 @@ where
                 val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
+                format!("{}-values", debug_name),
             )
             .expect(avro_err),
             &op_name,
@@ -294,6 +298,7 @@ where
                 key_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::None,
                 false,
+                format!("{}-keys", debug_name),
             )
             .expect(avro_err),
             avro::AvroDecoderState::new(
@@ -301,6 +306,7 @@ where
                 val_enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
+                format!("{}-values", debug_name),
             )
             .expect(avro_err),
             &op_name,
@@ -396,7 +402,7 @@ where
 pub fn decode_values<G>(
     stream: &Stream<G, (Vec<u8>, Option<i64>)>,
     encoding: DataEncoding,
-    name: &str,
+    debug_name: &str,
     envelope: &Envelope,
     // Information about optional transformations that can be eagerly done.
     // If the decoding elects to perform them, it should replace this with
@@ -423,6 +429,7 @@ where
                 enc.schema_registry_config,
                 envelope.get_avro_envelope_type(),
                 fast_forwarded,
+                debug_name.to_string(),
             )
             .expect("Failed to create Avro decoder"),
             &op_name,
@@ -433,7 +440,7 @@ where
         (_, Envelope::Debezium) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
-        (DataEncoding::Regex { regex }, Envelope::None) => regex_fn(stream, regex, name),
+        (DataEncoding::Regex { regex }, Envelope::None) => regex_fn(stream, regex, debug_name),
         (DataEncoding::Protobuf(enc), Envelope::None) => decode_values_inner(
             stream,
             protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
