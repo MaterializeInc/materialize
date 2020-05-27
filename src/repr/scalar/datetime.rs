@@ -620,6 +620,12 @@ impl ParsedDateTime {
         Ok(())
     }
 
+    pub fn clear_date(&mut self) {
+        self.year = None;
+        self.month = None;
+        self.day = None;
+    }
+
     /// Retrieve any value that we parsed out of the literal string for the
     /// `field`.
     fn units_of(&self, field: DateTimeField) -> Option<DateTimeFieldValue> {
@@ -659,21 +665,77 @@ fn fill_pdt_date(
 ) -> Result<()> {
     use TimeStrToken::*;
 
-    let expected = vec![
-        Num(0), // year
-        Dash,
-        Num(0), // month
-        Dash,
-        Num(0), // day
-        Space,
-        DateTimeDelimiter,
+    // Check for one number that represents YYYYMMDDD.
+    match actual.front() {
+        Some(Num(mut val)) if val > 9_999_999 && val < 100_000_000 /* i.e. has 8 digits */ => {
+            pdt.day = Some(DateTimeFieldValue::new(val % 100, 0));
+            val /= 100;
+            pdt.month = Some(DateTimeFieldValue::new(val % 100, 0));
+            val /= 100;
+            pdt.year = Some(DateTimeFieldValue::new(val, 0));
+            actual.pop_front();
+            // Trim remaining optional tokens
+            if let Some(Space) = actual.front() {
+                actual.pop_front();
+            }
+            if let Some(DateTimeDelimiter) = actual.front() {
+                actual.pop_front();
+            }
+            if let Some(Space) = actual.front() {
+                actual.pop_front();
+            }
+            return Ok(());
+        }
+        _ => (),
+    }
+
+    let valid_formats = vec![
+        vec![
+            Num(0), // year
+            Dash,
+            Num(0), // month
+            Dash,
+            Num(0), // day
+            Space,
+            DateTimeDelimiter,
+        ],
+        vec![
+            Num(0), // year
+            Space,
+            Num(0), // month
+            Dash,
+            Num(0), // day
+            Space,
+            DateTimeDelimiter,
+        ],
+        vec![
+            Num(0), // year
+            Space,
+            Num(0), // month
+            Space,
+            Num(0), // day
+            Space,
+            DateTimeDelimiter,
+        ],
     ];
 
-    let mut expected = VecDeque::from(expected);
+    let original_actual = actual.clone();
 
-    fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, DateTimeField::Year, 1)?;
+    for expected in valid_formats {
+        let mut expected = VecDeque::from(expected);
 
-    Ok(())
+        match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, DateTimeField::Year, 1) {
+            Ok(()) => {
+                return Ok(());
+            }
+            Err(_) => {
+                *actual = original_actual.clone();
+                pdt.clear_date();
+            }
+        }
+    }
+
+    bail!("does not match any format for date component")
 }
 
 /// Fills the hour, minute, and second fields of `pdt` using the `TimeStrToken`s in
@@ -833,7 +895,7 @@ fn fill_pdt_from_tokens(
     while let Some(atok) = actual.front() {
         if let Some(etok) = expected.front() {
             match (atok, etok) {
-                // The following forms of puncutation signal the end of a field and can
+                // The following forms of punctuation signal the end of a field and can
                 // trigger a write.
                 (Dash, Dash) | (Colon, Colon) => {
                     pdt.write_field_iff_none(current_field, unit_buf)?;

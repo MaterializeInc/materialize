@@ -97,6 +97,54 @@ SELECT * FROM iv_ish
 1 year
 03:00:00
 
+# Date-time literals
+
+query T
+SELECT DATE '2000-01-01'
+----
+2000-01-01
+
+query T
+SELECT DATE '2000 01-01'
+----
+2000-01-01
+
+query T
+SELECT DATE '2000 01 01'
+----
+2000-01-01
+
+query T
+SELECT DATE '20000101'
+----
+2000-01-01
+
+statement error
+SELECT DATE '2000-01 01'
+
+query T
+SELECT TIMESTAMP '2000-01-01 01:02:03'
+----
+2000-01-01 01:02:03
+
+query T
+SELECT TIMESTAMP '2000 01-01 01:02:03'
+----
+2000-01-01 01:02:03
+
+query T
+SELECT TIMESTAMP '2000 01 01 01:02:03'
+----
+2000-01-01 01:02:03
+
+query T
+SELECT TIMESTAMP '20010101 01:02:03';
+----
+2001-01-01 01:02:03
+
+statement error
+SELECT TIMESTAMP '2000-01 01 01:02:03'
+
 # Date arithmetic with month intervals.
 
 query T
@@ -890,6 +938,16 @@ SELECT TIMESTAMPTZ '2007-02-01T15:04:05+00'
 2007-02-01 15:04:05+00
 
 query T
+SELECT TIMESTAMPTZ '20070201 T 15:04:05+00';
+----
+2007-02-01 15:04:05+00
+
+query T
+SELECT TIMESTAMPTZ '20070201T15:04:05+00';
+----
+2007-02-01 15:04:05+00
+
+query T
 SELECT DATE '2007-02-01T15:04:05+00'
 ----
 2007-02-01
@@ -909,6 +967,9 @@ SELECT DATE '2007-02-01X15:04:05'
 
 statement error Invalid DATE '2007-02-01TT15:04:05': invalid DateTimeField: TT
 SELECT DATE '2007-02-01TT15:04:05'
+
+statement error Invalid DATE '20070201TT15:04:05': invalid DateTimeField: TT
+SELECT DATE '20070201TT15:04:05'
 
 statement error Invalid DATE '2007-02-01  T  T  15:04:05': Cannot determine format of all parts
 SELECT DATE '2007-02-01  T  T  15:04:05'
