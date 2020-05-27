@@ -1190,10 +1190,6 @@ impl PlanCatalog for ConnCatalog<'_> {
     fn empty_item_map(&self) -> Box<dyn ItemMap> {
         Box::new(Items(BTreeMap::new()))
     }
-
-    fn conn_id(&self) -> Option<u32> {
-        self.conn_id
-    }
 }
 
 impl PlanCatalogEntry for CatalogEntry {
