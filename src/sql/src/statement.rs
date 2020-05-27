@@ -423,15 +423,9 @@ fn handle_show_objects(
                 );
             }
             let database_spec = DatabaseSpecifier::Name(normalize::ident(from.0[0].clone()));
-            scx.catalog.get_schemas(&database_spec)
-                .ok_or_else(|| format_err!("database '{:?}' does not exist", database_spec))?
+            scx.catalog.get_schemas(&database_spec)?
         } else {
-            scx.catalog.get_schemas(&scx.session.database()).ok_or_else(|| {
-                format_err!(
-                    "session database '{}' does not exist",
-                    scx.session.database()
-                )
-            })?
+            scx.catalog.get_schemas(&scx.session.database())?
         };
 
         let mut rows = vec![];
@@ -1387,7 +1381,7 @@ fn handle_drop_database(
 ) -> Result<Plan, failure::Error> {
     let name = normalize::ident(name);
     let spec = DatabaseSpecifier::Name(name.clone());
-    match scx.catalog.database_resolver(spec) {
+    match scx.catalog.get_schemas(&spec) {
         Ok(_) => (),
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
