@@ -476,6 +476,16 @@ impl Catalog {
             .expect("missing temporary schema for connection")
     }
 
+    fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: String) -> bool {
+        for schema in self.get_temp_schemas(conn_id).0.values() {
+            let keys: Vec<String> = schema.items.0.keys().cloned().collect();
+            if keys.contains(&item_name) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
         self.get_temp_schemas(conn_id)
             .0
@@ -654,6 +664,32 @@ impl Catalog {
         }
     }
 
+    /// Gets GlobalIds of temporary items to be created, checks for name collisions
+    /// within a connection id.
+    fn temporary_ids(&mut self, ops: &[Op]) -> Result<Vec<GlobalId>, Error> {
+        let mut creating = Vec::new();
+        let mut temporary_ids = Vec::new();
+        for op in ops.iter() {
+            if let Op::CreateItem { id, name, item } = op {
+                if let CatalogItem::View(view) = item {
+                    if let Some(conn_id) = view.conn_id {
+                        if self.item_exists_in_temp_schemas(conn_id, name.item.clone())
+                            | creating.contains(&(conn_id, name.item.clone()))
+                        {
+                            return Err(Error::new(ErrorKind::ItemAlreadyExists(
+                                name.item.clone(),
+                            )));
+                        } else {
+                            creating.push((conn_id, name.item.clone()));
+                            temporary_ids.push(id.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(temporary_ids)
+    }
+
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<OpStatus>, Error> {
         trace!("transact: {:?}", ops);
 
@@ -683,20 +719,10 @@ impl Catalog {
             DropItem(GlobalId),
         }
 
+        let temporary_ids = self.temporary_ids(&ops)?;
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
-        let temp_items: Vec<GlobalId> = ops
-            .iter()
-            .filter_map(|op| {
-                if let Op::CreateItem { id, item, .. } = op {
-                    if item.is_temporary() {
-                        return Some(id.clone());
-                    }
-                }
-                None
-            })
-            .collect();
         for op in ops {
             actions.push(match op {
                 Op::CreateDatabase { name } => Action::CreateDatabase {
@@ -726,7 +752,7 @@ impl Catalog {
                     if !item.is_temporary() {
                         if item.uses().iter().any(|id| match self.try_get_by_id(*id) {
                             Some(entry) => entry.item().is_temporary(),
-                            None => temp_items.contains(&id),
+                            None => temporary_ids.contains(&id),
                         }) {
                             return Err(Error::new(ErrorKind::TemporaryItem(id.to_string())));
                         }
