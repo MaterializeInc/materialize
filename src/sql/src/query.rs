@@ -1866,7 +1866,7 @@ fn plan_function<'a>(
     }
 
     if sql_func.over.is_some() {
-        bail!("OVER specified but {}() is not a window function", ident);
+        unsupported!(213, "window functions");
     }
     if sql_func.filter.is_some() {
         bail!(
