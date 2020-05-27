@@ -290,6 +290,7 @@ mzconduct:
       - step: wait-for-tcp
         host: connect
         port: 8083
+        timeout_secs: 120
       - step: wait-for-tcp
         host: schema-registry
         port: 8081
