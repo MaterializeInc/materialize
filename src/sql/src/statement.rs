@@ -39,7 +39,7 @@ use sql_parser::ast::{
     SqlOption, Statement, Value,
 };
 
-use crate::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry, SchemaMap, SchemaType};
+use crate::catalog::{CatalogItemType, PlanCatalog, SchemaType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::pure::Schema;
@@ -208,7 +208,7 @@ pub fn describe_statement(
 
         Statement::Tail { name, .. } => {
             let name = scx.resolve_name(name)?;
-            let sql_object = scx.get(&name)?;
+            let sql_object = scx.catalog.get(&name)?;
             (Some(sql_object.desc()?.clone()), vec![])
         }
 
@@ -343,7 +343,7 @@ fn handle_tail(
     as_of: Option<sql_parser::ast::Expr>,
 ) -> Result<Plan, failure::Error> {
     let from = scx.resolve_name(from)?;
-    let entry = scx.get(&from)?;
+    let entry = scx.catalog.get(&from)?;
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
 
     match entry.item_type() {
@@ -423,10 +423,10 @@ fn handle_show_objects(
                 );
             }
             let database_spec = DatabaseSpecifier::Name(normalize::ident(from.0[0].clone()));
-            scx.get_schemas(&database_spec)
+            scx.catalog.get_schemas(&database_spec)
                 .ok_or_else(|| format_err!("database '{:?}' does not exist", database_spec))?
         } else {
-            scx.get_schemas(&scx.session.database()).ok_or_else(|| {
+            scx.catalog.get_schemas(&scx.session.database()).ok_or_else(|| {
                 format_err!(
                     "session database '{}' does not exist",
                     scx.session.database()
@@ -440,6 +440,7 @@ fn handle_show_objects(
         }
         if extended {
             let ambient_schemas = scx
+                .catalog
                 .get_schemas(&DatabaseSpecifier::Ambient)
                 .expect("ambient database should always exist");
             for name in ambient_schemas.keys() {
@@ -535,7 +536,7 @@ fn handle_show_indexes(
         unsupported!("SHOW EXTENDED INDEXES")
     }
     let from_name = scx.resolve_name(from_name)?;
-    let from_entry = scx.get(&from_name)?;
+    let from_entry = scx.catalog.get(&from_name)?;
     if !object_type_matches(ObjectType::View, from_entry.item_type())
         && !object_type_matches(ObjectType::Source, from_entry.item_type())
     {
@@ -611,6 +612,7 @@ fn handle_show_columns(
     let arena = RowArena::new();
     let table_name = scx.resolve_name(table_name)?;
     let rows: Vec<_> = scx
+        .catalog
         .get(&table_name)?
         .desc()?
         .iter()
@@ -632,7 +634,7 @@ fn handle_show_create_view(
     name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = scx.resolve_name(name)?;
-    let entry = scx.get(&name)?;
+    let entry = scx.catalog.get(&name)?;
     if let CatalogItemType::View = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
             Datum::String(&name.to_string()),
@@ -648,7 +650,7 @@ fn handle_show_create_source(
     name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = scx.resolve_name(name)?;
-    let entry = scx.get(&name)?;
+    let entry = scx.catalog.get(&name)?;
     if let CatalogItemType::Source = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
             Datum::String(&name.to_string()),
@@ -664,7 +666,7 @@ fn handle_show_create_sink(
     name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = scx.resolve_name(name)?;
-    let entry = scx.get(&name)?;
+    let entry = scx.catalog.get(&name)?;
     if let CatalogItemType::Sink = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
             Datum::String(&name.to_string()),
@@ -765,7 +767,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     };
 
     let name = scx.allocate_name(normalize::object_name(name)?);
-    let from = scx.get(&scx.resolve_name(from)?)?;
+    let from = scx.catalog.get(&scx.resolve_name(from)?)?;
     let suffix = format!(
         "{}-{}",
         scx.catalog
@@ -812,7 +814,7 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
         _ => unreachable!(),
     };
     let on_name = scx.resolve_name(on_name)?;
-    let catalog_entry = scx.get(&on_name)?;
+    let catalog_entry = scx.catalog.get(&on_name)?;
     let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
     if !object_type_matches(ObjectType::View, catalog_entry.item_type())
         && !object_type_matches(ObjectType::Source, catalog_entry.item_type())
@@ -1501,7 +1503,7 @@ fn handle_drop_item(
     name: &FullName,
     cascade: bool,
 ) -> Result<Option<GlobalId>, failure::Error> {
-    match scx.get(name) {
+    match scx.catalog.get(name) {
         Ok(catalog_entry) => {
             if catalog_entry.id().is_system() {
                 bail!(
@@ -1567,7 +1569,7 @@ fn handle_explain(
     let (scx, sql, query) = match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_name(name.clone())?;
-            let entry = scx.get(&full_name)?;
+            let entry = scx.catalog.get(&full_name)?;
             if entry.item_type() != CatalogItemType::View {
                 bail!(
                     "Expected {} to be a view, not a {}",
@@ -1682,14 +1684,6 @@ impl<'a> StatementContext<'a> {
             schema: "mz_temp".to_owned(),
             item: name.item,
         }
-    }
-
-    pub fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
-        Ok(self.catalog.get(name)?)
-    }
-
-    pub fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
-        self.catalog.get_schemas(database_spec)
     }
 
     pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
