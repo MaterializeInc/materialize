@@ -57,13 +57,13 @@ def main() -> int:
 class PipelineStep:
     def __init__(self, id: str):
         self.id = id
-        self.manual_inputs: Set[str] = set()
+        self.extra_inputs: Set[str] = set()
         self.image_dependencies: Set[mzbuild.ResolvedImage] = set()
         self.step_dependencies: Set[str] = set()
 
     def inputs(self) -> Set[str]:
         inputs = set()
-        inputs.update(self.manual_inputs)
+        inputs.update(self.extra_inputs)
         for image in self.image_dependencies:
             inputs.update(image.inputs(transitive=True))
         return inputs
@@ -94,7 +94,7 @@ def trim_pipeline(pipeline: Any) -> None:
                 if inp.startswith("#"):
                     step.image_dependencies.add(images[inp[1:]])
                 else:
-                    step.manual_inputs.add(inp)
+                    step.extra_inputs.add(inp)
         if "depends_on" in config:
             d = config["depends_on"]
             if isinstance(d, str):
@@ -110,14 +110,14 @@ def trim_pipeline(pipeline: Any) -> None:
                         step.image_dependencies.update(
                             find_compose_images(images, plugin_config["config"])
                         )
-                        step.manual_inputs.add(plugin_config["config"])
+                        step.extra_inputs.add(plugin_config["config"])
                     elif name == "./ci/plugins/mzconduct":
                         comp = Composition.find(plugin_config["test"]).path
                         config = comp / "mzcompose.yml"
                         step.image_dependencies.update(
                             find_compose_images(images, config)
                         )
-                        step.manual_inputs.add(str(config))
+                        step.extra_inputs.add(str(config))
         steps[step.id] = step
 
     # Make sure we have an up to date view of master.
@@ -161,8 +161,8 @@ def trim_pipeline(pipeline: Any) -> None:
         print(f'{"✓" if step.id in needed else "✗"} {step.id}')
         if step.step_dependencies:
             print("    wait:", " ".join(step.step_dependencies))
-        if step.manual_inputs:
-            print("    globs:", " ".join(step.manual_inputs))
+        if step.extra_inputs:
+            print("    globs:", " ".join(step.extra_inputs))
         if step.image_dependencies:
             print(
                 "    images:", " ".join(image.name for image in step.image_dependencies)
