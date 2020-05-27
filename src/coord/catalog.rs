@@ -409,6 +409,7 @@ impl Catalog {
     /// See also [`Catalog::get`].
     pub fn try_get(&self, name: &FullName, conn_id: Option<u32>) -> Option<&CatalogEntry> {
         self.get_schemas(&name.database, conn_id)
+            .ok()
             .and_then(|schemas| schemas.0.get(&name.schema))
             .and_then(|schema| schema.items.0.get(&name.item))
             .map(|id| &self.by_id[id])
@@ -518,15 +519,18 @@ impl Catalog {
         &self,
         database_spec: &DatabaseSpecifier,
         conn_id: Option<u32>,
-    ) -> Option<&Schemas> {
+    ) -> Result<&Schemas, Error> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
-            DatabaseSpecifier::Ambient => Some(&self.ambient_schemas),
+            DatabaseSpecifier::Ambient => Ok(&self.ambient_schemas),
             DatabaseSpecifier::Temporary => match conn_id {
-                Some(conn_id) => self.temporary_schemas.get(&conn_id),
-                None => None,
+                Some(conn_id) => Ok(self.temporary_schemas.get(&conn_id).unwrap()),
+                None => unreachable!("cannot get temporary schema with no conn_id"),
             },
-            DatabaseSpecifier::Name(name) => self.by_name.get(name).map(|db| &db.schemas),
+            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
+                Some(db) => Ok(&db.schemas),
+                None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
+            }
         }
     }
 
@@ -535,15 +539,18 @@ impl Catalog {
         &mut self,
         database_spec: &DatabaseSpecifier,
         conn_id: Option<u32>,
-    ) -> Option<&mut Schemas> {
+    ) -> Result<&mut Schemas, Error> {
         // Keep in sync with `get_schemas`.
         match database_spec {
-            DatabaseSpecifier::Ambient => Some(&mut self.ambient_schemas),
+            DatabaseSpecifier::Ambient => Ok(&mut self.ambient_schemas),
             DatabaseSpecifier::Temporary => match conn_id {
-                Some(conn_id) => self.temporary_schemas.get_mut(&conn_id),
-                None => None,
+                Some(conn_id) => Ok(self.temporary_schemas.get_mut(&conn_id).unwrap()),
+                None => unreachable!("cannot get temporary schema with no conn_id"),
             },
-            DatabaseSpecifier::Name(name) => self.by_name.get_mut(name).map(|db| &mut db.schemas),
+            DatabaseSpecifier::Name(name) => match self.by_name.get_mut(name) {
+                Some(db) => Ok(&mut db.schemas),
+                None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
+            }
         }
     }
 
@@ -1159,10 +1166,11 @@ impl PlanCatalog for ConnCatalog<'_> {
         self.catalog.get_by_id(id)
     }
 
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
-        self.catalog
-            .get_schemas(database_spec, self.conn_id)
-            .map(|m| m as &dyn SchemaMap)
+    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Result<&dyn SchemaMap, failure::Error> {
+        match self.catalog.get_schemas(database_spec, self.conn_id) {
+            Ok(schemas) => Ok(schemas as &dyn SchemaMap),
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn database_resolver<'a>(

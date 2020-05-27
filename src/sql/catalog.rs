@@ -27,7 +27,7 @@ pub trait PlanCatalog: fmt::Debug {
 
     fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry;
 
-    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Option<&dyn SchemaMap>;
+    fn get_schemas(&self, database_spec: &DatabaseSpecifier) -> Result<&dyn SchemaMap, failure::Error>;
 
     fn database_resolver<'a>(
         &'a self,
@@ -125,7 +125,7 @@ impl PlanCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn get_schemas(&self, _: &DatabaseSpecifier) -> Option<&dyn SchemaMap> {
+    fn get_schemas(&self, _: &DatabaseSpecifier) -> Result<&dyn SchemaMap, failure::Error> {
         unimplemented!();
     }
 
