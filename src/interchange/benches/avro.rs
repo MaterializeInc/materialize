@@ -299,7 +299,7 @@ pub fn bench_avro(c: &mut Criterion) {
     let mut bg = c.benchmark_group("avro");
     bg.throughput(Throughput::Bytes(len));
     bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(block_on(decoder.decode(&buf)).unwrap()))
+        b.iter(|| black_box(block_on(decoder.decode(&buf, None)).unwrap()))
     });
     bg.finish();
 }
