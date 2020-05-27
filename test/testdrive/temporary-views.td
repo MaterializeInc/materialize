@@ -34,6 +34,9 @@ non-temporary items cannot depend on temporary item
 
 > CREATE TEMP VIEW double_temp_v AS SELECT * FROM temp_v;
 
+! CREATE TEMP VIEW double_temp_v AS SELECT * FROM temp_v;
+catalog item 'double_temp_v' already exists
+
 > SELECT * FROM double_temp_v;
 1 "foo"
 1 "bar"
