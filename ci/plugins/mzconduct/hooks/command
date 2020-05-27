@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set -euo pipefail
+
+mzconduct() {
+    bin/ci-builder run stable bin/mzconduct "$@"
+}
+
+# Sometimes build cancellations prevent us from properly cleaning up the last
+# Docker Compose run, which can leave old containers or volumes around that will
+# interfere with this build.
+echo "--- :docker: Purging containers and volumes from previous builds"
+mzconduct down --volumes "$BUILDKITE_PLUGIN_MZCONDUCT_NAME"
+
+echo "--- :docker: Rebuilding non-mzbuild containers"
+mzcompose --mz-quiet build
+
+echo "+++ :docker: Running command in mzcompose service: $service" >&2
+
+if ! mzconduct run "$BUILDKITE_PLUGIN_MZCONDUCT_NAME" \
+        --workflow "$BUILDKITE_PLUGIN_MZCONDUCT_WORKFLOW" ; then
+    echo "Command failed! Uploading logs for debugging." >&2
+    mzcompose --mz-quiet logs --no-color > services.log
+    buildkite-agent artifact upload services.log
+    exit 1
+fi

@@ -112,10 +112,11 @@ def run(composition: str, workflow: Optional[str], services: Iterable[str],) -> 
 
 
 @cli.command()
+@click.option("-v", "--volumes", is_flag=True, help="Also destroy volumes")
 @click.argument("composition")
-def down(composition: str) -> None:
+def down(composition: str, volumes: bool) -> None:
     comp = Composition.find(composition)
-    comp.down()
+    comp.down(volumes)
 
 
 @cli.command()
@@ -163,6 +164,18 @@ def web(composition: str, service: str) -> None:
     comp.web(service)
 
 
+@cli.group()
+def show() -> None:
+    """Show properties of a composition"""
+
+
+@show.command()
+@click.argument("composition")
+def dir(composition: str) -> None:
+    """Show the directory that this composition is in"""
+    print(str(Composition.find(composition).path))
+
+
 # Composition Discovery
 
 
@@ -183,6 +196,10 @@ class Composition:
         return (
             f"Composition<{self.name}, {self._path}, {len(self.workflows())} workflows>"
         )
+
+    @property
+    def path(self) -> Path:
+        return self._path
 
     def workflow(self, workflow: str) -> "Workflow":
         """Get a workflow by name"""
@@ -205,9 +222,9 @@ class Composition:
             except subprocess.CalledProcessError:
                 raise Failed("error when bringing up all services")
 
-    def down(self) -> None:
+    def down(self, volumes: bool = False) -> None:
         with cd(self._path):
-            mzcompose_down()
+            mzcompose_down(volumes)
 
     def ps(self) -> None:
         with cd(self._path):
@@ -780,7 +797,7 @@ def mzcompose_stop(services: List[str]) -> subprocess.CompletedProcess:
 def mzcompose_down(destroy_volumes: bool = False) -> subprocess.CompletedProcess:
     cmd = ["./mzcompose", "--mz-quiet", "down"]
     if destroy_volumes:
-        cmd.append("-v")
+        cmd.append("--volumes")
     return spawn.runv(cmd)
 
 
