@@ -173,7 +173,7 @@ test1
 test2
 
 ! SHOW VIEWS FROM noexist
-schema 'noexist' does not exist
+unknown schema 'noexist'
 
 ! SHOW VIEWS FROM noexist.noexist
 unknown database 'noexist'

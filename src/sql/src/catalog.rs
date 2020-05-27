@@ -38,10 +38,11 @@ pub trait PlanCatalog: fmt::Debug {
         _: &DatabaseSpecifier,
     ) -> Result<Box<dyn Iterator<Item = &'a str> + 'a>, failure::Error>;
 
-    fn database_resolver<'a>(
+    fn get_items<'a>(
         &'a self,
-        database_spec: DatabaseSpecifier,
-    ) -> Result<Box<dyn PlanDatabaseResolver<'a> + 'a>, failure::Error>;
+        _: &DatabaseSpecifier,
+        schema_name: &str,
+    ) -> Result<Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>, failure::Error>;
 
     fn resolve(
         &self,
@@ -50,7 +51,12 @@ pub trait PlanCatalog: fmt::Debug {
         name: &PartialName,
     ) -> Result<FullName, failure::Error>;
 
-    fn empty_item_map(&self) -> Box<dyn ItemMap>;
+    fn resolve_schema(
+        &self,
+        _: &DatabaseSpecifier,
+        _: Option<&DatabaseSpecifier>,
+        schema_name: &str,
+    ) -> Result<DatabaseSpecifier, failure::Error>;
 }
 
 pub trait PlanCatalogEntry {
@@ -92,19 +98,6 @@ impl fmt::Display for CatalogItemType {
     }
 }
 
-pub trait PlanDatabaseResolver<'a> {
-    fn resolve_schema(&self, schema_name: &str) -> Option<(&'a dyn PlanSchema, SchemaType)>;
-}
-
-pub trait PlanSchema {
-    fn items(&self) -> &dyn ItemMap;
-}
-
-pub trait ItemMap {
-    fn is_empty(&self) -> bool;
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = (&'a String, &'a GlobalId)> + 'a>;
-}
-
 #[derive(Debug)]
 pub struct DummyCatalog;
 
@@ -136,10 +129,11 @@ impl PlanCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn database_resolver<'a>(
+    fn get_items<'a>(
         &'a self,
-        _: DatabaseSpecifier,
-    ) -> Result<Box<dyn PlanDatabaseResolver<'a> + 'a>, failure::Error> {
+        _: &DatabaseSpecifier,
+        _: &str,
+    ) -> Result<Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>, failure::Error> {
         unimplemented!();
     }
 
@@ -152,7 +146,12 @@ impl PlanCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn empty_item_map(&self) -> Box<dyn ItemMap> {
+    fn resolve_schema(
+        &self,
+        _: &DatabaseSpecifier,
+        _: Option<&DatabaseSpecifier>,
+        _: &str,
+    ) -> Result<DatabaseSpecifier, failure::Error> {
         unimplemented!();
     }
 }
