@@ -2045,9 +2045,6 @@ impl BinaryFunc {
             // decimal precision. Should either remove or fix.
             AddDecimal | SubDecimal | ModDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Unknown, _) | (_, ScalarType::Unknown) => {
-                        return ColumnType::new(ScalarType::Unknown);
-                    }
                     (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
                 };
@@ -2057,9 +2054,6 @@ impl BinaryFunc {
             }
             MulDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Unknown, _) | (_, ScalarType::Unknown) => {
-                        return ColumnType::new(ScalarType::Unknown);
-                    }
                     (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
                 };
@@ -2068,9 +2062,6 @@ impl BinaryFunc {
             }
             DivDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Unknown, _) | (_, ScalarType::Unknown) => {
-                        return ColumnType::new(ScalarType::Unknown);
-                    }
                     (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
                 };
@@ -2079,7 +2070,6 @@ impl BinaryFunc {
             }
 
             CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
-                ScalarType::Unknown => ColumnType::new(ScalarType::Unknown),
                 ScalarType::Decimal(_, s) => {
                     ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
                 }
@@ -3107,24 +3097,15 @@ impl VariadicFunc {
         use VariadicFunc::*;
         match self {
             Coalesce => {
-                let known_types = input_types
-                    .iter()
-                    .filter(|t| t.scalar_type != ScalarType::Unknown)
-                    .collect::<Vec<_>>();
-
+                assert!(input_types.len() > 0);
                 debug_assert!(
-                    known_types
+                    input_types
                         .windows(2)
                         .all(|w| w[0].scalar_type == w[1].scalar_type),
                     "coalesce inputs did not have uniform type: {:?}",
                     input_types
                 );
-
-                if known_types.is_empty() {
-                    ColumnType::new(ScalarType::Unknown)
-                } else {
-                    known_types.into_first().clone().nullable(true)
-                }
+                input_types.into_first().nullable(true)
             }
             Concat => ColumnType::new(ScalarType::String).nullable(true),
             MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
@@ -3134,10 +3115,7 @@ impl VariadicFunc {
             JsonbBuildArray | JsonbBuildObject => ColumnType::new(ScalarType::Jsonb).nullable(true),
             ListCreate { elem_type } => {
                 debug_assert!(
-                    input_types
-                        .iter()
-                        .all(|t| t.scalar_type == *elem_type
-                            || (t.scalar_type == ScalarType::Unknown)),
+                    input_types.iter().all(|t| t.scalar_type == *elem_type),
                     "Args to ListCreate should have types that are compatible with the elem_type"
                 );
                 ColumnType::new(ScalarType::List(Box::new(elem_type.clone())))

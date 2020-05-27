@@ -145,13 +145,6 @@ where
     Datum::from(x)
 }
 
-fn max_null<'a, I>(_datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    Datum::Null
-}
-
 fn min_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -274,13 +267,6 @@ where
     Datum::from(x)
 }
 
-fn min_null<'a, I>(_datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    Datum::Null
-}
-
 fn sum_int32<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -344,13 +330,6 @@ where
         let sum: Significand = datums.map(|d| d.unwrap_decimal()).sum();
         Datum::from(sum)
     }
-}
-
-fn sum_null<'a, I>(_datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    Datum::Null
 }
 
 fn count<'a, I>(datums: I) -> Datum<'a>
@@ -417,7 +396,6 @@ pub enum AggregateFunc {
     MaxDate,
     MaxTimestamp,
     MaxTimestampTz,
-    MaxNull,
     MinInt32,
     MinInt64,
     MinFloat32,
@@ -428,13 +406,11 @@ pub enum AggregateFunc {
     MinDate,
     MinTimestamp,
     MinTimestampTz,
-    MinNull,
     SumInt32,
     SumInt64,
     SumFloat32,
     SumFloat64,
     SumDecimal,
-    SumNull,
     Count,
     CountAll, // COUNT(*) counts nulls too
     Any,
@@ -458,7 +434,6 @@ impl AggregateFunc {
             AggregateFunc::MaxDate => max_date(datums),
             AggregateFunc::MaxTimestamp => max_timestamp(datums),
             AggregateFunc::MaxTimestampTz => max_timestamptz(datums),
-            AggregateFunc::MaxNull => max_null(datums),
             AggregateFunc::MinInt32 => min_int32(datums),
             AggregateFunc::MinInt64 => min_int64(datums),
             AggregateFunc::MinFloat32 => min_float32(datums),
@@ -469,13 +444,11 @@ impl AggregateFunc {
             AggregateFunc::MinDate => min_date(datums),
             AggregateFunc::MinTimestamp => min_timestamp(datums),
             AggregateFunc::MinTimestampTz => min_timestamptz(datums),
-            AggregateFunc::MinNull => min_null(datums),
             AggregateFunc::SumInt32 => sum_int32(datums),
             AggregateFunc::SumInt64 => sum_int64(datums),
             AggregateFunc::SumFloat32 => sum_float32(datums),
             AggregateFunc::SumFloat64 => sum_float64(datums),
             AggregateFunc::SumDecimal => sum_decimal(datums),
-            AggregateFunc::SumNull => sum_null(datums),
             AggregateFunc::Count => count(datums),
             AggregateFunc::CountAll => count_all(datums),
             AggregateFunc::Any => any(datums),
@@ -584,7 +557,6 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MaxDate => f.write_str("max"),
             AggregateFunc::MaxTimestamp => f.write_str("max"),
             AggregateFunc::MaxTimestampTz => f.write_str("max"),
-            AggregateFunc::MaxNull => f.write_str("max"),
             AggregateFunc::MinInt32 => f.write_str("min"),
             AggregateFunc::MinInt64 => f.write_str("min"),
             AggregateFunc::MinFloat32 => f.write_str("min"),
@@ -595,13 +567,11 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MinDate => f.write_str("min"),
             AggregateFunc::MinTimestamp => f.write_str("min"),
             AggregateFunc::MinTimestampTz => f.write_str("min"),
-            AggregateFunc::MinNull => f.write_str("min"),
             AggregateFunc::SumInt32 => f.write_str("sum"),
             AggregateFunc::SumInt64 => f.write_str("sum"),
             AggregateFunc::SumFloat32 => f.write_str("sum"),
             AggregateFunc::SumFloat64 => f.write_str("sum"),
             AggregateFunc::SumDecimal => f.write_str("sum"),
-            AggregateFunc::SumNull => f.write_str("sum"),
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::CountAll => f.write_str("countall"),
             AggregateFunc::Any => f.write_str("any"),

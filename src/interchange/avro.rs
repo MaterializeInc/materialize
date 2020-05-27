@@ -201,7 +201,7 @@ fn validate_schema_1(schema: SchemaNode) -> Result<RelationDesc> {
 
 fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
     Ok(match schema.inner {
-        SchemaPiece::Null => ScalarType::Unknown,
+        SchemaPiece::Null => bail!("null outside of union types is not supported"),
         SchemaPiece::Boolean => ScalarType::Bool,
         SchemaPiece::Int => ScalarType::Int32,
         SchemaPiece::Long => ScalarType::Int64,
@@ -723,7 +723,6 @@ fn build_schema(desc: &RelationDesc) -> Schema {
     let mut fields = Vec::new();
     for (name, typ) in desc.iter() {
         let mut field_type = match &typ.scalar_type {
-            ScalarType::Unknown => json!("null"),
             ScalarType::Bool => json!("boolean"),
             ScalarType::Int32 => json!("int"),
             ScalarType::Int64 => json!("long"),
@@ -761,7 +760,7 @@ fn build_schema(desc: &RelationDesc) -> Schema {
             }),
             ScalarType::List(_t) => unimplemented!("jamii/list"),
         };
-        if typ.nullable && typ.scalar_type != ScalarType::Unknown {
+        if typ.nullable {
             field_type = json!(["null", field_type]);
         }
         fields.push(json!({
@@ -890,11 +889,10 @@ impl Encoder {
             .zip_eq(row)
             .map(|((name, typ), datum)| {
                 let name = name.expect("name known to exist").as_str().to_owned();
-                if typ.nullable && typ.scalar_type != ScalarType::Unknown && datum.is_null() {
+                if typ.nullable && datum.is_null() {
                     return (name, Value::Union(0, Box::new(Value::Null)));
                 }
                 let mut val = match &typ.scalar_type {
-                    ScalarType::Unknown => Value::Null,
                     ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
                     ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
                     ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
@@ -931,7 +929,7 @@ impl Encoder {
                     }
                     ScalarType::List(_t) => unimplemented!("jamii/list"),
                 };
-                if typ.nullable && typ.scalar_type != ScalarType::Unknown {
+                if typ.nullable {
                     val = Value::Union(1, Box::new(val));
                 }
                 (name, val)
@@ -1042,7 +1040,6 @@ mod tests {
         // Simple transformations from primitive Avro Schema types
         // to Avro Values.
         let valid_pairings = vec![
-            (ScalarType::Unknown, Datum::Null, Value::Null),
             (ScalarType::Bool, Datum::True, Value::Boolean(true)),
             (ScalarType::Bool, Datum::False, Value::Boolean(false)),
             (ScalarType::Int32, Datum::Int32(1), Value::Int(1)),
