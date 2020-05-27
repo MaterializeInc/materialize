@@ -667,7 +667,7 @@ impl Catalog {
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(&mut self, ops: &[Op]) -> Result<Vec<GlobalId>, Error> {
-        let mut creating = Vec::new();
+        let mut creating = HashSet::new();
         let mut temporary_ids = Vec::new();
         for op in ops.iter() {
             if let Op::CreateItem { id, name, item } = op {
@@ -680,7 +680,7 @@ impl Catalog {
                                 name.item.clone(),
                             )));
                         } else {
-                            creating.push((conn_id, name.item.clone()));
+                            creating.insert((conn_id, name.item.clone()));
                             temporary_ids.push(id.clone());
                         }
                     }
