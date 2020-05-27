@@ -29,6 +29,7 @@ use expr::{EvalError, GlobalId, IdGen, OptimizedRelationExpr, RelationExpr, Scal
 
 // pub mod binding;
 pub mod column_knowledge;
+pub mod cse;
 pub mod demand;
 pub mod empty_map;
 pub mod filter_lets;
@@ -252,6 +253,7 @@ impl Default for Optimizer {
             }),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
+            Box::new(crate::cse::map::Map),
             Box::new(crate::reduction::FoldConstants),
         ];
         Self { transforms }
