@@ -1400,7 +1400,7 @@ fn handle_drop_schema(
     }
     match scx.resolve_schema(names.into_element()) {
         Ok((database_spec, schema_name)) => {
-            if let DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary = database_spec {
+            if let DatabaseSpecifier::Ambient = database_spec {
                 bail!(
                     "cannot drop schema {} because it is required by the database system",
                     schema_name
@@ -1654,7 +1654,7 @@ impl<'a> StatementContext<'a> {
 
     pub fn allocate_temporary_name(&self, name: PartialName) -> FullName {
         FullName {
-            database: DatabaseSpecifier::Temporary,
+            database: DatabaseSpecifier::Ambient,
             schema: "mz_temp".to_owned(),
             item: name.item,
         }
