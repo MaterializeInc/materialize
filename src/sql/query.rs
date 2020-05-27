@@ -1728,7 +1728,11 @@ fn plan_any_or_all<'a>(
         if func == AggregateFunc::All {
             exists = exists.call_unary(UnaryFunc::Not);
         }
-        Ok(exists)
+        Ok(ScalarExpr::If {
+            cond: Box::new(plan_is_null_expr(ecx, left, false)?),
+            then: Box::new(ScalarExpr::literal_null(ScalarType::Unknown)),
+            els: Box::new(exists),
+        })
     } else {
         let op_expr = plan_binary_op(
             &any_ecx,
