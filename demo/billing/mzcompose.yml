@@ -51,22 +51,17 @@ services:
     depends_on: [kafka, zookeeper]
   billing-demo:
     mzbuild: billing-demo
-    entrypoint: /bin/bash
     volumes:
       - db-data:/share/billing-demo/data
     environment:
       - RUST_LOG=billing-demo=debug,info
     command: |-
-      -c "
-      wait-for-it materialized:6875 --
-      wait-for-it kafka:9092 --
-      wait-for-it schema-registry:8081 --
       billing-demo \
           --message-count 1000 \
           --materialized-host materialized \
           --kafka-host kafka \
           --schema-registry-url http://schema-registry:8081 \
-          --csv-file-name /share/billing-demo/data/prices.csv"
+          --csv-file-name /share/billing-demo/data/prices.csv
     depends_on: [kafka, schema-registry, materialized]
   dashboard:
     mzbuild: dashboard
@@ -87,6 +82,40 @@ mzconduct:
   workflows:
     ci:
       steps:
+      - step: workflow
+        workflow: start-everything
+      - step: run
+        service: billing-demo
+        daemon: false
+        command: >-
+          --message-count 100
+          --materialized-host materialized
+          --kafka-host kafka
+          --schema-registry-url http://schema-registry:8081
+          --csv-file-name /share/billing-demo/data/prices.csv
+          --partitions 10
+      - step: down
+        destroy_volumes: true
+
+    load-test:
+      steps:
+      - step: workflow
+        workflow: start-everything
+      - step: run
+        service: billing-demo
+        daemon: true
+        command: >-
+          --message-count 10000000
+          --materialized-host materialized
+          --kafka-host kafka
+          --schema-registry-url http://schema-registry:8081
+          --csv-file-name /share/billing-demo/data/prices.csv
+          --partitions 10
+
+    # Helper workflows
+
+    start-everything:
+      steps:
       - step: start-services
         services: [materialized, kafka, schema-registry, dashboard]
       - step: wait-for-tcp
@@ -98,18 +127,3 @@ mzconduct:
       - step: wait-for-tcp
         host: materialized
         port: 6875
-      - step: run
-        service: billing-demo
-        daemon: false
-        command: >-
-          -c "
-          billing-demo
-          --message-count ${MZ_BILLING_DEMO_MESSAGES:-100}
-          --materialized-host materialized
-          --kafka-host kafka
-          --schema-registry-url http://schema-registry:8081
-          --csv-file-name /share/billing-demo/data/prices.csv
-          --partitions 10
-          "
-      - step: down
-        destroy_volumes: true
