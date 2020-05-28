@@ -108,7 +108,6 @@ All of these tests can be run in parallel.
 
     [load-instr]: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
 
-
   - [ ] From the VM, ensure all containers are running:
 
     ```shell script
