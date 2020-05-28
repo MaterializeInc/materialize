@@ -319,7 +319,7 @@ where
             match msg {
                 Message::Command(Command::Startup { session, tx }) => {
                     let mut messages = vec![];
-                    if self.catalog.database_resolver(session.database()).is_err() {
+                    if self.catalog.resolve_database(&session.database()).is_err() {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
                     self.catalog.create_temporary_schema(session.conn_id());

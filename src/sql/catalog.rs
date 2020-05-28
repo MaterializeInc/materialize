@@ -48,7 +48,7 @@ pub trait PlanCatalog: fmt::Debug {
     fn resolve_schema(
         &self,
         _: &DatabaseSpecifier,
-        _: Option<&DatabaseSpecifier>,
+        _: Option<String>,
         schema_name: &str,
     ) -> Result<DatabaseSpecifier, failure::Error>;
 }
@@ -143,7 +143,7 @@ impl PlanCatalog for DummyCatalog {
     fn resolve_schema(
         &self,
         _: &DatabaseSpecifier,
-        _: Option<&DatabaseSpecifier>,
+        _: Option<String>,
         _: &str,
     ) -> Result<DatabaseSpecifier, failure::Error> {
         unimplemented!();

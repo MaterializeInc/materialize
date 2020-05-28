@@ -1829,15 +1829,10 @@ impl<'a> StatementContext<'a> {
             );
         }
         let schema_name = normalize::ident(name.0.pop().unwrap());
-        let database_spec = name
-            .0
-            .pop()
-            .map(|n| DatabaseSpecifier::Name(normalize::ident(n)));
-        let database_spec = self.catalog.resolve_schema(
-            &self.session.database(),
-            database_spec.as_ref(),
-            &schema_name,
-        )?;
+        let database_spec = name.0.pop().map(normalize::ident);
+        let database_spec =
+            self.catalog
+                .resolve_schema(&self.session.database(), database_spec, &schema_name)?;
         Ok((database_spec, schema_name))
     }
 
