@@ -198,7 +198,7 @@ impl<'a> Parser<'a> {
             return Ok(Record::Query {
                 sql,
                 output: Err(error),
-                location: self.location(),
+                location,
             });
         }
 
