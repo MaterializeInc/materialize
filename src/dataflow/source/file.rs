@@ -29,6 +29,7 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 
+use super::SourceOutput;
 use crate::operator::StreamExt;
 use crate::server::TimestampHistories;
 use crate::source::util::source;
@@ -286,7 +287,7 @@ pub fn file<G, Ctor, I, Out, Err>(
     iter_ctor: Ctor,
 ) -> (
     (
-        timely::dataflow::Stream<G, (Out, Option<i64>)>,
+        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Out>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
@@ -410,9 +411,11 @@ where
                         Some(ts) => {
                             last_processed_offset = current_msg_offset;
                             let ts_cap = cap.delayed(&ts);
-                            output
-                                .session(&ts_cap)
-                                .give(Ok((message, Some(last_processed_offset.offset))));
+                            output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                vec![],
+                                message,
+                                Some(last_processed_offset.offset),
+                            )));
                             downgrade_capability(
                                 &id,
                                 cap,

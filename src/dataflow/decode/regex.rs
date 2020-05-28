@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::source::SourceOutput;
 use dataflow_types::{Diff, Timestamp};
 use differential_dataflow::Hashable;
 use log::warn;
@@ -20,7 +21,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
 pub fn regex<G>(
-    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     regex: Regex,
     name: &str,
 ) -> Stream<G, (Row, Timestamp, Diff)>
@@ -29,13 +30,13 @@ where
 {
     let name = String::from(name);
     stream.unary(
-        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
+        Exchange::new(|x: &SourceOutput<Vec<u8>, Vec<u8>>| x.value.hashed()),
         "RegexDecode",
         |_, _| {
             move |input, output| {
                 input.for_each(|cap, lines| {
                     let mut session = output.session(&cap);
-                    for (line, line_no) in &*lines {
+                    for SourceOutput {key: _, value: line, position: line_no} in &*lines {
                         let line = match str::from_utf8(&line) {
                             Ok(line) => line,
                             _ => {

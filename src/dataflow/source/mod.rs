@@ -12,8 +12,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use timely::dataflow::operators::Capability;
-use timely::scheduling::Activator;
+use serde::{Deserialize, Serialize};
+use timely::dataflow::{
+    channels::pact::{Exchange, ParallelizationContract},
+    operators::Capability,
+};
+use timely::{scheduling::Activator, Data};
 
 use dataflow_types::{Consistency, Timestamp};
 use expr::SourceInstanceId;
@@ -25,6 +29,7 @@ mod kafka;
 mod kinesis;
 mod util;
 
+use differential_dataflow::Hashable;
 pub use file::{file, read_file_task, FileReadStyle};
 pub use kafka::kafka;
 pub use kinesis::kinesis;
@@ -50,6 +55,50 @@ pub struct SourceConfig<'a, G> {
     pub timestamp_tx: TimestampChanges,
     /// TODO(ncrooks)
     pub consistency: Consistency,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+/// A record produced by a source
+pub struct SourceOutput<K, V>
+where
+    K: Data,
+    V: Data,
+{
+    /// The record's key (or some empty/default value for sources without the concept of key)
+    pub key: K,
+    /// The record's value
+    pub value: V,
+    /// The position in the source, if such a concept exists (e.g., Kafka offset, file line number)
+    pub position: Option<i64>,
+}
+
+impl<K, V> SourceOutput<K, V>
+where
+    K: Data,
+    V: Data,
+{
+    /// Build a new SourceOutput
+    pub fn new(key: K, value: V, position: Option<i64>) -> SourceOutput<K, V> {
+        SourceOutput {
+            key,
+            value,
+            position,
+        }
+    }
+}
+impl<K, V> SourceOutput<K, V>
+where
+    K: Data + Hashable<Output = u64> + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+    V: Data + Hashable<Output = u64> + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+{
+    /// A parallelization contract that hashes by keys
+    pub fn key_contract() -> impl ParallelizationContract<Timestamp, Self> {
+        Exchange::new(|x: &Self| x.key.hashed())
+    }
+    /// A parallelization contract that hashes by values
+    pub fn value_contract() -> impl ParallelizationContract<Timestamp, Self> {
+        Exchange::new(|x: &Self| x.value.hashed())
+    }
 }
 
 /// A `SourceToken` manages interest in a source.

@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use differential_dataflow::hashable::Hashable;
 use timely::dataflow::{
-    channels::pact::Exchange,
+    channels::pact::{Exchange, ParallelizationContract},
     channels::pushers::buffer::Session,
     channels::pushers::Counter as PushCounter,
     channels::pushers::Tee,
@@ -31,7 +31,7 @@ mod regex;
 
 use self::csv::csv;
 use self::regex::regex as regex_fn;
-use crate::operator::StreamExt;
+use crate::{operator::StreamExt, source::SourceOutput};
 use ::avro::{types::Value, Schema};
 use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair, EnvelopeType};
 
@@ -40,7 +40,7 @@ use log::error;
 use std::iter;
 
 pub fn decode_avro_values<G>(
-    stream: &Stream<G, (Value, Option<i64>)>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, Value>>,
     envelope: &Envelope,
     schema: Schema,
     debug_name: &str,
@@ -58,9 +58,16 @@ where
     } else {
         None
     };
-    stream
-        .pass_through("AvroValues")
-        .flat_map(move |((value, index), r, d)| {
+    stream.pass_through("AvroValues").flat_map(
+        move |(
+            SourceOutput {
+                value,
+                position: index,
+                key: _,
+            },
+            r,
+            d,
+        )| {
             let top_node = schema.top_node();
             let diffs = match envelope {
                 Envelope::None => {
@@ -95,7 +102,8 @@ where
                 .into_iter()
                 .chain(diffs.after.into_iter())
                 .map(move |row| (row, r, d))
-        })
+        },
+    )
 }
 
 pub type PushSession<'a, R> =
@@ -365,42 +373,45 @@ where
     })
 }
 
-fn decode_values_inner<G, V>(
-    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
+fn decode_values_inner<G, V, C>(
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     mut value_decoder_state: V,
     op_name: &str,
+    contract: C,
 ) -> Stream<G, (Row, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
     V: DecoderState + 'static,
+    C: ParallelizationContract<Timestamp, SourceOutput<Vec<u8>, Vec<u8>>>,
 {
-    stream.unary(
-        Exchange::new(|x: &(Vec<u8>, _)| (x.0.hashed())),
-        &op_name,
-        move |_, _| {
-            move |input, output| {
-                value_decoder_state.reset_event_count();
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for (payload, aux_num) in data.iter() {
-                        if !payload.is_empty() {
-                            block_on(value_decoder_state.give_value(
-                                payload,
-                                *aux_num,
-                                &mut session,
-                                *cap.time(),
-                            ));
-                        }
+    stream.unary(contract, &op_name, move |_, _| {
+        move |input, output| {
+            value_decoder_state.reset_event_count();
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for SourceOutput {
+                    key: _,
+                    value: payload,
+                    position: aux_num,
+                } in data.iter()
+                {
+                    if !payload.is_empty() {
+                        block_on(value_decoder_state.give_value(
+                            payload,
+                            *aux_num,
+                            &mut session,
+                            *cap.time(),
+                        ));
                     }
-                });
-                value_decoder_state.log_error_count();
-            }
-        },
-    )
+                }
+            });
+            value_decoder_state.log_error_count();
+        }
+    })
 }
 
 pub fn decode_values<G>(
-    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     encoding: DataEncoding,
     debug_name: &str,
     envelope: &Envelope,
@@ -422,6 +433,19 @@ where
         (DataEncoding::Csv(enc), Envelope::None) => {
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators)
         }
+        (DataEncoding::Avro(enc), Envelope::Debezium) => decode_values_inner(
+            stream,
+            avro::AvroDecoderState::new(
+                &enc.value_schema,
+                enc.schema_registry_config,
+                envelope.get_avro_envelope_type(),
+                fast_forwarded,
+                debug_name.to_string(),
+            )
+            .expect("Failed to create Avro decoder"),
+            &op_name,
+            SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
+        ),
         (DataEncoding::Avro(enc), envelope) => decode_values_inner(
             stream,
             avro::AvroDecoderState::new(
@@ -433,6 +457,7 @@ where
             )
             .expect("Failed to create Avro decoder"),
             &op_name,
+            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
@@ -445,6 +470,7 @@ where
             stream,
             protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
             &op_name,
+            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         ),
         (DataEncoding::Bytes, Envelope::None) => decode_values_inner(
             stream,
@@ -452,6 +478,7 @@ where
                 datum_func: bytes_to_datum,
             },
             &op_name,
+            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         ),
         (DataEncoding::Text, Envelope::None) => decode_values_inner(
             stream,
@@ -459,6 +486,7 @@ where
                 datum_func: text_to_datum,
             },
             &op_name,
+            SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         ),
     }
 }

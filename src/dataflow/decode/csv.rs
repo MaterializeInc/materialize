@@ -19,10 +19,10 @@ use timely::dataflow::{Scope, Stream};
 use dataflow_types::{Diff, Timestamp};
 use repr::{Datum, Row};
 
-use crate::metrics::EVENTS_COUNTER;
+use crate::{metrics::EVENTS_COUNTER, source::SourceOutput};
 
 pub fn csv<G>(
-    stream: &Stream<G, (Vec<u8>, Option<i64>)>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     header_row: bool,
     n_cols: usize,
     delimiter: u8,
@@ -45,7 +45,7 @@ where
         .collect::<Vec<_>>();
 
     stream.unary(
-        Exchange::new(|x: &(Vec<u8>, _)| x.0.hashed()),
+        Exchange::new(|x: &SourceOutput<Vec<u8>, Vec<u8>>| x.value.hashed()),
         "CsvDecode",
         |_, _| {
             // Temporary storage, and a re-useable CSV reader.
@@ -63,7 +63,7 @@ where
                     // but the CsvReader *itself* searches for line breaks.
                     // This is mainly an aesthetic/performance-golfing
                     // issue as I doubt it will ever be a bottleneck.
-                    for (line, line_no) in &*lines {
+                    for SourceOutput { key: _, value: line, position: line_no } in &*lines {
                         // We only want to process utf8 strings, as this ensures that all fields
                         // will be utf8 as well, allowing some unsafe shenanigans.
                         if std::str::from_utf8(line.as_slice()).is_err() {

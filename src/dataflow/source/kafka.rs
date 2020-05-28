@@ -35,7 +35,7 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 
 use super::util::source;
-use super::{SourceConfig, SourceStatus, SourceToken};
+use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
 use crate::server::TimestampHistories;
 
 // Global Kafka metrics.
@@ -620,7 +620,7 @@ pub fn kafka<G>(
     config: SourceConfig<G>,
     connector: KafkaSourceConnector,
 ) -> (
-    Stream<G, (Vec<u8>, (Vec<u8>, Option<i64>))>,
+    Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     Option<SourceToken>,
 )
 where
@@ -724,9 +724,10 @@ where
                                 bytes_read += key.len() as i64;
                                 bytes_read += out.len() as i64;
                                 let ts_cap = cap.delayed(&ts);
-                                output.session(&ts_cap).give((
+                                output.session(&ts_cap).give(SourceOutput::new(
                                     key,
-                                    (out, Some(Into::<KafkaOffset>::into(offset).offset)),
+                                    out,
+                                    Some(Into::<KafkaOffset>::into(offset).offset),
                                 ));
 
                                 partition_metrics.offset_ingested.set(offset.offset);
