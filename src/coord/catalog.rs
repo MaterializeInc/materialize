@@ -22,8 +22,8 @@ use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use ::sql::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry};
-use ::sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
+use sql::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry};
+use sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
@@ -32,7 +32,7 @@ use transform::Optimizer;
 use crate::catalog::error::{Error, ErrorKind};
 
 mod error;
-pub mod sql;
+pub mod storage;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
@@ -66,7 +66,7 @@ pub struct Catalog {
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
-    storage: Arc<Mutex<sql::Connection>>,
+    storage: Arc<Mutex<storage::Connection>>,
     creation_time: SystemTime,
     nonce: u64,
 }
@@ -258,7 +258,7 @@ impl Catalog {
     where
         F: FnOnce(&mut Self),
     {
-        let storage = sql::Connection::open(path)?;
+        let storage = storage::Connection::open(path)?;
 
         let mut catalog = Catalog {
             by_name: BTreeMap::new(),
@@ -339,7 +339,7 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn for_session(&self, session: &::sql::Session) -> ConnCatalog {
+    pub fn for_session(&self, session: &sql::Session) -> ConnCatalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
@@ -357,11 +357,11 @@ impl Catalog {
         }
     }
 
-    fn storage(&self) -> MutexGuard<sql::Connection> {
+    fn storage(&self) -> MutexGuard<storage::Connection> {
         self.storage.lock().expect("lock poisoned")
     }
 
-    pub fn storage_handle(&self) -> Arc<Mutex<sql::Connection>> {
+    pub fn storage_handle(&self) -> Arc<Mutex<storage::Connection>> {
         self.storage.clone()
     }
 
@@ -965,8 +965,8 @@ impl Catalog {
             None => PlanContext::default(),
             Some(eval_env) => eval_env.into(),
         };
-        let stmt = ::sql::parse(create_sql)?.into_element();
-        let plan = ::sql::plan(&pcx, &self.for_system_session(), stmt, &params)?;
+        let stmt = sql::parse(create_sql)?.into_element();
+        let plan = sql::plan(&pcx, &self.for_system_session(), stmt, &params)?;
         Ok(match plan {
             Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
