@@ -98,6 +98,24 @@ All of these tests can be run in parallel.
     ./dc.sh backup
     ```
 
+- [ ] Run the billing-demo load test on the tag.
+
+  - [ ] Spin up a fresh VM and start the load test.
+
+    Materialize employees can follow [these instructions for running semi-
+    automatic load tests][load-instr] in the infrastructure
+    repository.
+
+    [load-instr]: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
+
+  - [ ] From the VM, ensure all containers are running:
+
+    ```shell script
+    docker ps -a
+    ```
+
+  - [ ] The billing-demo container should run and finish without error.
+
 - [ ] Run the perf-kinesis load test on the tag.
 
   - [ ] Spin up a fresh VM and start the load test. To start the load test, ssh
@@ -119,19 +137,6 @@ All of these tests can be run in parallel.
   - [ ] Take a screenshot of the "Time behind external source" dashboard panel
     in Grafana. (This metric should have remained at 0ms or similar for the entirety
     of the run). Share the screenshot in the Slack channel.
-
-- [ ] Run the billing-demo load test on the tag.
-
-  - [ ] Spin up the billing-demo with an updated `--message-count` argument.
-
-    ```shell
-    cd demo/billing
-    # Manually edit the mzcompose.yml to have `--message-count 100000000`
-    # Follow the rest of the instructions in README.md
-    ```
-
-  - [ ] The billing-demo container should run and finish without error.
-
 
 ## Final release
 
