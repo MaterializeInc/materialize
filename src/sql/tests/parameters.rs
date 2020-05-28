@@ -12,12 +12,9 @@ use std::error::Error;
 use ore::collections::CollectionExt;
 use pgrepr::Type;
 use sql::catalog::DummyCatalog;
-use sql::Session;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
-    let catalog = DummyCatalog;
-    let session = Session::dummy();
     let test_cases = vec![
         (
             "SELECT $1, $2, $3",
@@ -84,7 +81,7 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     for (sql, types) in test_cases {
         println!("> {}", sql);
         let stmt = sql::parse(sql.into())?.into_element();
-        let (_desc, param_types) = sql::describe(&catalog, &session, stmt)?;
+        let (_desc, param_types) = sql::describe(&DummyCatalog, stmt)?;
         assert_eq!(param_types, types);
     }
     Ok(())

@@ -253,13 +253,12 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
-    use crate::{PlanContext, Session};
+    use crate::PlanContext;
 
     #[test]
     fn normalized_create() {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
-            session: &Session::dummy(),
             catalog: &DummyCatalog,
         };
 
@@ -271,7 +270,7 @@ mod tests {
 
         // Ensure that all identifiers are quoted.
         assert_eq!(
-            r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
+            r#"CREATE VIEW "dummy"."public"."foo" AS SELECT 1 AS "bar""#,
             create_statement(scx, parsed).unwrap()
         );
     }

@@ -23,7 +23,7 @@ pub use crate::expr::RelationExpr;
 pub use catalog::PlanCatalog;
 pub use names::{DatabaseSpecifier, FullName, PartialName};
 pub use pure::purify_statement as purify;
-pub use session::{InternalSession, PlanSession, PreparedStatement, Session, TransactionStatus};
+pub use session::{PreparedStatement, Session, TransactionStatus};
 pub use sql_parser::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 pub use statement::StatementContext;
 
@@ -211,11 +211,10 @@ pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
 pub fn plan(
     pcx: &PlanContext,
     catalog: &dyn PlanCatalog,
-    session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    statement::handle_statement(pcx, catalog, session, stmt, params)
+    statement::handle_statement(pcx, catalog, stmt, params)
 }
 
 /// Determines the type of the rows that will be returned by `stmt` and the type
@@ -225,10 +224,9 @@ pub fn plan(
 /// of types will be empty.
 pub fn describe(
     catalog: &dyn PlanCatalog,
-    session: &Session,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
-    let (desc, types) = statement::describe_statement(catalog, session, stmt)?;
+    let (desc, types) = statement::describe_statement(catalog, stmt)?;
     let types = types.into_iter().map(|t| pgrepr::Type::from(&t)).collect();
     Ok((desc, types))
 }

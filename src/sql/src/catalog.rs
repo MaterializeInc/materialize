@@ -27,6 +27,8 @@ pub trait PlanCatalog: fmt::Debug {
 
     fn nonce(&self) -> u64;
 
+    fn session_database(&self) -> DatabaseSpecifier;
+
     fn databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a>;
 
     fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error>;
@@ -44,16 +46,10 @@ pub trait PlanCatalog: fmt::Debug {
         schema_name: &str,
     ) -> Result<Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>, failure::Error>;
 
-    fn resolve(
-        &self,
-        current_database: DatabaseSpecifier,
-        search_path: &[&str],
-        name: &PartialName,
-    ) -> Result<FullName, failure::Error>;
+    fn resolve(&self, name: &PartialName) -> Result<FullName, failure::Error>;
 
     fn resolve_schema(
         &self,
-        _: &DatabaseSpecifier,
         _: Option<String>,
         schema_name: &str,
     ) -> Result<DatabaseSpecifier, failure::Error>;
@@ -110,6 +106,10 @@ impl PlanCatalog for DummyCatalog {
         0
     }
 
+    fn session_database(&self) -> DatabaseSpecifier {
+        DatabaseSpecifier::Name("dummy".into())
+    }
+
     fn databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         unimplemented!();
     }
@@ -137,18 +137,12 @@ impl PlanCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn resolve(
-        &self,
-        _: DatabaseSpecifier,
-        _: &[&str],
-        _: &PartialName,
-    ) -> Result<FullName, failure::Error> {
+    fn resolve(&self, _: &PartialName) -> Result<FullName, failure::Error> {
         unimplemented!();
     }
 
     fn resolve_schema(
         &self,
-        _: &DatabaseSpecifier,
         _: Option<String>,
         _: &str,
     ) -> Result<DatabaseSpecifier, failure::Error> {
