@@ -41,6 +41,17 @@ services:
 
 mzconduct:
   workflows:
+    ci:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: perf-kinesis
+          daemon: false
+          command: perf-kinesis
+        - step: down
+          destroy_volumes: true
+
     load-test:
       steps:
         - step: workflow
