@@ -91,14 +91,24 @@ where
     K: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
     V: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
 {
-    /// A parallelization contract that hashes by keys
+    /// A parallelization contract that hashes by keys.
+    ///
+    /// It would not be ideal to use this in a case where the keys might be
+    /// empty (or for any other reason too often the same),
+    /// as that would lead to serial execution of whatever operator
+    /// is being "parallelized" by this contract.
+    ///
+    /// One good reason to use this (and as of this writing, apparently the only reason)
+    /// is for operators that need to do some dedpulication logic based on keys:
+    /// For example, upserts, or Debezium dedpulication based on MySQL binlog coordinates.
     pub fn key_contract() -> impl ParallelizationContract<Timestamp, Self>
     where
         K: Hashable<Output = u64>,
     {
         Exchange::new(|x: &Self| x.key.hashed())
     }
-    /// A parallelization contract that hashes by values
+    /// A parallelization contract that hashes by values.
+    /// Most decode logic should use this instead of `key_contract`.
     pub fn value_contract() -> impl ParallelizationContract<Timestamp, Self>
     where
         V: Hashable<Output = u64>,
