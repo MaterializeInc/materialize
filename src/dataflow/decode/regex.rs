@@ -9,14 +9,14 @@
 
 use crate::source::SourceOutput;
 use dataflow_types::{Diff, Timestamp};
-use differential_dataflow::Hashable;
+
 use log::warn;
 use regex::Regex;
 use repr::{Datum, Row};
 use std::cmp::max;
 use std::iter;
 use std::str;
-use timely::dataflow::channels::pact::Exchange;
+
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
