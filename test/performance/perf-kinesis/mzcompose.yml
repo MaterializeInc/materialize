@@ -48,7 +48,7 @@ mzconduct:
         - step: run
           service: perf-kinesis
           daemon: false
-          command: perf-kinesis
+          command: >-
         - step: down
           destroy_volumes: true
 
@@ -59,7 +59,7 @@ mzconduct:
         - step: run
           service: perf-kinesis
           daemon: true
-          command: perf-kinesis
+          command: >-
 
     # Helper workflows
 
