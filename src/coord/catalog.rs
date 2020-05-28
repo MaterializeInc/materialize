@@ -352,11 +352,54 @@ impl Catalog {
         self.storage().allocate_id()
     }
 
+    pub fn resolve_database(&self, database_spec: &DatabaseSpecifier) -> Result<(), Error> {
+        match database_spec {
+            DatabaseSpecifier::Ambient => Ok(()),
+            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
+                Some(_) => Ok(()),
+                None => Err(Error::new(ErrorKind::UnknownDatabase(name.into()))),
+            },
+        }
+    }
+
+    pub fn resolve_schema(
+        &self,
+        current_database: &DatabaseSpecifier,
+        database: Option<String>,
+        schema_name: &str,
+        conn_id: u32,
+    ) -> Result<DatabaseSpecifier, Error> {
+        if let Some(database) = database {
+            let database_spec = DatabaseSpecifier::Name(database);
+            if self
+                .get_schema(&database_spec, schema_name, conn_id)
+                .is_ok()
+            {
+                return Ok(database_spec);
+            }
+        } else {
+            if self
+                .get_schema(current_database, schema_name, conn_id)
+                .is_ok()
+            {
+                return Ok(current_database.clone());
+            }
+            if self
+                .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
+                .is_ok()
+            {
+                return Ok(DatabaseSpecifier::Ambient);
+            }
+        }
+        Err(Error::new(ErrorKind::UnknownSchema(schema_name.into())))
+    }
+
     /// Resolves [`PartialName`] into a [`FullName`].
     ///
     /// If `name` does not specify a database, the `current_database` is used.
     /// If `name` does not specify a schema, then the schemas in `search_path`
     /// are searched in order.
+    #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
         current_database: DatabaseSpecifier,
@@ -373,31 +416,46 @@ impl Catalog {
             });
         }
 
-        // Find the specified database, or `current_database` if no database was
-        // specified.
-        let database_name = name
-            .database
-            .as_ref()
-            .map(|n| DatabaseSpecifier::Name(n.clone()))
-            .unwrap_or(current_database);
-        let resolver = self.database_resolver(database_name)?;
+        // If a schema name was specified, just try to find the item in that
+        // schema. If no schema was specified, try to find the item in every
+        // schema in the search path.
+        //
+        // This is written strangely to work around limitations in Rust's
+        // temporary lifetime inference [0]. Ideally the following would work,
+        // but it does not:
+        //
+        //     let schemas = match name.schema {
+        //         Some(name) => &[name],
+        //         None => search_path,
+        //     }
+        //
+        // [0]: https://github.com/rust-lang/rust/issues/15023
+        let mut schemas = &[name.schema.as_deref().unwrap_or("")][..];
+        if name.schema.is_none() {
+            schemas = search_path;
+        }
 
-        if let Some(schema_name) = &name.schema {
-            // A schema name was specified, so just try to find the item in
-            // that schema.
-            if let Some(out) = resolver.resolve_item(schema_name, &name.item, conn_id) {
-                return Ok(out);
-            }
-        } else {
-            // No schema was specified, so try to find the item in every schema
-            // in the search path, in order.
-            for &schema_name in search_path {
-                if let Some(out) = resolver.resolve_item(schema_name, &name.item, conn_id) {
-                    return Ok(out);
+        for &schema_name in schemas {
+            let database_name = name.database.clone();
+            let res = self.resolve_schema(&current_database, database_name, schema_name, conn_id);
+            let database_spec = match res {
+                Ok(database_spec) => database_spec,
+                Err(Error {
+                    kind: ErrorKind::UnknownSchema(_),
+                    ..
+                }) => continue,
+                Err(e) => return Err(e),
+            };
+            if let Ok(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
+                if schema.items.contains_key(&name.item) {
+                    return Ok(FullName {
+                        database: database_spec,
+                        schema: schema_name.to_owned(),
+                        item: name.item.to_owned(),
+                    });
                 }
             }
         }
-
         Err(Error::new(ErrorKind::UnknownItem(name.to_string())))
     }
 
@@ -430,29 +488,6 @@ impl Catalog {
     /// Returns an iterator over the name of each database in the catalog.
     pub fn databases(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(String::as_str)
-    }
-
-    pub fn database_resolver<'a>(
-        &'a self,
-        database_spec: DatabaseSpecifier,
-    ) -> Result<DatabaseResolver<'a>, Error> {
-        match &database_spec {
-            DatabaseSpecifier::Ambient => Ok(DatabaseResolver {
-                database_spec,
-                database: &EMPTY_DATABASE,
-                ambient_schemas: &self.ambient_schemas,
-                temporary_schemas: &self.temporary_schemas,
-            }),
-            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
-                Some(database) => Ok(DatabaseResolver {
-                    database_spec,
-                    database,
-                    ambient_schemas: &self.ambient_schemas,
-                    temporary_schemas: &self.temporary_schemas,
-                }),
-                None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
-            },
-        }
     }
 
     /// Creates a new schema in the `Catalog` for temporary items
@@ -1045,57 +1080,6 @@ pub enum OpStatus {
     DroppedItem(CatalogEntry),
 }
 
-/// A helper for resolving schema and item names within one database.
-pub struct DatabaseResolver<'a> {
-    database_spec: DatabaseSpecifier,
-    database: &'a Database,
-    ambient_schemas: &'a BTreeMap<String, Schema>,
-    temporary_schemas: &'a HashMap<u32, Schema>,
-}
-
-impl<'a> DatabaseResolver<'a> {
-    /// Attempts to resolve the item specified by `schema_name` and `item_name`
-    /// in the database that this resolver is attached to, or in the set of
-    /// ambient schemas.
-    pub fn resolve_item(
-        &self,
-        schema_name: &str,
-        item_name: &str,
-        conn_id: u32,
-    ) -> Option<FullName> {
-        if let Some(schema) = self.database.schemas.get(schema_name) {
-            if schema.items.contains_key(item_name) {
-                return Some(FullName {
-                    database: self.database_spec.clone(),
-                    schema: schema_name.to_owned(),
-                    item: item_name.to_owned(),
-                });
-            }
-        }
-        if let Some(schema) = self.ambient_schemas.get(schema_name) {
-            if schema.items.contains_key(item_name) {
-                return Some(FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: schema_name.to_owned(),
-                    item: item_name.to_owned(),
-                });
-            }
-        }
-        if schema_name == "mz_temp" {
-            let schema = &self.temporary_schemas[&conn_id];
-            if schema.items.contains_key(item_name) {
-                return Some(FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: schema_name.to_owned(),
-                    item: item_name.to_owned(),
-                });
-            }
-        }
-
-        None
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum SerializedCatalogItem {
     V1 {
@@ -1195,24 +1179,12 @@ impl PlanCatalog for ConnCatalog<'_> {
     fn resolve_schema(
         &self,
         current_database: &DatabaseSpecifier,
-        database: Option<&DatabaseSpecifier>,
+        database: Option<String>,
         schema_name: &str,
     ) -> Result<DatabaseSpecifier, failure::Error> {
-        let database_specs = if let Some(database) = database {
-            vec![database]
-        } else {
-            vec![current_database, &DatabaseSpecifier::Ambient]
-        };
-        for database_spec in database_specs {
-            if self
-                .catalog
-                .get_schema(&database_spec, schema_name, self.conn_id)
-                .is_ok()
-            {
-                return Ok(database_spec.clone());
-            }
-        }
-        Err(Error::new(ErrorKind::UnknownSchema(schema_name.into())).into())
+        Ok(self
+            .catalog
+            .resolve_schema(current_database, database, schema_name, self.conn_id)?)
     }
 }
 
