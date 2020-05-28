@@ -140,6 +140,7 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
 use crate::server::{TimestampChanges, TimestampHistories};
+use source::SourceOutput;
 
 mod arrange_by;
 mod context;
@@ -384,16 +385,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             } else {
                                 let ((ok_source, err_source), capability) = match connector {
                                     ExternalSourceConnector::Kafka(kc) => {
-                                        let (source, capability) = source::kafka(source_config, kc);
-                                        (
-                                            (
-                                                source.map(|(_key, (payload, aux_num))| {
-                                                    (payload, aux_num)
-                                                }),
-                                                operator::empty(region),
-                                            ),
-                                            capability,
-                                        )
+                                        let (ok_source, cap) = source::kafka(source_config, kc);
+                                        ((ok_source, operator::empty(region)), cap)
                                     }
                                     ExternalSourceConnector::Kinesis(kc) => {
                                         let (ok_source, cap) = source::kinesis(source_config, kc);
@@ -714,15 +707,13 @@ pub(crate) fn build_dataflow<A: Allocate>(
 /// greatest offset: its action summarizes the sequence of many actions that
 /// occur at the same moment and so are not distinguishable.
 fn prepare_upsert_by_max_offset<G>(
-    stream: &Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>,
+    stream: &Stream<G, (SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)>,
 ) -> Stream<G, ((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     stream.unary_frontier(
-        Exchange::new(
-            move |&((ref k, _), _): &((Vec<u8>, (Vec<u8>, Option<i64>)), Timestamp)| k.hashed(),
-        ),
+        Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
         "UpsertCompaction",
         |_cap, _info| {
             let mut values = HashMap::<_, HashMap<_, (Vec<u8>, Option<i64>)>>::new();
@@ -732,20 +723,28 @@ where
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
-                    for ((key, val), time) in vector.drain(..) {
+                    for (
+                        SourceOutput {
+                            key,
+                            value: val,
+                            position,
+                        },
+                        time,
+                    ) in vector.drain(..)
+                    {
                         let value = values
                             .entry(cap.delayed(&time))
                             .or_insert_with(HashMap::new)
                             .entry(key)
                             .or_insert_with(Default::default);
 
-                        if let Some(new_offset) = val.1 {
+                        if let Some(new_offset) = position {
                             if let Some(offset) = value.1 {
                                 if offset < new_offset {
-                                    *value = val;
+                                    *value = (val, position);
                                 }
                             } else {
-                                *value = val;
+                                *value = (val, position);
                             }
                         }
                     }

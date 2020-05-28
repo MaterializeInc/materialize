@@ -24,7 +24,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
 
 use super::util::source;
-use super::{SourceConfig, SourceStatus, SourceToken};
+use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
 use crate::metrics::EVENTS_COUNTER;
 
 lazy_static! {
@@ -55,7 +55,10 @@ const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 pub fn kinesis<G>(
     config: SourceConfig<G>,
     connector: KinesisSourceConnector,
-) -> (Stream<G, (Vec<u8>, Option<i64>)>, Option<SourceToken>)
+) -> (
+    Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    Option<SourceToken>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -175,7 +178,12 @@ where
                     for record in get_records_output.records {
                         let data = record.data.as_ref().to_vec();
                         bytes_read += data.len() as i64;
-                        output.session(&cap).give((data, None));
+                        // We don't do anything with keys; just send vec![] for now.
+                        // Kinesis doesn't have "primary keys" but it does have "partition keys" and "sequence numbers"; maybe
+                        // one or both of those could be useful...
+                        output
+                            .session(&cap)
+                            .give(SourceOutput::new(vec![], data, None));
                         events_success += 1;
                     }
                     downgrade_capability(cap, &name);
