@@ -109,7 +109,7 @@ pub async fn generate_and_put_records(
             thread::sleep(Duration::from_secs(1) - elapsed);
         } else {
             log::info!(
-                "Expected to put {} records in 1s, took {}",
+                "Expected to put {} records in 1s, took {:#?}",
                 records_per_second,
                 elapsed
             );

@@ -86,10 +86,7 @@ pub async fn query_materialized_view_until(
         if elapsed < Duration::from_secs(1) {
             tokio::time::delay_for(Duration::from_secs(1) - elapsed).await;
         } else {
-            log::info!(
-                "Expected to query for records in 1s, took {}",
-                elapsed
-            );
+            log::info!("Expected to query for records in 1s, took {:#?}", elapsed);
         }
     }
     Ok(())
