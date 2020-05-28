@@ -79,8 +79,8 @@ create_source_text_kafka ::=
     )
   )?
 create_view ::=
-  'CREATE' 'VIEW' view_name 'AS' select_stmt |
-  'CREATE' 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
