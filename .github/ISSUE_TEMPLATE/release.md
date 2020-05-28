@@ -117,7 +117,6 @@ All of these tests can be run in parallel.
 
   - [ ] The billing-demo container should run and finish without error.
 
-
 - [ ] Run the perf-kinesis load test on the tag.
 
   - [ ] Spin up a fresh VM and start the load test. To start the load test, ssh
