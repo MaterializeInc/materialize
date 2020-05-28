@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
 use std::iter;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -22,11 +21,10 @@ use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use sql::catalog::{CatalogItemType, PlanCatalog, PlanCatalogEntry};
-use sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
+use sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -60,6 +58,7 @@ pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 /// The catalog also maintains special "ambient schemas": virtual schemas,
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
+#[derive(Debug)]
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
@@ -67,7 +66,7 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     storage: Arc<Mutex<storage::Connection>>,
-    creation_time: SystemTime,
+    startup_time: SystemTime,
     nonce: u64,
 }
 
@@ -75,8 +74,14 @@ pub struct Catalog {
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
     conn_id: u32,
-    database: DatabaseSpecifier,
+    database: String,
     search_path: &'a [&'a str],
+}
+
+impl ConnCatalog<'_> {
+    fn database_spec(&self) -> DatabaseSpecifier {
+        DatabaseSpecifier::Name(self.database.clone())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -267,7 +272,7 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
-            creation_time: SystemTime::now(),
+            startup_time: SystemTime::now(),
             nonce: rand::random(),
         };
         catalog.create_temporary_schema(SYSTEM_CONN_ID);
@@ -343,7 +348,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
-            database: session.database(),
+            database: session.database().into(),
             search_path: session.search_path(),
         }
     }
@@ -352,7 +357,7 @@ impl Catalog {
         ConnCatalog {
             catalog: self,
             conn_id: SYSTEM_CONN_ID,
-            database: DatabaseSpecifier::Ambient,
+            database: "materialize".into(),
             search_path: &[],
         }
     }
@@ -367,16 +372,6 @@ impl Catalog {
 
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().allocate_id()
-    }
-
-    pub fn resolve_database(&self, database_spec: &DatabaseSpecifier) -> Result<(), Error> {
-        match database_spec {
-            DatabaseSpecifier::Ambient => Ok(()),
-            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
-                Some(_) => Ok(()),
-                None => Err(Error::new(ErrorKind::UnknownDatabase(name.into()))),
-            },
-        }
     }
 
     pub fn resolve_schema(
@@ -417,15 +412,6 @@ impl Catalog {
         name: &PartialName,
         conn_id: u32,
     ) -> Result<FullName, Error> {
-        if let (Some(database_name), Some(schema_name)) = (&name.database, &name.schema) {
-            // `name` is fully specified already. No resolution required.
-            return Ok(FullName {
-                database: DatabaseSpecifier::Name(database_name.to_owned()),
-                schema: schema_name.to_owned(),
-                item: name.item.clone(),
-            });
-        }
-
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in every
         // schema in the search path.
@@ -1014,25 +1000,6 @@ impl Catalog {
     pub fn dump(&self) -> String {
         serde_json::to_string(&self.by_name).expect("serialization cannot fail")
     }
-
-    pub fn creation_time(&self) -> SystemTime {
-        self.creation_time
-    }
-
-    pub fn nonce(&self) -> u64 {
-        self.nonce
-    }
-}
-
-impl fmt::Debug for Catalog {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.debug_struct("Catalog")
-            .field("by_name", &self.by_name)
-            .field("by_id", &self.by_id)
-            .field("ambient_schemas", &self.ambient_schemas)
-            .field("storage", &self.storage)
-            .finish()
-    }
 }
 
 impl IdHumanizer for Catalog {
@@ -1113,67 +1080,24 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
-impl PlanCatalog for ConnCatalog<'_> {
-    fn creation_time(&self) -> SystemTime {
-        self.catalog.creation_time()
+impl sql::catalog::Catalog for ConnCatalog<'_> {
+    fn startup_time(&self) -> SystemTime {
+        self.catalog.startup_time
     }
 
     fn nonce(&self) -> u64 {
-        self.catalog.nonce()
+        self.catalog.nonce
     }
 
-    fn session_database(&self) -> DatabaseSpecifier {
-        self.database.clone()
+    fn default_database(&self) -> &str {
+        &self.database
     }
 
-    fn databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.catalog.databases())
-    }
-
-    fn get(&self, name: &FullName) -> Result<&dyn PlanCatalogEntry, failure::Error> {
-        Ok(self.catalog.get(name, self.conn_id)?)
-    }
-
-    fn get_by_id(&self, id: &GlobalId) -> &dyn PlanCatalogEntry {
-        self.catalog.get_by_id(id)
-    }
-
-    fn get_schemas<'a>(
-        &'a self,
-        database_spec: &DatabaseSpecifier,
-    ) -> Result<Box<dyn Iterator<Item = &'a str> + 'a>, failure::Error> {
-        match database_spec {
-            DatabaseSpecifier::Ambient => Ok(Box::new(
-                self.catalog
-                    .ambient_schemas
-                    .keys()
-                    .map(|s| s.as_str())
-                    .chain(iter::once(MZ_TEMP_SCHEMA)),
-            )),
-            DatabaseSpecifier::Name(n) => match self.catalog.by_name.get(n) {
-                Some(db) => Ok(Box::new(db.schemas.keys().map(|s| s.as_str()))),
-                None => Err(Error::new(ErrorKind::UnknownDatabase(n.into())).into()),
-            },
+    fn resolve_database(&self, database_name: &str) -> Result<(), failure::Error> {
+        match self.catalog.by_name.get(database_name) {
+            Some(_) => Ok(()),
+            None => Err(Error::new(ErrorKind::UnknownDatabase(database_name.into())).into()),
         }
-    }
-
-    fn get_items<'a>(
-        &'a self,
-        database_spec: &DatabaseSpecifier,
-        schema_name: &str,
-    ) -> Result<Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>, failure::Error> {
-        let schema = self
-            .catalog
-            .get_schema(database_spec, schema_name, self.conn_id)?;
-        Ok(Box::new(schema.items.values().map(move |id| {
-            self.catalog.get_by_id(id) as &dyn PlanCatalogEntry
-        })))
-    }
-
-    fn resolve(&self, name: &PartialName) -> Result<FullName, failure::Error> {
-        Ok(self
-            .catalog
-            .resolve(self.database.clone(), self.search_path, name, self.conn_id)?)
     }
 
     fn resolve_schema(
@@ -1181,13 +1105,70 @@ impl PlanCatalog for ConnCatalog<'_> {
         database: Option<String>,
         schema_name: &str,
     ) -> Result<DatabaseSpecifier, failure::Error> {
+        Ok(self.catalog.resolve_schema(
+            &self.database_spec(),
+            database,
+            schema_name,
+            self.conn_id,
+        )?)
+    }
+
+    fn resolve_item(&self, name: &PartialName) -> Result<FullName, failure::Error> {
         Ok(self
             .catalog
-            .resolve_schema(&self.database, database, schema_name, self.conn_id)?)
+            .resolve(self.database_spec(), self.search_path, name, self.conn_id)?)
+    }
+
+    fn list_databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
+        Box::new(self.catalog.databases())
+    }
+
+    fn list_schemas<'a>(
+        &'a self,
+        database_spec: &DatabaseSpecifier,
+    ) -> Box<dyn Iterator<Item = &'a str> + 'a> {
+        match database_spec {
+            DatabaseSpecifier::Ambient => Box::new(
+                self.catalog
+                    .ambient_schemas
+                    .keys()
+                    .map(|s| s.as_str())
+                    .chain(iter::once(MZ_TEMP_SCHEMA)),
+            ),
+            DatabaseSpecifier::Name(n) => {
+                let schemas = &self.catalog.by_name[n].schemas;
+                Box::new(schemas.keys().map(|s| s.as_str()))
+            }
+        }
+    }
+
+    fn list_items<'a>(
+        &'a self,
+        database_spec: &DatabaseSpecifier,
+        schema_name: &str,
+    ) -> Box<dyn Iterator<Item = &'a dyn sql::catalog::CatalogItem> + 'a> {
+        let schema = self
+            .catalog
+            .get_schema(database_spec, schema_name, self.conn_id)
+            .unwrap();
+        Box::new(
+            schema
+                .items
+                .values()
+                .map(move |id| self.catalog.get_by_id(id) as &dyn sql::catalog::CatalogItem),
+        )
+    }
+
+    fn get_item(&self, name: &FullName) -> &dyn sql::catalog::CatalogItem {
+        self.catalog.get(name, self.conn_id).unwrap()
+    }
+
+    fn get_item_by_id(&self, id: &GlobalId) -> &dyn sql::catalog::CatalogItem {
+        self.catalog.get_by_id(id)
     }
 }
 
-impl PlanCatalogEntry for CatalogEntry {
+impl sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &FullName {
         self.name()
     }
@@ -1218,12 +1199,12 @@ impl PlanCatalogEntry for CatalogEntry {
         }
     }
 
-    fn item_type(&self) -> CatalogItemType {
+    fn item_type(&self) -> sql::catalog::CatalogItemType {
         match self.item() {
-            CatalogItem::Source(_) => CatalogItemType::Source,
-            CatalogItem::Sink(_) => CatalogItemType::Sink,
-            CatalogItem::View(_) => CatalogItemType::View,
-            CatalogItem::Index(_) => CatalogItemType::Index,
+            CatalogItem::Source(_) => sql::catalog::CatalogItemType::Source,
+            CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
+            CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
+            CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
         }
     }
 

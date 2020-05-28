@@ -98,8 +98,8 @@ pub fn create_statement(
         ))
     };
 
-    let resolve_name = |name: &ObjectName| -> Result<_, failure::Error> {
-        Ok(unresolve(scx.resolve_name(name.clone())?))
+    let resolve_item = |name: &ObjectName| -> Result<_, failure::Error> {
+        Ok(unresolve(scx.resolve_item(name.clone())?))
     };
 
     struct QueryNormalizer<'a> {
@@ -153,7 +153,7 @@ pub fn create_statement(
         }
 
         fn visit_object_name(&mut self, object_name: &'ast mut ObjectName) {
-            match self.scx.resolve_name(object_name.clone()) {
+            match self.scx.resolve_item(object_name.clone()) {
                 Ok(full_name) => *object_name = unresolve(full_name),
                 Err(e) => self.err = Some(e),
             };
@@ -195,7 +195,7 @@ pub fn create_statement(
             if_not_exists,
         } => {
             *name = allocate_name(name)?;
-            *from = resolve_name(from)?;
+            *from = resolve_item(from)?;
             *if_not_exists = false;
         }
 
@@ -230,7 +230,7 @@ pub fn create_statement(
             key_parts,
             if_not_exists,
         } => {
-            *on_name = resolve_name(on_name)?;
+            *on_name = resolve_item(on_name)?;
             let mut normalizer = QueryNormalizer { scx, err: None };
             for key_part in key_parts {
                 normalizer.visit_expr(key_part);

@@ -37,9 +37,9 @@ use tokio_postgres::types::FromSql;
 use pgrepr::Jsonb;
 use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use sql::catalog::Catalog;
 use sql::{
-    normalize, scalar_type_from_sql, FullName, MutationKind, Plan, PlanCatalog, PlanContext,
-    StatementContext,
+    normalize, scalar_type_from_sql, FullName, MutationKind, Plan, PlanContext, StatementContext,
 };
 
 pub struct Postgres {
@@ -123,7 +123,7 @@ END $$;
     pub async fn execute(
         &mut self,
         pcx: &PlanContext,
-        catalog: &dyn PlanCatalog,
+        catalog: &dyn Catalog,
         stmt: &Statement,
     ) -> Result<Plan, failure::Error> {
         let scx = StatementContext { pcx, catalog };
@@ -216,7 +216,7 @@ END $$;
                 self.client.execute(&*stmt.to_string(), &[]).await?;
                 let mut items = vec![];
                 for name in names {
-                    let name = match scx.resolve_name(name.clone()) {
+                    let name = match scx.resolve_item(name.clone()) {
                         Ok(name) => name,
                         Err(err) => {
                             if *if_exists {
@@ -226,16 +226,7 @@ END $$;
                             }
                         }
                     };
-                    match catalog.get(&name).ok() {
-                        None => {
-                            if !if_exists {
-                                bail!("internal error: table {} missing from catalog", name);
-                            }
-                        }
-                        Some(entry) => {
-                            items.push(entry.id());
-                        }
-                    }
+                    items.push(catalog.get_item(&name).id());
                 }
                 Plan::DropItems {
                     items,
@@ -244,14 +235,14 @@ END $$;
             }
             Statement::Delete { table_name, .. } => {
                 let mut updates = vec![];
-                let table_name = scx.resolve_name(table_name.clone())?;
+                let table_name = scx.resolve_item(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, -1));
                 }
                 let affected_rows = updates.len();
                 Plan::SendDiffs {
-                    id: catalog.get(&table_name)?.id(),
+                    id: catalog.get_item(&table_name).id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Delete,
@@ -259,14 +250,14 @@ END $$;
             }
             Statement::Insert { table_name, .. } => {
                 let mut updates = vec![];
-                let table_name = scx.resolve_name(table_name.clone())?;
+                let table_name = scx.resolve_item(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(&table_name, sql).await? {
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
                 Plan::SendDiffs {
-                    id: catalog.get(&table_name)?.id(),
+                    id: catalog.get_item(&table_name).id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Insert,
@@ -279,7 +270,7 @@ END $$;
             } => {
                 let mut updates = vec![];
                 let mut sql = format!("SELECT * FROM {}", table_name);
-                let table_name = scx.resolve_name(table_name.clone())?;
+                let table_name = scx.resolve_item(table_name.clone())?;
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
                 }
@@ -293,7 +284,7 @@ END $$;
                 }
                 assert_eq!(affected_rows * 2, updates.len());
                 Plan::SendDiffs {
-                    id: catalog.get(&table_name)?.id(),
+                    id: catalog.get_item(&table_name).id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Update,

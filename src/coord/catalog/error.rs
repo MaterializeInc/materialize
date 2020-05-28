@@ -92,9 +92,7 @@ impl fmt::Display for Error {
             ErrorKind::ReadOnlySystemSchema(name) => {
                 write!(f, "system schema '{}' cannot be modified", name)
             }
-            ErrorKind::SchemaNotEmpty(name) => {
-                write!(f, "cannot drop non-empty schema '{}'", name)
-            }
+            ErrorKind::SchemaNotEmpty(name) => write!(f, "cannot drop non-empty schema '{}'", name),
             ErrorKind::TemporaryItem(name) => write!(
                 f,
                 "non-temporary items cannot depend on temporary item '{}'",

@@ -45,6 +45,7 @@ use expr::{
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
+use sql::catalog::Catalog as _;
 use sql::{
     DatabaseSpecifier, ExplainOptions, FullName, MutationKind, ObjectType, Params, Plan,
     PlanContext, PreparedStatement, Session, Statement,
@@ -319,7 +320,11 @@ where
             match msg {
                 Message::Command(Command::Startup { session, tx }) => {
                     let mut messages = vec![];
-                    if self.catalog.resolve_database(&session.database()).is_err() {
+                    let catalog = self.catalog.for_session(&session);
+                    if catalog
+                        .resolve_database(catalog.default_database())
+                        .is_err()
+                    {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
                     self.catalog.create_temporary_schema(session.conn_id());
@@ -546,7 +551,9 @@ where
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
             .expect("unable to drop temporary items for conn_id");
-        self.catalog.drop_temporary_schema(conn_id).expect("unable to drop temporary schema");
+        self.catalog
+            .drop_temporary_schema(conn_id)
+            .expect("unable to drop temporary schema");
     }
 
     fn sequence_plan(

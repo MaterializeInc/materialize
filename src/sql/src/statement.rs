@@ -12,7 +12,6 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::HashMap;
-use std::iter;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -40,7 +39,7 @@ use sql_parser::ast::{
     SqlOption, Statement, Value,
 };
 
-use crate::catalog::{CatalogItemType, PlanCatalog};
+use crate::catalog::{Catalog, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::pure::Schema;
@@ -99,7 +98,7 @@ pub fn make_show_objects_desc(
 }
 
 pub fn describe_statement(
-    catalog: &dyn PlanCatalog,
+    catalog: &dyn Catalog,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
     let pcx = &PlanContext::default();
@@ -200,8 +199,8 @@ pub fn describe_statement(
         }
 
         Statement::Tail { name, .. } => {
-            let name = scx.resolve_name(name)?;
-            let sql_object = scx.catalog.get(&name)?;
+            let name = scx.resolve_item(name)?;
+            let sql_object = scx.catalog.get_item(&name);
             (Some(sql_object.desc()?.clone()), vec![])
         }
 
@@ -224,7 +223,7 @@ pub fn describe_statement(
 
 pub fn handle_statement(
     pcx: &PlanContext,
-    catalog: &dyn PlanCatalog,
+    catalog: &dyn Catalog,
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
@@ -330,8 +329,8 @@ fn handle_tail(
     with_snapshot: bool,
     as_of: Option<sql_parser::ast::Expr>,
 ) -> Result<Plan, failure::Error> {
-    let from = scx.resolve_name(from)?;
-    let entry = scx.catalog.get(&from)?;
+    let from = scx.resolve_item(from)?;
+    let entry = scx.catalog.get_item(&from);
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
 
     match entry.item_type() {
@@ -370,7 +369,7 @@ fn handle_show_databases(
 ) -> Result<Plan, failure::Error> {
     let rows = scx
         .catalog
-        .databases()
+        .list_databases()
         .map(|database| vec![Datum::from(database)])
         .collect();
 
@@ -404,16 +403,11 @@ fn handle_show_objects(
 
     if let ObjectType::Schema = object_type {
         let schemas = if let Some(from) = from {
-            if from.0.len() != 1 {
-                bail!(
-                    "database name '{}' does not have exactly one component",
-                    from
-                );
-            }
-            let database_spec = DatabaseSpecifier::Name(normalize::ident(from.0[0].clone()));
-            scx.catalog.get_schemas(&database_spec)?
+            let database_name = scx.resolve_database(from)?;
+            scx.catalog
+                .list_schemas(&DatabaseSpecifier::Name(database_name))
         } else {
-            scx.catalog.get_schemas(&scx.catalog.session_database())?
+            scx.catalog.list_schemas(&scx.resolve_default_database()?)
         };
 
         let mut rows = vec![];
@@ -421,10 +415,7 @@ fn handle_show_objects(
             rows.push(make_row(name, "USER"));
         }
         if extended {
-            let ambient_schemas = scx
-                .catalog
-                .get_schemas(&DatabaseSpecifier::Ambient)
-                .expect("ambient database should always exist");
+            let ambient_schemas = scx.catalog.list_schemas(&DatabaseSpecifier::Ambient);
             for name in ambient_schemas {
                 rows.push(make_row(name, "SYSTEM"));
             }
@@ -440,14 +431,10 @@ fn handle_show_objects(
     } else {
         let items = if let Some(from) = from {
             let (database_spec, schema_name) = scx.resolve_schema(from)?;
-            scx.catalog
-                .get_items(&database_spec, &schema_name)
-                .expect("schema known to exist")
+            scx.catalog.list_items(&database_spec, &schema_name)
         } else {
             scx.catalog
-                .get_items(&scx.catalog.session_database(), "public")
-                .ok()
-                .unwrap_or_else(|| Box::new(iter::empty()))
+                .list_items(&scx.resolve_default_database()?, "public")
         };
 
         let filtered_items =
@@ -497,8 +484,8 @@ fn handle_show_indexes(
     if extended {
         unsupported!("SHOW EXTENDED INDEXES")
     }
-    let from_name = scx.resolve_name(from_name)?;
-    let from_entry = scx.catalog.get(&from_name)?;
+    let from_name = scx.resolve_item(from_name)?;
+    let from_entry = scx.catalog.get_item(&from_name);
     if !object_type_matches(ObjectType::View, from_entry.item_type())
         && !object_type_matches(ObjectType::Source, from_entry.item_type())
     {
@@ -512,7 +499,7 @@ fn handle_show_indexes(
     let rows = from_entry
         .used_by()
         .iter()
-        .map(|id| scx.catalog.get_by_id(id))
+        .map(|id| scx.catalog.get_item_by_id(id))
         .filter(|entry| {
             object_type_matches(ObjectType::Index, entry.item_type())
                 && entry.uses() == vec![from_entry.id()]
@@ -528,7 +515,7 @@ fn handle_show_indexes(
             };
             let mut row_subset = Vec::new();
             for (i, (key_expr, key_sql)) in keys.iter().zip_eq(key_sqls).enumerate() {
-                let desc = scx.catalog.get_by_id(&on).desc().unwrap();
+                let desc = scx.catalog.get_item_by_id(&on).desc().unwrap();
                 let key_sql = key_sql.to_string();
                 let (col_name, func) = match key_expr {
                     expr::ScalarExpr::Column(i) => {
@@ -572,10 +559,10 @@ fn handle_show_columns(
     }
 
     let arena = RowArena::new();
-    let table_name = scx.resolve_name(table_name)?;
+    let table_name = scx.resolve_item(table_name)?;
     let rows: Vec<_> = scx
         .catalog
-        .get(&table_name)?
+        .get_item(&table_name)
         .desc()?
         .iter()
         .map(|(name, typ)| {
@@ -595,8 +582,8 @@ fn handle_show_create_view(
     scx: &StatementContext,
     name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let name = scx.resolve_name(name)?;
-    let entry = scx.catalog.get(&name)?;
+    let name = scx.resolve_item(name)?;
+    let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::View = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
             Datum::String(&name.to_string()),
@@ -611,8 +598,8 @@ fn handle_show_create_source(
     scx: &StatementContext,
     name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let name = scx.resolve_name(name)?;
-    let entry = scx.catalog.get(&name)?;
+    let name = scx.resolve_item(name)?;
+    let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::Source = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
             Datum::String(&name.to_string()),
@@ -627,8 +614,8 @@ fn handle_show_create_sink(
     scx: &StatementContext,
     name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let name = scx.resolve_name(name)?;
-    let entry = scx.catalog.get(&name)?;
+    let name = scx.resolve_item(name)?;
+    let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::Sink = entry.item_type() {
         Ok(Plan::SendRows(vec![Row::pack(&[
             Datum::String(&name.to_string()),
@@ -729,11 +716,11 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     };
 
     let name = scx.allocate_name(normalize::object_name(name)?);
-    let from = scx.catalog.get(&scx.resolve_name(from)?)?;
+    let from = scx.catalog.get_item(&scx.resolve_item(from)?);
     let suffix = format!(
         "{}-{}",
         scx.catalog
-            .creation_time()
+            .startup_time()
             .duration_since(UNIX_EPOCH)?
             .as_secs(),
         scx.catalog.nonce()
@@ -775,8 +762,8 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
         } => (name, on_name, key_parts, if_not_exists),
         _ => unreachable!(),
     };
-    let on_name = scx.resolve_name(on_name)?;
-    let catalog_entry = scx.catalog.get(&on_name)?;
+    let on_name = scx.resolve_item(on_name)?;
+    let catalog_entry = scx.catalog.get_item(&on_name);
     let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
     if !object_type_matches(ObjectType::View, catalog_entry.item_type())
         && !object_type_matches(ObjectType::Source, catalog_entry.item_type())
@@ -826,11 +813,10 @@ fn handle_create_schema(
             .pop()
             .expect("names always have at least one component"),
     );
-    let database_name = name
-        .0
-        .pop()
-        .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
-        .unwrap_or_else(|| scx.catalog.session_database());
+    let database_name = match name.0.pop() {
+        None => DatabaseSpecifier::Name(scx.catalog.default_database().into()),
+        Some(n) => DatabaseSpecifier::Name(normalize::ident(n)),
+    };
     Ok(Plan::CreateSchema {
         database_name,
         schema_name,
@@ -872,10 +858,11 @@ fn handle_create_view(
     } else {
         scx.allocate_name(normalize::object_name(name.to_owned())?)
     };
-    let replace = if *if_exists == IfExistsBehavior::Replace {
-        let if_exists = true;
+    let replace = if *if_exists == IfExistsBehavior::Replace
+        && scx.catalog.resolve_item(&name.clone().into()).is_ok()
+    {
         let cascade = false;
-        handle_drop_item(scx, ObjectType::View, if_exists, &name, cascade)?
+        handle_drop_item(scx, ObjectType::View, &name, cascade)?
     } else {
         None
     };
@@ -1347,16 +1334,18 @@ fn handle_drop_database(
     name: Ident,
     if_exists: bool,
 ) -> Result<Plan, failure::Error> {
-    let name = normalize::ident(name);
-    let spec = DatabaseSpecifier::Name(name.clone());
-    match scx.catalog.get_schemas(&spec) {
-        Ok(_) => (),
+    let name = match scx.resolve_database_ident(name) {
+        Ok(name) => name,
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the database
             // does not exist.
+            //
+            // TODO(benesch): adjust the type here so we can more clearly
+            // indicate that we don't want to drop any database at all.
+            String::new()
         }
         Err(err) => return Err(err),
-    }
+    };
     Ok(Plan::DropDatabase { name })
 }
 
@@ -1393,10 +1382,7 @@ fn handle_drop_schema(
                     schema_name
                 );
             }
-            let mut items = scx
-                .catalog
-                .get_items(&database_spec, &schema_name)
-                .expect("schema known to exist");
+            let mut items = scx.catalog.list_items(&database_spec, &schema_name);
             if !cascade && items.next().is_some() {
                 bail!(
                     "schema '{}.{}' cannot be dropped without CASCADE while it contains objects",
@@ -1432,18 +1418,12 @@ fn handle_drop_items(
 ) -> Result<Plan, failure::Error> {
     let names = names
         .into_iter()
-        .map(|n| scx.resolve_name(n))
+        .map(|n| scx.resolve_item(n))
         .collect::<Vec<_>>();
     let mut ids = vec![];
     for name in names {
         match name {
-            Ok(name) => ids.extend(handle_drop_item(
-                scx,
-                object_type,
-                if_exists,
-                &name,
-                cascade,
-            )?),
+            Ok(name) => ids.extend(handle_drop_item(scx, object_type, &name, cascade)?),
             Err(_) if if_exists => {
                 // TODO(benesch): generate a notice indicating this
                 // item does not exist.
@@ -1460,45 +1440,35 @@ fn handle_drop_items(
 fn handle_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
-    if_exists: bool,
     name: &FullName,
     cascade: bool,
 ) -> Result<Option<GlobalId>, failure::Error> {
-    match scx.catalog.get(name) {
-        Ok(catalog_entry) => {
-            if catalog_entry.id().is_system() {
-                bail!(
-                    "cannot drop item {} because it is required by the database system",
-                    name
-                );
-            }
-            if !object_type_matches(object_type, catalog_entry.item_type()) {
-                bail!("{} is not of type {}", name, object_type);
-            }
-            if !cascade {
-                for id in catalog_entry.used_by() {
-                    let dep = scx.catalog.get_by_id(id);
-                    match dep.item_type() {
-                        CatalogItemType::Source | CatalogItemType::View | CatalogItemType::Sink => {
-                            bail!(
-                                "cannot drop {}: still depended upon by catalog item '{}'",
-                                catalog_entry.name(),
-                                dep.name()
-                            );
-                        }
-                        CatalogItemType::Index => (),
-                    }
-                }
-            }
-            Ok(Some(catalog_entry.id()))
-        }
-        Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating this
-            // item does not exist.
-            Ok(None)
-        }
-        Err(err) => Err(err),
+    let catalog_entry = scx.catalog.get_item(name);
+    if catalog_entry.id().is_system() {
+        bail!(
+            "cannot drop item {} because it is required by the database system",
+            name
+        );
     }
+    if !object_type_matches(object_type, catalog_entry.item_type()) {
+        bail!("{} is not of type {}", name, object_type);
+    }
+    if !cascade {
+        for id in catalog_entry.used_by() {
+            let dep = scx.catalog.get_item_by_id(id);
+            match dep.item_type() {
+                CatalogItemType::Source | CatalogItemType::View | CatalogItemType::Sink => {
+                    bail!(
+                        "cannot drop {}: still depended upon by catalog item '{}'",
+                        catalog_entry.name(),
+                        dep.name()
+                    );
+                }
+                CatalogItemType::Index => (),
+            }
+        }
+    }
+    Ok(Some(catalog_entry.id()))
 }
 
 fn handle_select(
@@ -1529,8 +1499,8 @@ fn handle_explain(
     };
     let (scx, sql, query) = match explainee {
         Explainee::View(name) => {
-            let full_name = scx.resolve_name(name.clone())?;
-            let entry = scx.catalog.get(&full_name)?;
+            let full_name = scx.resolve_item(name.clone())?;
+            let entry = scx.catalog.get_item(&full_name);
             if entry.item_type() != CatalogItemType::View {
                 bail!(
                     "Expected {} to be a view, not a {}",
@@ -1622,7 +1592,7 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct StatementContext<'a> {
     pub pcx: &'a PlanContext,
-    pub catalog: &'a dyn PlanCatalog,
+    pub catalog: &'a dyn Catalog,
 }
 
 impl<'a> StatementContext<'a> {
@@ -1630,7 +1600,7 @@ impl<'a> StatementContext<'a> {
         FullName {
             database: match name.database {
                 Some(name) => DatabaseSpecifier::Name(name),
-                None => self.catalog.session_database(),
+                None => DatabaseSpecifier::Name(self.catalog.default_database().into()),
             },
             schema: name.schema.unwrap_or_else(|| "public".into()),
             item: name.item,
@@ -1643,6 +1613,28 @@ impl<'a> StatementContext<'a> {
             schema: "mz_temp".to_owned(),
             item: name.item,
         }
+    }
+
+    pub fn resolve_default_database(&self) -> Result<DatabaseSpecifier, failure::Error> {
+        let name = self.catalog.default_database();
+        self.catalog.resolve_database(name)?;
+        Ok(DatabaseSpecifier::Name(name.into()))
+    }
+
+    pub fn resolve_database(&self, name: ObjectName) -> Result<String, failure::Error> {
+        if name.0.len() != 1 {
+            bail!(
+                "database name '{}' does not have exactly one component",
+                name
+            );
+        }
+        self.resolve_database_ident(name.0.into_element())
+    }
+
+    pub fn resolve_database_ident(&self, name: Ident) -> Result<String, failure::Error> {
+        let name = normalize::ident(name);
+        self.catalog.resolve_database(&name)?;
+        Ok(name)
     }
 
     pub fn resolve_schema(
@@ -1661,8 +1653,8 @@ impl<'a> StatementContext<'a> {
         Ok((database_spec, schema_name))
     }
 
-    pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
+    pub fn resolve_item(&self, name: ObjectName) -> Result<FullName, failure::Error> {
         let name = normalize::object_name(name)?;
-        Ok(self.catalog.resolve(&name)?)
+        Ok(self.catalog.resolve_item(&name)?)
     }
 }

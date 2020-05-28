@@ -19,8 +19,9 @@ use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp}
 use repr::{RelationDesc, Row, ScalarType};
 use sql_parser::parser::Parser as SqlParser;
 
+use crate::catalog::Catalog;
+
 pub use crate::expr::RelationExpr;
-pub use catalog::PlanCatalog;
 pub use names::{DatabaseSpecifier, FullName, PartialName};
 pub use pure::purify_statement as purify;
 pub use session::{PreparedStatement, Session, TransactionStatus};
@@ -210,7 +211,7 @@ pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
 /// use [`purify`].
 pub fn plan(
     pcx: &PlanContext,
-    catalog: &dyn PlanCatalog,
+    catalog: &dyn Catalog,
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
@@ -223,7 +224,7 @@ pub fn plan(
 /// will be returned. If the query uses no parameters, then the returned vector
 /// of types will be empty.
 pub fn describe(
-    catalog: &dyn PlanCatalog,
+    catalog: &dyn Catalog,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
     let (desc, types) = statement::describe_statement(catalog, stmt)?;

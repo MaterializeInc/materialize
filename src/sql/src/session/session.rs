@@ -23,7 +23,6 @@ use failure::bail;
 
 use repr::{Datum, Row, ScalarType};
 
-use crate::names::DatabaseSpecifier;
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
@@ -296,8 +295,8 @@ impl Session {
     }
 
     /// Returns the value of the `database` configuration parameter.
-    pub fn database(&self) -> DatabaseSpecifier {
-        DatabaseSpecifier::Name(self.database.value().to_owned())
+    pub fn database(&self) -> &str {
+        self.database.value()
     }
 
     /// Returns the value of the `extra_float_digits` configuration parameter.
