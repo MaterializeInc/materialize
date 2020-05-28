@@ -175,8 +175,8 @@ test2
 ! SHOW VIEWS FROM noexist
 unknown schema 'noexist'
 
-! SHOW VIEWS FROM noexist.noexist
-unknown database 'noexist'
+! SHOW VIEWS FROM noexist_db.noexist_schema
+unknown database 'noexist_db'
 
 ! SHOW EXTENDED VIEWS
 Expected one of SCHEMAS or INDEX or INDEXES or KEYS or TABLES or COLUMNS or FULL, found: VIEWS

@@ -13,8 +13,8 @@ use backtrace::Backtrace;
 
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
-    backtrace: Backtrace,
+    pub(crate) kind: ErrorKind,
+    pub(crate) backtrace: Backtrace,
 }
 
 #[derive(Debug)]
