@@ -417,7 +417,11 @@ impl From<Significand> for Datum<'static> {
 
 impl From<chrono::Duration> for Datum<'static> {
     fn from(duration: chrono::Duration) -> Datum<'static> {
-        Datum::Interval(Interval::new(0, 0, duration.num_nanoseconds().unwrap_or(0)))
+        Datum::Interval(Interval::new(
+            0,
+            duration.num_seconds(),
+            duration.num_nanoseconds().unwrap_or(0) % 1_000_000_000,
+        ))
     }
 }
 
@@ -743,7 +747,8 @@ pub struct Interval {
     pub months: i64,
     /// A timespan represented in nanoseconds.
     ///
-    /// Irrespective of values, will not be carried over into months.
+    /// Irrespective of values, `duration` will not be carried over into
+    /// `months`.
     pub duration: i128,
 }
 
@@ -784,12 +789,23 @@ impl std::ops::Neg for Interval {
     }
 }
 
+/// Converts this `Interval`'s duration into `chrono::Duration`.
+///
+/// Note that this _does not_ include the `Interval`'s months;
+/// `chrono::Duration` deftly avoids the responsibility of handling the notion
+/// of months entirely.
+impl From<Interval> for chrono::Duration {
+    fn from(i: Interval) -> chrono::Duration {
+        use chrono::Duration;
+        // This can be converted into a single call with
+        // https://github.com/chronotope/chrono/pull/426
+        Duration::seconds(i.dur_as_secs() as i64)
+            + Duration::nanoseconds(i.dur_subsec_nanos() as i64)
+    }
+}
+
 impl Interval {
     /// Constructs a new `Interval` with the specified units of time.
-    ///
-    /// Units more significant than seconds but less significant than months can
-    /// be converted into seconds or nanoseconds using this module's `seconds_multiplier` or
-    /// `nanos_multiplier` function, respectively.
     ///
     /// `nanos` in excess of `999_999_999` are carried over into seconds.
     pub fn new(months: i64, seconds: i64, nanos: i64) -> Interval {

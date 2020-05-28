@@ -426,8 +426,15 @@ fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datu
 
 fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
     let mut i = a.unwrap_interval();
+
+    // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
     if i.duration < 0 {
-        i = i + repr::Interval::new(0, 86400, 0);
+        i = repr::Interval::new(0, 86400, 0)
+            + repr::Interval::new(
+                0,
+                i.dur_as_secs() % (24 * 60 * 60),
+                i.dur_subsec_nanos() as i64,
+            );
     }
 
     Datum::Time(NaiveTime::from_hms_nano(
@@ -541,7 +548,7 @@ fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(match b {
         Datum::Interval(i) => {
             let dt = add_timestamp_months(dt, i.months);
-            add_timestamp_duration(dt, i.duration)
+            dt + chrono::Duration::from(i)
         }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     })
@@ -553,7 +560,7 @@ fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let new_ndt = match b {
         Datum::Interval(i) => {
             let dt = add_timestamp_months(dt, i.months);
-            add_timestamp_duration(dt, i.duration)
+            dt + chrono::Duration::from(i)
         }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     };
@@ -581,21 +588,13 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months);
-    Datum::Timestamp(add_timestamp_duration(dt, interval.duration))
+    Datum::Timestamp(dt + chrono::Duration::from(interval))
 }
 
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
-
-    // TODO(sploiselle): Convert this into https://github.com/chronotope/chrono/pull/426
-    let dur = if interval.duration > std::i64::MAX as i128 {
-        chrono::Duration::seconds(interval.dur_as_secs())
-    } else {
-        chrono::Duration::nanoseconds(interval.duration as i64)
-    };
-
-    let (t, _) = time.overflowing_add_signed(dur);
+    let (t, _) = time.overflowing_add_signed(chrono::Duration::from(interval));
     Datum::Time(t)
 }
 
@@ -715,17 +714,6 @@ fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
     new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
 }
 
-fn add_timestamp_duration(dt: NaiveDateTime, duration: i128) -> NaiveDateTime {
-    // TODO(sploiselle): Convert this into https://github.com/chronotope/chrono/pull/426
-    let dur = if duration > std::i64::MAX as i128 {
-        chrono::Duration::seconds((duration / 1_000_000_000) as i64)
-    } else {
-        chrono::Duration::nanoseconds(duration as i64)
-    };
-
-    dt + dur
-}
-
 fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
@@ -786,20 +774,13 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, -interval.months);
-    Datum::Timestamp(add_timestamp_duration(dt, -interval.duration))
+    Datum::Timestamp(dt - chrono::Duration::from(interval))
 }
 
 fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
-    // TODO(sploiselle): Convert this into https://github.com/chronotope/chrono/pull/426
-    let dur = if interval.duration > std::i64::MAX as i128 {
-        chrono::Duration::seconds(interval.dur_as_secs())
-    } else {
-        chrono::Duration::nanoseconds(interval.duration as i64)
-    };
-
-    let (t, _) = time.overflowing_sub_signed(dur);
+    let (t, _) = time.overflowing_sub_signed(chrono::Duration::from(interval));
     Datum::Time(t)
 }
 

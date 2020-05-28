@@ -391,9 +391,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Time(_) => 1 + size_of::<NaiveTime>(),
         Datum::Timestamp(_) => 1 + size_of::<NaiveDateTime>(),
         Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
-        Datum::Interval(_) => {
-            1 + size_of::<i64>() + size_of::<u64>() + size_of::<u32>() + size_of::<bool>()
-        }
+        Datum::Interval(_) => 1 + size_of::<i64>() + size_of::<i128>(),
         Datum::Decimal(_) => 1 + size_of::<Significand>(),
         Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
         Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),

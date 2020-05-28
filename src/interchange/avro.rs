@@ -930,14 +930,26 @@ impl Encoder {
                         Value::Timestamp(datum.unwrap_timestamptz().naive_utc())
                     }
                     // Duration Avro format: https://avro.apache.org/docs/current/spec.html#Duration
+                    // Compress values down into months, days, microseconds to ensure
+                    // values fit.
                     ScalarType::Interval => Value::Fixed(12, {
                         let iv = datum.unwrap_interval();
                         let mut buf = Vec::with_capacity(12);
-                        let days = iv.days() as i128;
-                        let sub_day_ns = iv.duration % (days * 24 * 60 * 60 * 1_000_000_000);
-                        buf.extend(&(iv.months as i32).to_le_bytes());
-                        buf.extend(&(days as i32).to_le_bytes());
-                        buf.extend(&((sub_day_ns / 1_000_000) as i32).to_le_bytes());
+                        // Avro doesn't support negative durations.
+                        let mut dur = iv.duration.abs();
+                        // We assume 24 hours per day w/o any complexity because
+                        // there aren't more details.
+                        let ns = dur % (24 * 60 * 60 * 1_000_000_000);
+                        dur /= 24 * 60 * 60 * 1_000_000_000;
+                        // We assume 30 days per month like in Postgres because
+                        // there aren't more details about the Avro
+                        // implementation.
+                        let days = dur % 30;
+                        dur /= 30;
+                        let months = iv.months.abs() + dur as i64;
+                        buf.extend(&(months as u32).to_le_bytes());
+                        buf.extend(&(days as u32).to_le_bytes());
+                        buf.extend(&((ns / 1_000_000) as u32).to_le_bytes());
                         debug_assert_eq!(buf.len(), 12);
                         buf
                     }),

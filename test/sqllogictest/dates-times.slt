@@ -995,3 +995,8 @@ query T
 SELECT interval '-01:02:03.04'::time;
 ----
 22:57:56.96
+
+query T
+SELECT interval '-3 days -2 hours'::time;
+----
+22:00:00
