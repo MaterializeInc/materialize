@@ -34,7 +34,7 @@ use crate::catalog::error::{Error, ErrorKind};
 mod error;
 pub mod sql;
 
-pub const SYSTEM_CONN_ID: u32 = 0;
+const SYSTEM_CONN_ID: u32 = 0;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -73,12 +73,8 @@ pub struct Catalog {
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
     conn_id: u32,
-}
-
-impl ConnCatalog<'_> {
-    pub fn new(catalog: &Catalog, conn_id: u32) -> ConnCatalog {
-        ConnCatalog { catalog, conn_id }
-    }
+    database: DatabaseSpecifier,
+    search_path: &'a [&'a str],
 }
 
 #[derive(Debug, Serialize)]
@@ -338,6 +334,24 @@ impl Catalog {
         }
 
         Ok(catalog)
+    }
+
+    pub fn for_session(&self, session: &::sql::Session) -> ConnCatalog {
+        ConnCatalog {
+            catalog: self,
+            conn_id: session.conn_id(),
+            database: session.database(),
+            search_path: session.search_path(),
+        }
+    }
+
+    pub fn for_system_session(&self) -> ConnCatalog {
+        ConnCatalog {
+            catalog: self,
+            conn_id: SYSTEM_CONN_ID,
+            database: DatabaseSpecifier::Ambient,
+            search_path: &[],
+        }
     }
 
     fn storage(&self) -> MutexGuard<sql::Connection> {
@@ -934,13 +948,7 @@ impl Catalog {
             Some(eval_env) => eval_env.into(),
         };
         let stmt = ::sql::parse(create_sql)?.into_element();
-        let plan = ::sql::plan(
-            &pcx,
-            &ConnCatalog::new(self, SYSTEM_CONN_ID),
-            &::sql::InternalSession,
-            stmt,
-            &params,
-        )?;
+        let plan = ::sql::plan(&pcx, &self.for_system_session(), stmt, &params)?;
         Ok(match plan {
             Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
@@ -1100,6 +1108,10 @@ impl PlanCatalog for ConnCatalog<'_> {
         self.catalog.nonce()
     }
 
+    fn session_database(&self) -> DatabaseSpecifier {
+        self.database.clone()
+    }
+
     fn databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
         Box::new(self.catalog.databases())
     }
@@ -1144,26 +1156,20 @@ impl PlanCatalog for ConnCatalog<'_> {
         })))
     }
 
-    fn resolve(
-        &self,
-        current_database: DatabaseSpecifier,
-        search_path: &[&str],
-        name: &PartialName,
-    ) -> Result<FullName, failure::Error> {
+    fn resolve(&self, name: &PartialName) -> Result<FullName, failure::Error> {
         Ok(self
             .catalog
-            .resolve(current_database, search_path, name, self.conn_id)?)
+            .resolve(self.database.clone(), self.search_path, name, self.conn_id)?)
     }
 
     fn resolve_schema(
         &self,
-        current_database: &DatabaseSpecifier,
         database: Option<String>,
         schema_name: &str,
     ) -> Result<DatabaseSpecifier, failure::Error> {
         Ok(self
             .catalog
-            .resolve_schema(current_database, database, schema_name, self.conn_id)?)
+            .resolve_schema(&self.database, database, schema_name, self.conn_id)?)
     }
 }
 

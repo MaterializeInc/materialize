@@ -39,7 +39,7 @@ use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::{
     normalize, scalar_type_from_sql, FullName, MutationKind, Plan, PlanCatalog, PlanContext,
-    Session, StatementContext,
+    StatementContext,
 };
 
 pub struct Postgres {
@@ -124,14 +124,9 @@ END $$;
         &mut self,
         pcx: &PlanContext,
         catalog: &dyn PlanCatalog,
-        session: &Session,
         stmt: &Statement,
     ) -> Result<Plan, failure::Error> {
-        let scx = StatementContext {
-            pcx,
-            catalog,
-            session,
-        };
+        let scx = StatementContext { pcx, catalog };
         Ok(match stmt {
             Statement::CreateTable {
                 name,

@@ -43,10 +43,7 @@ use crate::catalog::{CatalogItemType, PlanCatalog};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::query::QueryLifetime;
-use crate::{
-    normalize, query, unsupported, Index, Params, Plan, PlanContext, PlanSession, Sink, Source,
-    View,
-};
+use crate::{normalize, query, unsupported, Index, Params, Plan, PlanContext, Sink, Source, View};
 use regex::Regex;
 
 use tokio::io::AsyncBufReadExt;
@@ -104,15 +101,10 @@ pub fn make_show_objects_desc(
 
 pub fn describe_statement(
     catalog: &dyn PlanCatalog,
-    session: &dyn PlanSession,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
     let pcx = &PlanContext::default();
-    let scx = &StatementContext {
-        catalog,
-        session,
-        pcx,
-    };
+    let scx = &StatementContext { catalog, pcx };
     Ok(match stmt {
         Statement::CreateDatabase { .. }
         | Statement::CreateSchema { .. }
@@ -141,7 +133,7 @@ pub fn describe_statement(
             )),
             match explainee {
                 Explainee::Query(q) => {
-                    describe_statement(catalog, session, Statement::Query(Box::new(q)))?.1
+                    describe_statement(catalog, Statement::Query(Box::new(q)))?.1
                 }
                 _ => vec![],
             },
@@ -234,15 +226,10 @@ pub fn describe_statement(
 pub fn handle_statement(
     pcx: &PlanContext,
     catalog: &dyn PlanCatalog,
-    session: &dyn PlanSession,
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let scx = &StatementContext {
-        pcx,
-        catalog,
-        session,
-    };
+    let scx = &StatementContext { pcx, catalog };
     match stmt {
         Statement::Tail {
             name,
@@ -427,7 +414,7 @@ fn handle_show_objects(
             let database_spec = DatabaseSpecifier::Name(normalize::ident(from.0[0].clone()));
             scx.catalog.get_schemas(&database_spec)?
         } else {
-            scx.catalog.get_schemas(&scx.session.database())?
+            scx.catalog.get_schemas(&scx.catalog.session_database())?
         };
 
         let mut rows = vec![];
@@ -459,7 +446,7 @@ fn handle_show_objects(
                 .expect("schema known to exist")
         } else {
             scx.catalog
-                .get_items(&scx.session.database(), "public")
+                .get_items(&scx.catalog.session_database(), "public")
                 .ok()
                 .unwrap_or_else(|| Box::new(iter::empty()))
         };
@@ -844,7 +831,7 @@ fn handle_create_schema(
         .0
         .pop()
         .map(|n| DatabaseSpecifier::Name(normalize::ident(n)))
-        .unwrap_or_else(|| scx.session.database());
+        .unwrap_or_else(|| scx.catalog.session_database());
     Ok(Plan::CreateSchema {
         database_name,
         schema_name,
@@ -1686,7 +1673,6 @@ fn handle_explain(
             let scx = StatementContext {
                 pcx: entry.plan_cx(),
                 catalog: scx.catalog,
-                session: scx.session,
             };
             (scx, entry.create_sql().to_owned(), *query)
         }
@@ -1795,7 +1781,6 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 pub struct StatementContext<'a> {
     pub pcx: &'a PlanContext,
     pub catalog: &'a dyn PlanCatalog,
-    pub session: &'a dyn PlanSession,
 }
 
 impl<'a> StatementContext<'a> {
@@ -1803,7 +1788,7 @@ impl<'a> StatementContext<'a> {
         FullName {
             database: match name.database {
                 Some(name) => DatabaseSpecifier::Name(name),
-                None => self.session.database(),
+                None => self.catalog.session_database(),
             },
             schema: name.schema.unwrap_or_else(|| "public".into()),
             item: name.item,
@@ -1830,16 +1815,12 @@ impl<'a> StatementContext<'a> {
         }
         let schema_name = normalize::ident(name.0.pop().unwrap());
         let database_spec = name.0.pop().map(normalize::ident);
-        let database_spec =
-            self.catalog
-                .resolve_schema(&self.session.database(), database_spec, &schema_name)?;
+        let database_spec = self.catalog.resolve_schema(database_spec, &schema_name)?;
         Ok((database_spec, schema_name))
     }
 
     pub fn resolve_name(&self, name: ObjectName) -> Result<FullName, failure::Error> {
         let name = normalize::object_name(name)?;
-        Ok(self
-            .catalog
-            .resolve(self.session.database(), self.session.search_path(), &name)?)
+        Ok(self.catalog.resolve(&name)?)
     }
 }
