@@ -81,7 +81,16 @@ pub async fn query_materialized_view_until(
                 }
             }
         }
-        tokio::time::delay_for(Duration::from_secs(1) - timer.elapsed()).await;
+
+        let elapsed = timer.elapsed().as_millis();
+        if elapsed < 1000 {
+            tokio::time::delay_for(Duration::from_millis((1000 - elapsed) as u64)).await;
+        } else {
+            log::info!(
+                "Expected to query for records in 1000 milliseconds, took {}",
+                elapsed
+            );
+        }
     }
     Ok(())
 }
