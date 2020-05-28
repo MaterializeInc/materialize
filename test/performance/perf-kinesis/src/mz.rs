@@ -82,12 +82,12 @@ pub async fn query_materialized_view_until(
             }
         }
 
-        let elapsed = timer.elapsed().as_millis();
-        if elapsed < 1000 {
-            tokio::time::delay_for(Duration::from_millis((1000 - elapsed) as u64)).await;
+        let elapsed = timer.elapsed();
+        if elapsed < Duration::from_secs(1) {
+            tokio::time::delay_for(Duration::from_secs(1) - elapsed).await;
         } else {
             log::info!(
-                "Expected to query for records in 1000 milliseconds, took {}",
+                "Expected to query for records in 1s, took {}",
                 elapsed
             );
         }
