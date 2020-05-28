@@ -304,7 +304,9 @@ class Composition:
         compositions = {}
 
         compose_files = itertools.chain(
-            Path("demo").glob("*/mzcompose.yml"), Path("test").glob("*/mzcompose.yml")
+            Path("demo").glob("*/mzcompose.yml"),
+            Path("test").glob("*/mzcompose.yml"),
+            Path("test/performance").glob("*/mzcompose.yml"),
         )
         for mzcompose in compose_files:
             with mzcompose.open() as fh:
