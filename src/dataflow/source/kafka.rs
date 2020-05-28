@@ -20,6 +20,7 @@ use prometheus::{
     register_uint_gauge_vec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, UIntGauge,
     UIntGaugeVec,
 };
+use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
@@ -210,16 +211,16 @@ struct PartitionConsumer {
     buffer: Option<MessageParts>,
     /// The underlying Kafka consumer. This consumer is assigned to read from one partition
     /// exclusively
-    consumer: BaseConsumer<GlueConsumerContext>,
+    partition_queue: PartitionQueue<GlueConsumerContext>,
 }
 
 impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
-    fn new(pid: i32, consumer: BaseConsumer<GlueConsumerContext>) -> Self {
+    fn new(pid: i32, partition_queue: PartitionQueue<GlueConsumerContext>) -> Self {
         PartitionConsumer {
             pid,
             buffer: None,
-            consumer,
+            partition_queue,
         }
     }
 
@@ -230,7 +231,7 @@ impl PartitionConsumer {
             assert_eq!(message.partition, self.pid);
             Some(message)
         } else {
-            match self.consumer.poll(Duration::from_millis(0)) {
+            match self.partition_queue.poll(Duration::from_millis(0)) {
                 Some(Ok(msg)) => {
                     let result = MessageParts::from(&msg);
                     assert_eq!(result.partition, self.pid);
@@ -253,19 +254,16 @@ struct DataPlaneInfo {
     source_name: String,
     /// Source instance ID (stored as a string for logging)
     source_id: String,
-    /// Kafka Configuration Parameters
-    kafka_config: ClientConfig,
+    /// Kafka consumer for this source
+    consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
-    consumers: VecDeque<PartitionConsumer>,
+    partitions: VecDeque<PartitionConsumer>,
     /// The expected number of partitions. If needs_refresh is set to false, then
     /// expected_partition_count == consumers.len() == partition_metadata.len()
     expected_partition_count: i32,
     /// Field is set to true when we have detected that metadata is out-of-date and needs
     /// to be refreshed
     needs_refresh: bool,
-    /// Activator shared across consumers. Anytime a consumer receives a new message, the source
-    /// will get scheduled.
-    consumer_activator: Arc<Mutex<SyncActivator>>,
     /// Per-source metrics.
     source_metrics: SourceMetrics,
     /// Per-partition metrics.
@@ -313,29 +311,31 @@ impl DataPlaneInfo {
         consumer_activator: Arc<Mutex<SyncActivator>>,
     ) -> DataPlaneInfo {
         let source_id = source_id.to_string();
+        let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
+            .create_with_context(GlueConsumerContext(consumer_activator))
+            .expect("Failed to create Kafka Consumer");
         DataPlaneInfo {
             source_metrics: SourceMetrics::new(&topic_name, &source_id),
             partition_metrics: Vec::new(),
             topic_name,
             source_name,
             source_id,
-            kafka_config,
-            consumers: VecDeque::new(),
+            partitions: VecDeque::new(),
             needs_refresh: true,
             expected_partition_count: 1,
-            consumer_activator,
+            consumer: Arc::new(consumer),
         }
     }
 
-    /// Returns a count of total number of consumers for this source
-    fn get_consumer_count(&self) -> i32 {
-        // Note: the number of consumers is guaranteed to always be smaller than
+    /// Returns a count of total number of partition queues for this source
+    fn get_partition_count(&self) -> i32 {
+        // Note: the number of partition queues is guaranteed to always be smaller than
         // expected_partition_count (i32)
-        self.consumers.len().try_into().unwrap()
+        self.partitions.len().try_into().unwrap()
     }
 
     /// Refreshes source information for the expected partition count
-    /// 1) creates new consumers and assigns each to an individual partition
+    /// 1) creates new partition queues and assigns each to an individual partition
     /// 2) creates appropriate source metadata
     pub fn refresh_source_information(
         &mut self,
@@ -348,7 +348,7 @@ impl DataPlaneInfo {
                 self.source_name, self.expected_partition_count
             );
             self.source_metrics.metadata_refresh_counter.inc();
-            if self.update_consumer_list() {
+            if self.update_partition_queue_list() {
                 cp_info.update_partition_metadata(self.expected_partition_count);
                 self.needs_refresh = false;
                 activator.activate();
@@ -357,12 +357,11 @@ impl DataPlaneInfo {
                 activator.activate_after(Duration::from_secs(1));
             }
         }
-
         // Verify that invariants hold if successfully refreshed
         assert!(
             self.needs_refresh || cp_info.get_partition_count() == self.expected_partition_count
         );
-        assert!(self.needs_refresh || self.get_consumer_count() == self.expected_partition_count);
+        assert!(self.needs_refresh || self.get_partition_count() == self.expected_partition_count);
     }
 
     /// Marks a source as needing refresh, along with the expected partition count
@@ -375,41 +374,63 @@ impl DataPlaneInfo {
     /// Update the list of Kafka consumers to match the number of partitions
     /// We currently create one consumer per partition
     #[must_use]
-    fn update_consumer_list(&mut self) -> bool {
-        let next_pid = self.get_consumer_count();
+    fn update_partition_queue_list(&mut self) -> bool {
+        let next_pid = self.get_partition_count();
         let to_add = self.expected_partition_count - next_pid;
         // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
         // starting from 0
         for i in 0..to_add {
             let pid: i32 = next_pid + i;
-            if !self.create_partition_consumer(pid) {
-                // If failed to create consumer, stop and exit
+            if !self.create_partition_queue(pid) {
+                // If failed to create new partition queue, stop and exit
                 return false;
             }
         }
-        assert_eq!(self.expected_partition_count, self.get_consumer_count());
+        assert_eq!(self.expected_partition_count, self.get_partition_count());
         true
     }
 
-    /// Create a new kafka consumer and adds it to the list of existing consumers
-    fn create_partition_consumer(&mut self, partition_id: i32) -> bool {
-        let cx = GlueConsumerContext(self.consumer_activator.clone());
-        let consumer: BaseConsumer<GlueConsumerContext> = self
-            .kafka_config
-            .create_with_context(cx)
-            .expect("Failed to create Kafka Consumer");
-        if refresh_metadata(&consumer, &self.topic_name, partition_id + 1) {
-            let mut partition_list = TopicPartitionList::with_capacity(1);
-            partition_list.add_partition(&self.topic_name, partition_id);
-            consumer.assign(&partition_list).unwrap();
-            self.consumers
-                .push_front(PartitionConsumer::new(partition_id, consumer));
-            self.partition_metrics.push(PartitionMetrics::new(
-                &self.topic_name,
-                &self.source_id,
-                &partition_id.to_string(),
-            ));
-            true
+    /// Create a new partition queue and adds it to the list of existing consumers
+    fn create_partition_queue(&mut self, partition_id: i32) -> bool {
+        if refresh_metadata(self.consumer.as_ref(), &self.topic_name, partition_id + 1) {
+            // Collect old partition assignments
+            let tpl = self.consumer.assignment().unwrap();
+            // Create list from assignments
+            let mut partition_list = TopicPartitionList::new();
+            for partition in tpl.elements_for_topic(&self.topic_name) {
+                partition_list.add_partition_offset(
+                    partition.topic(),
+                    partition.partition(),
+                    partition.offset(),
+                );
+            }
+            // Add new partition
+            partition_list.add_partition_offset(&self.topic_name, partition_id, Offset::Beginning);
+            self.consumer.assign(&partition_list).unwrap();
+            let partition_queue = self
+                .consumer
+                .split_partition_queue(&self.topic_name, partition_id);
+            if let Some(partition_queue) = partition_queue {
+                self.partitions
+                    .push_front(PartitionConsumer::new(partition_id, partition_queue));
+                assert_eq!(
+                    self.consumer
+                        .assignment()
+                        .unwrap()
+                        .elements_for_topic(&self.topic_name)
+                        .len(),
+                    self.partitions.len()
+                );
+                self.partition_metrics.push(PartitionMetrics::new(
+                    &self.topic_name,
+                    &self.source_id,
+                    &partition_id.to_string(),
+                ));
+                self.consumer.poll(Duration::from_secs(0));
+                true
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -426,13 +447,13 @@ impl DataPlaneInfo {
         cp_info: &ControlPlaneInfo,
         activator: &Activator,
     ) -> Option<MessageParts> {
-        assert!(self.needs_refresh || self.get_consumer_count() == self.expected_partition_count);
+        assert!(self.needs_refresh || self.get_partition_count() == self.expected_partition_count);
         let mut next_message = None;
-        let consumer_count = self.get_consumer_count();
+        let consumer_count = self.get_partition_count();
         let mut attempts = 0;
         while !self.needs_refresh && attempts < consumer_count {
-            let mut consumer = self.consumers.pop_front().unwrap();
-            let message = consumer.get_next_message();
+            let mut partition_queue = self.partitions.pop_front().unwrap();
+            let message = partition_queue.get_next_message();
             if let Some(message) = message {
                 let partition = message.partition;
                 let offset = MzOffset::from(message.offset);
@@ -464,7 +485,7 @@ impl DataPlaneInfo {
                     );
                     // Seek to the *next* offset (aka last_offset + 1) that we have not yet processed
                     last_offset.offset += 1;
-                    self.fast_forward_consumer(&consumer, partition, last_offset.into());
+                    self.fast_forward_consumer(partition, last_offset.into());
                     // We explicitly should not consume the message as we have already processed it
                     // However, we make sure to activate the source to make sure that we get a chance
                     // to read from this consumer again (even if no new data arrives)
@@ -473,7 +494,7 @@ impl DataPlaneInfo {
                     next_message = Some(message);
                 }
             }
-            self.consumers.push_back(consumer);
+            self.partitions.push_back(partition_queue);
             if next_message.is_some() {
                 // Found a message, exit the loop and return message
                 break;
@@ -481,7 +502,7 @@ impl DataPlaneInfo {
                 attempts += 1;
             }
         }
-        assert!(self.needs_refresh || self.get_consumer_count() == self.expected_partition_count);
+        assert!(self.needs_refresh || self.get_partition_count() == self.expected_partition_count);
         next_message
     }
 
@@ -490,7 +511,7 @@ impl DataPlaneInfo {
     /// read from.
     fn buffer_message(&mut self, msg: MessageParts) {
         // Guaranteed to exist as we just read from this consumer
-        let mut consumer = self.consumers.back_mut().unwrap();
+        let mut consumer = self.partitions.back_mut().unwrap();
         assert_eq!(msg.partition, consumer.pid);
         consumer.buffer = Some(msg);
     }
@@ -498,13 +519,8 @@ impl DataPlaneInfo {
     /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
     /// Assumption: if offset does not exist (for instance, because of compaction), will seek
     /// to the next available offset
-    fn fast_forward_consumer(
-        &self,
-        consumer: &PartitionConsumer,
-        pid: i32,
-        next_offset: KafkaOffset,
-    ) {
-        let res = consumer.consumer.seek(
+    fn fast_forward_consumer(&self, pid: i32, next_offset: KafkaOffset) {
+        let res = self.consumer.seek(
             &self.topic_name,
             pid,
             Offset::Offset(next_offset.offset),
@@ -512,11 +528,7 @@ impl DataPlaneInfo {
         );
         match res {
             Ok(_) => {
-                let res = consumer
-                    .consumer
-                    .position()
-                    .unwrap_or_default()
-                    .to_topic_map();
+                let res = self.consumer.position().unwrap_or_default().to_topic_map();
                 let position = res.get(&(self.topic_name.clone(), pid));
                 if let Some(position) = position {
                     let position = position.to_raw();
