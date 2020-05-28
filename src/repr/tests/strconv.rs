@@ -43,7 +43,7 @@ fn test_parse_date_errors() {
     );
     run_test_parse_date_errors(
         "2001-01-02 04",
-        "invalid input syntax for date: unknown format: \"2001-01-02 04\"",
+        "invalid input syntax for date: have unprocessed tokens 4: \"2001-01-02 04\"",
     );
     fn run_test_parse_date_errors(s: &str, e: &str) {
         assert_eq!(
@@ -83,7 +83,11 @@ fn test_parse_time_errors() {
     );
     run_test_parse_time_errors(
         "03.456",
-        "invalid input syntax for time: unknown format: \"03.456\"",
+        "invalid input syntax for time: have unprocessed tokens 3.456000000: \"03.456\"",
+    );
+    run_test_parse_time_errors(
+        "03.456",
+        "invalid input syntax for time: have unprocessed tokens 3.456000000: \"03.456\"",
     );
 
     fn run_test_parse_time_errors(s: &str, e: &str) {
@@ -142,7 +146,7 @@ fn test_parse_timestamp_errors() {
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 04",
-        "invalid input syntax for timestamp: unknown format: \"2001-01-02 04\"",
+        "invalid input syntax for timestamp: have unprocessed tokens 4: \"2001-01-02 04\"",
     );
 
     run_test_parse_timestamp_errors(

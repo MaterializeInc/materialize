@@ -971,6 +971,9 @@ SELECT DATE '2007-02-01TT15:04:05'
 statement error invalid input syntax for date: Cannot determine format of all parts: "2007-02-01  T  T  15:04:05"
 SELECT DATE '2007-02-01  T  T  15:04:05'
 
+statement error invalid input syntax for date: Invalid timezone string \(T\): named timezones are not supported. Failed to parse T at token index 0
+SELECT DATE '2007-02-01  T '
+
 # Test casting time to interval & vice versa
 
 query T
@@ -993,3 +996,17 @@ query T
 SELECT date FROM (SELECT column1 AS date FROM (VALUES ('2020-01-01')))
 ----
 2020-01-01
+
+# Arbitrary punctuation as delimiter
+query T
+SELECT '"2020-03-17 ~02:36:56~"'::timestamp;
+----
+2020-03-17 02:36:56
+
+query T
+SELECT '"2020!03-17 #?~T~02:36:56#"'::timestamp;
+----
+2020-03-17 02:36:56
+
+query error invalid input syntax for timestamp: have unprocessed tokens 56
+select TIMESTAMP '"2020-03-17 ~02:36:~56~"';

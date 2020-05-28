@@ -230,7 +230,7 @@ statement error invalid input syntax for interval: SECOND must be \(-60, 60\), g
 SELECT INTERVAL '100-11 366 250:59:61';
 
 # Invalid syntax
-statement error invalid input syntax for interval: Invalid syntax at offset 7: provided Dot but expected None: "1:2:3.4.5"
+statement error invalid input syntax for interval: have unprocessed tokens .500000000
 SELECT INTERVAL '1:2:3.4.5';
 
 statement error
@@ -367,26 +367,19 @@ SELECT INTERVAL '+1 year +2 days +3:4:5.6';
 # Differentiate between trailing DateTimeField name and
 # PostgreSQL TimeUnit.
 query T
-SELECT INTERVAL '1-2' MONTH;
+SELECT INTERVAL '01:02:03' MINUTE;
 ----
-1 year 2 months
-
-statement error
-SELECT INTERVAL '1-2 month';
-
-statement error
-SELECT INTERVAL '1-2month';
+01:02:00
 
 query T
-SELECT INTERVAL '1-2' HOUR;
+SELECT INTERVAL '01:02:03minute';
 ----
-1 year 2 months
+01:02:03
 
-statement error invalid input syntax for interval: Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR': "1-2 hour"
-SELECT INTERVAL '1-2 hour';
-
-statement error invalid input syntax for interval: Invalid syntax at offset 3: provided TimeUnit\(Hour\) but expected None: "1-2hour"
-SELECT INTERVAL '1-2hour';
+query T
+SELECT INTERVAL '01:02:03minute hour day year';
+----
+01:02:03
 
 # Use larger numbers.
 query T
@@ -510,6 +503,20 @@ SELECT INTERVAL '2-3 3:4' DAY(1)
 statement error Expected literal int, found: -
 SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
 
+# Arbitrary punctuation delimiters
+query T
+SELECT interval '02-01!1~01:02:03';
+----
+2 years 1 month 1 day 01:02:03
+
+query T
+SELECT interval '1! hour';
+----
+01:00:00
+
+statement error
+SELECT interval '02!01!1~01:02:03';
+
 ## Math
 
 # Support negating interval
@@ -600,10 +607,10 @@ SELECT INTERVAL '768614336404564651 year';
 statement error Overflows maximum months; cannot exceed 9223372036854775807 months
 SELECT INTERVAL '768614336404564650.7 year';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 19: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 months';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 20: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 months';
 
 statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
@@ -627,8 +634,8 @@ SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 19: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 seconds';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 20: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 seconds';
