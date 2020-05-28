@@ -789,9 +789,9 @@ impl RowPacker {
     ///
     /// assert_eq!(row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("age"), Datum::Int64(42)])
     /// ```
-    pub fn try_push_list_with<F>(mut self, f: F) -> Result<RowPacker, failure::Error>
+    pub fn try_push_list_with<F, E>(mut self, f: F) -> Result<RowPacker, E>
     where
-        F: FnOnce(RowPacker) -> Result<RowPacker, failure::Error>,
+        F: FnOnce(RowPacker) -> Result<RowPacker, E>,
     {
         let start = unsafe { self.start_list() };
         f(self).map(|mut packer| {
@@ -853,6 +853,7 @@ impl RowPacker {
     /// # Example
     ///
     /// ```
+    /// # use std::error::Error;
     /// # use repr::{Row, Datum, RowPacker};
     /// let mut packer = RowPacker::new();
     /// let packer = packer.try_push_dict_with(|mut packer| {
@@ -860,7 +861,7 @@ impl RowPacker {
     ///     packer.push(Datum::String("age"));
     ///     // value
     ///     packer.push(Datum::Int64(42));
-    ///     Ok(packer)
+    ///     Ok::<_, Box<dyn Error>>(packer)
     /// }).unwrap();
     /// let row = packer.finish();
     ///
@@ -869,9 +870,9 @@ impl RowPacker {
     ///     vec![("age", Datum::Int64(42))]
     /// );
     /// ```
-    pub fn try_push_dict_with<F>(mut self, f: F) -> Result<Self, failure::Error>
+    pub fn try_push_dict_with<F, E>(mut self, f: F) -> Result<Self, E>
     where
-        F: FnOnce(RowPacker) -> Result<RowPacker, failure::Error>,
+        F: FnOnce(RowPacker) -> Result<RowPacker, E>,
     {
         let start = unsafe { self.start_dict() };
         f(self).map(|mut packer| {
@@ -1113,7 +1114,7 @@ mod tests {
     #[test]
     fn test_dict_errors() -> Result<(), Box<dyn std::error::Error>> {
         let packer = RowPacker::new();
-        let packer = packer.try_push_dict_with(Ok)?;
+        let packer = packer.try_push_dict_with(Ok::<_, Box<dyn std::error::Error>>)?;
         let _ = packer.finish();
 
         assert!(RowPacker::new()
