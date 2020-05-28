@@ -32,9 +32,41 @@ services:
     init: true
     command: -w 4
 
-  grafana:
+  dashboard:
     mzbuild: dashboard
     environment:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:
       - *grafana
+
+mzconduct:
+  workflows:
+    ci:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: perf-kinesis
+          daemon: false
+          command: perf-kinesis
+        - step: down
+          destroy_volumes: true
+
+    load-test:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: perf-kinesis
+          daemon: true
+          command: perf-kinesis
+
+    # Helper workflows
+
+    start-everything:
+      steps:
+        - step: start-services
+          services: [materialized, dashboard]
+        - step: wait-for-tcp
+          host: materialized
+          port: 6875
