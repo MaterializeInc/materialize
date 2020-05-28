@@ -122,17 +122,17 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     plugins:
-      - ./ci/plugins/mzcompose:
-          config: demo/billing/mzcompose.yml
-          run: billing-demo
+      - ./ci/plugins/mzconduct:
+          test: billing
+          workflow: ci
 
   - id: chbench-demo
     label: "chbench sanity check"
     depends_on: build
-    command: bin/ci-builder run stable bin/mzconduct run chbench --workflow ci
-    # TODO(benesch): integrate dc.sh into mzcompose, so we don't need to
-    # manually track image inputs here.
-    inputs: ["#materialized", "#chbenchmark", "#peeker", "#cli"]
+    plugins:
+      - ./ci/plugins/mzconduct:
+          test: chbench
+          workflow: ci
     timeout_in_minutes: 30
 
   - id: catalog-compat
