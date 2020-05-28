@@ -45,7 +45,7 @@ where
         .collect::<Vec<_>>();
 
     stream.unary(
-        Exchange::new(|x: &SourceOutput<Vec<u8>, Vec<u8>>| x.value.hashed()),
+        SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         "CsvDecode",
         |_, _| {
             // Temporary storage, and a re-useable CSV reader.

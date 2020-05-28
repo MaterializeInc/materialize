@@ -30,7 +30,7 @@ where
 {
     let name = String::from(name);
     stream.unary(
-        Exchange::new(|x: &SourceOutput<Vec<u8>, Vec<u8>>| x.value.hashed()),
+        SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         "RegexDecode",
         |_, _| {
             move |input, output| {
