@@ -744,7 +744,7 @@ impl fmt::Display for ColumnType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
-    pub months: i64,
+    pub months: i32,
     /// A timespan represented in nanoseconds.
     ///
     /// Irrespective of values, `duration` will not be carried over into
@@ -799,8 +799,7 @@ impl From<Interval> for chrono::Duration {
         use chrono::Duration;
         // This can be converted into a single call with
         // https://github.com/chronotope/chrono/pull/426
-        Duration::seconds(i.dur_as_secs() as i64)
-            + Duration::nanoseconds(i.dur_subsec_nanos() as i64)
+        Duration::seconds(i.dur_as_secs() as i64) + Duration::nanoseconds(i.nanoseconds() as i64)
     }
 }
 
@@ -808,7 +807,7 @@ impl Interval {
     /// Constructs a new `Interval` with the specified units of time.
     ///
     /// `nanos` in excess of `999_999_999` are carried over into seconds.
-    pub fn new(months: i64, seconds: i64, nanos: i64) -> Interval {
+    pub fn new(months: i32, seconds: i64, nanos: i64) -> Interval {
         Interval {
             months,
             duration: seconds as i128 * 1_000_000_000 + nanos as i128,
@@ -818,11 +817,6 @@ impl Interval {
     /// Returns the total number of whole seconds in the `Interval`'s duration.
     pub fn dur_as_secs(&self) -> i64 {
         (self.duration / 1_000_000_000) as i64
-    }
-
-    /// Returns the number of sub-second nanoseconds in the `Interval`'s duration.
-    pub fn dur_subsec_nanos(&self) -> i32 {
-        (self.duration % 1_000_000_000) as i32
     }
 
     /// Computes the year part of the interval.
@@ -875,20 +869,20 @@ impl Interval {
     /// modulo 60.0.
     pub fn seconds(&self) -> f64 {
         let s = (self.dur_as_secs() % 60) as f64;
-        let ns = f64::from(self.dur_subsec_nanos()) / 1e9;
+        let ns = f64::from(self.nanoseconds()) / 1e9;
         s + ns
     }
 
     /// Computes the nanosecond part of the interval.
     pub fn nanoseconds(&self) -> i32 {
-        self.dur_subsec_nanos()
+        (self.duration % 1_000_000_000) as i32
     }
 
     /// Computes the total number of seconds in the interval.
     pub fn as_seconds(&self) -> f64 {
         (self.months as f64) * 60.0 * 60.0 * 24.0 * 30.0
             + (self.dur_as_secs() as f64)
-            + f64::from(self.dur_subsec_nanos()) / 1e9
+            + f64::from(self.nanoseconds()) / 1e9
     }
 
     /// Truncate the "head" of the interval, removing all time units greater than `f`.
@@ -989,7 +983,7 @@ impl fmt::Display for Interval {
         let years = months / 12;
         months %= 12;
         let mut secs = self.dur_as_secs().abs();
-        let mut nanos = self.dur_subsec_nanos().abs();
+        let mut nanos = self.nanoseconds().abs();
         let days = secs / (24 * 60 * 60);
         secs %= 24 * 60 * 60;
         let hours = secs / (60 * 60);
@@ -1067,7 +1061,7 @@ mod test {
 
     #[test]
     fn interval_fmt() {
-        fn mon(mon: i64) -> String {
+        fn mon(mon: i32) -> String {
             Interval {
                 months: mon,
                 ..Default::default()
@@ -1112,7 +1106,7 @@ mod test {
         assert_eq!(&dur(-(60 * 45)), "-00:45:00");
         assert_eq!(&dur(-6), "-00:00:06");
 
-        fn mon_dur(mon: i64, d: i64) -> String {
+        fn mon_dur(mon: i32, d: i64) -> String {
             Interval::new(mon, d, 0).to_string()
         }
         assert_eq!(&mon_dur(1, 86_400 * 2 + 6), "1 month 2 days 00:00:06");

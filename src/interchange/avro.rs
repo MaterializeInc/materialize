@@ -929,28 +929,16 @@ impl Encoder {
                     ScalarType::TimestampTz => {
                         Value::Timestamp(datum.unwrap_timestamptz().naive_utc())
                     }
-                    // Duration Avro format: https://avro.apache.org/docs/current/spec.html#Duration
-                    // Compress values down into months, days, microseconds to ensure
-                    // values fit.
-                    ScalarType::Interval => Value::Fixed(12, {
+                    // This feature isn't actually supported by the Avro Java
+                    // client (https://issues.apache.org/jira/browse/AVRO-2123),
+                    // so no one is likely to be using it, so we're just using
+                    // our own very convenient format.
+                    ScalarType::Interval => Value::Fixed(24, {
                         let iv = datum.unwrap_interval();
-                        let mut buf = Vec::with_capacity(12);
-                        // Avro doesn't support negative durations.
-                        let mut dur = iv.duration.abs();
-                        // We assume 24 hours per day w/o any complexity because
-                        // there aren't more details.
-                        let ns = dur % (24 * 60 * 60 * 1_000_000_000);
-                        dur /= 24 * 60 * 60 * 1_000_000_000;
-                        // We assume 30 days per month like in Postgres because
-                        // there aren't more details about the Avro
-                        // implementation.
-                        let days = dur % 30;
-                        dur /= 30;
-                        let months = iv.months.abs() + dur as i64;
-                        buf.extend(&(months as u32).to_le_bytes());
-                        buf.extend(&(days as u32).to_le_bytes());
-                        buf.extend(&((ns / 1_000_000) as u32).to_le_bytes());
-                        debug_assert_eq!(buf.len(), 12);
+                        let mut buf = Vec::with_capacity(24);
+                        buf.extend(&iv.months.to_le_bytes());
+                        buf.extend(&iv.duration.to_le_bytes());
+                        debug_assert_eq!(buf.len(), 24);
                         buf
                     }),
                     ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),

@@ -258,7 +258,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::TimestampTz(t)
         }
         Tag::Interval => {
-            let months = read_copy::<i64>(data, offset);
+            let months = read_copy::<i32>(data, offset);
             let duration = read_copy::<i128>(data, offset);
             Datum::Interval(Interval { months, duration })
         }
@@ -348,7 +348,7 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
         }
         Datum::Interval(i) => {
             data.push(Tag::Interval as u8);
-            push_copy!(data, i.months, i64);
+            push_copy!(data, i.months, i32);
             push_copy!(data, i.duration, i128);
         }
         Datum::Decimal(s) => {
@@ -391,7 +391,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Time(_) => 1 + size_of::<NaiveTime>(),
         Datum::Timestamp(_) => 1 + size_of::<NaiveDateTime>(),
         Datum::TimestampTz(_) => 1 + size_of::<DateTime<Utc>>(),
-        Datum::Interval(_) => 1 + size_of::<i64>() + size_of::<i128>(),
+        Datum::Interval(_) => 1 + size_of::<i32>() + size_of::<i128>(),
         Datum::Decimal(_) => 1 + size_of::<Significand>(),
         Datum::Bytes(bytes) => 1 + size_of::<usize>() + bytes.len(),
         Datum::String(string) => 1 + size_of::<usize>() + string.as_bytes().len(),

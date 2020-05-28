@@ -430,11 +430,7 @@ fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
     // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
     if i.duration < 0 {
         i = repr::Interval::new(0, 86400, 0)
-            + repr::Interval::new(
-                0,
-                i.dur_as_secs() % (24 * 60 * 60),
-                i.dur_subsec_nanos() as i64,
-            );
+            + repr::Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64);
     }
 
     Datum::Time(NaiveTime::from_hms_nano(
@@ -678,12 +674,13 @@ fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     add_timestamptz_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
-fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
+fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
     if months == 0 {
         return dt;
     }
 
-    let mut months: i32 = months.try_into().expect("fewer than i64 months");
+    let mut months = months;
+
     let (mut year, mut month, mut day) = (dt.year(), dt.month0() as i32, dt.day());
     let years = months / 12;
     year += years;

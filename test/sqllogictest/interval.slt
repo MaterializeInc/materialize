@@ -575,16 +575,21 @@ SELECT INTERVAL '-1-2 -3 -4:5:6.7' + INTERVAL '1-2 3 4:5:6.7'
 00:00:00
 
 ## Largest values
+query T
+SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'
+----
+2236962132 days 07:59:59.999999
 
 query T
-SELECT INTERVAL '9223372036854775807 months 9223372036854775807 seconds';
+SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'
 ----
-768614336404564650 years 7 months 106751991167300 days 15:30:07
+-2236962132 days -07:59:59.999999
 
-query T
-SELECT INTERVAL '-9223372036854775807 months -9223372036854775807 seconds';
-----
--768614336404564650 years -7 months -106751991167300 days -15:30:07
+statement error Invalid INTERVAL '2147483647 days 2147483648 hours': exceeds min/max interval duration \+/-\(2147483647 days 2147483647 hours 59 minutes 59.999999 seconds\)
+SELECT INTERVAL '2147483647 days 2147483648 hours'
+
+statement error Invalid INTERVAL '-2147483647 days -2147483648 hours': exceeds min/max interval duration \+/-\(2147483647 days 2147483647 hours 59 minutes 59.999999 seconds\)
+SELECT INTERVAL '-2147483647 days -2147483648 hours'
 
 # Largest number of cumulative nanoseconds
 query T

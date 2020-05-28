@@ -193,7 +193,7 @@ impl ParsedDateTime {
     /// Compute an Interval from an ParsedDateTime.
     ///
     /// # Errors
-    /// - If any component overflows a parameter (i.e. i64).
+    /// If values exceed `i32::MAX` for the `Interval`'s months or derived days.
     pub fn compute_interval(&self) -> Result<Interval> {
         use DateTimeField::*;
         let mut months = 0i64;
@@ -207,7 +207,26 @@ impl ParsedDateTime {
             self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
         }
 
-        Ok(Interval::new(months, seconds, nanos))
+        let months: i32 = match months.try_into() {
+            Ok(m) => m,
+            Err(_) => bail!("exceeds min/max months (+/-2147483647); have {}", months),
+        };
+
+        let i = Interval::new(months, seconds, nanos);
+
+        // Don't let our duration exceed Postgres' min/max for those same fields,
+        // equivalent to:
+        // ```
+        // SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds';
+        // SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds';
+        // ```
+        if i.duration > 193_273_528_233_599_999_999_000
+            || i.duration < -193_273_528_233_599_999_999_000
+        {
+            bail!("exceeds min/max interval duration +/-(2147483647 days 2147483647 hours 59 minutes 59.999999 seconds)")
+        }
+
+        Ok(i)
     }
     /// Adds the appropriate values from self's ParsedDateTime to `months`,
     /// `seconds`, and `nanos`. These fields are then appropriate to construct
