@@ -14,6 +14,13 @@ use rand::{Rng, SeedableRng};
 
 use repr::strconv;
 
+fn bench_parse_jsonb(c: &mut Criterion) {
+    let input = include_str!("testdata/twitter.json");
+    c.bench_function("parse_jsonb", |b| {
+        b.iter(|| black_box(strconv::parse_jsonb(input).unwrap()))
+    });
+}
+
 fn bench_format_list_simple(c: &mut Criterion) {
     let mut rng = StdRng::from_seed([0; 32]);
     let list: Vec<i32> = (0..(1 << 12)).map(|_| rng.gen()).collect();
@@ -62,5 +69,10 @@ fn bench_format_list_nested(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_format_list_simple, bench_format_list_nested);
+criterion_group!(
+    benches,
+    bench_format_list_simple,
+    bench_format_list_nested,
+    bench_parse_jsonb
+);
 criterion_main!(benches);

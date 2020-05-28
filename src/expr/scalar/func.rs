@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
 use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::jsonb::Jsonb;
+use repr::jsonb::JsonbRef;
 use repr::regex::Regex;
 use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
@@ -459,7 +459,7 @@ fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 // repr::jsonb::Jsonb.
 fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
-    strconv::format_jsonb(&mut buf, &Jsonb::from_datum(a));
+    strconv::format_jsonb(&mut buf, JsonbRef::from_datum(a));
     Datum::String(temp_storage.push_string(buf))
 }
 
@@ -1759,7 +1759,7 @@ fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> 
 
 fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
-    strconv::format_jsonb_pretty(&mut buf, &Jsonb::from_datum(a));
+    strconv::format_jsonb_pretty(&mut buf, JsonbRef::from_datum(a));
     Datum::String(temp_storage.push_string(buf))
 }
 

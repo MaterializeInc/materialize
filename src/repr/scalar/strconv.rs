@@ -33,7 +33,7 @@ use ore::fmt::FormatBuffer;
 
 use crate::datetime::{DateTimeField, ParsedDateTime};
 use crate::decimal::Decimal;
-use crate::jsonb::Jsonb;
+use crate::jsonb::{Jsonb, JsonbRef};
 use crate::Interval;
 
 #[derive(Debug)]
@@ -426,7 +426,7 @@ pub fn parse_jsonb(s: &str) -> Result<Jsonb, failure::Error> {
     s.trim().parse()
 }
 
-pub fn format_jsonb<F>(buf: &mut F, jsonb: &Jsonb) -> Nestable
+pub fn format_jsonb<F>(buf: &mut F, jsonb: JsonbRef) -> Nestable
 where
     F: FormatBuffer,
 {
@@ -434,7 +434,7 @@ where
     Nestable::MayNeedEscaping
 }
 
-pub fn format_jsonb_pretty<F>(buf: &mut F, jsonb: &Jsonb)
+pub fn format_jsonb_pretty<F>(buf: &mut F, jsonb: JsonbRef)
 where
     F: FormatBuffer,
 {

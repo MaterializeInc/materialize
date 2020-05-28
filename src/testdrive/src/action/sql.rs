@@ -15,14 +15,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
-use serde_json::Value;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
-use tokio_postgres::types::{Json, Type};
+use tokio_postgres::types::Type;
 
 use ore::collections::CollectionExt;
 use ore::retry;
-use pgrepr::{Interval, Numeric};
+use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::Statement;
 use sql_parser::parser::Parser as SqlParser;
 
@@ -356,9 +355,7 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
                     .get::<_, Option<chrono::NaiveDate>>(i)
                     .map(|x| x.to_string()),
                 Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
-                Type::JSONB => row
-                    .get::<_, Option<Json<Value>>>(i)
-                    .and_then(|v| serde_json::to_string(&v.0).ok()),
+                Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
                 _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
             }
             .unwrap_or_else(|| "<null>".into()),
