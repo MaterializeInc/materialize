@@ -713,7 +713,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     stream.unary_frontier(
-        SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
+        Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
         "UpsertCompaction",
         |_cap, _info| {
             let mut values = HashMap::<_, HashMap<_, (Vec<u8>, Option<i64>)>>::new();
