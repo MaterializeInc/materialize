@@ -104,12 +104,12 @@ pub async fn generate_and_put_records(
         .context("putting records to Kinesis")?;
         shard_starting_hash_keys.push_back(target_shard);
 
-        let elapsed = put_timer.elapsed().as_millis();
-        if elapsed < 1000 {
-            thread::sleep(Duration::from_millis((1000 - elapsed) as u64));
+        let elapsed = put_timer.elapsed();
+        if elapsed < Duration::from_secs(1) {
+            thread::sleep(Duration::from_secs(1) - elapsed);
         } else {
             log::info!(
-                "Expected to put {} records in 1000 milliseconds, took {}",
+                "Expected to put {} records in 1s, took {:#?}",
                 records_per_second,
                 elapsed
             );
