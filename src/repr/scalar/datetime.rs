@@ -395,12 +395,26 @@ impl ParsedDateTime {
         use DateTimeField::*;
 
         let mut pdt = ParsedDateTime::default();
-
         let mut value_parts = VecDeque::new();
+        let mut value_tokens = tokenize_time_str(value.trim())?;
+        let mut token_buffer = VecDeque::new();
 
-        let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
-        for s in value_split {
-            value_parts.push_back(tokenize_time_str(s)?);
+        while let Some(t) = value_tokens.pop_front() {
+            match t {
+                TimeStrToken::Delim => {
+                    if !token_buffer.is_empty() {
+                        value_parts.push_back(token_buffer.clone());
+                        token_buffer.clear();
+                    }
+                }
+                // Equivalent to trimming Colons from each leading element.
+                TimeStrToken::Colon if token_buffer.is_empty() => {}
+                _ => token_buffer.push_back(t),
+            }
+        }
+
+        if !token_buffer.is_empty() {
+            value_parts.push_back(token_buffer)
         }
 
         let mut annotated_parts = Vec::new();
@@ -466,8 +480,14 @@ impl ParsedDateTime {
                 TimePartFormat::PostgreSql(f) => fill_pdt_interval_pg(&mut ap.tokens, f, &mut pdt)?,
             }
 
+            // Consume unused TimeUnits for PG compat.
+            while let Some(TimeStrToken::TimeUnit(_)) = ap.tokens.front() {
+                ap.tokens.pop_front();
+            }
+
             if !ap.tokens.is_empty() {
-                bail!("invalid syntax")
+                let t: Vec<String> = Vec::from(ap.tokens).iter().map(|t| t.to_string()).collect();
+                bail!("Invalid syntax: have unprocessed tokens {}", t.join(""));
             }
         }
 
@@ -488,10 +508,6 @@ impl ParsedDateTime {
         if let Some(TimeStrToken::DateTimeDelimiter) = ts_actual.front() {
             ts_actual.pop_front();
             trim_delim_tokens(&mut ts_actual);
-
-            if ts_actual.is_empty() {
-                bail!("invalid syntax; cannot have 'T' without time following")
-            }
         }
 
         fill_pdt_time(&mut pdt, &mut ts_actual)?;
@@ -500,7 +516,8 @@ impl ParsedDateTime {
         if ts_actual.is_empty() {
             Ok(pdt)
         } else {
-            bail!("invalid syntax")
+            let t: Vec<String> = Vec::from(ts_actual).iter().map(|t| t.to_string()).collect();
+            bail!("Invalid syntax: have unprocessed tokens {}", t.join(""));
         }
     }
     /// Builds a ParsedDateTime from a TIME string (`value`).
@@ -518,7 +535,12 @@ impl ParsedDateTime {
         if time_actual.is_empty() {
             Ok(pdt)
         } else {
-            bail!("invalid syntax")
+            let t: Vec<String> = Vec::from(time_actual)
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
+
+            bail!("Invalid syntax: have unprocessed tokens {}", t.join(""));
         }
     }
 
@@ -531,26 +553,28 @@ impl ParsedDateTime {
     ) -> Result<()> {
         use DateTimeField::*;
 
-        match f {
-            Year if self.year.is_none() => {
-                self.year = u;
+        if u.is_some() {
+            match f {
+                Year if self.year.is_none() => {
+                    self.year = u;
+                }
+                Month if self.month.is_none() => {
+                    self.month = u;
+                }
+                Day if self.day.is_none() => {
+                    self.day = u;
+                }
+                Hour if self.hour.is_none() => {
+                    self.hour = u;
+                }
+                Minute if self.minute.is_none() => {
+                    self.minute = u;
+                }
+                Second if self.second.is_none() => {
+                    self.second = u;
+                }
+                _ => failure::bail!("{} field set twice", f),
             }
-            Month if self.month.is_none() => {
-                self.month = u;
-            }
-            Day if self.day.is_none() => {
-                self.day = u;
-            }
-            Hour if self.hour.is_none() => {
-                self.hour = u;
-            }
-            Minute if self.minute.is_none() => {
-                self.minute = u;
-            }
-            Second if self.second.is_none() => {
-                self.second = u;
-            }
-            _ => failure::bail!("{} field set twice", f),
         }
         Ok(())
     }
@@ -923,8 +947,8 @@ fn fill_pdt_from_tokens(
 
                 continue;
             }
-            (TimeUnit(f), TimeUnit(_)) if unit_buf.is_some() => {
-                if *f != current_field {
+            (TimeUnit(f), TimeUnit(_)) => {
+                if unit_buf.is_some() && *f != current_field {
                     failure::bail!(
                             "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
                             i,
@@ -933,16 +957,7 @@ fn fill_pdt_from_tokens(
                         );
                 }
             }
-            (TimeUnit(f), TimeUnit(_)) if unit_buf.is_none() => {
-                failure::bail!(
-                    "Invalid syntax: {} must be preceeded by a number, e.g. \'1{}\'",
-                    f,
-                    f
-                );
-            }
-            // Dots do not denote terminating a field, so should not trigger a write.
-            (Dot, Dot) => {}
-            (DateTimeDelimiter, DateTimeDelimiter) => {}
+            (Dot, Dot) | (DateTimeDelimiter, DateTimeDelimiter) => {}
             // avoid removing actual token if encountering non-matching DateTimeDelimiter
             (_, DateTimeDelimiter) => {
                 expected.pop_front();
@@ -1025,15 +1040,6 @@ fn fill_pdt_from_tokens(
 
     trim_delim_tokens(actual);
 
-    if !actual.is_empty() && !expected.is_empty() {
-        failure::bail!(
-            "Invalid syntax at offset {}: provided {:?} but expected {:?}",
-            i,
-            actual.front(),
-            expected.front(),
-        )
-    }
-
     pdt.write_field_iff_none(current_field, unit_buf)?;
 
     Ok(())
@@ -1053,6 +1059,7 @@ enum TimePartFormat {
 
 /// AnnotatedIntervalPart contains the tokens to be parsed, as well as the format
 /// to parse them.
+#[derive(Debug, Eq, PartialEq, Clone)]
 struct AnnotatedIntervalPart {
     pub tokens: VecDeque<TimeStrToken>,
     pub fmt: TimePartFormat,
@@ -1083,8 +1090,11 @@ fn determine_format_w_datetimefield(
         // Implies {?}{?}{?}, ambiguous case.
         None | Some(Delim) => Ok(None),
         Some(Dot) => {
-            if let Some(Num(_)) = toks.front() {
-                toks.pop_front();
+            match toks.front() {
+                Some(Num(_)) | Some(Nanos(_)) => {
+                    toks.pop_front();
+                }
+                _ => {}
             }
             match toks.pop_front() {
                 // Implies {Num.NumTimeUnit}
@@ -1222,6 +1232,25 @@ pub(crate) enum TimeStrToken {
     Delim,
 }
 
+impl std::fmt::Display for TimeStrToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use TimeStrToken::*;
+        match self {
+            Dash => write!(f, "-"),
+            Colon => write!(f, ":"),
+            Dot => write!(f, "."),
+            Plus => write!(f, "+"),
+            Zulu => write!(f, "Z"),
+            Num(i) => write!(f, "{}", i),
+            Nanos(i) => write!(f, "{}", i),
+            TzName(n) => write!(f, "{}", n),
+            TimeUnit(d) => write!(f, "{:?}", d),
+            DateTimeDelimiter => write!(f, "T"),
+            Delim => write!(f, " "),
+        }
+    }
+}
+
 /// Convert a string from a time-like datatype (INTERVAL, TIMESTAMP/TZ, DATE, and TIME)
 /// into Vec<TimeStrToken>.
 ///
@@ -1245,12 +1274,26 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
     fn maybe_tokenize_num_buf(
         n: &mut String,
         i: usize,
+        is_frac: &mut bool,
         t: &mut VecDeque<TimeStrToken>,
     ) -> Result<()> {
         if !n.is_empty() {
-            t.push_back(parse_num(&n, i)?);
-            n.clear();
+            if *is_frac {
+                // Fractions only support 9 places of precision.
+                n.truncate(9);
+                let raw: i64 = n
+                    .parse()
+                    .map_err(|e| format_err!("couldn't parse fraction {}: {}", n, e))?;
+                // this is guaranteed to be ascii, so len is fine
+                let multiplicand = 1_000_000_000 / 10_i64.pow(n.len() as u32);
+                t.push_back(TimeStrToken::Nanos(raw * multiplicand));
+                n.clear();
+            } else {
+                t.push_back(parse_num(&n, i)?);
+                n.clear();
+            }
         }
+        *is_frac = false;
         Ok(())
     }
     fn maybe_tokenize_char_buf(c: &mut String, t: &mut VecDeque<TimeStrToken>) -> Result<()> {
@@ -1271,71 +1314,52 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
         }
         Ok(())
     }
-    let mut last_field_is_frac = false;
+    let mut next_num_is_frac = false;
     for (i, chr) in value.chars().enumerate() {
         if !num_buf.is_empty() && !char_buf.is_empty() {
             bail!("Could not tokenize")
         }
         match chr {
             '+' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Plus);
             }
             '-' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Dash);
             }
             ':' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Colon);
             }
             '.' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Dot);
-                last_field_is_frac = true;
+                next_num_is_frac = true;
             }
             chr if chr.is_digit(10) => {
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                num_buf.push(chr)
+                num_buf.push(chr);
             }
             chr if chr.is_ascii_alphabetic() => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
-                char_buf.push(chr)
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
+                char_buf.push(chr);
             }
             chr if chr.is_ascii_whitespace() || chr.is_ascii_punctuation() => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Delim);
             }
-            chr => bail!("Invalid character at offset {} in {}: {:?}", i, value, chr),
+            _ => bail!("Invalid character at offset {} in {}: {:?}", i, value, chr),
         }
     }
-    if !num_buf.is_empty() {
-        if !last_field_is_frac {
-            toks.push_back(parse_num(&num_buf, 0)?);
-        } else {
-            // this is guaranteed to be ascii, so len is fine
-            let mut chars = num_buf.len();
-            // Fractions only support 9 places of precision.
-            let default_precision = 9;
-            if chars > default_precision {
-                num_buf = num_buf[..default_precision].to_string();
-                chars = default_precision;
-            }
-            let raw: i64 = num_buf
-                .parse()
-                .map_err(|e| format_err!("couldn't parse fraction {}: {}", num_buf, e))?;
-            let multiplicand = 1_000_000_000 / 10_i64.pow(chars as u32);
 
-            toks.push_back(TimeStrToken::Nanos(raw * multiplicand));
-        }
-    } else {
-        maybe_tokenize_char_buf(&mut char_buf, &mut toks)?
-    }
+    maybe_tokenize_num_buf(&mut num_buf, value.len(), &mut next_num_is_frac, &mut toks)?;
+    maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
 
     trim_delim_tokens(&mut toks);
 
@@ -1623,12 +1647,12 @@ mod test {
         use TimeStrToken::*;
         assert_eq!(
             expected_sql_standard_interval_tokens(Year),
-            vec![Num(0), Dash, Num(0), Space]
+            vec![Num(0), Dash, Num(0), Delim]
         );
 
         assert_eq!(
             expected_sql_standard_interval_tokens(Day),
-            vec![Num(0), Space,]
+            vec![Num(0), Delim]
         );
         assert_eq!(
             expected_sql_standard_interval_tokens(Hour),
