@@ -88,15 +88,21 @@ where
 }
 impl<K, V> SourceOutput<K, V>
 where
-    K: Data + Hashable<Output = u64> + Serialize + for<'a> Deserialize<'a> + Send + Sync,
-    V: Data + Hashable<Output = u64> + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+    K: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+    V: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
 {
     /// A parallelization contract that hashes by keys
-    pub fn key_contract() -> impl ParallelizationContract<Timestamp, Self> {
+    pub fn key_contract() -> impl ParallelizationContract<Timestamp, Self>
+    where
+        K: Hashable<Output = u64>,
+    {
         Exchange::new(|x: &Self| x.key.hashed())
     }
     /// A parallelization contract that hashes by values
-    pub fn value_contract() -> impl ParallelizationContract<Timestamp, Self> {
+    pub fn value_contract() -> impl ParallelizationContract<Timestamp, Self>
+    where
+        V: Hashable<Output = u64>,
+    {
         Exchange::new(|x: &Self| x.value.hashed())
     }
 }
