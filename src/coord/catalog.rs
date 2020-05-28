@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, TimeZone, Utc};
 use failure::bail;
 use lazy_static::lazy_static;
-use log::{error, info, trace};
+use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -526,15 +526,12 @@ impl Catalog {
             .collect()
     }
 
-    pub fn drop_temporary_schema(&mut self, conn_id: u32) {
-        if self.temporary_schemas[&conn_id].items.is_empty() {
-            error!(
-                "items leftover in temporary schema for conn_id: {}",
-                conn_id
-            );
+    pub fn drop_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
+        if !self.temporary_schemas[&conn_id].items.is_empty() {
+            return Err(Error::new(ErrorKind::SchemaNotEmpty("mz_temp".into())));
         }
-
         self.temporary_schemas.remove(&conn_id);
+        Ok(())
     }
 
     /// Gets the schema map for the database matching `database_spec`.

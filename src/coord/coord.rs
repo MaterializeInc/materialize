@@ -546,7 +546,7 @@ where
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
             .expect("unable to drop temporary items for conn_id");
-        self.catalog.drop_temporary_schema(conn_id);
+        self.catalog.drop_temporary_schema(conn_id).expect("unable to drop temporary schema");
     }
 
     fn sequence_plan(

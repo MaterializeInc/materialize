@@ -29,6 +29,7 @@ pub(crate) enum ErrorKind {
     ItemAlreadyExists(String),
     UnacceptableSchemaName(String),
     ReadOnlySystemSchema(String),
+    SchemaNotEmpty(String),
     TemporaryItem(String),
     UnsatisfiableLoggingDependency { depender_name: String },
     Storage(rusqlite::Error),
@@ -62,6 +63,7 @@ impl std::error::Error for Error {
             | ErrorKind::ItemAlreadyExists(_)
             | ErrorKind::UnacceptableSchemaName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
+            | ErrorKind::SchemaNotEmpty(_)
             | ErrorKind::TemporaryItem(_)
             | ErrorKind::UnsatisfiableLoggingDependency { .. } => None,
             ErrorKind::Storage(e) => Some(e),
@@ -89,6 +91,9 @@ impl fmt::Display for Error {
             }
             ErrorKind::ReadOnlySystemSchema(name) => {
                 write!(f, "system schema '{}' cannot be modified", name)
+            }
+            ErrorKind::SchemaNotEmpty(name) => {
+                write!(f, "cannot drop non-empty schema '{}'", name)
             }
             ErrorKind::TemporaryItem(name) => write!(
                 f,
