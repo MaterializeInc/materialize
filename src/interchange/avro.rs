@@ -576,7 +576,7 @@ impl DebeziumDecodeState {
                         .ok_or_else(|| format_err!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
-                        match self.binlog_offsets.entry(file_val) {
+                        match self.binlog_offsets.entry(file_val.clone()) {
                             Entry::Occupied(mut oe) => {
                                 let (old_max_pos, old_max_row) = *oe.get();
                                 if old_max_pos > pos || (old_max_pos == pos && old_max_row >= row) {
@@ -585,8 +585,8 @@ impl DebeziumDecodeState {
                                     } else {
                                         format!("")
                                     };
-                                    warn!("Debezium for source {} did not advance: previously read ({}, {}), now read ({}, {}). Skipping record{}.",
-                                          self.debug_name, old_max_pos, old_max_row, pos, row, offset_string);
+                                    warn!("Debezium for source {} did not advance in binlog file {}: previously read ({}, {}), now read ({}, {}). Skipping record{}.",
+                                          self.debug_name, file_val, old_max_pos, old_max_row, pos, row, offset_string);
                                     return Ok(DiffPair {
                                         before: None,
                                         after: None,
@@ -595,7 +595,7 @@ impl DebeziumDecodeState {
                                 oe.insert((pos, row));
                             }
                             Entry::Vacant(ve) => {
-                                ve.insert((pos as usize, row as usize));
+                                ve.insert((pos, row));
                             }
                         }
                     }
