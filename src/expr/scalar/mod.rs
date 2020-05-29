@@ -392,7 +392,10 @@ impl ScalarExpr {
                             *e = cond.take().call_binary(els.take(), BinaryFunc::Or);
                         }
                         (Some(Ok(Datum::False)), _) => {
-                            *e = cond.take().call_binary(els.take(), BinaryFunc::And);
+                            *e = cond
+                                .take()
+                                .call_unary(UnaryFunc::Not)
+                                .call_binary(els.take(), BinaryFunc::And);
                         }
                         (_, Some(Ok(Datum::True))) => {
                             *e = cond
@@ -401,10 +404,7 @@ impl ScalarExpr {
                                 .call_binary(then.take(), BinaryFunc::Or);
                         }
                         (_, Some(Ok(Datum::False))) => {
-                            *e = cond
-                                .take()
-                                .call_unary(UnaryFunc::Not)
-                                .call_binary(then.take(), BinaryFunc::And);
+                            *e = cond.take().call_binary(then.take(), BinaryFunc::And);
                         }
                         _ => {}
                     }
