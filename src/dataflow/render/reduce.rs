@@ -60,14 +60,13 @@ where
             // applied a single reduction (which should be good for any consumers
             // of the operator and its arrangement).
 
-            let keys_clone = group_key.clone();
             let relation_expr_clone = relation_expr.clone();
 
             // Our first step is to extract `(key, vals)` from `input`.
             // We do this carefully, attempting to avoid unneccesary allocations
             // that would result from cloning rows in input arrangements.
-            let group_key_owned = group_key.to_vec();
-            let aggregates_owned = aggregates.to_vec();
+            let group_key_clone = group_key.clone();
+            let aggregates_clone = aggregates.clone();
 
             // Tracks the required number of columns to extract.
             let mut columns_needed = 0;
@@ -83,7 +82,7 @@ where
             }
 
             let mut row_packer = RowPacker::new();
-            let (key_input, mut err_input): (
+            let (key_val_input, mut err_input): (
                 Collection<_, Result<(Row, Row), DataflowError>, _>,
                 _,
             ) = self
@@ -93,8 +92,11 @@ where
                     // First, evaluate the key selector expressions.
                     // If any error we produce their errors as output and note
                     // the fact that the key was not correctly produced.
+                    // TODO(frank): this allocation could be re-used if we were
+                    // more clever about where it came from (e.g. allocated with
+                    // lifetime `'storage` in `flat_map_ref`).
                     let datums = row.iter().take(columns_needed).collect::<Vec<_>>();
-                    for expr in group_key_owned.iter() {
+                    for expr in group_key_clone.iter() {
                         match expr.eval(&datums, &temp_storage) {
                             Ok(val) => row_packer.push(val),
                             Err(e) => {
@@ -109,7 +111,7 @@ where
                     // "ReduceCollation" operator to panic due to absent aggregates.
                     if results.is_empty() {
                         let key = row_packer.finish_and_reuse();
-                        for aggr in aggregates_owned.iter() {
+                        for aggr in aggregates_clone.iter() {
                             match aggr.expr.eval(&datums, &temp_storage) {
                                 Ok(val) => {
                                     row_packer.push(val);
@@ -130,7 +132,7 @@ where
 
             // Demux out the potential errors from key and value selector evaluation.
             use timely::dataflow::operators::ok_err::OkErr;
-            let (ok, err) = key_input.inner.ok_err(|(x, t, d)| match x {
+            let (ok, err) = key_val_input.inner.ok_err(|(x, t, d)| match x {
                 Ok(x) => Ok((x, t, d)),
                 Err(x) => Err((x, t, d)),
             });
@@ -219,7 +221,7 @@ where
                 });
                 (oks, err_input)
             };
-            let index = (0..keys_clone.len()).collect::<Vec<_>>();
+            let index = (0..group_key.len()).collect::<Vec<_>>();
             self.set_local_columns(relation_expr, &index[..], (oks, errs.arrange()));
         }
     }
