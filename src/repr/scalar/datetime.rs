@@ -1921,15 +1921,7 @@ mod test {
                 "0-0 0",
                 Year,
                 1,
-                "Invalid syntax at offset 1: provided Space but expected Dash",
-            ),
-            // If you have Nanos, you cannot convert to Num.
-            (
-                "1 2.3",
-                "0 0.0YEAR",
-                Year,
-                1,
-                "Invalid syntax at offset 4: provided Nanos(300000000) but expected TimeUnit(Year)",
+                "Invalid syntax at offset 1: provided Delim but expected Dash",
             ),
         ];
         for test in test_cases.iter() {
@@ -2102,11 +2094,6 @@ mod test {
                 Month,
                 "Invalid syntax at offset 3: provided Dot but expected TimeUnit(Year)",
             ),
-            (
-                "YEAR",
-                Year,
-                "Invalid syntax: YEAR must be preceeded by a number, e.g. \'1YEAR\'",
-            ),
             // Running into this error means that determine_format_w_datetimefield
             // failed.
             (
@@ -2272,11 +2259,6 @@ mod test {
                 "1-2:3.4",
                 Minute,
                 "Invalid syntax at offset 1: provided Dash but expected Colon",
-            ),
-            (
-                "1:2.2.",
-                Minute,
-                "Invalid syntax at offset 5: provided Dot but expected None",
             ),
             (
                 "1YEAR",
@@ -2842,7 +2824,7 @@ mod test {
             (
                 "-:::::1.27",
                 Second,
-                "Invalid syntax at offset 2: provided Colon but expected None",
+                "Invalid syntax: have unprocessed tokens 1.270000000",
             ),
             (
                 "-1 ::.27",
@@ -2853,7 +2835,7 @@ mod test {
             (
                 "1:2:3.4.5",
                 Second,
-                "Invalid syntax at offset 7: provided Dot but expected None",
+                "Invalid syntax: have unprocessed tokens .500000000",
             ),
             (
                 "1+2:3.4",
@@ -2869,16 +2851,6 @@ mod test {
                 "0 foo",
                 Second,
                 "invalid DateTimeField: FOO",
-            ),
-            (
-                "1-2 hour",
-                Second,
-                "Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR'",
-            ),
-            (
-                "1-2hour",
-                Second,
-                "Invalid syntax at offset 3: provided TimeUnit(Hour) but expected None",
             ),
             (
                 "1-2 3:4 5 second",
@@ -2899,22 +2871,22 @@ mod test {
             (
                 "9223372036854775808 months",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 19: number too large to fit in target type",
             ),
             (
                 "-9223372036854775808 months",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 20: number too large to fit in target type",
             ),
             (
                 "9223372036854775808 seconds",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 19: number too large to fit in target type",
             ),
             (
                 "-9223372036854775808 seconds",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 20: number too large to fit in target type",
             ),
         ];
         for test in test_cases.iter() {

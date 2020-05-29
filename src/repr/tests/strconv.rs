@@ -43,7 +43,7 @@ fn test_parse_date_errors() {
     );
     run_test_parse_date_errors(
         "2001-01-02 04",
-        "Invalid DATE '2001-01-02 04': Unknown format",
+        "Invalid DATE '2001-01-02 04': Invalid syntax: have unprocessed tokens 4",
     );
     fn run_test_parse_date_errors(s: &str, e: &str) {
         assert_eq!(
@@ -81,7 +81,10 @@ fn test_parse_time_errors() {
         "01:02:61.345",
         "Invalid TIME \'01:02:61.345\': SECOND must be (0, 60), got 61",
     );
-    run_test_parse_time_errors("03.456", "Invalid TIME \'03.456\': Unknown format");
+    run_test_parse_time_errors(
+        "03.456",
+        "Invalid TIME \'03.456\': Invalid syntax: have unprocessed tokens 3.456000000",
+    );
 
     fn run_test_parse_time_errors(s: &str, e: &str) {
         assert_eq!(
@@ -139,7 +142,7 @@ fn test_parse_timestamp_errors() {
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 04",
-        "Invalid TIMESTAMP \'2001-01-02 04\': Unknown format",
+        "Invalid TIMESTAMP \'2001-01-02 04\': Invalid syntax: have unprocessed tokens 4",
     );
 
     run_test_parse_timestamp_errors(
