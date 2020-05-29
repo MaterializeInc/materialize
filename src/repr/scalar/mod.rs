@@ -761,24 +761,6 @@ impl Default for Interval {
     }
 }
 
-impl std::ops::Add for Interval {
-    type Output = Self;
-    #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add(self, other: Self) -> Self {
-        Self {
-            months: self.months + other.months,
-            duration: self.duration + other.duration,
-        }
-    }
-}
-
-impl std::ops::Sub for Interval {
-    type Output = Self;
-    fn sub(self, other: Self) -> Self {
-        self + -other
-    }
-}
-
 impl std::ops::Neg for Interval {
     type Output = Self;
     fn neg(self) -> Self {
@@ -812,6 +794,41 @@ impl Interval {
             months,
             duration: seconds as i128 * 1_000_000_000 + nanos as i128,
         }
+    }
+
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
+        let months = match self.months.checked_add(other.months) {
+            Some(m) => m,
+            None => return None,
+        };
+        let i = Self {
+            months,
+            duration: self.duration + other.duration,
+        };
+        if i.validate_duration().is_err() {
+            None
+        } else {
+            Some(i)
+        }
+    }
+
+    pub fn validate_duration(&self) -> Result<(), failure::Error> {
+        // Don't let our duration exceed Postgres' min/max for those same fields,
+        // equivalent to:
+        // ```
+        // SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds';
+        // SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds';
+        // ```
+        if self.duration > 193_273_528_233_599_999_999_000
+            || self.duration < -193_273_528_233_599_999_999_000
+        {
+            bail!(
+                "exceeds min/max interval duration +/-(2147483647 days 2147483647 hours \
+                59 minutes 59.999999 seconds)"
+            )
+        }
+
+        Ok(())
     }
 
     /// Returns the total number of whole seconds in the `Interval`'s duration.

@@ -409,6 +409,7 @@ impl std::fmt::Display for EvalError {
             EvalError::DivisionByZero => f.write_str("division by zero"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
             EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
+            EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
             EvalError::InvalidByteSequence {
                 byte_sequence,

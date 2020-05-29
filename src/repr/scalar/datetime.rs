@@ -213,19 +213,7 @@ impl ParsedDateTime {
         };
 
         let i = Interval::new(months, seconds, nanos);
-
-        // Don't let our duration exceed Postgres' min/max for those same fields,
-        // equivalent to:
-        // ```
-        // SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds';
-        // SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds';
-        // ```
-        if i.duration > 193_273_528_233_599_999_999_000
-            || i.duration < -193_273_528_233_599_999_999_000
-        {
-            bail!("exceeds min/max interval duration +/-(2147483647 days 2147483647 hours 59 minutes 59.999999 seconds)")
-        }
-
+        i.validate_duration()?;
         Ok(i)
     }
     /// Adds the appropriate values from self's ParsedDateTime to `months`,

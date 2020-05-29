@@ -933,12 +933,12 @@ impl Encoder {
                     // client (https://issues.apache.org/jira/browse/AVRO-2123),
                     // so no one is likely to be using it, so we're just using
                     // our own very convenient format.
-                    ScalarType::Interval => Value::Fixed(24, {
+                    ScalarType::Interval => Value::Fixed(20, {
                         let iv = datum.unwrap_interval();
                         let mut buf = Vec::with_capacity(24);
                         buf.extend(&iv.months.to_le_bytes());
                         buf.extend(&iv.duration.to_le_bytes());
-                        debug_assert_eq!(buf.len(), 24);
+                        debug_assert_eq!(buf.len(), 20);
                         buf
                     }),
                     ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),

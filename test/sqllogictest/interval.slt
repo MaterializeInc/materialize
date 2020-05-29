@@ -591,6 +591,12 @@ SELECT INTERVAL '2147483647 days 2147483648 hours'
 statement error Invalid INTERVAL '-2147483647 days -2147483648 hours': exceeds min/max interval duration \+/-\(2147483647 days 2147483647 hours 59 minutes 59.999999 seconds\)
 SELECT INTERVAL '-2147483647 days -2147483648 hours'
 
+statement error interval out of range
+SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds' + INTERVAL '1';
+
+statement error interval out of range
+SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds' - INTERVAL '1';
+
 # Largest number of cumulative nanoseconds
 query T
 SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';

@@ -469,6 +469,7 @@ pub enum EvalError {
     DivisionByZero,
     NumericFieldOverflow,
     IntegerOutOfRange,
+    IntervalOutOfRange,
     InvalidEncodingName(String),
     InvalidByteSequence {
         byte_sequence: String,

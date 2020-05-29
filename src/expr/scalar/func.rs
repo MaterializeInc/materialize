@@ -430,7 +430,12 @@ fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
     // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
     if i.duration < 0 {
         i = repr::Interval::new(0, 86400, 0)
-            + repr::Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64);
+            .checked_add(&repr::Interval::new(
+                0,
+                i.dur_as_secs() % (24 * 60 * 60),
+                i.nanoseconds() as i64,
+            ))
+            .unwrap();
     }
 
     Datum::Time(NaiveTime::from_hms_nano(
@@ -715,8 +720,11 @@ fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
-fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_interval() + b.unwrap_interval())
+fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_interval()
+        .checked_add(&b.unwrap_interval())
+        .ok_or(EvalError::IntervalOutOfRange)
+        .map(Datum::from)
 }
 
 fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -761,8 +769,11 @@ fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_time() - b.unwrap_time())
 }
 
-fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_interval() - b.unwrap_interval())
+fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_interval()
+        .checked_add(&-b.unwrap_interval())
+        .ok_or(EvalError::IntervalOutOfRange)
+        .map(Datum::from)
 }
 
 fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1871,7 +1882,7 @@ impl BinaryFunc {
             BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddDecimal => Ok(eager!(add_decimal)),
-            BinaryFunc::AddInterval => Ok(eager!(add_interval)),
+            BinaryFunc::AddInterval => eager!(add_interval),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
             BinaryFunc::SubFloat32 => Ok(eager!(sub_float32)),
@@ -1880,7 +1891,7 @@ impl BinaryFunc {
             BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
             BinaryFunc::SubTimestampInterval => Ok(eager!(sub_timestamp_interval)),
             BinaryFunc::SubTimestampTzInterval => Ok(eager!(sub_timestamptz_interval)),
-            BinaryFunc::SubInterval => Ok(eager!(sub_interval)),
+            BinaryFunc::SubInterval => eager!(sub_interval),
             BinaryFunc::SubDate => Ok(eager!(sub_date)),
             BinaryFunc::SubDateInterval => Ok(eager!(sub_date_interval)),
             BinaryFunc::SubTime => Ok(eager!(sub_time)),
