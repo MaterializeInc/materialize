@@ -255,7 +255,7 @@ struct DataPlaneInfo {
     /// Kafka consumer for this source
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
-    partitions: VecDeque<PartitionConsumer>,
+    partition_consumers: VecDeque<PartitionConsumer>,
     /// The current number of partitions. If needs_refresh is set to false, then
     /// current_partition_count == expected_partition_count == consumers.len() == partition_metadata.len()
     current_partition_count: i32,
@@ -327,7 +327,7 @@ impl DataPlaneInfo {
             topic_name,
             source_name,
             source_id,
-            partitions: VecDeque::new(),
+            partition_consumers: VecDeque::new(),
             needs_refresh: true,
             current_partition_count: 0,
             expected_partition_count: 1,
@@ -364,10 +364,10 @@ impl DataPlaneInfo {
     }
 
     /// Returns a count of total number of consumers for this source
-    fn get_partition_count(&self) -> i32 {
+    fn get_partition_consumers_count(&self) -> i32 {
         // Note: the number of consumers is guaranteed to always be smaller than
         // expected_partition_count (i32)
-        self.partitions.len().try_into().unwrap()
+        self.partition_consumers.len().try_into().unwrap()
     }
 
     /// Refreshes source information for the expected partition count
@@ -397,7 +397,7 @@ impl DataPlaneInfo {
             self.needs_refresh || cp_info.get_partition_count() == self.current_partition_count
         );
         assert!(
-            self.needs_refresh || self.get_partition_count() == self.get_worker_partition_count()
+            self.needs_refresh || self.get_partition_consumers_count() == self.get_worker_partition_count()
         );
     }
 
@@ -414,20 +414,22 @@ impl DataPlaneInfo {
     /// We currently create one consumer per partition
     #[must_use]
     fn update_partition_queue_list(&mut self, cp_info: &mut ControlPlaneInfo) -> bool {
-        let next_pid = self.get_partition_count();
+        let next_pid = self.current_partition_count;
         let to_add = self.expected_partition_count - next_pid;
        // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
         // starting from 0
         for i in 0..to_add {
             let pid: i32 = next_pid + i;
-            if !self.create_partition_queue(pid) {
-                // If failed to create new partition queue, stop and exit
-                return false;
-           }
+            if self.has_partition(pid) {
+                if !self.create_partition_queue(pid) {
+                    // If failed to create consumer, stop and exit
+                    return false;
+                }
+            }
             cp_info.update_partition_metadata(pid);
             self.current_partition_count += 1;
         }
-        assert_eq!(self.get_worker_partition_count(), self.get_partition_count());
+        assert_eq!(self.get_worker_partition_count(), self.get_partition_consumers_count());
         assert_eq!(
             self.current_partition_count as usize,
             cp_info.partition_metadata.len()
@@ -456,7 +458,7 @@ impl DataPlaneInfo {
                 .consumer
                 .split_partition_queue(&self.topic_name, partition_id);
             if let Some(partition_queue) = partition_queue {
-                self.partitions
+                self.partition_consumers
                     .push_front(PartitionConsumer::new(partition_id, partition_queue));
                 assert_eq!(
                     self.consumer
@@ -464,7 +466,7 @@ impl DataPlaneInfo {
                         .unwrap()
                         .elements_for_topic(&self.topic_name)
                         .len(),
-                    self.partitions.len()
+                    self.partition_consumers.len()
                 );
                 self.partition_metrics.insert(partition_id,PartitionMetrics::new(
                     &self.topic_name,
@@ -492,12 +494,12 @@ impl DataPlaneInfo {
         cp_info: &ControlPlaneInfo,
         activator: &Activator,
     ) -> Option<MessageParts> {
-        assert!(self.needs_refresh || self.get_partition_count() == self.get_worker_partition_count());
+        assert!(self.needs_refresh || self.get_partition_consumers_count() == self.get_worker_partition_count());
         let mut next_message = None;
-        let consumer_count = self.get_partition_count();
+        let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
         while !self.needs_refresh && attempts < consumer_count {
-            let mut partition_queue = self.partitions.pop_front().unwrap();
+            let mut partition_queue = self.partition_consumers.pop_front().unwrap();
             let message = partition_queue.get_next_message();
             if let Some(message) = message {
                 let partition = message.partition;
@@ -539,7 +541,7 @@ impl DataPlaneInfo {
                     next_message = Some(message);
                 }
             }
-            self.partitions.push_back(partition_queue);
+            self.partition_consumers.push_back(partition_queue);
             if next_message.is_some() {
                 // Found a message, exit the loop and return message
                 break;
@@ -548,7 +550,7 @@ impl DataPlaneInfo {
             }
         }
         assert!(
-            self.needs_refresh || self.get_partition_count() == self.get_worker_partition_count()
+            self.needs_refresh || self.get_partition_consumers_count() == self.get_worker_partition_count()
         );
         next_message
     }
@@ -558,7 +560,7 @@ impl DataPlaneInfo {
     /// read from.
     fn buffer_message(&mut self, msg: MessageParts) {
         // Guaranteed to exist as we just read from this consumer
-        let mut consumer = self.partitions.back_mut().unwrap();
+        let mut consumer = self.partition_consumers.back_mut().unwrap();
         assert_eq!(msg.partition, consumer.pid);
         consumer.buffer = Some(msg);
     }
