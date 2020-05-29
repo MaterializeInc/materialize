@@ -807,6 +807,9 @@ where
                     return SourceStatus::Alive;
                 }
             }
+            if bytes_read > 0 {
+                KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
+            }
             // Ensure that we poll kafka more often than the eviction timeout
             activator.activate_after(Duration::from_secs(60));
             SourceStatus::Alive
