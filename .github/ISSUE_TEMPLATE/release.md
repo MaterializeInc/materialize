@@ -67,17 +67,15 @@ production readiness.
 
 ### Test the release candidate
 
-All of these tests can be run in parallel.
+To run the required load tests on the release candidate tag, Materialize employees
+can follow [these instructions for running semi-automatic load tests][load-instr]
+in the infrastructure repository. All of these tests can be run in parallel.
+
+[load-instr]: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
 
 - [ ] Run the chbench load test on the release candidate tag.
 
   - [ ] Spin up a fresh VM and start the load test.
-
-    Materialize employees can follow [these instructions for running semi-
-    automatic load tests][load-instr] in the infrastructure
-    repository.
-
-    [load-instr]: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
 
   - [ ] From the VM, ensure all containers are running:
 
@@ -98,15 +96,9 @@ All of these tests can be run in parallel.
     ./dc.sh backup
     ```
 
-- [ ] Run the billing-demo load test on the tag.
+- [ ] Run the billing-demo load test on the release candidate tag.
 
   - [ ] Spin up a fresh VM and start the load test.
-
-    Materialize employees can follow [these instructions for running semi-
-    automatic load tests][load-instr] in the infrastructure
-    repository.
-
-    [load-instr]: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
 
   - [ ] From the VM, ensure all containers are running:
 
@@ -118,17 +110,11 @@ All of these tests can be run in parallel.
 
 - [ ] Run the perf-kinesis load test on the tag.
 
-  - [ ] Spin up a fresh VM and start the load test. To start the load test, ssh
-    into the VM and run:
+  - [ ] Spin up a fresh VM and start the load test.
 
-    ```shell
-    cd materialize/test/performance/perf-kinesis
-    ./mzcompose up -d
-    ```
+  - [ ] From the VM, ensure all containers are running:
 
-  - [ ] Ensure all containers started successfully and are running:
-
-    ```shell
+    ```shell script
     docker ps -a
     ```
 
