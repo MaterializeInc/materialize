@@ -333,7 +333,7 @@ impl DataPlaneInfo {
             expected_partition_count: 1,
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
-            worker_count: worker_count.try_into().unwrap()
+            worker_count: worker_count.try_into().unwrap(),
         }
     }
 
@@ -397,7 +397,8 @@ impl DataPlaneInfo {
             self.needs_refresh || cp_info.get_partition_count() == self.current_partition_count
         );
         assert!(
-            self.needs_refresh || self.get_partition_consumers_count() == self.get_worker_partition_count()
+            self.needs_refresh
+                || self.get_partition_consumers_count() == self.get_worker_partition_count()
         );
     }
 
@@ -408,15 +409,13 @@ impl DataPlaneInfo {
         self.expected_partition_count = expected_pcount
     }
 
-
-
     /// Update the list of Kafka consumers to match the number of partitions
     /// We currently create one consumer per partition
     #[must_use]
     fn update_partition_queue_list(&mut self, cp_info: &mut ControlPlaneInfo) -> bool {
         let next_pid = self.current_partition_count;
         let to_add = self.expected_partition_count - next_pid;
-       // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
+        // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
         // starting from 0
         for i in 0..to_add {
             let pid: i32 = next_pid + i;
@@ -429,7 +428,10 @@ impl DataPlaneInfo {
             cp_info.update_partition_metadata(pid);
             self.current_partition_count += 1;
         }
-        assert_eq!(self.get_worker_partition_count(), self.get_partition_consumers_count());
+        assert_eq!(
+            self.get_worker_partition_count(),
+            self.get_partition_consumers_count()
+        );
         assert_eq!(
             self.current_partition_count as usize,
             cp_info.partition_metadata.len()
@@ -468,11 +470,14 @@ impl DataPlaneInfo {
                         .len(),
                     self.partition_consumers.len()
                 );
-                self.partition_metrics.insert(partition_id,PartitionMetrics::new(
-                    &self.topic_name,
-                    &self.source_id,
-                    &partition_id.to_string(),
-                ));
+                self.partition_metrics.insert(
+                    partition_id,
+                    PartitionMetrics::new(
+                        &self.topic_name,
+                        &self.source_id,
+                        &partition_id.to_string(),
+                    ),
+                );
                 self.consumer.poll(Duration::from_secs(0));
                 true
             } else {
@@ -494,7 +499,10 @@ impl DataPlaneInfo {
         cp_info: &ControlPlaneInfo,
         activator: &Activator,
     ) -> Option<MessageParts> {
-        assert!(self.needs_refresh || self.get_partition_consumers_count() == self.get_worker_partition_count());
+        assert!(
+            self.needs_refresh
+                || self.get_partition_consumers_count() == self.get_worker_partition_count()
+        );
         let mut next_message = None;
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
@@ -550,7 +558,8 @@ impl DataPlaneInfo {
             }
         }
         assert!(
-            self.needs_refresh || self.get_partition_consumers_count() == self.get_worker_partition_count()
+            self.needs_refresh
+                || self.get_partition_consumers_count() == self.get_worker_partition_count()
         );
         next_message
     }
