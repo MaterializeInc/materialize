@@ -1117,7 +1117,7 @@ ORDER BY supplier_cnt DESC
 
 %8 =
 | Get %3
-| Filter if isnull(#0) then {null} else {true}
+| Filter (!(isnull(#0)) || null)
 
 %9 =
 | Union %7 %8
@@ -1130,7 +1130,7 @@ ORDER BY supplier_cnt DESC
 | Join %4 %9 %10 (= #17 #23 #24)
 | | implementation = Differential %9 %10.(#0) %4.(#17)
 | | demand = (#17, #20..#22)
-| Filter if isnull(#17) then {null} else {true}
+| Filter (!(isnull(#17)) || null)
 | Reduce group=(#20, substr(#22, 1, 3), #21) count(distinct #17)
 
 Finish order_by=(#3 desc) limit=none offset=0 project=(#0..#3)
