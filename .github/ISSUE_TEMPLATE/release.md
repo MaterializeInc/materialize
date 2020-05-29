@@ -88,14 +88,6 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] Take a screenshot of the Grafana dashboard with the full 24 hours of
     data and share it in the #release channel in Slack.
 
-  - [ ] Stop Prometheus, and upload a backup of the data to the #release
-    channel in Slack.
-
-    ```shell
-    ./dc.sh stop prometheus
-    ./dc.sh backup
-    ```
-
 - [ ] Run the billing-demo load test on the release candidate tag.
 
   - [ ] Spin up a fresh VM and start the load test.
