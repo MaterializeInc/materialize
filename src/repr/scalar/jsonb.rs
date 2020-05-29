@@ -83,6 +83,7 @@ use std::str::{self, FromStr};
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
+use self::vec_stack::VecStack;
 use crate::{Datum, Row, RowPacker};
 
 /// An owned JSON value backed by a [`Row`].
@@ -225,37 +226,34 @@ impl JsonbPacker {
     ///
     /// Errors if any of the contained integers cannot be represented exactly as
     /// an [`f64`].
-    pub fn pack_serde_json(mut self, val: serde_json::Value) -> Result<RowPacker, failure::Error> {
+    pub fn pack_serde_json(self, val: serde_json::Value) -> Result<RowPacker, failure::Error> {
         let mut commands = vec![];
         Collector(&mut commands).deserialize(val)?;
-        pack_value(&commands, &mut self.packer);
-        Ok(self.packer)
+        Ok(pack(self.packer, &commands))
     }
 
     /// Parses and packs a JSON-formatted byte slice.
     ///
     /// Errors if the slice is not valid JSON or if any of the contained
     /// integers cannot be represented exactly as an [`f64`].
-    pub fn pack_slice(mut self, buf: &[u8]) -> Result<RowPacker, failure::Error> {
+    pub fn pack_slice(self, buf: &[u8]) -> Result<RowPacker, failure::Error> {
         let mut commands = vec![];
         let mut deserializer = serde_json::Deserializer::from_slice(buf);
         Collector(&mut commands).deserialize(&mut deserializer)?;
         deserializer.end()?;
-        pack_value(&commands, &mut self.packer);
-        Ok(self.packer)
+        Ok(pack(self.packer, &commands))
     }
 
     /// Parses and packs a JSON-formatted string.
     ///
     /// Errors if the string is not valid or JSON or if any of the contained
     /// integers cannot be represented exactly as an [`f64`].
-    pub fn pack_str(mut self, s: &str) -> Result<RowPacker, failure::Error> {
+    pub fn pack_str(self, s: &str) -> Result<RowPacker, failure::Error> {
         let mut commands = vec![];
         let mut deserializer = serde_json::Deserializer::from_str(s);
         Collector(&mut commands).deserialize(&mut deserializer)?;
         deserializer.end()?;
-        pack_value(&commands, &mut self.packer);
-        Ok(self.packer)
+        Ok(pack(self.packer, &commands))
     }
 }
 
@@ -376,8 +374,23 @@ impl<'a, 'de> Visitor<'de> for Collector<'a, 'de> {
     }
 }
 
+struct DictEntry<'a> {
+    key: &'a str,
+    val: &'a [Command<'a>],
+}
+
+fn pack(mut packer: RowPacker, value: &[Command]) -> RowPacker {
+    let mut buf = vec![];
+    pack_value(&mut packer, VecStack::new(&mut buf), value);
+    packer
+}
+
 #[inline]
-fn pack_value<'de>(value: &[Command<'de>], packer: &mut RowPacker) {
+fn pack_value<'a, 'scratch>(
+    packer: &mut RowPacker,
+    scratch: VecStack<'scratch, DictEntry<'a>>,
+    value: &'a [Command<'a>],
+) {
     match &value[0] {
         Command::Null => packer.push(Datum::JsonNull),
         Command::Bool(b) => packer.push(if *b { Datum::True } else { Datum::False }),
@@ -385,21 +398,25 @@ fn pack_value<'de>(value: &[Command<'de>], packer: &mut RowPacker) {
         Command::String(s) => packer.push(Datum::String(s)),
         Command::Array(further) => {
             let range = &value[1..][..*further];
-            pack_list(range, packer);
+            pack_list(packer, scratch, range);
         }
         Command::Map(further) => {
             let range = &value[1..][..*further];
-            pack_dict(range, packer);
+            pack_dict(packer, scratch, range);
         }
     }
 }
 
 /// Packs a sequence of values as an ordered list.
-fn pack_list<'de>(mut values: &[Command<'de>], packer: &mut RowPacker) {
+fn pack_list<'a, 'scratch>(
+    packer: &mut RowPacker,
+    mut scratch: VecStack<'scratch, DictEntry<'a>>,
+    mut values: &'a [Command<'a>],
+) {
     let start = unsafe { packer.start_list() };
     while !values.is_empty() {
         let value = extract_value(&mut values);
-        pack_value(value, packer);
+        pack_value(packer, scratch.fresh(), value);
     }
     unsafe { packer.finish_list(start) }
 }
@@ -410,22 +427,16 @@ fn pack_list<'de>(mut values: &[Command<'de>], packer: &mut RowPacker) {
 /// the entries in the dictionary are sorted by these strings.
 /// Multiple values for the same key are detected and only
 /// the last value is kept.
-fn pack_dict<'de>(mut entries: &[Command<'de>], packer: &mut RowPacker) {
-    struct Entry<'a> {
-        key: &'a str,
-        val: &'a [Command<'a>],
-    }
-
-    // TODO: It is a bit annoying to have this allocation, but
-    // avoiding it seems to require mocking up the recursive
-    // function evaluation as a stack machine, which is also
-    // annoying.
-    let mut sorts = Vec::new();
+fn pack_dict<'a, 'scratch>(
+    packer: &mut RowPacker,
+    mut scratch: VecStack<'scratch, DictEntry<'a>>,
+    mut entries: &'a [Command<'a>],
+) {
     while !entries.is_empty() {
         if let Command::String(key) = &entries[0] {
             entries = &entries[1..];
             let val = extract_value(&mut entries);
-            sorts.push(Entry { key, val });
+            scratch.push(DictEntry { key, val });
         } else {
             unreachable!("JSON decoding produced invalid command sequence");
         }
@@ -435,19 +446,20 @@ fn pack_dict<'de>(mut entries: &[Command<'de>], packer: &mut RowPacker) {
     // `Row` representation. If keys are duplicated, we must keep only the last
     // value for the key, as ordered by appearance in the source JSON, per
     // PostgreSQL's implementation.
-    sorts.sort_by_key(|entry| entry.key);
+    scratch.sort_by_key(|entry| entry.key);
     let start = unsafe { packer.start_dict() };
-    for i in 0..sorts.len() {
-        if i == sorts.len() - 1 || sorts[i].key != sorts[i + 1].key {
-            packer.push(Datum::String(sorts[i].key));
-            pack_value(sorts[i].val, packer);
+    for i in 0..scratch.len() {
+        if i == scratch.len() - 1 || scratch[i].key != scratch[i + 1].key {
+            let DictEntry { key, val } = scratch[i];
+            packer.push(Datum::String(key));
+            pack_value(packer, scratch.fresh(), val);
         }
     }
     unsafe { packer.finish_dict(start) }
 }
 
 /// Extracts a self-contained slice of commands for the next parse node.
-fn extract_value<'de, 'a>(values: &mut &'a [Command<'de>]) -> &'a [Command<'de>] {
+fn extract_value<'a>(values: &mut &'a [Command<'a>]) -> &'a [Command<'a>] {
     let result = match values[0] {
         Command::Array(further) => &values[..further + 1],
         Command::Map(further) => &values[..further + 1],
@@ -514,5 +526,72 @@ impl<'a, 'b> io::Write for WriterFormatter<'a, 'b> {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+mod vec_stack {
+    use std::ops::Index;
+
+    /// A `VecStack` presents as a stack of [`Vec`]s where only the vector at
+    /// the top of the stack is accessible. It is backed by a single [`Vec`]
+    /// whose allocation is reused as elements are added to and dropped from the
+    /// stack, and so it can be more efficient than allocating individual
+    /// vectors.
+    pub struct VecStack<'a, T> {
+        buf: &'a mut Vec<T>,
+        i: usize,
+    }
+
+    impl<'a, T> VecStack<'a, T> {
+        /// Creates a new `VecStack` backed by `buf`.
+        ///
+        /// The stack starts with a single psuedo-vector.
+        pub fn new(buf: &'a mut Vec<T>) -> VecStack<'a, T> {
+            VecStack { buf, i: 0 }
+        }
+
+        /// Adds a new element to the psuedo-vector at the top of the stack.
+        pub fn push(&mut self, t: T) {
+            self.buf.push(t)
+        }
+
+        /// Sorts the psuedo-vector at the top of the stack by the key
+        /// identified by `f`.
+        pub fn sort_by_key<F, K>(&mut self, f: F)
+        where
+            F: FnMut(&T) -> K,
+            K: Ord,
+        {
+            self.buf[self.i..].sort_by_key(f)
+        }
+
+        /// Returns the length of the psuedo-vector at the top of the stack.
+        pub fn len(&self) -> usize {
+            self.buf.len() - self.i
+        }
+
+        /// Push a fresh vector onto the stack.
+        ///
+        /// The returned `VecStack` is a handle to this vector. The
+        /// psuedo-vector beneath the new vector is inaccessible until the new
+        /// handle is dropped.
+        pub fn fresh<'b>(&'b mut self) -> VecStack<'b, T> {
+            let i = self.buf.len();
+            VecStack { buf: self.buf, i }
+        }
+    }
+
+    impl<'a, T> Index<usize> for VecStack<'a, T> {
+        type Output = T;
+
+        fn index(&self, i: usize) -> &Self::Output {
+            &self.buf[self.i + i]
+        }
+    }
+
+    impl<'a, T> Drop for VecStack<'a, T> {
+        fn drop(&mut self) {
+            self.buf.truncate(self.i)
+        }
     }
 }
