@@ -18,6 +18,7 @@ pub static KAFKA_SOURCE_NAME: &str = "billing_source";
 pub static CSV_SOURCE_NAME: &str = "price_source";
 pub static KAFKA_SINK_NAME: &str = "billing_sink";
 pub static KAFKA_SINK_TOPIC_NAME: &str = "billing_monthly_statements";
+pub static REINGESTED_SINK_SOURCE_NAME: &str = "reingested_sink";
 
 fn parse_utc_datetime_from_str(s: &str) -> ParseResult<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from_utc(
@@ -84,6 +85,10 @@ pub struct Args {
     /// functionality
     #[structopt(long)]
     pub partitions: Option<i32>,
+
+    /// Whether or not to validate the sink matches its input view
+    #[structopt(long)]
+    pub check_sink: bool,
 }
 
 impl Args {
@@ -111,6 +116,7 @@ impl Args {
             preserve_source: self.preserve_source,
             low_memory: self.low_memory,
             seed: self.seed,
+            check_sink: self.check_sink,
         }
     }
 
@@ -142,4 +148,5 @@ pub struct MzConfig {
     pub preserve_source: bool,
     pub low_memory: bool,
     pub seed: Option<u64>,
+    pub check_sink: bool,
 }

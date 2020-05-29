@@ -202,6 +202,7 @@ dependencies = [
  "futures-channel",
  "hex",
  "log",
+ "ore",
  "parse_duration",
  "postgres-types",
  "protobuf",

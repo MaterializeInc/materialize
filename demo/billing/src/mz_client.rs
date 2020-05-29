@@ -8,13 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use std::marker::Sync;
+use std::time::Duration;
 
 use csv::Writer;
+use ore::retry;
 use postgres_types::ToSql;
 use rand::Rng;
 use tokio_postgres::{Client, NoTls};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// A materialized client with custom methods
 pub struct MzClient(Client);
@@ -50,7 +52,7 @@ impl MzClient {
     }
 
     pub async fn drop_source(&self, name: &str) -> Result<()> {
-        let q = format!("DROP SOURCE {} CASCADE", name);
+        let q = format!("DROP SOURCE IF EXISTS {} CASCADE", name);
         log::debug!("deleting source=> {}", q);
         self.0.execute(&*q, &[]).await?;
         Ok(())
@@ -87,7 +89,24 @@ impl MzClient {
         sink_topic_name: &str,
         sink_name: &str,
         schema_registry_url: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
+        let global_id_query = format!(
+            "SELECT global_id FROM mz_catalog_names WHERE name = 'materialize.public.{}'",
+            sink_name
+        );
+
+        log::debug!("querying sinks=> {}", global_id_query);
+        let rows = self.0.query(&*global_id_query, &[]).await?;
+        if rows.len() > 1 {
+            return Err(format!("expected single row response, got {} rows", rows.len()).into());
+        }
+
+        let old_global_id: Option<String> = if rows.len() == 1 {
+            Some(rows[0].get(0))
+        } else {
+            None
+        };
+
         let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
@@ -99,7 +118,29 @@ impl MzClient {
 
         log::debug!("creating sink=> {}", query);
         self.0.execute(&*query, &[]).await?;
-        Ok(())
+
+        // Get the new global_id for the recently created sink
+        retry::retry_for(Duration::from_secs(10), |_| async {
+            log::debug!("getting new sink global_id=> {}", global_id_query);
+            let rows = self.0.query(&*global_id_query, &[]).await?;
+
+            if rows.len() != 1 {
+                log::debug!("received {} rows, expected only one", rows.len());
+                return Err("Expected exactly one row in response".into());
+            }
+
+            let global_id: String = rows[0].get(0);
+
+            if let Some(old_global_id) = old_global_id.as_ref() {
+                if global_id == *old_global_id {
+                    return Err("Global id not updated yet".into());
+                }
+            }
+
+            log::debug!("received a global id {:?}", global_id);
+            Ok(global_id)
+        })
+        .await
     }
 
     pub async fn create_csv_source(
@@ -140,5 +181,86 @@ impl MzClient {
     pub async fn execute(&self, query: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64> {
         log::debug!("exec-> {} params={:?}", query, params);
         Ok(self.0.execute(query, params).await?)
+    }
+
+    pub async fn reingest_sink(
+        &self,
+        kafka_url: &str,
+        schema_registry_url: &str,
+        source_name: &str,
+        global_id: String,
+    ) -> Result<()> {
+        let query = format!(
+            "SELECT topic FROM mz_kafka_sinks WHERE global_id = '{}'",
+            global_id
+        );
+
+        log::debug!("getting topic name to reingest sink=> {}", query);
+        let rows = self.0.query(&*query, &[]).await?;
+
+        if rows.len() != 1 {
+            return Err(format!("expected single row response, got {} rows", rows.len()).into());
+        }
+
+        let topic_name: String = rows[0].get(0);
+        let query = format!("CREATE MATERIALIZED SOURCE {source_name} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic_name}' \
+                     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}' ENVELOPE DEBEZIUM",
+                    source_name = source_name,
+                    kafka_url = kafka_url,
+                    topic_name = topic_name,
+                    schema_registry = schema_registry_url);
+
+        log::debug!("creating materialized source to reingest sink=> {}", query);
+        self.0.execute(&*query, &[]).await?;
+
+        Ok(())
+    }
+
+    pub async fn validate_sink(
+        &self,
+        check_sink_view: &str,
+        input_view: &str,
+        invalid_rows_view: &str,
+    ) -> Result<()> {
+        let count_check_sink_query = format!("SELECT count(*) from {}", check_sink_view);
+        let count_input_view_query = format!("SELECT count(*) from {}", input_view);
+
+        retry::retry_for::<_, _, _, Error>(Duration::from_secs(15), |_| async {
+            let count_check_sink: i64 = self
+                .0
+                .query_one(&*count_check_sink_query, &[])
+                .await?
+                .get(0);
+            let count_input_view: i64 = self
+                .0
+                .query_one(&*count_input_view_query, &[])
+                .await?
+                .get(0);
+
+            if count_check_sink != count_input_view {
+                return Err(format!(
+                    "Expected check_sink view to have {} rows, found {}",
+                    count_input_view, count_check_sink
+                )
+                .into());
+            }
+
+            Ok(())
+        })
+        .await?;
+
+        let query = format!("SELECT * FROM {}", invalid_rows_view);
+        log::debug!("validating sinks=> {}", query);
+        let rows = self.0.query(&*query, &[]).await?;
+
+        if rows.len() != 0 {
+            return Err(format!(
+                "Expected 0 invalid rows from check_sink, found {}",
+                rows.len()
+            )
+            .into());
+        }
+
+        Ok(())
     }
 }
