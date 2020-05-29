@@ -321,6 +321,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     encoding,
                                     key_encoding,
                                     &dataflow.debug_name,
+                                    worker_index,
                                 );
                                 let arranged = arrange_from_upsert(
                                     &decoded,

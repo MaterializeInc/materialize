@@ -31,9 +31,16 @@ impl AvroDecoderState {
         envelope: EnvelopeType,
         reject_non_inserts: bool,
         debug_name: String,
+        worker_index: usize,
     ) -> Result<Self, failure::Error> {
         Ok(AvroDecoderState {
-            decoder: Decoder::new(reader_schema, schema_registry_config, envelope, debug_name)?,
+            decoder: Decoder::new(
+                reader_schema,
+                schema_registry_config,
+                envelope,
+                debug_name,
+                worker_index,
+            )?,
             events_success: 0,
             events_error: 0,
             reject_non_inserts,
