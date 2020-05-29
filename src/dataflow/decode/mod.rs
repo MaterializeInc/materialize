@@ -54,7 +54,7 @@ where
     // See #2133
     let envelope = envelope.clone();
     let mut dbz_state = if envelope.get_avro_envelope_type() == EnvelopeType::Debezium {
-        DebeziumDecodeState::new_from_schema(&schema, debug_name.to_string())
+        DebeziumDecodeState::new(&schema, debug_name.to_string(), stream.scope().index())
     } else {
         None
     };
@@ -258,6 +258,7 @@ pub fn decode_upsert<G>(
     value_encoding: DataEncoding,
     key_encoding: DataEncoding,
     debug_name: &str,
+    worker_index: usize,
 ) -> Stream<G, (Row, Option<Row>, Timestamp)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -280,6 +281,7 @@ where
                 interchange::avro::EnvelopeType::Upsert,
                 false,
                 format!("{}-values", debug_name),
+                worker_index,
             )
             .expect(avro_err),
             &op_name,
@@ -295,6 +297,7 @@ where
                 interchange::avro::EnvelopeType::Upsert,
                 false,
                 format!("{}-values", debug_name),
+                worker_index,
             )
             .expect(avro_err),
             &op_name,
@@ -307,6 +310,7 @@ where
                 interchange::avro::EnvelopeType::None,
                 false,
                 format!("{}-keys", debug_name),
+                worker_index,
             )
             .expect(avro_err),
             avro::AvroDecoderState::new(
@@ -315,6 +319,7 @@ where
                 interchange::avro::EnvelopeType::Upsert,
                 false,
                 format!("{}-values", debug_name),
+                worker_index,
             )
             .expect(avro_err),
             &op_name,
@@ -425,6 +430,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let op_name = format!("{}Decode", encoding.op_name());
+    let worker_index = stream.scope().index();
 
     match (encoding, envelope) {
         (_, Envelope::Upsert(_)) => {
@@ -441,6 +447,7 @@ where
                 envelope.get_avro_envelope_type(),
                 fast_forwarded,
                 debug_name.to_string(),
+                worker_index,
             )
             .expect("Failed to create Avro decoder"),
             &op_name,
@@ -454,6 +461,7 @@ where
                 envelope.get_avro_envelope_type(),
                 fast_forwarded,
                 debug_name.to_string(),
+                worker_index,
             )
             .expect("Failed to create Avro decoder"),
             &op_name,
