@@ -203,3 +203,71 @@ FROM x
 | Project (#4..#9, #3, #10)
 
 EOF
+
+statement ok
+CREATE TABLE y (a bool, b bool)
+
+# Bypass if statements with identical branches
+query T multiline
+EXPLAIN PLAN FOR SELECT
+  CASE WHEN b THEN a ELSE a END
+FROM y
+----
+%0 =
+| Get materialize.public.y (u7)
+| Project (#0)
+
+EOF
+
+# Bypass if statements with identical branches
+query T multiline
+EXPLAIN PLAN FOR SELECT
+  CASE WHEN b THEN NULL ELSE true END
+FROM y
+----
+%0 =
+| Get materialize.public.y (u7)
+| Map (!(#1) || null)
+| Project (#2)
+
+EOF
+
+
+# Bypass if statements with identical branches
+query T multiline
+EXPLAIN PLAN FOR SELECT
+  CASE WHEN b THEN NULL ELSE false END
+FROM y
+----
+%0 =
+| Get materialize.public.y (u7)
+| Map (#1 && null)
+| Project (#2)
+
+EOF
+
+
+query T multiline
+EXPLAIN PLAN FOR SELECT
+  CASE WHEN b THEN true ELSE NULL END
+FROM y
+----
+%0 =
+| Get materialize.public.y (u7)
+| Map (#1 || null)
+| Project (#2)
+
+EOF
+
+
+query T multiline
+EXPLAIN PLAN FOR SELECT
+  CASE WHEN b THEN false ELSE NULL END
+FROM y
+----
+%0 =
+| Get materialize.public.y (u7)
+| Map (!(#1) && null)
+| Project (#2)
+
+EOF
