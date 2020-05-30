@@ -28,7 +28,7 @@ use expr::{GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInst
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
-use repr::{ColumnType, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -472,17 +472,12 @@ pub enum ExternalSourceConnector {
 }
 
 impl ExternalSourceConnector {
-    pub fn metadata_columns(&self) -> Vec<(Option<String>, ColumnType)> {
+    pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
         match self {
-            Self::Kafka(_) => vec![(Some("mz_offset".into()), ColumnType::new(ScalarType::Int64))],
-            Self::File(_) => vec![(
-                Some("mz_line_no".into()),
-                ColumnType::new(ScalarType::Int64),
-            )],
+            Self::Kafka(_) => vec![("mz_offset".into(), ColumnType::new(ScalarType::Int64))],
+            Self::File(_) => vec![("mz_line_no".into(), ColumnType::new(ScalarType::Int64))],
             Self::Kinesis(_) => vec![],
-            Self::AvroOcf(_) => {
-                vec![(Some("mz_obj_no".into()), ColumnType::new(ScalarType::Int64))]
-            }
+            Self::AvroOcf(_) => vec![("mz_obj_no".into(), ColumnType::new(ScalarType::Int64))],
         }
     }
 

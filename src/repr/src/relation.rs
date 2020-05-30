@@ -206,17 +206,6 @@ impl RelationDesc {
         self
     }
 
-    pub fn add_cols<I, N>(&mut self, cols: I)
-    where
-        I: IntoIterator<Item = (Option<N>, ColumnType)>,
-        N: Into<ColumnName>,
-    {
-        for (name, typ) in cols.into_iter() {
-            self.typ.column_types.push(typ);
-            self.names.push(name.map(Into::into));
-        }
-    }
-
     /// Adds a new named, nonnullable column with the specified scalar type.
     pub fn add_nonnull_column<N>(self, name: N, scalar_type: ScalarType) -> RelationDesc
     where
