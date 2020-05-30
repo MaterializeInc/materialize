@@ -255,16 +255,12 @@ impl RelationDesc {
     }
 
     pub fn get_unambiguous_name(&self, i: usize) -> Option<&ColumnName> {
-        let name = self.get_name(i);
+        let name = self.names[i].as_ref();
         if self.iter_names().filter(|n| n == &name).count() == 1 {
             name
         } else {
             None
         }
-    }
-
-    pub fn get_name(&self, i: usize) -> Option<&ColumnName> {
-        self.names[i].as_ref()
     }
 }
 
