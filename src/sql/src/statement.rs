@@ -1279,7 +1279,11 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 (DataEncoding::Avro { .. }, _)
                 | (DataEncoding::Protobuf { .. }, _)
                 | (_, Envelope::Debezium) => (),
-                _ => desc.add_cols(external_connector.metadata_columns()),
+                _ => {
+                    for (name, ty) in external_connector.metadata_columns() {
+                        desc = desc.add_column(name, ty);
+                    }
+                }
             }
 
             let if_not_exists = *if_not_exists;
