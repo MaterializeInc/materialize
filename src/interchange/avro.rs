@@ -28,7 +28,7 @@ use avro::schema::{
 use avro::types::{DecimalValue, Value};
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::jsonb::Jsonb;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
 
@@ -818,7 +818,7 @@ fn build_schema(desc: &RelationDesc) -> Schema {
 
 /// Manages encoding of Avro-encoded bytes.
 pub struct Encoder {
-    desc: RelationDesc,
+    columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
 }
 
@@ -831,23 +831,19 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    pub fn new(mut desc: RelationDesc) -> Self {
+    pub fn new(desc: RelationDesc) -> Self {
+        let writer_schema = build_schema(&desc);
         // Invent names for columns that don't have a name.
-        let missing_names: Vec<_> = desc
-            .iter_names()
+        let columns = desc
+            .into_iter()
             .enumerate()
-            .filter_map(|(i, name)| match name {
-                Some(_) => None,
-                None => Some(i),
+            .map(|(i, (name, ty))| match name {
+                None => (ColumnName::from(format!("column{}", i)), ty),
+                Some(name) => (name, ty),
             })
             .collect();
-        for i in missing_names {
-            desc.set_name(i, Some(format!("column{}", i).into()));
-        }
-
-        let writer_schema = build_schema(&desc);
         Encoder {
-            desc,
+            columns,
             writer_schema,
         }
     }
@@ -908,11 +904,11 @@ impl Encoder {
 
     fn row_to_avro(&self, row: Vec<Datum>) -> Value {
         let fields = self
-            .desc
+            .columns
             .iter()
             .zip_eq(row)
             .map(|((name, typ), datum)| {
-                let name = name.expect("name known to exist").as_str().to_owned();
+                let name = name.as_str().to_owned();
                 if typ.nullable && typ.scalar_type != ScalarType::Unknown && datum.is_null() {
                     return (name, Value::Union(0, Box::new(Value::Null)));
                 }

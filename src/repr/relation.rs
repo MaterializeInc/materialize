@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::iter;
+use std::vec;
 
 use failure::bail;
 use serde::{Deserialize, Serialize};
@@ -264,8 +266,13 @@ impl RelationDesc {
     pub fn get_name(&self, i: usize) -> Option<&ColumnName> {
         self.names[i].as_ref()
     }
+}
 
-    pub fn set_name(&mut self, i: usize, name: Option<ColumnName>) {
-        self.names[i] = name
+impl IntoIterator for RelationDesc {
+    type Item = (Option<ColumnName>, ColumnType);
+    type IntoIter = iter::Zip<vec::IntoIter<Option<ColumnName>>, vec::IntoIter<ColumnType>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.names.into_iter().zip(self.typ.column_types)
     }
 }

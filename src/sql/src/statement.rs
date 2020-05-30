@@ -12,6 +12,7 @@
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -921,19 +922,7 @@ fn handle_create_view(
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
     let relation_expr = relation_expr.decorrelate();
-    let typ = desc.typ();
-    if !columns.is_empty() {
-        if columns.len() != typ.column_types.len() {
-            bail!(
-                "VIEW definition has {} columns, but query has {} columns",
-                columns.len(),
-                typ.column_types.len()
-            )
-        }
-        for (i, name) in columns.iter().enumerate() {
-            desc.set_name(i, Some(normalize::column_name(name.clone())));
-        }
-    }
+    desc = maybe_rename_columns("view", desc, columns)?;
     let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
     let if_not_exists = *if_exists == IfExistsBehavior::Skip;
@@ -1324,19 +1313,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 desc.clear_keys();
             }
 
-            let typ = desc.typ();
-            if !col_names.is_empty() {
-                if col_names.len() != typ.column_types.len() {
-                    bail!(
-                        "SOURCE definition has {} columns, but expected {} columns",
-                        col_names.len(),
-                        typ.column_types.len()
-                    )
-                }
-                for (i, name) in col_names.iter().enumerate() {
-                    desc.set_name(i, Some(normalize::column_name(name.clone())));
-                }
-            }
+            desc = maybe_rename_columns("source", desc, col_names)?;
 
             // TODO(benesch): the available metadata columns should not depend
             // on the format.
@@ -1375,6 +1352,30 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
         }
         other => unsupported!(format!("{:?}", other)),
     }
+}
+
+fn maybe_rename_columns(
+    context: impl fmt::Display,
+    desc: RelationDesc,
+    column_names: &[Ident],
+) -> Result<RelationDesc, failure::Error> {
+    if column_names.is_empty() {
+        return Ok(desc);
+    }
+
+    if column_names.len() != desc.typ().column_types.len() {
+        bail!(
+            "{0} definition names {1} columns, but {0} has {2} columns",
+            context,
+            column_names.len(),
+            desc.typ().column_types.len()
+        )
+    }
+
+    let new_names = column_names
+        .iter()
+        .map(|n| Some(normalize::column_name(n.clone())));
+    Ok(RelationDesc::new(desc.typ().clone(), new_names))
 }
 
 fn handle_drop_database(
