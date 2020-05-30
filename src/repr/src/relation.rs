@@ -66,6 +66,17 @@ impl ColumnType {
     }
 }
 
+impl fmt::Display for ColumnType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}{}",
+            self.scalar_type,
+            if self.nullable { "?" } else { "" }
+        )
+    }
+}
+
 /// The type of a relation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationType {

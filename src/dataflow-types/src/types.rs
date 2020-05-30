@@ -283,49 +283,59 @@ pub enum DataEncoding {
 }
 
 impl DataEncoding {
+    /// Computes the [`RelationDesc`] for the relation specified by the this
+    /// data encoding and envelope.s
     pub fn desc(&self, envelope: &Envelope) -> Result<RelationDesc, failure::Error> {
-        let full_desc = if let Envelope::Upsert(key_encoding) = envelope {
-            let key_desc = key_encoding.desc(&Envelope::None)?;
-            //rename key columns to "key" something if the encoding is not Avro
-            let key_desc = match key_encoding {
-                DataEncoding::Avro(_) => key_desc,
-                _ => {
-                    let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
-                    key_desc.with_names(names)
+        // Add columns for the key, if using the upsert envelope.
+        let key_desc = match envelope {
+            Envelope::Upsert(key_encoding) => {
+                let key_desc = key_encoding.desc(&Envelope::None)?;
+
+                // It doesn't make sense for the key to have keys.
+                assert!(key_desc.typ().keys.is_empty());
+
+                // Add the key columns as a key.
+                let key = (0..key_desc.arity()).collect();
+                let key_desc = key_desc.with_key(key);
+
+                // Rename key columns to "keyN" if the encoding is not Avro.
+                match key_encoding {
+                    DataEncoding::Avro(_) => key_desc,
+                    _ => {
+                        let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
+                        key_desc.with_names(names)
+                    }
                 }
-            };
-            let keys = key_desc
-                .iter_names()
-                .enumerate()
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>();
-            key_desc.with_key(keys)
-        } else {
-            RelationDesc::empty()
+            }
+            _ => RelationDesc::empty(),
         };
 
-        let desc = match self {
-            DataEncoding::Bytes => {
-                RelationDesc::empty().with_nonnull_column("data", ScalarType::Bytes)
-            }
+        // Add columns for the data, based on the encoding format.
+        Ok(match self {
+            DataEncoding::Bytes => key_desc.with_nonnull_column("data", ScalarType::Bytes),
             DataEncoding::AvroOcf { reader_schema } => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .with_context(|e| format!("validating avro ocf reader schema: {}", e))?
+                    .into_iter()
+                    .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty))
             }
             DataEncoding::Avro(AvroEncoding {
                 value_schema,
                 key_schema,
                 ..
             }) => {
-                let mut desc =
+                let desc =
                     avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
-                        .with_context(|e| format!("validating avro value schema: {}", e))?;
+                        .with_context(|e| format!("validating avro value schema: {}", e))?
+                        .into_iter()
+                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
                 if let Some(key_schema) = key_schema {
-                    let keys = avro::validate_key_schema(key_schema, &desc)
+                    let key = avro::validate_key_schema(key_schema, &desc)
                         .with_context(|e| format!("validating avro key schema: {}", e))?;
-                    desc = desc.with_key(keys);
+                    desc.with_key(key)
+                } else {
+                    desc
                 }
-                desc
             }
             DataEncoding::Protobuf(ProtobufEncoding {
                 descriptors,
@@ -342,24 +352,20 @@ impl DataEncoding {
                 // just surround their entire regex in an explicit capture
                 // group.
                 .skip(1)
-                .fold(RelationDesc::empty(), |desc, (i, name)| {
+                .fold(key_desc, |desc, (i, name)| {
                     let name = match name {
                         None => format!("column{}", i),
-                        Some(name) => ocn.to_owned(),
+                        Some(name) => name.to_owned(),
                     };
                     let ty = ColumnType::new(ScalarType::String).nullable(true);
                     desc.with_column(name, ty)
                 }),
             DataEncoding::Csv(CsvEncoding { n_cols, .. }) => (1..=*n_cols)
-                .fold(RelationDesc::empty(), |desc, i| {
+                .fold(key_desc, |desc, i| {
                     desc.with_nonnull_column(format!("column{}", i), ScalarType::String)
                 }),
-            DataEncoding::Text => {
-                RelationDesc::empty().with_nonnull_column("text", ScalarType::String)
-            }
-        };
-
-        Ok(full_desc.concat(desc))
+            DataEncoding::Text => key_desc.with_nonnull_column("text", ScalarType::String),
+        })
     }
 
     pub fn op_name(&self) -> &str {
