@@ -305,10 +305,9 @@ impl DataEncoding {
         };
 
         let desc = match self {
-            DataEncoding::Bytes => RelationDesc::from_cols(vec![(
-                ColumnType::new(ScalarType::Bytes),
-                Some("data".to_owned()),
-            )]),
+            DataEncoding::Bytes => {
+                RelationDesc::empty().add_nonnull_column("data", ScalarType::Bytes)
+            }
             DataEncoding::AvroOcf { reader_schema } => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .with_context(|e| format!("validating avro ocf reader schema: {}", e))?
@@ -335,43 +334,31 @@ impl DataEncoding {
                 let d = decode_descriptors(descriptors)?;
                 validate_descriptors(message_name, &d)?
             }
-            DataEncoding::Regex { regex } => {
-                RelationDesc::from_cols(
-                    regex
-                        .capture_names()
-                        .enumerate()
-                        // The first capture is the entire matched string.
-                        // This will often not be useful, so skip it.
-                        // If people want it they can just surround their
-                        // entire regex in an explicit capture group.
-                        .skip(1)
-                        .map(|(i, ocn)| {
-                            (
-                                ColumnType::new(ScalarType::String).nullable(true),
-                                match ocn {
-                                    None => Some(format!("column{}", i)),
-                                    Some(ocn) => Some(String::from(ocn)),
-                                },
-                            )
-                        })
-                        .collect(),
-                )
+            DataEncoding::Regex { regex } => regex
+                .capture_names()
+                .enumerate()
+                // The first capture is the entire matched string. This will
+                // often not be useful, so skip it. If people want it they can
+                // just surround their entire regex in an explicit capture
+                // group.
+                .skip(1)
+                .fold(RelationDesc::empty(), |desc, (i, ocn)| {
+                    let name = match ocn {
+                        None => format!("column{}", i),
+                        Some(ocn) => ocn.to_owned(),
+                    };
+                    let ty = ColumnType::new(ScalarType::String).nullable(true);
+                    desc.add_column(name, ty)
+                }),
+            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => (1..=*n_cols)
+                .fold(RelationDesc::empty(), |desc, i| {
+                    desc.add_nonnull_column(format!("column{}", i), ScalarType::String)
+                }),
+            DataEncoding::Text => {
+                RelationDesc::empty().add_nonnull_column("text", ScalarType::String)
             }
-            DataEncoding::Csv(CsvEncoding { n_cols, .. }) => RelationDesc::from_cols(
-                (1..=*n_cols)
-                    .map(|i| {
-                        (
-                            ColumnType::new(ScalarType::String),
-                            Some(format!("column{}", i)),
-                        )
-                    })
-                    .collect(),
-            ),
-            DataEncoding::Text => RelationDesc::from_cols(vec![(
-                ColumnType::new(ScalarType::String),
-                Some("text".to_owned()),
-            )]),
         };
+
         Ok(full_desc.concat(desc))
     }
 
