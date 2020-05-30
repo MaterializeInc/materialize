@@ -1339,7 +1339,8 @@ fn maybe_rename_columns(
     let new_names = column_names
         .iter()
         .map(|n| Some(normalize::column_name(n.clone())));
-    Ok(RelationDesc::new(desc.typ().clone(), new_names))
+
+    Ok(desc.with_names(new_names))
 }
 
 fn handle_drop_database(
