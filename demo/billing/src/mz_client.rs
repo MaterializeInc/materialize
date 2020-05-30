@@ -65,18 +65,34 @@ impl MzClient {
         kafka_topic_name: &str,
         source_name: &str,
         message_name: &str,
+        batch_size: Option<u64>,
     ) -> Result<()> {
         let encoded = hex::encode(descriptor);
-
-        let query = format!(
-            "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+        let query = if let Some(batch_size) = batch_size {
+            format!(
+                "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+             WITH (max_timestamp_batch_size={batch_size}) \
+             FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}' \
+             ",
+                descriptor = encoded,
+                kafka_url = kafka_url,
+                topic = kafka_topic_name,
+                source = source_name,
+                message = message_name,
+                batch_size = batch_size
+            )
+        } else {
+            format!(
+                "CREATE SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
              FORMAT PROTOBUF MESSAGE '{message}' USING SCHEMA '\\x{descriptor}'",
-            descriptor = encoded,
-            kafka_url = kafka_url,
-            topic = kafka_topic_name,
-            source = source_name,
-            message = message_name,
-        );
+                descriptor = encoded,
+                kafka_url = kafka_url,
+                topic = kafka_topic_name,
+                source = source_name,
+                message = message_name,
+            )
+        };
+
         log::debug!("creating source=> {}", query);
 
         self.0.execute(&*query, &[]).await?;
@@ -143,6 +159,7 @@ impl MzClient {
         source_name: &str,
         num_clients: u32,
         seed: Option<u64>,
+        batch_size: Option<u64>,
     ) -> Result<()> {
         let mut writer = Writer::from_path(file_name)?;
         use rand::SeedableRng;
@@ -161,11 +178,21 @@ impl MzClient {
         }
 
         writer.flush()?;
-        let query = format!(
-            "CREATE SOURCE {source} FROM FILE '{file}' FORMAT CSV WITH 3 COLUMNS",
-            source = source_name,
-            file = file_name,
-        );
+        let query = if let Some(batch_size) = batch_size {
+            format!(
+                "CREATE SOURCE {source} FROM FILE '{file}'  WITH (max_timestamp_batch_size={batch_size}) FORMAT CSV WITH 3 COLUMNS \
+               ",
+                source = source_name,
+                file = file_name,
+                batch_size = batch_size
+            )
+        } else {
+            format!(
+                "CREATE SOURCE {source} FROM FILE '{file}' FORMAT CSV WITH 3 COLUMNS",
+                source = source_name,
+                file = file_name
+            )
+        };
 
         log::debug!("creating csv source=> {}", query);
         self.0.execute(&*query, &[]).await?;

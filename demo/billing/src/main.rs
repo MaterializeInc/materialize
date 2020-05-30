@@ -150,6 +150,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                 config::CSV_SOURCE_NAME,
                 randomizer::NUM_CLIENTS,
                 config.seed,
+                config.batch_size,
             )
             .await?;
 
@@ -160,6 +161,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                 &config.kafka_topic,
                 config::KAFKA_SOURCE_NAME,
                 proto::BILLING_MESSAGE_NAME,
+                config.batch_size,
             )
             .await?;
 
