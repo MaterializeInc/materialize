@@ -211,9 +211,20 @@ impl RelationDesc {
         }
     }
 
-    /// Adds a new named, nonnullable column with the specified type.
-    pub fn add_column(mut self, name: impl Into<ColumnName>, scalar_type: ScalarType) -> Self {
-        self.typ.column_types.push(ColumnType::new(scalar_type));
+    /// Adds a new named, nonnullable column with the specified scalar type.
+    pub fn add_nonnull_column<N>(self, name: N, scalar_type: ScalarType) -> RelationDesc
+    where
+        N: Into<ColumnName>,
+    {
+        self.add_column(name, ColumnType::new(scalar_type))
+    }
+
+    /// Adds a new named column with the specified column type.
+    pub fn add_column<N>(mut self, name: N, column_type: ColumnType) -> RelationDesc
+    where
+        N: Into<ColumnName>,
+    {
+        self.typ.column_types.push(column_type);
         self.names.push(Some(name.into()));
         self
     }
