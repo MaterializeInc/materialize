@@ -150,7 +150,7 @@ impl FoldConstants {
                     );
                     for key in relation_type.keys.iter() {
                         if key.iter().all(|i| *i < input_arity + index) {
-                            current_type = current_type.add_keys(key.clone());
+                            current_type = current_type.with_key(key.clone());
                         }
                     }
                     scalar.reduce(&current_type);

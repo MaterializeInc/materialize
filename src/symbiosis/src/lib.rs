@@ -161,7 +161,7 @@ END $$;
                 for (index, column) in columns.iter().enumerate() {
                     for option in column.options.iter() {
                         if let ColumnOption::Unique { is_primary } = option.option {
-                            typ = typ.add_keys(vec![index]);
+                            typ = typ.with_key(vec![index]);
                             if is_primary {
                                 typ.column_types[index] =
                                     typ.column_types[index].clone().nullable(false);
@@ -193,7 +193,7 @@ END $$;
                                 typ.column_types[*key].set_nullable(false);
                             }
                         }
-                        typ = typ.add_keys(keys);
+                        typ = typ.with_key(keys);
                     }
                 }
 
