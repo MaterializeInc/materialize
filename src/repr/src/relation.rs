@@ -188,13 +188,6 @@ impl RelationDesc {
         RelationDesc { typ, names }
     }
 
-    pub fn from_cols(cols: Vec<(ColumnType, Option<String>)>) -> RelationDesc {
-        Self::new(
-            RelationType::new(cols.iter().map(|(typ, _)| typ.clone()).collect()),
-            cols.into_iter().map(|(_, name)| name),
-        )
-    }
-
     pub fn concat(mut self, other: Self) -> Self {
         let self_len = self.typ.column_types.len();
         self.names.extend(other.names);
