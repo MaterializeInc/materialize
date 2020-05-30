@@ -224,7 +224,7 @@ impl RelationExpr {
                 }
                 let result = typ.clone();
                 if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
-                    result.add_keys(Vec::new())
+                    result.with_key(Vec::new())
                 } else {
                     result
                 }
@@ -241,7 +241,7 @@ impl RelationExpr {
                 );
                 for keys in input_typ.keys {
                     if keys.iter().all(|k| outputs.contains(k)) {
-                        output_typ = output_typ.add_keys(
+                        output_typ = output_typ.with_key(
                             keys.iter()
                                 .map(|c| outputs.iter().position(|o| o == c).unwrap())
                                 .collect(),
@@ -296,7 +296,7 @@ impl RelationExpr {
                         }
                     }
                     for new_key in new_keys {
-                        typ = typ.add_keys(new_key);
+                        typ = typ.with_key(new_key);
                     }
                 }
 
@@ -376,7 +376,7 @@ impl RelationExpr {
                 });
                 if remains_unique && !inputs.is_empty() {
                     for keys in input_types[0].keys.iter() {
-                        typ = typ.add_keys(keys.clone());
+                        typ = typ.with_key(keys.clone());
                     }
                 }
                 typ
@@ -420,7 +420,7 @@ impl RelationExpr {
                     keys.push((0..group_key.len()).collect());
                 }
                 for key in keys {
-                    result = result.add_keys(key);
+                    result = result.with_key(key);
                 }
                 result
             }

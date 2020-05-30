@@ -302,14 +302,14 @@ impl DataEncoding {
                 .enumerate()
                 .map(|(i, _)| i)
                 .collect::<Vec<_>>();
-            key_desc.add_keys(keys)
+            key_desc.with_key(keys)
         } else {
             RelationDesc::empty()
         };
 
         let desc = match self {
             DataEncoding::Bytes => {
-                RelationDesc::empty().add_nonnull_column("data", ScalarType::Bytes)
+                RelationDesc::empty().with_nonnull_column("data", ScalarType::Bytes)
             }
             DataEncoding::AvroOcf { reader_schema } => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
@@ -326,7 +326,7 @@ impl DataEncoding {
                 if let Some(key_schema) = key_schema {
                     let keys = avro::validate_key_schema(key_schema, &desc)
                         .with_context(|e| format!("validating avro key schema: {}", e))?;
-                    desc = desc.add_keys(keys);
+                    desc = desc.with_key(keys);
                 }
                 desc
             }
@@ -345,20 +345,20 @@ impl DataEncoding {
                 // just surround their entire regex in an explicit capture
                 // group.
                 .skip(1)
-                .fold(RelationDesc::empty(), |desc, (i, ocn)| {
-                    let name = match ocn {
+                .fold(RelationDesc::empty(), |desc, (i, name)| {
+                    let name = match name {
                         None => format!("column{}", i),
-                        Some(ocn) => ocn.to_owned(),
+                        Some(name) => ocn.to_owned(),
                     };
                     let ty = ColumnType::new(ScalarType::String).nullable(true);
-                    desc.add_column(name, ty)
+                    desc.with_column(name, ty)
                 }),
             DataEncoding::Csv(CsvEncoding { n_cols, .. }) => (1..=*n_cols)
                 .fold(RelationDesc::empty(), |desc, i| {
-                    desc.add_nonnull_column(format!("column{}", i), ScalarType::String)
+                    desc.with_nonnull_column(format!("column{}", i), ScalarType::String)
                 }),
             DataEncoding::Text => {
-                RelationDesc::empty().add_nonnull_column("text", ScalarType::String)
+                RelationDesc::empty().with_nonnull_column("text", ScalarType::String)
             }
         };
 

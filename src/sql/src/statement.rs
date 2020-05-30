@@ -49,7 +49,7 @@ use crate::{normalize, query, unsupported, Index, Params, Plan, PlanContext, Sin
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
-        { RelationDesc::empty().add_nonnull_column("Database", ScalarType::String) };
+        { RelationDesc::empty().with_nonnull_column("Database", ScalarType::String) };
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::new(
         RelationType::new(vec![
             ColumnType::new(ScalarType::String),
@@ -71,9 +71,9 @@ lazy_static! {
         .map(Some),
     );
     static ref SHOW_COLUMNS_DESC: RelationDesc = RelationDesc::empty()
-        .add_nonnull_column("Field", ScalarType::String)
-        .add_nonnull_column("Nullable", ScalarType::String)
-        .add_nonnull_column("Type", ScalarType::String);
+        .with_nonnull_column("Field", ScalarType::String)
+        .with_nonnull_column("Nullable", ScalarType::String)
+        .with_nonnull_column("Type", ScalarType::String);
 }
 
 pub fn make_show_objects_desc(
@@ -84,17 +84,17 @@ pub fn make_show_objects_desc(
     let col_name = object_type_as_plural_str(object_type);
     if full {
         let mut relation_desc = RelationDesc::empty()
-            .add_nonnull_column(col_name, ScalarType::String)
-            .add_nonnull_column("TYPE", ScalarType::String);
+            .with_nonnull_column(col_name, ScalarType::String)
+            .with_nonnull_column("TYPE", ScalarType::String);
         if ObjectType::View == object_type {
-            relation_desc = relation_desc.add_nonnull_column("QUERYABLE", ScalarType::Bool);
+            relation_desc = relation_desc.with_nonnull_column("QUERYABLE", ScalarType::Bool);
         }
         if !materialized && (ObjectType::View == object_type || ObjectType::Source == object_type) {
-            relation_desc = relation_desc.add_nonnull_column("MATERIALIZED", ScalarType::Bool);
+            relation_desc = relation_desc.with_nonnull_column("MATERIALIZED", ScalarType::Bool);
         }
         relation_desc
     } else {
-        RelationDesc::empty().add_nonnull_column(col_name, ScalarType::String)
+        RelationDesc::empty().with_nonnull_column(col_name, ScalarType::String)
     }
 }
 
@@ -121,7 +121,7 @@ pub fn describe_statement(
         Statement::Explain {
             stage, explainee, ..
         } => (
-            Some(RelationDesc::empty().add_nonnull_column(
+            Some(RelationDesc::empty().with_nonnull_column(
                 match stage {
                     ExplainStage::Sql => "Sql",
                     ExplainStage::RawPlan => "Raw Plan",
@@ -141,8 +141,8 @@ pub fn describe_statement(
         Statement::ShowCreateView { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_nonnull_column("View", ScalarType::String)
-                    .add_nonnull_column("Create View", ScalarType::String),
+                    .with_nonnull_column("View", ScalarType::String)
+                    .with_nonnull_column("Create View", ScalarType::String),
             ),
             vec![],
         ),
@@ -150,8 +150,8 @@ pub fn describe_statement(
         Statement::ShowCreateSource { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_nonnull_column("Source", ScalarType::String)
-                    .add_nonnull_column("Create Source", ScalarType::String),
+                    .with_nonnull_column("Source", ScalarType::String)
+                    .with_nonnull_column("Create Source", ScalarType::String),
             ),
             vec![],
         ),
@@ -159,8 +159,8 @@ pub fn describe_statement(
         Statement::ShowCreateSink { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_nonnull_column("Sink", ScalarType::String)
-                    .add_nonnull_column("Create Sink", ScalarType::String),
+                    .with_nonnull_column("Sink", ScalarType::String)
+                    .with_nonnull_column("Create Sink", ScalarType::String),
             ),
             vec![],
         ),
@@ -185,9 +185,9 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .add_nonnull_column("name", ScalarType::String)
-                            .add_nonnull_column("setting", ScalarType::String)
-                            .add_nonnull_column("description", ScalarType::String),
+                            .with_nonnull_column("name", ScalarType::String)
+                            .with_nonnull_column("setting", ScalarType::String)
+                            .with_nonnull_column("description", ScalarType::String),
                     ),
                     vec![],
                 )
@@ -195,7 +195,7 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .add_nonnull_column(variable.as_str(), ScalarType::String),
+                            .with_nonnull_column(variable.as_str(), ScalarType::String),
                     ),
                     vec![],
                 )
@@ -1265,7 +1265,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 Some(_) => bail!("ignore_source_keys must be a boolean"),
             };
             if ignore_source_keys {
-                desc.clear_keys();
+                desc = desc.without_keys();
             }
 
             desc = maybe_rename_columns(format!("source {}", name), desc, col_names)?;
@@ -1281,7 +1281,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 | (_, Envelope::Debezium) => (),
                 _ => {
                     for (name, ty) in external_connector.metadata_columns() {
-                        desc = desc.add_column(name, ty);
+                        desc = desc.with_column(name, ty);
                     }
                 }
             }
