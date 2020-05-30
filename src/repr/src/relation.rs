@@ -259,6 +259,21 @@ impl RelationDesc {
         self
     }
 
+    /// Builds a new relation description with the column names replaced with
+    /// new names.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the arity of the relation type does not match the number of
+    /// items in `names`.
+    pub fn with_names<I, N>(self, names: I) -> Self
+    where
+        I: IntoIterator<Item = Option<N>>,
+        N: Into<ColumnName>,
+    {
+        Self::new(self.typ, names)
+    }
+
     /// Computes the number of columns in the relation.
     pub fn arity(&self) -> usize {
         self.typ.arity()

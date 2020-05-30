@@ -289,13 +289,10 @@ impl DataEncoding {
             //rename key columns to "key" something if the encoding is not Avro
             let key_desc = match key_encoding {
                 DataEncoding::Avro(_) => key_desc,
-                _ => RelationDesc::new(
-                    key_desc.typ().clone(),
-                    key_desc
-                        .iter_names()
-                        .enumerate()
-                        .map(|(i, _)| Some(format!("key{}", i))),
-                ),
+                _ => {
+                    let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
+                    key_desc.with_names(names)
+                }
             };
             let keys = key_desc
                 .iter_names()
