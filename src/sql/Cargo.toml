@@ -5,8 +5,6 @@ version = "0.1.0"
 edition = "2018"
 publish = false
 
-[lib]
-
 [dependencies]
 avro = { path = "../avro" }
 aws-arn = "0.1.1"
