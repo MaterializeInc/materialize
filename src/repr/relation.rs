@@ -64,11 +64,6 @@ impl ColumnType {
         self.nullable = nullable;
         self
     }
-
-    /// Required outside of builder contexts.
-    pub fn set_nullable(&mut self, nullable: bool) {
-        self.nullable = nullable
-    }
 }
 
 /// The type of a relation.
