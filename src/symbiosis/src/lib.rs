@@ -163,8 +163,7 @@ END $$;
                         if let ColumnOption::Unique { is_primary } = option.option {
                             typ = typ.with_key(vec![index]);
                             if is_primary {
-                                typ.column_types[index] =
-                                    typ.column_types[index].clone().nullable(false);
+                                typ.column_types[index].nullable = false;
                             }
                         }
                     }
@@ -190,7 +189,7 @@ END $$;
 
                         if *is_primary {
                             for key in keys.iter() {
-                                typ.column_types[*key].set_nullable(false);
+                                typ.column_types[*key].nullable = false;
                             }
                         }
                         typ = typ.with_key(keys);
