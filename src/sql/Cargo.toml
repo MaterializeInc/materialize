@@ -6,7 +6,6 @@ edition = "2018"
 publish = false
 
 [lib]
-path = "lib.rs"
 
 [dependencies]
 avro = { path = "../avro" }
