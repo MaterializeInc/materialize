@@ -1,0 +1,11 @@
+[package]
+name = "util"
+description = "Utilities for testing Materialize"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0.31"
+chrono = "0.4.11"
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }

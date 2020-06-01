@@ -210,11 +210,11 @@ dependencies = [
  "protoc-rust",
  "rand",
  "rand_distr",
- "rdkafka",
  "structopt",
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "util",
  "uuid",
 ]
 
@@ -3859,6 +3859,15 @@ name = "utf8-ranges"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ae116fef2b7fea257ed6440d3cfcff7f190865f170cdad00bb6465bf18ecba"
+
+[[package]]
+name = "util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rdkafka",
+]
 
 [[package]]
 name = "uuid"
