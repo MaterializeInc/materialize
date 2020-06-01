@@ -24,7 +24,7 @@ use std::process;
 use protobuf::Message;
 use structopt::StructOpt;
 
-use util::kafka::kafka_client;
+use test_util::kafka::kafka_client;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
 use crate::error::Result;

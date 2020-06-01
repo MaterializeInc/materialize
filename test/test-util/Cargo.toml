@@ -1,5 +1,5 @@
 [package]
-name = "util"
+name = "test-util"
 description = "Utilities for testing Materialize"
 version = "0.1.0"
 edition = "2018"
