@@ -1,0 +1,61 @@
+# Copyright 2020 sqlparser-rs contributors. All rights reserved.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# This file is derived from the sqlparser-rs project, available at
+# https://github.com/andygrove/sqlparser-rs. It was incorporated
+# directly into Materialize on December 21, 2019.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+INSERT INTO customer VALUES (1, 2, 3)
+----
+INSERT INTO customer VALUES (1, 2, 3)
+=>
+Insert { table_name: ObjectName([Ident("customer")]), columns: [], source: Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None, fetch: None } }
+
+parse-statement
+INSERT INTO customer VALUES (1, 2, 3), (1, 2, 3)
+----
+INSERT INTO customer VALUES (1, 2, 3), (1, 2, 3)
+=>
+Insert { table_name: ObjectName([Ident("customer")]), columns: [], source: Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))], [Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None, fetch: None } }
+
+parse-statement
+INSERT INTO public.customer VALUES (1, 2, 3)
+----
+INSERT INTO public.customer VALUES (1, 2, 3)
+=>
+Insert { table_name: ObjectName([Ident("public"), Ident("customer")]), columns: [], source: Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None, fetch: None } }
+
+parse-statement
+INSERT INTO db.public.customer VALUES (1, 2, 3)
+----
+INSERT INTO db.public.customer VALUES (1, 2, 3)
+=>
+Insert { table_name: ObjectName([Ident("db"), Ident("public"), Ident("customer")]), columns: [], source: Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None, fetch: None } }
+
+parse-statement
+INSERT INTO public.customer (id, name, active) VALUES (1, 2, 3)
+----
+INSERT INTO public.customer (id, name, active) VALUES (1, 2, 3)
+=>
+Insert { table_name: ObjectName([Ident("public"), Ident("customer")]), columns: [Ident("id"), Ident("name"), Ident("active")], source: Query { ctes: [], body: Values(Values([[Value(Number("1")), Value(Number("2")), Value(Number("3"))]])), order_by: [], limit: None, offset: None, fetch: None } }
+
+parse-statement
+INSERT INTO customer WITH foo AS (SELECT 1) SELECT * FROM foo UNION VALUES (1)
+----
+INSERT INTO customer WITH foo AS (SELECT 1) SELECT * FROM foo UNION VALUES (1)
+=>
+Insert { table_name: ObjectName([Ident("customer")]), columns: [], source: Query { ctes: [Cte { alias: TableAlias { name: Ident("foo"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }], body: SetOperation { op: Union, all: false, left: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), right: Values(Values([[Value(Number("1"))]])) }, order_by: [], limit: None, offset: None, fetch: None } }

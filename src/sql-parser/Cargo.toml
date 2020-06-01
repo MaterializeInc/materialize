@@ -10,6 +10,7 @@ failure = "0.1.8"
 log = "0.4.5"
 repr = { path = "../repr" }
 lazy_static = "1.4.0"
+datadriven = "0.1.0"
 
 [dev-dependencies]
 matches = "0.1"
