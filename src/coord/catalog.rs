@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::iter;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
@@ -32,6 +33,10 @@ use crate::catalog::error::{Error, ErrorKind};
 
 mod error;
 pub mod sql;
+
+pub const SYSTEM_CONN_ID: u32 = 0;
+
+pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -59,8 +64,8 @@ pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     indexes: HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
-    ambient_schemas: Schemas,
-    temporary_schemas: HashMap<u32, Schemas>,
+    ambient_schemas: BTreeMap<String, Schema>,
+    temporary_schemas: HashMap<u32, Schema>,
     storage: Arc<Mutex<sql::Connection>>,
     creation_time: SystemTime,
     nonce: u64,
@@ -69,11 +74,11 @@ pub struct Catalog {
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     catalog: &'a Catalog,
-    conn_id: Option<u32>,
+    conn_id: u32,
 }
 
 impl ConnCatalog<'_> {
-    pub fn new(catalog: &Catalog, conn_id: Option<u32>) -> ConnCatalog {
+    pub fn new(catalog: &Catalog, conn_id: u32) -> ConnCatalog {
         ConnCatalog { catalog, conn_id }
     }
 }
@@ -81,27 +86,21 @@ impl ConnCatalog<'_> {
 #[derive(Debug, Serialize)]
 struct Database {
     id: i64,
-    schemas: Schemas,
+    schemas: BTreeMap<String, Schema>,
 }
 
 lazy_static! {
     static ref EMPTY_DATABASE: Database = Database {
         id: 0,
-        schemas: Schemas(BTreeMap::new()),
+        schemas: BTreeMap::new(),
     };
 }
 
 #[derive(Debug, Serialize)]
-struct Schemas(BTreeMap<String, Schema>);
-
-#[derive(Debug, Serialize)]
 pub struct Schema {
     id: i64,
-    items: Items,
+    items: BTreeMap<String, GlobalId>,
 }
-
-#[derive(Debug, Serialize)]
-struct Items(BTreeMap<String, GlobalId>);
 
 #[derive(Clone, Debug)]
 pub struct CatalogEntry {
@@ -196,12 +195,18 @@ impl CatalogItem {
         }
     }
 
+    /// Returns the connection ID that this item belongs to, if this item is
+    /// temporary.
+    pub fn conn_id(&self) -> Option<u32> {
+        match self {
+            CatalogItem::View(view) => view.conn_id,
+            _ => None,
+        }
+    }
+
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
-        match self {
-            CatalogItem::View(view) => view.conn_id.is_some(),
-            _ => false,
-        }
+        self.conn_id().is_some()
     }
 }
 
@@ -263,12 +268,13 @@ impl Catalog {
             by_name: BTreeMap::new(),
             by_id: BTreeMap::new(),
             indexes: HashMap::new(),
-            ambient_schemas: Schemas(BTreeMap::new()),
+            ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             creation_time: SystemTime::now(),
             nonce: rand::random(),
         };
+        catalog.create_temporary_schema(SYSTEM_CONN_ID);
 
         let databases = catalog.storage().load_databases()?;
         for (id, name) in databases {
@@ -276,7 +282,7 @@ impl Catalog {
                 name,
                 Database {
                     id,
-                    schemas: Schemas(BTreeMap::new()),
+                    schemas: BTreeMap::new(),
                 },
             );
         }
@@ -293,11 +299,11 @@ impl Catalog {
                 }
                 None => &mut catalog.ambient_schemas,
             };
-            schemas.0.insert(
+            schemas.insert(
                 schema_name,
                 Schema {
                     id,
-                    items: Items(BTreeMap::new()),
+                    items: BTreeMap::new(),
                 },
             );
         }
@@ -349,17 +355,53 @@ impl Catalog {
         self.storage().allocate_id()
     }
 
+    pub fn resolve_database(&self, database_spec: &DatabaseSpecifier) -> Result<(), Error> {
+        match database_spec {
+            DatabaseSpecifier::Ambient => Ok(()),
+            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
+                Some(_) => Ok(()),
+                None => Err(Error::new(ErrorKind::UnknownDatabase(name.into()))),
+            },
+        }
+    }
+
+    pub fn resolve_schema(
+        &self,
+        current_database: &DatabaseSpecifier,
+        database: Option<String>,
+        schema_name: &str,
+        conn_id: u32,
+    ) -> Result<DatabaseSpecifier, Error> {
+        if let Some(database) = database {
+            let database_spec = DatabaseSpecifier::Name(database);
+            self.get_schema(&database_spec, schema_name, conn_id)
+                .map(|_| database_spec)
+        } else {
+            match self.get_schema(current_database, schema_name, conn_id) {
+                Ok(_) => Ok(current_database.clone()),
+                Err(Error {
+                    kind: ErrorKind::UnknownSchema(_),
+                    ..
+                }) => self
+                    .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
+                    .map(|_| DatabaseSpecifier::Ambient),
+                Err(e) => Err(e),
+            }
+        }
+    }
+
     /// Resolves [`PartialName`] into a [`FullName`].
     ///
     /// If `name` does not specify a database, the `current_database` is used.
     /// If `name` does not specify a schema, then the schemas in `search_path`
     /// are searched in order.
+    #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
         current_database: DatabaseSpecifier,
         search_path: &[&str],
         name: &PartialName,
-        conn_id: Option<u32>,
+        conn_id: u32,
     ) -> Result<FullName, Error> {
         if let (Some(database_name), Some(schema_name)) = (&name.database, &name.schema) {
             // `name` is fully specified already. No resolution required.
@@ -370,49 +412,63 @@ impl Catalog {
             });
         }
 
-        // Find the specified database, or `current_database` if no database was
-        // specified.
-        let database_name = name
-            .database
-            .as_ref()
-            .map(|n| DatabaseSpecifier::Name(n.clone()))
-            .unwrap_or(current_database);
-        let resolver = self.database_resolver(database_name)?;
+        // If a schema name was specified, just try to find the item in that
+        // schema. If no schema was specified, try to find the item in every
+        // schema in the search path.
+        //
+        // This is written strangely to work around limitations in Rust's
+        // temporary lifetime inference [0]. Ideally the following would work,
+        // but it does not:
+        //
+        //     let schemas = match name.schema {
+        //         Some(name) => &[name],
+        //         None => search_path,
+        //     }
+        //
+        // [0]: https://github.com/rust-lang/rust/issues/15023
+        let mut schemas = &[name.schema.as_deref().unwrap_or("")][..];
+        if name.schema.is_none() {
+            schemas = search_path;
+        }
 
-        if let Some(schema_name) = &name.schema {
-            // A schema name was specified, so just try to find the item in
-            // that schema.
-            if let Some(out) = resolver.resolve_item(schema_name, &name.item, conn_id) {
-                return Ok(out);
-            }
-        } else {
-            // No schema was specified, so try to find the item in every schema
-            // in the search path, in order.
-            for &schema_name in search_path {
-                if let Some(out) = resolver.resolve_item(schema_name, &name.item, conn_id) {
-                    return Ok(out);
+        for &schema_name in schemas {
+            let database_name = name.database.clone();
+            let res = self.resolve_schema(&current_database, database_name, schema_name, conn_id);
+            let database_spec = match res {
+                Ok(database_spec) => database_spec,
+                Err(Error {
+                    kind: ErrorKind::UnknownSchema(_),
+                    ..
+                }) => continue,
+                Err(e) => return Err(e),
+            };
+            if let Ok(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
+                if schema.items.contains_key(&name.item) {
+                    return Ok(FullName {
+                        database: database_spec,
+                        schema: schema_name.to_owned(),
+                        item: name.item.to_owned(),
+                    });
                 }
             }
         }
-
         Err(Error::new(ErrorKind::UnknownItem(name.to_string())))
     }
 
     /// Returns the named catalog item, if it exists.
     ///
     /// See also [`Catalog::get`].
-    pub fn try_get(&self, name: &FullName, conn_id: Option<u32>) -> Option<&CatalogEntry> {
-        self.get_schemas(&name.database, conn_id)
+    pub fn try_get(&self, name: &FullName, conn_id: u32) -> Option<&CatalogEntry> {
+        self.get_schema(&name.database, &name.schema, conn_id)
             .ok()
-            .and_then(|schemas| schemas.0.get(&name.schema))
-            .and_then(|schema| schema.items.0.get(&name.item))
+            .and_then(|schema| schema.items.get(&name.item))
             .map(|id| &self.by_id[id])
     }
 
     /// Returns the named catalog item, or an error if it does not exist.
     ///
     /// See also [`Catalog::try_get`].
-    pub fn get(&self, name: &FullName, conn_id: Option<u32>) -> Result<&CatalogEntry, Error> {
+    pub fn get(&self, name: &FullName, conn_id: u32) -> Result<&CatalogEntry, Error> {
         self.try_get(name, conn_id)
             .ok_or_else(|| Error::new(ErrorKind::UnknownItem(name.to_string())))
     }
@@ -430,84 +486,34 @@ impl Catalog {
         self.by_name.keys().map(String::as_str)
     }
 
-    pub fn database_resolver<'a>(
-        &'a self,
-        database_spec: DatabaseSpecifier,
-    ) -> Result<DatabaseResolver<'a>, Error> {
-        match &database_spec {
-            DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary => Ok(DatabaseResolver {
-                database_spec,
-                database: &EMPTY_DATABASE,
-                ambient_schemas: &self.ambient_schemas,
-                temporary_schemas: &self.temporary_schemas,
-            }),
-            DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
-                Some(database) => Ok(DatabaseResolver {
-                    database_spec,
-                    database,
-                    ambient_schemas: &self.ambient_schemas,
-                    temporary_schemas: &self.temporary_schemas,
-                }),
-                None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
-            },
-        }
-    }
-
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: u32) {
-        let mut temp_schema_for_conn_id = BTreeMap::new();
-        temp_schema_for_conn_id.insert(
-            "mz_temp".into(),
+        self.temporary_schemas.insert(
+            conn_id,
             Schema {
                 id: -1,
-                items: Items(BTreeMap::new()),
+                items: BTreeMap::new(),
             },
         );
-        self.temporary_schemas
-            .insert(conn_id, Schemas(temp_schema_for_conn_id));
     }
 
-    fn get_temp_schemas(&mut self, conn_id: u32) -> &Schemas {
-        self.temporary_schemas
-            .get(&conn_id)
-            .expect("missing temporary schema for connection")
-    }
-
-    fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: String) -> bool {
-        for schema in self.get_temp_schemas(conn_id).0.values() {
-            if schema.items.0.contains_key(&item_name) {
-                return true;
-            }
-        }
-        false
+    fn item_exists_in_temp_schemas(&mut self, conn_id: u32, item_name: &str) -> bool {
+        self.temporary_schemas[&conn_id]
+            .items
+            .contains_key(item_name)
     }
 
     pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
-        self.get_temp_schemas(conn_id)
-            .0
+        self.temporary_schemas[&conn_id]
+            .items
             .values()
-            .flat_map(|schema| {
-                schema
-                    .items
-                    .0
-                    .values()
-                    .map(|id| Op::DropItem(*id))
-                    .collect::<Vec<Op>>()
-            })
+            .map(|id| Op::DropItem(*id))
             .collect()
     }
 
     pub fn drop_temporary_schema(&mut self, conn_id: u32) {
-        if self
-            .get_temp_schemas(conn_id)
-            .0
-            .get("mz_temp")
-            .expect("missing temporary schema mz_temp for conn_id: {}")
-            .items
-            .0
-            .is_empty()
-        {
+        if self.temporary_schemas[&conn_id].items.is_empty() {
             error!(
                 "items leftover in temporary schema for conn_id: {}",
                 conn_id
@@ -518,40 +524,52 @@ impl Catalog {
     }
 
     /// Gets the schema map for the database matching `database_spec`.
-    fn get_schemas(
+    fn get_schema(
         &self,
         database_spec: &DatabaseSpecifier,
-        conn_id: Option<u32>,
-    ) -> Result<&Schemas, Error> {
+        schema_name: &str,
+        conn_id: u32,
+    ) -> Result<&Schema, Error> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
-            DatabaseSpecifier::Ambient => Ok(&self.ambient_schemas),
-            DatabaseSpecifier::Temporary => match conn_id {
-                Some(conn_id) => Ok(self.temporary_schemas.get(&conn_id).unwrap()),
-                None => unreachable!("cannot get temporary schema with no conn_id"),
+            DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
+                Ok(&self.temporary_schemas[&conn_id])
+            }
+            DatabaseSpecifier::Ambient => match self.ambient_schemas.get(schema_name) {
+                Some(schema) => Ok(schema),
+                None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
             },
             DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
-                Some(db) => Ok(&db.schemas),
+                Some(db) => match db.schemas.get(schema_name) {
+                    Some(schema) => Ok(schema),
+                    None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
+                },
                 None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
             },
         }
     }
 
     /// Like `get_schemas`, but returns a `mut` reference.
-    fn get_schemas_mut(
+    fn get_schema_mut(
         &mut self,
         database_spec: &DatabaseSpecifier,
-        conn_id: Option<u32>,
-    ) -> Result<&mut Schemas, Error> {
+        schema_name: &str,
+        conn_id: u32,
+    ) -> Result<&mut Schema, Error> {
         // Keep in sync with `get_schemas`.
         match database_spec {
-            DatabaseSpecifier::Ambient => Ok(&mut self.ambient_schemas),
-            DatabaseSpecifier::Temporary => match conn_id {
-                Some(conn_id) => Ok(self.temporary_schemas.get_mut(&conn_id).unwrap()),
-                None => unreachable!("cannot get temporary schema with no conn_id"),
+            DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
+                Ok(self.temporary_schemas.get_mut(&conn_id).unwrap())
+            }
+            DatabaseSpecifier::Ambient => match self.ambient_schemas.get_mut(schema_name) {
+                Some(schema) => Ok(schema),
+                None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
             },
             DatabaseSpecifier::Name(name) => match self.by_name.get_mut(name) {
-                Some(db) => Ok(&mut db.schemas),
+                Some(db) => match db.schemas.get_mut(schema_name) {
+                    Some(schema) => Ok(schema),
+                    None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
+                },
                 None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
             },
         }
@@ -584,17 +602,10 @@ impl Catalog {
                 .or_insert_with(Vec::new)
                 .push(index.keys.clone());
         }
-        let conn_id = match &entry.item {
-            CatalogItem::View(view) => view.conn_id,
-            _ => None,
-        };
-        self.get_schemas_mut(&entry.name.database, conn_id)
-            .expect("catalog out of sync")
-            .0
-            .get_mut(&entry.name.schema)
+        let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+        self.get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
             .expect("catalog out of sync")
             .items
-            .0
             .insert(entry.name.item.clone(), entry.id);
         self.by_id.insert(entry.id, entry);
     }
@@ -602,7 +613,7 @@ impl Catalog {
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
         let mut ops = vec![];
         if let Some(database) = self.by_name.get(&name) {
-            for (schema_name, schema) in &database.schemas.0 {
+            for (schema_name, schema) in &database.schemas {
                 Self::drop_schema_items(schema, &self.by_id, &mut ops);
                 ops.push(Op::DropSchema {
                     database_name: DatabaseSpecifier::Name(name.clone()),
@@ -622,7 +633,7 @@ impl Catalog {
         let mut ops = vec![];
         if let DatabaseSpecifier::Name(database_name) = database_spec {
             if let Some(database) = self.by_name.get(&database_name) {
-                if let Some(schema) = database.schemas.0.get(&schema_name) {
+                if let Some(schema) = database.schemas.get(&schema_name) {
                     Self::drop_schema_items(schema, &self.by_id, &mut ops);
                     ops.push(Op::DropSchema {
                         database_name: DatabaseSpecifier::Name(database_name),
@@ -648,7 +659,7 @@ impl Catalog {
         ops: &mut Vec<Op>,
     ) {
         let mut seen = HashSet::new();
-        for &id in schema.items.0.values() {
+        for &id in schema.items.values() {
             Self::drop_item_cascade(id, by_id, ops, &mut seen)
         }
     }
@@ -684,12 +695,12 @@ impl Catalog {
                     }),
             } = op
             {
-                if self.item_exists_in_temp_schemas(*conn_id, name.item.clone())
-                    || creating.contains(&(conn_id, name.item.clone()))
+                if self.item_exists_in_temp_schemas(*conn_id, &name.item)
+                    || creating.contains(&(conn_id, &name.item))
                 {
                     return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
                 } else {
-                    creating.insert((conn_id, name.item.clone()));
+                    creating.insert((conn_id, &name.item));
                     temporary_ids.push(id.clone());
                 }
             }
@@ -745,7 +756,7 @@ impl Catalog {
                     }
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
-                        DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary => {
+                        DatabaseSpecifier::Ambient => {
                             return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
@@ -770,7 +781,6 @@ impl Catalog {
                                     name.to_string(),
                                 )));
                             }
-                            DatabaseSpecifier::Temporary => unreachable!(),
                         };
                         let schema_id = tx.load_schema_id(database_id, &name.schema)?;
                         let serialized_item = self.serialize_item(&item);
@@ -789,7 +799,7 @@ impl Catalog {
                 } => {
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
-                        DatabaseSpecifier::Ambient | DatabaseSpecifier::Temporary => {
+                        DatabaseSpecifier::Ambient => {
                             return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
@@ -819,7 +829,7 @@ impl Catalog {
                         name,
                         Database {
                             id,
-                            schemas: Schemas(BTreeMap::new()),
+                            schemas: BTreeMap::new(),
                         },
                     );
                     OpStatus::CreatedDatabase
@@ -835,12 +845,11 @@ impl Catalog {
                         .get_mut(&database_name)
                         .unwrap()
                         .schemas
-                        .0
                         .insert(
                             schema_name,
                             Schema {
                                 id,
-                                items: Items(BTreeMap::new()),
+                                items: BTreeMap::new(),
                             },
                         );
                     OpStatus::CreatedSchema
@@ -864,17 +873,11 @@ impl Catalog {
                         .get_mut(&database_name)
                         .unwrap()
                         .schemas
-                        .0
                         .remove(&schema_name);
                     OpStatus::DroppedSchema
                 }
 
                 Action::DropItem(id) => {
-                    let conn_id = match &self.get_by_id(&id).item {
-                        CatalogItem::View(view) => view.conn_id.clone(),
-                        _ => None,
-                    };
-
                     let metadata = self.by_id.remove(&id).unwrap();
                     if !metadata.item.is_placeholder() {
                         info!(
@@ -890,13 +893,10 @@ impl Catalog {
                         }
                     }
 
-                    self.get_schemas_mut(&metadata.name.database, conn_id)
-                        .expect("catalog out of sync")
-                        .0
-                        .get_mut(&metadata.name.schema)
+                    let conn_id = metadata.item.conn_id().unwrap_or(SYSTEM_CONN_ID);
+                    self.get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
                         .expect("catalog out of sync")
                         .items
-                        .0
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
                     if let CatalogItem::Index(index) = &metadata.item {
@@ -957,7 +957,7 @@ impl Catalog {
         let stmt = ::sql::parse(create_sql)?.into_element();
         let plan = ::sql::plan(
             &pcx,
-            &ConnCatalog::new(self, None),
+            &ConnCatalog::new(self, SYSTEM_CONN_ID),
             &::sql::InternalSession,
             stmt,
             &params,
@@ -1076,60 +1076,6 @@ pub enum OpStatus {
     DroppedItem(CatalogEntry),
 }
 
-/// A helper for resolving schema and item names within one database.
-pub struct DatabaseResolver<'a> {
-    database_spec: DatabaseSpecifier,
-    database: &'a Database,
-    ambient_schemas: &'a Schemas,
-    temporary_schemas: &'a HashMap<u32, Schemas>,
-}
-
-impl<'a> DatabaseResolver<'a> {
-    /// Attempts to resolve the item specified by `schema_name` and `item_name`
-    /// in the database that this resolver is attached to, or in the set of
-    /// ambient schemas.
-    pub fn resolve_item(
-        &self,
-        schema_name: &str,
-        item_name: &str,
-        conn_id: Option<u32>,
-    ) -> Option<FullName> {
-        if let Some(schema) = self.database.schemas.0.get(schema_name) {
-            if schema.items.0.contains_key(item_name) {
-                return Some(FullName {
-                    database: self.database_spec.clone(),
-                    schema: schema_name.to_owned(),
-                    item: item_name.to_owned(),
-                });
-            }
-        }
-        if let Some(schema) = self.ambient_schemas.0.get(schema_name) {
-            if schema.items.0.contains_key(item_name) {
-                return Some(FullName {
-                    database: DatabaseSpecifier::Ambient,
-                    schema: schema_name.to_owned(),
-                    item: item_name.to_owned(),
-                });
-            }
-        }
-        if let Some(conn_id) = conn_id {
-            if let Some(temp_schema_for_conn_id) = self.temporary_schemas.get(&conn_id) {
-                if let Some(schema) = temp_schema_for_conn_id.0.get(schema_name) {
-                    if schema.items.0.contains_key(item_name) {
-                        return Some(FullName {
-                            database: DatabaseSpecifier::Temporary,
-                            schema: schema_name.to_owned(),
-                            item: item_name.to_owned(),
-                        });
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum SerializedCatalogItem {
     V1 {
@@ -1187,9 +1133,18 @@ impl PlanCatalog for ConnCatalog<'_> {
         &'a self,
         database_spec: &DatabaseSpecifier,
     ) -> Result<Box<dyn Iterator<Item = &'a str> + 'a>, failure::Error> {
-        match self.catalog.get_schemas(database_spec, self.conn_id) {
-            Ok(schemas) => Ok(Box::new(schemas.0.keys().map(|s| s.as_str()))),
-            Err(e) => Err(e.into()),
+        match database_spec {
+            DatabaseSpecifier::Ambient => Ok(Box::new(
+                self.catalog
+                    .ambient_schemas
+                    .keys()
+                    .map(|s| s.as_str())
+                    .chain(iter::once(MZ_TEMP_SCHEMA)),
+            )),
+            DatabaseSpecifier::Name(n) => match self.catalog.by_name.get(n) {
+                Some(db) => Ok(Box::new(db.schemas.keys().map(|s| s.as_str()))),
+                None => Err(Error::new(ErrorKind::UnknownDatabase(n.into())).into()),
+            },
         }
     }
 
@@ -1198,19 +1153,12 @@ impl PlanCatalog for ConnCatalog<'_> {
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
     ) -> Result<Box<dyn Iterator<Item = &'a dyn PlanCatalogEntry> + 'a>, failure::Error> {
-        match self
+        let schema = self
             .catalog
-            .get_schemas(database_spec, self.conn_id)?
-            .0
-            .get(schema_name)
-        {
-            Some(schema) => {
-                Ok(Box::new(schema.items.0.values().map(move |id| {
-                    self.catalog.get_by_id(id) as &dyn PlanCatalogEntry
-                })))
-            }
-            None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into())).into()),
-        }
+            .get_schema(database_spec, schema_name, self.conn_id)?;
+        Ok(Box::new(schema.items.values().map(move |id| {
+            self.catalog.get_by_id(id) as &dyn PlanCatalogEntry
+        })))
     }
 
     fn resolve(
@@ -1227,29 +1175,12 @@ impl PlanCatalog for ConnCatalog<'_> {
     fn resolve_schema(
         &self,
         current_database: &DatabaseSpecifier,
-        database: Option<&DatabaseSpecifier>,
+        database: Option<String>,
         schema_name: &str,
     ) -> Result<DatabaseSpecifier, failure::Error> {
-        let database_specs = if let Some(database) = database {
-            vec![database]
-        } else {
-            vec![
-                current_database,
-                &DatabaseSpecifier::Ambient,
-                &DatabaseSpecifier::Temporary,
-            ]
-        };
-        for database_spec in database_specs {
-            if self
-                .catalog
-                .get_schemas(&database_spec, self.conn_id)?
-                .0
-                .contains_key(schema_name)
-            {
-                return Ok(database_spec.clone());
-            }
-        }
-        Err(Error::new(ErrorKind::UnknownSchema(schema_name.into())).into())
+        Ok(self
+            .catalog
+            .resolve_schema(current_database, database, schema_name, self.conn_id)?)
     }
 }
 
