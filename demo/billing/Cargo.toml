@@ -22,10 +22,10 @@ protoc = "2.8.1"
 rand = "0.7.3"
 rand_distr = "0.2.2"
 structopt = "0.3.14"
-util = { path = "../../test/util" }
 thiserror = "1.0.19"
 tokio = { version = "0.2.21", features = ["full"] }
 tokio-postgres = "0.5.2"
+util = { path = "../../test/util" }
 uuid = { version = "0.8", features = ["v4"] }
 
 [build-dependencies]
