@@ -34,8 +34,8 @@ use sql_parser::ast::ColumnOption;
 use sql_parser::ast::{DataType, ObjectType, Statement};
 use tokio_postgres::types::FromSql;
 
+use pgrepr::Jsonb;
 use repr::decimal::Significand;
-use repr::jsonb::Jsonb;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::{
     normalize, scalar_type_from_sql, FullName, MutationKind, Plan, PlanCatalog, PlanContext,
@@ -433,9 +433,9 @@ fn push_column(
             row.push(bytes.as_deref().into());
         }
         DataType::Jsonb => {
-            let serde = get_column_inner::<serde_json::Value>(postgres_row, i, nullable)?;
-            if let Some(serde) = serde {
-                row = Jsonb::new(serde)?.pack_into(row)
+            let jsonb = get_column_inner::<Jsonb>(postgres_row, i, nullable)?;
+            if let Some(jsonb) = jsonb {
+                row.extend_by_row(&jsonb.0.into_row())
             } else {
                 row.push(Datum::Null)
             }

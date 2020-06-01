@@ -16,13 +16,14 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use ore::fmt::FormatBuffer;
 use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::jsonb::Jsonb;
+use repr::jsonb::JsonbRef;
 use repr::strconv::{self, Nestable};
 use repr::{Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
-use crate::{Format, Interval, Numeric, Type};
+use crate::{Format, Interval, Jsonb, Numeric, Type};
 
 pub mod interval;
+pub mod jsonb;
 pub mod numeric;
 
 /// A PostgreSQL datum.
@@ -84,7 +85,9 @@ impl Value {
             }
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
-            (_, ScalarType::Jsonb) => Some(Value::Jsonb(Jsonb::from_datum(datum))),
+            (_, ScalarType::Jsonb) => {
+                Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
+            }
             (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
                 list.iter()
                     .map(|elem| Value::from_datum(elem, elem_type))
@@ -120,8 +123,8 @@ impl Value {
             ),
             Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
-            Value::Jsonb(jsonb) => (
-                buf.push_row(jsonb.into_row()).unpack_first(),
+            Value::Jsonb(js) => (
+                buf.push_row(js.0.into_row()).unpack_first(),
                 ScalarType::Jsonb,
             ),
             Value::List(elems) => {
@@ -173,7 +176,7 @@ impl Value {
             Value::Float8(f) => strconv::format_float64(buf, *f),
             Value::Numeric(n) => strconv::format_decimal(buf, &n.0),
             Value::Text(s) => strconv::format_string(buf, s),
-            Value::Jsonb(js) => strconv::format_jsonb(buf, js),
+            Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::List(elems) => encode_list(buf, elems),
         }
     }
@@ -195,7 +198,7 @@ impl Value {
             Value::Float8(f) => f.to_sql(&PgType::FLOAT8, buf),
             Value::Numeric(n) => n.to_sql(&PgType::NUMERIC, buf),
             Value::Text(s) => s.to_sql(&PgType::TEXT, buf),
-            Value::Jsonb(jsonb) => jsonb.as_serde_json().to_sql(&PgType::JSONB, buf),
+            Value::Jsonb(js) => js.to_sql(&PgType::JSONB, buf),
             Value::List(_) => {
                 // for now just use text encoding
                 self.encode_text(buf);
@@ -239,7 +242,7 @@ impl Value {
             Type::Interval => Value::Interval(Interval(strconv::parse_interval(raw)?)),
             Type::Text => Value::Text(raw.to_owned()),
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
-            Type::Jsonb => Value::Jsonb(strconv::parse_jsonb(raw)?),
+            Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
             Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
             Type::Unknown => panic!("cannot decode unknown type"),
         })
@@ -257,10 +260,7 @@ impl Value {
             Type::Int4 => i32::from_sql(ty.inner(), raw).map(Value::Int4),
             Type::Int8 => i64::from_sql(ty.inner(), raw).map(Value::Int8),
             Type::Interval => Interval::from_sql(ty.inner(), raw).map(Value::Interval),
-            Type::Jsonb => {
-                let val = serde_json::Value::from_sql(ty.inner(), raw)?;
-                Ok(Value::Jsonb(Jsonb::new(val)?))
-            }
+            Type::Jsonb => Jsonb::from_sql(ty.inner(), raw).map(Value::Jsonb),
             Type::Numeric => Numeric::from_sql(ty.inner(), raw).map(Value::Numeric),
             Type::Text => String::from_sql(ty.inner(), raw).map(Value::Text),
             Type::Time => NaiveTime::from_sql(ty.inner(), raw).map(Value::Time),

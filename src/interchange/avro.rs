@@ -27,7 +27,7 @@ use avro::schema::{
 };
 use avro::types::{DecimalValue, Value};
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
-use repr::jsonb::Jsonb;
+use repr::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
@@ -335,9 +335,7 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> Result<RowPacker> 
                 unreachable!("Avro value out of sync with schema");
             }
         }
-        Value::Json(j) => {
-            row = Jsonb::new(j)?.pack_into(row);
-        }
+        Value::Json(j) => row = JsonbPacker::new(row).pack_serde_json(j)?,
         other @ Value::Fixed(..)
         | other @ Value::Array(_)
         | other @ Value::Map(_)
@@ -949,9 +947,7 @@ impl Encoder {
                     }),
                     ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
                     ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
-                    ScalarType::Jsonb => {
-                        Value::Json(Jsonb::from_datum(datum.clone()).into_serde_json())
-                    }
+                    ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                     ScalarType::List(_t) => unimplemented!("jamii/list"),
                 };
                 if typ.nullable && typ.scalar_type != ScalarType::Unknown {
