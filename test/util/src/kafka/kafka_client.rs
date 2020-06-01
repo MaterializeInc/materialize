@@ -13,7 +13,6 @@
 
 use std::time::Duration;
 
-use anyhow;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
