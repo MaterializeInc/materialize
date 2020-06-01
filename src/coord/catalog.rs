@@ -36,6 +36,8 @@ pub mod sql;
 
 pub const SYSTEM_CONN_ID: u32 = 0;
 
+pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
+
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
 /// For each object, it keeps track of both forward and reverse dependencies:
@@ -530,7 +532,7 @@ impl Catalog {
     ) -> Result<&Schema, Error> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
-            DatabaseSpecifier::Ambient if schema_name == "mz_temp" => {
+            DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
                 Ok(&self.temporary_schemas[&conn_id])
             }
             DatabaseSpecifier::Ambient => match self.ambient_schemas.get(schema_name) {
@@ -556,7 +558,7 @@ impl Catalog {
     ) -> Result<&mut Schema, Error> {
         // Keep in sync with `get_schemas`.
         match database_spec {
-            DatabaseSpecifier::Ambient if schema_name == "mz_temp" => {
+            DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
                 Ok(self.temporary_schemas.get_mut(&conn_id).unwrap())
             }
             DatabaseSpecifier::Ambient => match self.ambient_schemas.get_mut(schema_name) {
@@ -1137,7 +1139,7 @@ impl PlanCatalog for ConnCatalog<'_> {
                     .ambient_schemas
                     .keys()
                     .map(|s| s.as_str())
-                    .chain(iter::once("mz_temp")),
+                    .chain(iter::once(MZ_TEMP_SCHEMA)),
             )),
             DatabaseSpecifier::Name(n) => match self.catalog.by_name.get(n) {
                 Some(db) => Ok(Box::new(db.schemas.keys().map(|s| s.as_str()))),
