@@ -198,3 +198,21 @@ Parse error:
 FROM bar+1 ORDER
         ^
 Expected end of statement, found: +
+
+parse-statement
+SELECT * FROM db.public..customer
+----
+error:
+Parse error:
+SELECT * FROM db.public..customer
+                        ^
+Expected identifier, found: .
+
+parse-statement
+SELECT * FROM
+----
+error:
+Parse error:
+SELECT * FROM
+             ^
+Expected identifier, found: EOF

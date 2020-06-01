@@ -23,7 +23,6 @@ use ore::collections::CollectionExt;
 use ore::retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::Statement;
-use sql_parser::parser::Parser as SqlParser;
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedResult};
@@ -35,7 +34,7 @@ pub struct SqlAction {
 }
 
 pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, String> {
-    let stmts = SqlParser::parse_sql(cmd.query.clone())
+    let stmts = sql_parser::parser::parse_statements(cmd.query.clone())
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
         return Err(format!("expected one statement, but got {}", stmts.len()));
