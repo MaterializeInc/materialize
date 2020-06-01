@@ -47,7 +47,7 @@ Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
 <span id="v0.3.0"></span>
-## 0.2.2 &rarr; 0.3.0 (Unreleased)
+## 0.2.2 &rarr; 0.3.0
 
 - Support [temporary views](/sql/create-view/#temporary-views).
 
