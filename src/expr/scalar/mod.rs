@@ -44,6 +44,12 @@ pub enum ScalarExpr {
         func: VariadicFunc,
         exprs: Vec<ScalarExpr>,
     },
+    /// Conditionally evaluated expressions.
+    ///
+    /// It is important that `then` and `els` only be evaluated if
+    /// `cond` is true or not, respectively. This is the only way
+    /// users can guard execution (other logical operator do not
+    /// short-circuit) and we need to preserve that.
     If {
         cond: Box<ScalarExpr>,
         then: Box<ScalarExpr>,
@@ -370,13 +376,40 @@ impl ScalarExpr {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
                 }
             }
-            ScalarExpr::If { cond, then, els } => match cond.as_literal() {
-                Some(Ok(Datum::True)) => *e = then.take(),
-                Some(Ok(Datum::False)) | Some(Ok(Datum::Null)) => *e = els.take(),
-                Some(Err(_)) => *e = cond.take(),
-                Some(_) => unreachable!(),
-                None => (),
-            },
+            ScalarExpr::If { cond, then, els } => {
+                if let Some(literal) = cond.as_literal() {
+                    match literal {
+                        Ok(Datum::True) => *e = then.take(),
+                        Ok(Datum::False) | Ok(Datum::Null) => *e = els.take(),
+                        Err(_) => *e = cond.take(),
+                        _ => unreachable!(),
+                    }
+                } else if then == els {
+                    *e = then.take();
+                } else if then.is_literal_ok() && els.is_literal_ok() {
+                    match (then.as_literal(), els.as_literal()) {
+                        (Some(Ok(Datum::True)), _) => {
+                            *e = cond.take().call_binary(els.take(), BinaryFunc::Or);
+                        }
+                        (Some(Ok(Datum::False)), _) => {
+                            *e = cond
+                                .take()
+                                .call_unary(UnaryFunc::Not)
+                                .call_binary(els.take(), BinaryFunc::And);
+                        }
+                        (_, Some(Ok(Datum::True))) => {
+                            *e = cond
+                                .take()
+                                .call_unary(UnaryFunc::Not)
+                                .call_binary(then.take(), BinaryFunc::Or);
+                        }
+                        (_, Some(Ok(Datum::False))) => {
+                            *e = cond.take().call_binary(then.take(), BinaryFunc::And);
+                        }
+                        _ => {}
+                    }
+                }
+            }
         });
     }
 
