@@ -5,7 +5,6 @@ skip = [
     # down compilation and bloat the binary.
 
     # Awaiting:
-    #   - reqwest 0.13.5 (https://github.com/seanmonstar/reqwest/releases)
     #   - redox-users (https://gitlab.redox-os.org/redox-os/users/-/merge_requests/34)
     { name = "base64", version = "0.11.0" },
 

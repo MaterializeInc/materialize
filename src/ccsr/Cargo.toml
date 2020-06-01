@@ -12,7 +12,7 @@ path = "lib.rs"
 futures = "0.3"
 native-tls = "0.2.4"
 openssl = { version = "0.10.29", features = ["vendored"] }
-reqwest = { version = "0.10.4", features = ["blocking", "json", "native-tls-vendored"] }
+reqwest = { version = "0.10.6", features = ["blocking", "json", "native-tls-vendored"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.53"
 url = { version = "2.1.0", features = ["serde"] }
