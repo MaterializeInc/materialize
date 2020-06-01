@@ -24,6 +24,8 @@ use std::process;
 use protobuf::Message;
 use structopt::StructOpt;
 
+use test_util::kafka::kafka_client;
+
 use crate::config::{Args, KafkaConfig, MzConfig};
 use crate::error::Result;
 use crate::mz_client::MzClient;
@@ -31,7 +33,6 @@ use crate::mz_client::MzClient;
 mod config;
 mod error;
 mod gen;
-mod kafka_client;
 mod macros;
 mod mz_client;
 mod proto;
@@ -97,11 +98,14 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
 
     let mut recordstate = randomizer::RecordState::new(config.start_time);
 
-    let mut k_client =
-        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)?;
+    let mut k_client = kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic)
+        .map_err(|e| error::Error::from(e.to_string()))?;
 
     if let Some(partitions) = config.partitions {
-        k_client.create_topic(partitions).await?;
+        k_client
+            .create_topic(partitions)
+            .await
+            .map_err(|e| error::Error::from(e.to_string()))?;
     }
 
     let mut buf = vec![];
@@ -114,7 +118,10 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         let m = randomizer::random_batch(rng, &mut recordstate);
         m.write_to_vec(&mut buf)?;
         log::trace!("sending: {:?}", m);
-        k_client.send(&buf).await?;
+        k_client
+            .send(&buf)
+            .await
+            .map_err(|e| error::Error::from(e.to_string()))?;
         total_size += buf.len();
         buf.clear();
         if i % (config.message_count / 100).max(5) == 0 {

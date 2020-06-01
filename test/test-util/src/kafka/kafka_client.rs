@@ -18,8 +18,6 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 
-use crate::error::Result;
-
 pub struct KafkaClient {
     producer: FutureProducer<DefaultClientContext>,
     messages: i64,
@@ -28,7 +26,7 @@ pub struct KafkaClient {
 }
 
 impl KafkaClient {
-    pub fn new(kafka_url: &str, group_id: &str, topic: &str) -> Result<KafkaClient> {
+    pub fn new(kafka_url: &str, group_id: &str, topic: &str) -> Result<KafkaClient, anyhow::Error> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", kafka_url);
         config.set("group.id", group_id);
@@ -43,7 +41,7 @@ impl KafkaClient {
         })
     }
 
-    pub async fn create_topic(&self, partitions: i32) -> Result<()> {
+    pub async fn create_topic(&self, partitions: i32) -> Result<(), anyhow::Error> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
         let res = config
@@ -60,23 +58,26 @@ impl KafkaClient {
             .await?;
 
         if res.len() != 1 {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "error creating topic {}: \
              kafka topic creation returned {} results, but exactly one result was expected",
                 self.topic,
                 res.len()
-            )
-            .into());
+            ));
         }
 
         if let Err((_, e)) = res[0] {
-            return Err(format!("error creating topic {}: {}", self.topic, e).into());
+            return Err(anyhow::anyhow!(
+                "error creating topic {}: {}",
+                self.topic,
+                e
+            ));
         }
 
         Ok(())
     }
 
-    pub async fn send(&mut self, message: &[u8]) -> Result<()> {
+    pub async fn send(&mut self, message: &[u8]) -> Result<(), anyhow::Error> {
         self.messages += 1;
         let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic)
             .payload(message)

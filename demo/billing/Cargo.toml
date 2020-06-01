@@ -2,7 +2,6 @@
 name = "billing-demo"
 description = "Microservice demo using Materialize to power a real-time billing usecase"
 version = "0.1.0"
-authors = ["Brandon W Maister <bwm@materialize.io>"]
 edition = "2018"
 publish = false
 
@@ -22,8 +21,8 @@ protobuf = "2.8.1"
 protoc = "2.8.1"
 rand = "0.7.3"
 rand_distr = "0.2.2"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 structopt = "0.3.14"
+test-util = { path = "../../test/test-util" }
 thiserror = "1.0.19"
 tokio = { version = "0.2.21", features = ["full"] }
 tokio-postgres = "0.5.2"

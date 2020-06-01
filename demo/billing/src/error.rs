@@ -19,9 +19,6 @@ pub enum Error {
     #[error("Unexpected error running postgres command")]
     PgError(#[from] tokio_postgres::Error),
 
-    #[error("Interacting with kafka: {0}")]
-    KafkaError(#[from] rdkafka::error::KafkaError),
-
     #[error("Sending kafka message")]
     FuturesCancelled(#[from] futures_channel::oneshot::Canceled),
 

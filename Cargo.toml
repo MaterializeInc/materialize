@@ -28,6 +28,7 @@ members = [
     "test/metabase/smoketest",
     "test/performance/perf-kinesis",
     "test/smith",
+    "test/test-util",
 ]
 
 [profile.release]
