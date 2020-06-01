@@ -19,6 +19,6 @@ url = { version = "2.1.0", features = ["serde"] }
 
 [dev-dependencies]
 failure = "0.1.8"
-hyper = "0.13.5"
+hyper = "0.13.6"
 lazy_static = "1.4"
 tokio = { version = "0.2", features = ["macros"] }

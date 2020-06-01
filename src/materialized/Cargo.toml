@@ -27,7 +27,7 @@ dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.8"
 futures = "0.3"
 getopts = "0.2"
-hyper = "0.13.5"
+hyper = "0.13.6"
 jemallocator = { version = "0.3.0", features = ["profiling"] }
 krb5-src = { version = "0.2.1", features = ["binaries"] }
 lazy_static = "1.4.0"
