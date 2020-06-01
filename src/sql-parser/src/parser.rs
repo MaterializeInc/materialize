@@ -33,6 +33,20 @@ use crate::ast::*;
 use crate::keywords;
 use crate::tokenizer::*;
 
+/// Parses a SQL string containing zero or more SQL statements.
+pub fn parse_statements(sql: String) -> Result<Vec<Statement>, ParserError> {
+    let mut tokenizer = Tokenizer::new(&sql);
+    let tokens = tokenizer.tokenize()?;
+    Parser::new(sql, tokens).parse_statements()
+}
+
+/// Parses a SQL string containing one SQL expression.
+pub fn parse_expr(sql: String) -> Result<Expr, ParserError> {
+    let mut tokenizer = Tokenizer::new(&sql);
+    let tokens = tokenizer.tokenize()?;
+    Parser::new(sql, tokens).parse_expr()
+}
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($parser:expr, $range:expr, $MSG:expr) => {
@@ -61,13 +75,13 @@ pub struct ParserError {
 }
 
 #[derive(PartialEq)]
-pub enum IsOptional {
+enum IsOptional {
     Optional,
     Mandatory,
 }
 use IsOptional::*;
 
-pub enum IsLateral {
+enum IsLateral {
     Lateral,
     NotLateral,
 }
@@ -102,7 +116,7 @@ impl<'a> fmt::Display for ParserError {
 impl<'a> Error for ParserError {}
 
 /// SQL Parser
-pub struct Parser {
+struct Parser {
     sql: String,
     tokens: Vec<(Token, Range<usize>)>,
     /// The index of the first unprocessed token in `self.tokens`
@@ -113,7 +127,7 @@ pub struct Parser {
 /// precedence classes are ordered from weakest binding at the top to tightest binding at the
 /// bottom.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub enum Precedence {
+enum Precedence {
     Zero,
     Or,
     And,
@@ -131,7 +145,7 @@ pub enum Precedence {
 
 impl Parser {
     /// Parse the specified tokens
-    pub fn new(sql: String, tokens: Vec<(Token, Range<usize>)>) -> Self {
+    fn new(sql: String, tokens: Vec<(Token, Range<usize>)>) -> Self {
         Parser {
             sql,
             tokens,
@@ -147,31 +161,22 @@ impl Parser {
         }
     }
 
-    /// Parse a SQL statement and produce an Abstract Syntax Tree (AST)
-    pub fn parse_sql(sql: String) -> Result<Vec<Statement>, ParserError> {
-        debug!("Parsing sql '{}'...", &sql);
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer.tokenize()?;
-        let mut parser = Parser::new(sql, tokens);
+    fn parse_statements(&mut self) -> Result<Vec<Statement>, ParserError> {
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
         loop {
             // ignore empty statements (between successive statement delimiters)
-            while parser.consume_token(&Token::SemiColon) {
+            while self.consume_token(&Token::SemiColon) {
                 expecting_statement_delimiter = false;
             }
 
-            if parser.peek_token().is_none() {
+            if self.peek_token().is_none() {
                 break;
             } else if expecting_statement_delimiter {
-                return parser.expected(
-                    parser.peek_range(),
-                    "end of statement",
-                    parser.peek_token(),
-                );
+                return self.expected(self.peek_range(), "end of statement", self.peek_token());
             }
 
-            let statement = parser.parse_statement()?;
+            let statement = self.parse_statement()?;
             stmts.push(statement);
             expecting_statement_delimiter = true;
         }
@@ -180,7 +185,7 @@ impl Parser {
 
     /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
     /// stopping before the statement separator, if any.
-    pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_statement(&mut self) -> Result<Statement, ParserError> {
         match self.next_token() {
             Some(t) => match t {
                 Token::Word(ref w) if w.keyword != "" => match w.keyword.as_ref() {
@@ -230,12 +235,12 @@ impl Parser {
     }
 
     /// Parse a new expression
-    pub fn parse_expr(&mut self) -> Result<Expr, ParserError> {
+    fn parse_expr(&mut self) -> Result<Expr, ParserError> {
         self.parse_subexpr(Precedence::Zero)
     }
 
     /// Parse tokens until the precedence changes
-    pub fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr, ParserError> {
+    fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr, ParserError> {
         debug!("parsing expr");
         let mut expr = self.parse_prefix()?;
         debug!("prefix: {:?}", expr);
@@ -252,7 +257,7 @@ impl Parser {
     }
 
     /// Parse an expression prefix
-    pub fn parse_prefix(&mut self) -> Result<Expr, ParserError> {
+    fn parse_prefix(&mut self) -> Result<Expr, ParserError> {
         // PostgreSQL allows any string literal to be preceded by a type name,
         // indicating that the string literal represents a literal of that type.
         // Some examples:
@@ -391,7 +396,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_function(&mut self, name: ObjectName) -> Result<Expr, ParserError> {
+    fn parse_function(&mut self, name: ObjectName) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let all = self.parse_keyword("ALL");
         let all_range = self.peek_prev_range();
@@ -454,7 +459,7 @@ impl Parser {
         }))
     }
 
-    pub fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
+    fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
         let units = match self.next_token() {
             Some(Token::Word(w)) => w
                 .keyword
@@ -480,7 +485,7 @@ impl Parser {
     }
 
     /// Parse `CURRENT ROW` or `{ <positive number> | UNBOUNDED } { PRECEDING | FOLLOWING }`
-    pub fn parse_window_frame_bound(&mut self) -> Result<WindowFrameBound, ParserError> {
+    fn parse_window_frame_bound(&mut self) -> Result<WindowFrameBound, ParserError> {
         if self.parse_keywords(vec!["CURRENT", "ROW"]) {
             Ok(WindowFrameBound::CurrentRow)
         } else {
@@ -503,7 +508,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_case_expr(&mut self) -> Result<Expr, ParserError> {
+    fn parse_case_expr(&mut self) -> Result<Expr, ParserError> {
         let mut operand = None;
         if !self.parse_keyword("WHEN") {
             operand = Some(Box::new(self.parse_expr()?));
@@ -534,7 +539,7 @@ impl Parser {
     }
 
     /// Parse a SQL CAST function e.g. `CAST(expr AS FLOAT)`
-    pub fn parse_cast_expr(&mut self) -> Result<Expr, ParserError> {
+    fn parse_cast_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let expr = self.parse_expr()?;
         self.expect_keyword("AS")?;
@@ -547,14 +552,14 @@ impl Parser {
     }
 
     /// Parse a SQL EXISTS expression e.g. `WHERE EXISTS(SELECT ...)`.
-    pub fn parse_exists_expr(&mut self) -> Result<Expr, ParserError> {
+    fn parse_exists_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let exists_node = Expr::Exists(Box::new(self.parse_query()?));
         self.expect_token(&Token::RParen)?;
         Ok(exists_node)
     }
 
-    pub fn parse_extract_expr(&mut self) -> Result<Expr, ParserError> {
+    fn parse_extract_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let field = self.parse_extract_field()?;
         self.expect_keyword("FROM")?;
@@ -567,7 +572,7 @@ impl Parser {
     }
 
     /// Parse the kinds of things that can be fed to EXTRACT and DATE_TRUNC
-    pub fn parse_extract_field(&mut self) -> Result<ExtractField, ParserError> {
+    fn parse_extract_field(&mut self) -> Result<ExtractField, ParserError> {
         let tok = self.next_token();
         let field: Result<ExtractField, _> = match tok {
             Some(Token::Word(ref k)) => k.keyword.parse(),
@@ -590,7 +595,7 @@ impl Parser {
     ///   4. `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
     ///   5. `INTERVAL '1.111' SECOND (2)`
     ///
-    pub fn parse_literal_interval(&mut self) -> Result<Expr, ParserError> {
+    fn parse_literal_interval(&mut self) -> Result<Expr, ParserError> {
         // The first token in an interval is a string literal which specifies
         // the duration of the interval.
         let value = self.parse_literal_string()?;
@@ -664,7 +669,7 @@ impl Parser {
     }
 
     /// Parse an operator following an expression
-    pub fn parse_infix(&mut self, expr: Expr, precedence: Precedence) -> Result<Expr, ParserError> {
+    fn parse_infix(&mut self, expr: Expr, precedence: Precedence) -> Result<Expr, ParserError> {
         debug!("parsing infix");
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
@@ -786,7 +791,7 @@ impl Parser {
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
-    pub fn parse_in(&mut self, expr: Expr, negated: bool) -> Result<Expr, ParserError> {
+    fn parse_in(&mut self, expr: Expr, negated: bool) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let in_op = if self
             .parse_one_of_keywords(&["SELECT", "VALUES", "WITH"])
@@ -810,7 +815,7 @@ impl Parser {
     }
 
     /// Parses `BETWEEN <low> AND <high>`, assuming the `BETWEEN` keyword was already consumed
-    pub fn parse_between(&mut self, expr: Expr, negated: bool) -> Result<Expr, ParserError> {
+    fn parse_between(&mut self, expr: Expr, negated: bool) -> Result<Expr, ParserError> {
         // Stop parsing subexpressions for <low> and <high> on tokens with
         // precedence lower than that of `BETWEEN`, such as `AND`, `IS`, etc.
         let low = self.parse_subexpr(Precedence::Like)?;
@@ -825,7 +830,7 @@ impl Parser {
     }
 
     /// Parse a postgresql casting style which is in the form of `expr::datatype`
-    pub fn parse_pg_cast(&mut self, expr: Expr) -> Result<Expr, ParserError> {
+    fn parse_pg_cast(&mut self, expr: Expr) -> Result<Expr, ParserError> {
         Ok(Expr::Cast {
             expr: Box::new(expr),
             data_type: self.parse_data_type()?,
@@ -833,7 +838,7 @@ impl Parser {
     }
 
     /// Get the precedence of the next token
-    pub fn get_next_precedence(&self) -> Precedence {
+    fn get_next_precedence(&self) -> Precedence {
         if let Some(token) = self.peek_token() {
             debug!("get_next_precedence() {:?}", token);
 
@@ -883,12 +888,12 @@ impl Parser {
 
     /// Return the first non-whitespace token that has not yet been processed
     /// (or None if reached end-of-file)
-    pub fn peek_token(&self) -> Option<Token> {
+    fn peek_token(&self) -> Option<Token> {
         self.peek_nth_token(0)
     }
 
     /// Return nth non-whitespace token that has not yet been processed
-    pub fn peek_nth_token(&self, mut n: usize) -> Option<Token> {
+    fn peek_nth_token(&self, mut n: usize) -> Option<Token> {
         let mut index = self.index;
         loop {
             index += 1;
@@ -907,7 +912,7 @@ impl Parser {
     /// Return the first non-whitespace token that has not yet been processed
     /// (or None if reached end-of-file) and mark it as processed. OK to call
     /// repeatedly after reaching EOF.
-    pub fn next_token(&mut self) -> Option<Token> {
+    fn next_token(&mut self) -> Option<Token> {
         loop {
             self.index += 1;
             match self.tokens.get(self.index - 1) {
@@ -918,7 +923,7 @@ impl Parser {
     }
 
     /// Return the first unprocessed token, possibly whitespace.
-    pub fn next_token_no_skip(&mut self) -> Option<&Token> {
+    fn next_token_no_skip(&mut self) -> Option<&Token> {
         self.index += 1;
         self.tokens.get(self.index - 1).map(|(token, _range)| token)
     }
@@ -926,7 +931,7 @@ impl Parser {
     /// Push back the last one non-whitespace token. Must be called after
     /// `next_token()`, otherwise might panic. OK to call after
     /// `next_token()` indicates an EOF.
-    pub fn prev_token(&mut self) {
+    fn prev_token(&mut self) {
         loop {
             assert!(self.index > 0);
             self.index -= 1;
@@ -987,7 +992,7 @@ impl Parser {
 
     /// Look for an expected keyword and consume it if it exists
     #[must_use]
-    pub fn parse_keyword(&mut self, expected: &'static str) -> bool {
+    fn parse_keyword(&mut self, expected: &'static str) -> bool {
         // Ideally, we'd accept a enum variant, not a string, but since
         // it's not trivial to maintain the enum without duplicating all
         // the keywords three times, we'll settle for a run-time check that
@@ -1004,7 +1009,7 @@ impl Parser {
 
     /// Look for an expected sequence of keywords and consume them if they exist
     #[must_use]
-    pub fn parse_keywords(&mut self, keywords: Vec<&'static str>) -> bool {
+    fn parse_keywords(&mut self, keywords: Vec<&'static str>) -> bool {
         let index = self.index;
         for keyword in keywords {
             if !self.parse_keyword(&keyword) {
@@ -1019,7 +1024,7 @@ impl Parser {
 
     /// Look for one of the given keywords and return the one that matches.
     #[must_use]
-    pub fn parse_one_of_keywords(&mut self, keywords: &[&'static str]) -> Option<&'static str> {
+    fn parse_one_of_keywords(&mut self, keywords: &[&'static str]) -> Option<&'static str> {
         for keyword in keywords {
             assert!(
                 keywords::ALL_KEYWORDS.contains(keyword),
@@ -1041,7 +1046,7 @@ impl Parser {
 
     /// Bail out if the current token is not one of the expected keywords, or consume it if it is
     #[must_use = "must match against result to determine what keyword was parsed"]
-    pub fn expect_one_of_keywords(
+    fn expect_one_of_keywords(
         &mut self,
         keywords: &[&'static str],
     ) -> Result<&'static str, ParserError> {
@@ -1057,7 +1062,7 @@ impl Parser {
     }
 
     /// Bail out if the current token is not an expected keyword, or consume it if it is
-    pub fn expect_keyword(&mut self, expected: &'static str) -> Result<(), ParserError> {
+    fn expect_keyword(&mut self, expected: &'static str) -> Result<(), ParserError> {
         if self.parse_keyword(expected) {
             Ok(())
         } else {
@@ -1067,7 +1072,7 @@ impl Parser {
 
     /// Bail out if the following tokens are not the expected sequence of
     /// keywords, or consume them if they are.
-    pub fn expect_keywords(&mut self, expected: &[&'static str]) -> Result<(), ParserError> {
+    fn expect_keywords(&mut self, expected: &[&'static str]) -> Result<(), ParserError> {
         for kw in expected {
             self.expect_keyword(kw)?;
         }
@@ -1076,7 +1081,7 @@ impl Parser {
 
     /// Consume the next token if it matches the expected token, otherwise return false
     #[must_use]
-    pub fn consume_token(&mut self, expected: &Token) -> bool {
+    fn consume_token(&mut self, expected: &Token) -> bool {
         match &self.peek_token() {
             Some(t) if *t == *expected => {
                 self.next_token();
@@ -1087,7 +1092,7 @@ impl Parser {
     }
 
     /// Bail out if the current token is not an expected keyword, or consume it if it is
-    pub fn expect_token(&mut self, expected: &Token) -> Result<(), ParserError> {
+    fn expect_token(&mut self, expected: &Token) -> Result<(), ParserError> {
         if self.consume_token(expected) {
             Ok(())
         } else {
@@ -1096,7 +1101,7 @@ impl Parser {
     }
 
     /// Parse a comma-separated list of 1+ items accepted by `F`
-    pub fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
+    fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
     where
         F: FnMut(&mut Parser) -> Result<T, ParserError>,
     {
@@ -1125,7 +1130,7 @@ impl Parser {
     }
 
     /// Parse a SQL CREATE statement
-    pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parse_keyword("DATABASE") {
             self.parse_create_database()
         } else if self.parse_keyword("SCHEMA") {
@@ -1179,7 +1184,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_create_database(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_database(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         Ok(Statement::CreateDatabase {
@@ -1188,7 +1193,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_create_schema(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_schema(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         Ok(Statement::CreateSchema {
@@ -1197,7 +1202,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_format(&mut self) -> Result<Format, ParserError> {
+    fn parse_format(&mut self) -> Result<Format, ParserError> {
         let format = if self.parse_keyword("AVRO") {
             self.expect_keyword("USING")?;
             Format::Avro(self.parse_avro_schema()?)
@@ -1255,7 +1260,7 @@ impl Parser {
         Ok(format)
     }
 
-    pub fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
+    fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
         let avro_schema = if self.parse_keywords(vec!["CONFLUENT", "SCHEMA", "REGISTRY"]) {
             let url = self.parse_literal_string()?;
             let seed = if self.parse_keyword("SEED") {
@@ -1288,7 +1293,7 @@ impl Parser {
         Ok(avro_schema)
     }
 
-    pub fn parse_schema(&mut self) -> Result<Schema, ParserError> {
+    fn parse_schema(&mut self) -> Result<Schema, ParserError> {
         self.expect_keyword("SCHEMA")?;
         let schema = if self.parse_keyword("FILE") {
             Schema::File(self.parse_literal_string()?.into())
@@ -1298,7 +1303,7 @@ impl Parser {
         Ok(schema)
     }
 
-    pub fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
         let envelope = if self.parse_keyword("NONE") {
             Envelope::None
         } else if self.parse_keyword("DEBEZIUM") {
@@ -1320,7 +1325,7 @@ impl Parser {
         Ok(envelope)
     }
 
-    pub fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_source(&mut self) -> Result<Statement, ParserError> {
         let materialized = self.parse_keyword("MATERIALIZED");
         self.expect_keyword("SOURCE")?;
         let if_not_exists = self.parse_if_not_exists()?;
@@ -1352,7 +1357,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_sink(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword("FROM")?;
@@ -1375,7 +1380,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_connector(&mut self) -> Result<Connector, ParserError> {
+    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
         match self.expect_one_of_keywords(&["FILE", "KAFKA", "KINESIS", "AVRO"])? {
             "FILE" => {
                 let path = self.parse_literal_string()?;
@@ -1402,7 +1407,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_create_view(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_view(&mut self) -> Result<Statement, ParserError> {
         let mut if_exists = if self.parse_keyword("OR") {
             self.expect_keyword("REPLACE")?;
             IfExistsBehavior::Replace
@@ -1435,7 +1440,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_create_index(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_index(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         self.expect_keyword("ON")?;
@@ -1478,7 +1483,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_drop(&mut self) -> Result<Statement, ParserError> {
+    fn parse_drop(&mut self) -> Result<Statement, ParserError> {
         let object_type = match self.parse_one_of_keywords(&[
             "DATABASE", "SCHEMA", "TABLE", "VIEW", "SOURCE", "SINK", "INDEX",
         ]) {
@@ -1524,7 +1529,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_table(&mut self) -> Result<Statement, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
@@ -1595,7 +1600,7 @@ impl Parser {
         Ok((columns, constraints))
     }
 
-    pub fn parse_column_option_def(&mut self) -> Result<ColumnOptionDef, ParserError> {
+    fn parse_column_option_def(&mut self) -> Result<ColumnOptionDef, ParserError> {
         let name = if self.parse_keyword("CONSTRAINT") {
             Some(self.parse_identifier()?)
         } else {
@@ -1631,9 +1636,7 @@ impl Parser {
         Ok(ColumnOptionDef { name, option })
     }
 
-    pub fn parse_optional_table_constraint(
-        &mut self,
-    ) -> Result<Option<TableConstraint>, ParserError> {
+    fn parse_optional_table_constraint(&mut self) -> Result<Option<TableConstraint>, ParserError> {
         let name = if self.parse_keyword("CONSTRAINT") {
             Some(self.parse_identifier()?)
         } else {
@@ -1686,7 +1689,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_with_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_with_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
         if self.parse_keyword("WITH") {
             self.expect_token(&Token::LParen)?;
             let options = self.parse_comma_separated(Parser::parse_sql_option)?;
@@ -1697,14 +1700,14 @@ impl Parser {
         }
     }
 
-    pub fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         let value = self.parse_value()?;
         Ok(SqlOption { name, value })
     }
 
-    pub fn parse_alter(&mut self) -> Result<Statement, ParserError> {
+    fn parse_alter(&mut self) -> Result<Statement, ParserError> {
         self.expect_keyword("TABLE")?;
         let _ = self.parse_keyword("ONLY");
         let table_name = self.parse_object_name()?;
@@ -1732,7 +1735,7 @@ impl Parser {
     }
 
     /// Parse a copy statement
-    pub fn parse_copy(&mut self) -> Result<Statement, ParserError> {
+    fn parse_copy(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
         self.expect_keywords(&["FROM", "STDIN"])?;
@@ -1836,7 +1839,7 @@ impl Parser {
         Ok(Expr::List(exprs))
     }
 
-    pub fn parse_number_value(&mut self) -> Result<Value, ParserError> {
+    fn parse_number_value(&mut self) -> Result<Value, ParserError> {
         match self.parse_value()? {
             v @ Value::Number(_) => Ok(v),
             _ => {
@@ -1847,7 +1850,7 @@ impl Parser {
     }
 
     /// Parse an unsigned literal integer/long
-    pub fn parse_literal_uint(&mut self) -> Result<u64, ParserError> {
+    fn parse_literal_uint(&mut self) -> Result<u64, ParserError> {
         match self.next_token() {
             Some(Token::Number(s)) => s.parse::<u64>().map_err(|e| {
                 self.error(
@@ -1860,7 +1863,7 @@ impl Parser {
     }
 
     /// Parse a literal string
-    pub fn parse_literal_string(&mut self) -> Result<String, ParserError> {
+    fn parse_literal_string(&mut self) -> Result<String, ParserError> {
         match self.next_token() {
             Some(Token::SingleQuotedString(ref s)) => Ok(s.clone()),
             other => self.expected(self.peek_prev_range(), "literal string", other),
@@ -1868,7 +1871,7 @@ impl Parser {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    pub fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
+    fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
         let mut data_type = match self.next_token() {
             Some(Token::Word(k)) => match k.keyword.as_ref() {
                 "BOOL" | "BOOLEAN" => DataType::Boolean,
@@ -1949,7 +1952,7 @@ impl Parser {
     /// Parse `AS identifier` (or simply `identifier` if it's not a reserved keyword)
     /// Some examples with aliases: `SELECT 1 foo`, `SELECT COUNT(*) AS cnt`,
     /// `SELECT ... FROM t1 foo, t2 bar`, `SELECT ... FROM (...) AS bar`
-    pub fn parse_optional_alias(
+    fn parse_optional_alias(
         &mut self,
         reserved_kwds: &[&str],
     ) -> Result<Option<Ident>, ParserError> {
@@ -1983,7 +1986,7 @@ impl Parser {
     /// like in `... FROM generate_series(1, 10) AS t (col)`. In this case
     /// the alias is allowed to optionally name the columns in the table, in
     /// addition to the table itself.
-    pub fn parse_optional_table_alias(
+    fn parse_optional_table_alias(
         &mut self,
         reserved_kwds: &[&str],
     ) -> Result<Option<TableAlias>, ParserError> {
@@ -1998,7 +2001,7 @@ impl Parser {
 
     /// Parse a possibly qualified, possibly quoted identifier, e.g.
     /// `foo` or `myschema."table"`
-    pub fn parse_object_name(&mut self) -> Result<ObjectName, ParserError> {
+    fn parse_object_name(&mut self) -> Result<ObjectName, ParserError> {
         let mut idents = vec![];
         loop {
             idents.push(self.parse_identifier()?);
@@ -2010,7 +2013,7 @@ impl Parser {
     }
 
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
-    pub fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
+    fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
         match self.next_token() {
             Some(Token::Word(w)) => Ok(w.to_ident()),
             unexpected => self.expected(self.peek_prev_range(), "identifier", unexpected),
@@ -2018,7 +2021,7 @@ impl Parser {
     }
 
     /// Parse a parenthesized comma-separated list of unqualified, possibly quoted identifiers
-    pub fn parse_parenthesized_column_list(
+    fn parse_parenthesized_column_list(
         &mut self,
         optional: IsOptional,
     ) -> Result<Vec<Ident>, ParserError> {
@@ -2037,7 +2040,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_optional_precision(&mut self) -> Result<Option<u64>, ParserError> {
+    fn parse_optional_precision(&mut self) -> Result<Option<u64>, ParserError> {
         if self.consume_token(&Token::LParen) {
             let n = self.parse_literal_uint()?;
             self.expect_token(&Token::RParen)?;
@@ -2047,7 +2050,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_optional_precision_scale(
+    fn parse_optional_precision_scale(
         &mut self,
     ) -> Result<(Option<u64>, Option<u64>), ParserError> {
         if self.consume_token(&Token::LParen) {
@@ -2064,7 +2067,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_delete(&mut self) -> Result<Statement, ParserError> {
+    fn parse_delete(&mut self) -> Result<Statement, ParserError> {
         self.expect_keyword("FROM")?;
         let table_name = self.parse_object_name()?;
         let selection = if self.parse_keyword("WHERE") {
@@ -2083,7 +2086,7 @@ impl Parser {
     /// preceeded with some `WITH` CTE declarations and optionally followed
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
     /// expect the initial keyword to be already consumed
-    pub fn parse_query(&mut self) -> Result<Query, ParserError> {
+    fn parse_query(&mut self) -> Result<Query, ParserError> {
         let ctes = if self.parse_keyword("WITH") {
             // TODO: optional RECURSIVE
             self.parse_comma_separated(Parser::parse_cte)?
@@ -2218,7 +2221,7 @@ impl Parser {
 
     /// Parse a restricted `SELECT` statement (no CTEs / `UNION` / `ORDER BY`),
     /// assuming the initial `SELECT` was already consumed
-    pub fn parse_select(&mut self) -> Result<Select, ParserError> {
+    fn parse_select(&mut self) -> Result<Select, ParserError> {
         let all = self.parse_keyword("ALL");
         let all_range = self.peek_prev_range();
         let distinct = self.parse_keyword("DISTINCT");
@@ -2271,7 +2274,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_set(&mut self) -> Result<Statement, ParserError> {
+    fn parse_set(&mut self) -> Result<Statement, ParserError> {
         let modifier = self.parse_one_of_keywords(&["SESSION", "LOCAL"]);
         let mut variable = self.parse_identifier()?;
         let mut normal = self.consume_token(&Token::Eq) || self.parse_keyword("TO");
@@ -2301,7 +2304,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_show(&mut self) -> Result<Statement, ParserError> {
+    fn parse_show(&mut self) -> Result<Statement, ParserError> {
         if self.parse_keyword("DATABASES") {
             return Ok(Statement::ShowDatabases {
                 filter: self.parse_show_statement_filter()?,
@@ -2437,7 +2440,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_table_and_joins(&mut self) -> Result<TableWithJoins, ParserError> {
+    fn parse_table_and_joins(&mut self) -> Result<TableWithJoins, ParserError> {
         let relation = self.parse_table_factor()?;
 
         // Note that for keywords to be properly handled here, they need to be
@@ -2505,7 +2508,7 @@ impl Parser {
     }
 
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
-    pub fn parse_table_factor(&mut self) -> Result<TableFactor, ParserError> {
+    fn parse_table_factor(&mut self) -> Result<TableFactor, ParserError> {
         if self.parse_keyword("LATERAL") {
             // LATERAL must always be followed by a subquery.
             if !self.consume_token(&Token::LParen) {
@@ -2594,7 +2597,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_derived_table_factor(
+    fn parse_derived_table_factor(
         &mut self,
         lateral: IsLateral,
     ) -> Result<TableFactor, ParserError> {
@@ -2630,7 +2633,7 @@ impl Parser {
     }
 
     /// Parse an INSERT statement
-    pub fn parse_insert(&mut self) -> Result<Statement, ParserError> {
+    fn parse_insert(&mut self) -> Result<Statement, ParserError> {
         self.expect_keyword("INTO")?;
         let table_name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
@@ -2642,7 +2645,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_update(&mut self) -> Result<Statement, ParserError> {
+    fn parse_update(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parse_object_name()?;
         self.expect_keyword("SET")?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
@@ -2659,14 +2662,14 @@ impl Parser {
     }
 
     /// Parse a `var = expr` assignment, used in an UPDATE statement
-    pub fn parse_assignment(&mut self) -> Result<Assignment, ParserError> {
+    fn parse_assignment(&mut self) -> Result<Assignment, ParserError> {
         let id = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         let value = self.parse_expr()?;
         Ok(Assignment { id, value })
     }
 
-    pub fn parse_optional_args(&mut self) -> Result<FunctionArgs, ParserError> {
+    fn parse_optional_args(&mut self) -> Result<FunctionArgs, ParserError> {
         if self.consume_token(&Token::Mult) {
             self.expect_token(&Token::RParen)?;
             Ok(FunctionArgs::Star)
@@ -2680,7 +2683,7 @@ impl Parser {
     }
 
     /// Parse a comma-delimited list of projections after SELECT
-    pub fn parse_select_item(&mut self) -> Result<SelectItem, ParserError> {
+    fn parse_select_item(&mut self) -> Result<SelectItem, ParserError> {
         if self.consume_token(&Token::Mult) {
             return Ok(SelectItem::Wildcard);
         }
@@ -2698,7 +2701,7 @@ impl Parser {
     }
 
     /// Parse an expression, optionally followed by ASC or DESC (used in ORDER BY)
-    pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, ParserError> {
+    fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, ParserError> {
         let expr = self.parse_expr()?;
 
         let asc = if self.parse_keyword("ASC") {
@@ -2712,7 +2715,7 @@ impl Parser {
     }
 
     /// Parse a LIMIT clause
-    pub fn parse_limit(&mut self) -> Result<Option<Expr>, ParserError> {
+    fn parse_limit(&mut self) -> Result<Option<Expr>, ParserError> {
         if self.parse_keyword("ALL") {
             Ok(None)
         } else {
@@ -2721,14 +2724,14 @@ impl Parser {
     }
 
     /// Parse an OFFSET clause
-    pub fn parse_offset(&mut self) -> Result<Expr, ParserError> {
+    fn parse_offset(&mut self) -> Result<Expr, ParserError> {
         let value = Expr::Value(self.parse_number_value()?);
         let _ = self.parse_one_of_keywords(&["ROW", "ROWS"]);
         Ok(value)
     }
 
     /// Parse a FETCH clause
-    pub fn parse_fetch(&mut self) -> Result<Fetch, ParserError> {
+    fn parse_fetch(&mut self) -> Result<Fetch, ParserError> {
         self.expect_one_of_keywords(&["FIRST", "NEXT"])?;
         let (quantity, percent) = if self.parse_one_of_keywords(&["ROW", "ROWS"]).is_some() {
             (None, false)
@@ -2756,7 +2759,7 @@ impl Parser {
         })
     }
 
-    pub fn parse_values(&mut self) -> Result<Values, ParserError> {
+    fn parse_values(&mut self) -> Result<Values, ParserError> {
         let values = self.parse_comma_separated(|parser| {
             parser.expect_token(&Token::LParen)?;
             let exprs = parser.parse_comma_separated(Parser::parse_expr)?;
@@ -2766,21 +2769,21 @@ impl Parser {
         Ok(Values(values))
     }
 
-    pub fn parse_start_transaction(&mut self) -> Result<Statement, ParserError> {
+    fn parse_start_transaction(&mut self) -> Result<Statement, ParserError> {
         self.expect_keyword("TRANSACTION")?;
         Ok(Statement::StartTransaction {
             modes: self.parse_transaction_modes()?,
         })
     }
 
-    pub fn parse_begin(&mut self) -> Result<Statement, ParserError> {
+    fn parse_begin(&mut self) -> Result<Statement, ParserError> {
         let _ = self.parse_one_of_keywords(&["TRANSACTION", "WORK"]);
         Ok(Statement::StartTransaction {
             modes: self.parse_transaction_modes()?,
         })
     }
 
-    pub fn parse_transaction_modes(&mut self) -> Result<Vec<TransactionMode>, ParserError> {
+    fn parse_transaction_modes(&mut self) -> Result<Vec<TransactionMode>, ParserError> {
         let mut modes = vec![];
         let mut required = false;
         loop {
@@ -2816,19 +2819,19 @@ impl Parser {
         Ok(modes)
     }
 
-    pub fn parse_commit(&mut self) -> Result<Statement, ParserError> {
+    fn parse_commit(&mut self) -> Result<Statement, ParserError> {
         Ok(Statement::Commit {
             chain: self.parse_commit_rollback_chain()?,
         })
     }
 
-    pub fn parse_rollback(&mut self) -> Result<Statement, ParserError> {
+    fn parse_rollback(&mut self) -> Result<Statement, ParserError> {
         Ok(Statement::Rollback {
             chain: self.parse_commit_rollback_chain()?,
         })
     }
 
-    pub fn parse_commit_rollback_chain(&mut self) -> Result<bool, ParserError> {
+    fn parse_commit_rollback_chain(&mut self) -> Result<bool, ParserError> {
         let _ = self.parse_one_of_keywords(&["TRANSACTION", "WORK"]);
         if self.parse_keyword("AND") {
             let chain = !self.parse_keyword("NO");
@@ -2839,7 +2842,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_tail(&mut self) -> Result<Statement, ParserError> {
+    fn parse_tail(&mut self) -> Result<Statement, ParserError> {
         let name = self.parse_object_name()?;
         let with_snapshot = if self.parse_keyword("WITH") {
             self.expect_keyword("SNAPSHOT")?;
@@ -2862,7 +2865,7 @@ impl Parser {
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
-    pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
+    fn parse_explain(&mut self) -> Result<Statement, ParserError> {
         // (TYPED)?
         let mut options = ExplainOptions { typed: false };
         if self.parse_keyword("TYPED") {
@@ -2908,7 +2911,7 @@ impl Parser {
 }
 
 impl Word {
-    pub fn to_ident(&self) -> Ident {
+    fn to_ident(&self) -> Ident {
         match self.quote_style {
             Some(_) => Ident::new(&self.value),
             None => Ident::new_normalized(&self.value),

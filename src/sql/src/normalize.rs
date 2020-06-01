@@ -249,30 +249,31 @@ pub fn create_statement(
 
 #[cfg(test)]
 mod tests {
-    use sql_parser::parser::Parser;
+    use std::error::Error;
 
     use super::*;
     use crate::catalog::DummyCatalog;
     use crate::{PlanContext, Session};
 
     #[test]
-    fn normalized_create() {
+    fn normalized_create() -> Result<(), Box<dyn Error>> {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
             session: &Session::dummy(),
             catalog: &DummyCatalog,
         };
 
-        let parsed = Parser::parse_sql("create materialized view foo as select 1 as bar".into())
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
+        let parsed = sql_parser::parser::parse_statements(
+            "create materialized view foo as select 1 as bar".into(),
+        )?
+        .into_element();
 
         // Ensure that all identifiers are quoted.
         assert_eq!(
             r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
-            create_statement(scx, parsed).unwrap()
+            create_statement(scx, parsed)?,
         );
+
+        Ok(())
     }
 }

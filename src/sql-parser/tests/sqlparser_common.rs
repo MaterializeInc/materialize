@@ -18,16 +18,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Test SQL syntax.
-
-use std::fmt;
+use datadriven::walk;
 
 use sql_parser::ast::display::AstDisplay;
-use sql_parser::ast::visit_mut::VisitMut;
-use sql_parser::ast::*;
-use sql_parser::parser::*;
-
-use datadriven::walk;
+use sql_parser::ast::visit_mut::{self, VisitMut};
+use sql_parser::ast::{Expr, Ident};
+use sql_parser::parser;
 
 fn trim_one<'a>(s: &'a str) -> &'a str {
     if s.ends_with('\n') {
@@ -37,27 +33,14 @@ fn trim_one<'a>(s: &'a str) -> &'a str {
     }
 }
 
-pub fn run_parser_method<F, T>(sql: &str, f: F) -> T
-where
-    F: Fn(&mut Parser) -> T,
-    T: fmt::Debug + PartialEq,
-{
-    let mut tokenizer = sql_parser::tokenizer::Tokenizer::new(sql);
-    let tokens = tokenizer.tokenize().unwrap();
-    f(&mut Parser::new(sql.to_string(), tokens))
-}
-
-fn parse_sql_statements(sql: &str) -> Result<Vec<Statement>, ParserError> {
-    Parser::parse_sql(sql.to_string())
-}
-
 #[test]
 fn datadriven() {
     walk("tests/testdata", |f| {
         f.run(|test_case| -> String {
             match test_case.directive.as_str() {
                 "parse-statement" => {
-                    match parse_sql_statements(trim_one(&test_case.input)) {
+                    let sql = trim_one(&test_case.input).to_owned();
+                    match parser::parse_statements(sql) {
                         Ok(s) => {
                             if s.len() != 1 {
                                 "expected exactly one statement".to_string()
@@ -74,7 +57,8 @@ fn datadriven() {
                     }
                 }
                 "parse-scalar" => {
-                    match run_parser_method(&test_case.input.trim(), Parser::parse_expr) {
+                    let sql = test_case.input.trim().to_owned();
+                    match parser::parse_expr(sql) {
                         Ok(s) => {
                             if test_case.args.get("roundtrip").is_some() {
                                 format!("{}\n", s.to_string())
@@ -124,24 +108,12 @@ fn op_precedence() {
         ("NOT a NOT LIKE b", "NOT (a NOT LIKE b)"),
         ("NOT a NOT IN ('a')", "NOT (a NOT IN ('a'))"),
     ] {
-        let left = Parser::parse_sql(format!("SELECT {}", actual)).unwrap();
-        let mut right = Parser::parse_sql(format!("SELECT {}", expected)).unwrap();
+        let left = parser::parse_statements(format!("SELECT {}", actual)).unwrap();
+        let mut right = parser::parse_statements(format!("SELECT {}", expected)).unwrap();
         RemoveParens.visit_statement(&mut right[0]);
 
         assert_eq!(left, right);
     }
-}
-
-#[test]
-fn parse_invalid_table_name() {
-    let ast = run_parser_method("db.public..customer", Parser::parse_object_name);
-    assert!(ast.is_err());
-}
-
-#[test]
-fn parse_no_table_name() {
-    let ast = run_parser_method("", Parser::parse_object_name);
-    assert!(ast.is_err());
 }
 
 #[test]

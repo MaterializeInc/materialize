@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
 use repr::{RelationDesc, Row, ScalarType};
-use sql_parser::parser::Parser as SqlParser;
+use sql_parser::parser;
 
 pub use crate::expr::RelationExpr;
 pub use catalog::PlanCatalog;
@@ -200,7 +200,7 @@ impl Default for PlanContext {
 
 /// Parses a raw SQL string into a [`Statement`].
 pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
-    Ok(SqlParser::parse_sql(sql)?)
+    Ok(parser::parse_statements(sql)?)
 }
 
 /// Produces a [`Plan`] from the purified statement `stmt`.
