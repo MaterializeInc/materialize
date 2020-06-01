@@ -90,18 +90,19 @@ impl MzClient {
         sink_name: &str,
         schema_registry_url: &str,
     ) -> Result<String> {
-        let global_id_query = format!(
-            "SELECT global_id FROM mz_catalog_names WHERE name = 'materialize.public.{}'",
+        let topic_name_query = format!(
+            "SELECT topic FROM mz_kafka_sinks NATURAL JOIN mz_catalog_names \
+             WHERE name = 'materialize.public.{}'",
             sink_name
         );
 
-        log::debug!("querying sinks=> {}", global_id_query);
-        let rows = self.0.query(&*global_id_query, &[]).await?;
+        log::debug!("querying sinks=> {}", topic_name_query);
+        let rows = self.0.query(&*topic_name_query, &[]).await?;
         if rows.len() > 1 {
             return Err(format!("expected single row response, got {} rows", rows.len()).into());
         }
 
-        let old_global_id: Option<String> = if rows.len() == 1 {
+        let old_topic_name: Option<String> = if rows.len() == 1 {
             Some(rows[0].get(0))
         } else {
             None
@@ -121,24 +122,17 @@ impl MzClient {
 
         // Get the new global_id for the recently created sink
         retry::retry_for(Duration::from_secs(10), |_| async {
-            log::debug!("getting new sink global_id=> {}", global_id_query);
-            let rows = self.0.query(&*global_id_query, &[]).await?;
-
-            if rows.len() != 1 {
-                log::debug!("received {} rows, expected only one", rows.len());
-                return Err("Expected exactly one row in response".into());
-            }
-
-            let global_id: String = rows[0].get(0);
-
-            if let Some(old_global_id) = old_global_id.as_ref() {
-                if global_id == *old_global_id {
-                    return Err("Global id not updated yet".into());
+            log::debug!("getting sink topic => {}", topic_name_query);
+            let row = self.0.query_one(&*topic_name_query, &[]).await?;
+            let topic_name: String = row.get(0);
+            if let Some(old_topic_name) = old_topic_name.as_ref() {
+                if topic_name == *old_topic_name {
+                    return Err("topic name not updated yet".into());
                 }
             }
 
-            log::debug!("received a global id {:?}", global_id);
-            Ok(global_id)
+            log::debug!("received a topic name {:?}", topic_name);
+            Ok(topic_name)
         })
         .await
     }
@@ -188,21 +182,8 @@ impl MzClient {
         kafka_url: &str,
         schema_registry_url: &str,
         source_name: &str,
-        global_id: String,
+        topic_name: &str,
     ) -> Result<()> {
-        let query = format!(
-            "SELECT topic FROM mz_kafka_sinks WHERE global_id = '{}'",
-            global_id
-        );
-
-        log::debug!("getting topic name to reingest sink=> {}", query);
-        let rows = self.0.query(&*query, &[]).await?;
-
-        if rows.len() != 1 {
-            return Err(format!("expected single row response, got {} rows", rows.len()).into());
-        }
-
-        let topic_name: String = rows[0].get(0);
         let query = format!("CREATE MATERIALIZED SOURCE {source_name} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic_name}' \
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}' ENVELOPE DEBEZIUM",
                     source_name = source_name,

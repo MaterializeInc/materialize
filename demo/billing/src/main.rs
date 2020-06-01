@@ -177,7 +177,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             exec_query!(client, "drop_index_billing_records");
         }
 
-        let sink_global_id = client
+        let sink_topic = client
             .create_kafka_sink(
                 &config.kafka_url,
                 config::KAFKA_SINK_TOPIC_NAME,
@@ -191,7 +191,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                     &config.kafka_url,
                     &config.schema_registry_url,
                     config::REINGESTED_SINK_SOURCE_NAME,
-                    sink_global_id,
+                    &sink_topic,
                 )
                 .await?;
             exec_query!(client, "check_sink");
