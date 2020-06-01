@@ -33,7 +33,7 @@ pdqselect = "0.1.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
-regex = "1.3.7"
+regex = "1.3.9"
 repr = { path = "../repr" }
 rusoto_core = "0.43.0-beta.1"
 rusoto_credential = "0.43.0"
