@@ -13,9 +13,6 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
-use bytes::Bytes;
-use rand::distributions::Alphanumeric;
-use rand::Rng;
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{
     CreateStreamInput, DeleteStreamInput, DescribeStreamInput, Kinesis, KinesisClient,
@@ -23,6 +20,7 @@ use rusoto_kinesis::{
 };
 
 use ore::retry;
+use util::generator;
 
 const DUMMY_PARTITION_KEY: &str = "dummy";
 const ACTIVE: &str = "ACTIVE";
@@ -76,8 +74,8 @@ pub async fn create_stream(
 pub async fn generate_and_put_records(
     kinesis_client: &KinesisClient,
     stream_name: &str,
-    total_records: i64,
-    records_per_second: i64,
+    total_records: u64,
+    records_per_second: u64,
 ) -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
     // For each string, round robin puts across all of the shards.
@@ -130,19 +128,14 @@ pub async fn put_records_one_second(
     kinesis_client: &KinesisClient,
     stream_name: &str,
     shard_starting_hash_key: &str,
-    records_per_second: i64,
-) -> Result<i64, anyhow::Error> {
+    records_per_second: u64,
+) -> Result<u64, anyhow::Error> {
     // Generate records.
     let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
-    for _i in 0..records_per_second {
+    for bytes in generator::bytes::generate_bytes(records_per_second).into_iter() {
         // todo: make the records more realistic json blobs
         records.push(PutRecordsRequestEntry {
-            data: Bytes::from(
-                rand::thread_rng()
-                    .sample_iter(&Alphanumeric)
-                    .take(30)
-                    .collect::<String>(),
-            ),
+            data: bytes,
             explicit_hash_key: Some(shard_starting_hash_key.to_owned()), // explicitly push to the current shard
             partition_key: DUMMY_PARTITION_KEY.to_owned(), // will be overridden by "explicit_hash_key"
         });
@@ -163,7 +156,7 @@ pub async fn put_records_one_second(
                 // todo: do something with failed counts
                 let put_records = output.records.len();
                 index += put_records;
-                put_record_count += output.records.len() as i64;
+                put_record_count += output.records.len() as u64;
             }
             Err(RusotoError::Service(PutRecordsError::KMSThrottling(e)))
             | Err(RusotoError::Service(PutRecordsError::ProvisionedThroughputExceeded(e))) => {

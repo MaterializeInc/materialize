@@ -2132,7 +2132,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aws-util",
- "bytes",
  "chrono",
  "env_logger",
  "futures",
@@ -2147,6 +2146,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "util",
 ]
 
 [[package]]
@@ -3865,7 +3865,9 @@ name = "util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
+ "rand",
  "rdkafka",
 ]
 

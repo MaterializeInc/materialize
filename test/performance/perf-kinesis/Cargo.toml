@@ -8,7 +8,6 @@ publish = false
 [dependencies]
 anyhow = "1.0.31"
 aws-util = { path = "../../../src/aws-util" }
-bytes = "0.5.4"
 chrono = "0.4"
 env_logger = "0.7.1"
 futures = "0.3.4"
@@ -23,3 +22,4 @@ structopt = "0.3.11"
 thiserror = "1.0.19"
 tokio = { version = "0.2.21", features = ["full"] }
 tokio-postgres = "0.5.1"
+util = { path = "../../util" }
