@@ -152,9 +152,9 @@ pub struct Args {
 
     /// The total number of records to create
     #[structopt(long, default_value = "150000000")]
-    pub total_records: i64,
+    pub total_records: u64,
 
     /// The number of records to put to the Kinesis stream per second
     #[structopt(long, default_value = "2000")]
-    pub records_per_second: i64,
+    pub records_per_second: u64,
 }

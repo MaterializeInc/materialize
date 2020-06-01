@@ -9,4 +9,5 @@
 
 //! `test_util` provides utilities for test programs and demos that run against Materialize.
 
+pub mod generator;
 pub mod kafka;

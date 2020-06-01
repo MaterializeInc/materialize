@@ -2132,7 +2132,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aws-util",
- "bytes",
  "chrono",
  "env_logger",
  "futures",
@@ -2144,6 +2143,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "structopt",
+ "test-util",
  "thiserror",
  "tokio",
  "tokio-postgres",
@@ -3390,7 +3390,9 @@ name = "test-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
+ "rand",
  "rdkafka",
 ]
 
