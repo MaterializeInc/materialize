@@ -176,6 +176,11 @@ impl JsonbRef<'_> {
     }
 
     /// Serializes the JSON value into the given IO stream.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this `JsonbRef` was constructed with a [`Datum`] that is not
+    /// representable as JSON.
     pub fn to_writer<W>(&self, writer: W) -> Result<(), failure::Error>
     where
         W: io::Write,
@@ -185,6 +190,11 @@ impl JsonbRef<'_> {
     }
 
     /// Constructs an owned [`serde_json::Value`] from this `JsonbRef`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this `JsonbRef` was constructed with a [`Datum`] that is not
+    /// representable as JSON.
     pub fn to_serde_json(&self) -> serde_json::Value {
         serde_json::to_value(&JsonbDatum(self.datum))
             .expect("conversion to serde_json::Value known to be valid")
