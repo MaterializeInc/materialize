@@ -18,6 +18,7 @@ use encoding::DecoderTrap;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
+use ore::result::ResultExt;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::jsonb::JsonbRef;
 use repr::regex::Regex;
@@ -269,93 +270,85 @@ fn cast_decimal_to_string<'a>(a: Datum<'a>, scale: u8, temp_storage: &'a RowAren
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_string_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_bool(a.unwrap_str()) {
-        Ok(true) => Datum::True,
-        Ok(false) => Datum::False,
-        Err(_) => Datum::Null,
+fn cast_string_to_bool<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    match strconv::parse_bool(a.unwrap_str())? {
+        true => Ok(Datum::True),
+        false => Ok(Datum::False),
     }
 }
 
-fn cast_string_to_bytes<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match strconv::parse_bytes(a.unwrap_str()) {
-        Ok(bytes) => Datum::Bytes(temp_storage.push_bytes(bytes)),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_bytes<'a>(
+    a: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let bytes = strconv::parse_bytes(a.unwrap_str())?;
+    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
-fn cast_string_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_int32(a.unwrap_str()) {
-        Ok(n) => Datum::Int32(n),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_int32(a.unwrap_str())
+        .map(Datum::Int32)
+        .err_into()
 }
 
-fn cast_string_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_int64(a.unwrap_str()) {
-        Ok(n) => Datum::Int64(n),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_int64(a.unwrap_str())
+        .map(Datum::Int64)
+        .err_into()
 }
 
-fn cast_string_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_float32(a.unwrap_str()) {
-        Ok(n) => Datum::Float32(n.into()),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_float32(a.unwrap_str())
+        .map(|n| Datum::Float32(n.into()))
+        .err_into()
 }
 
-fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_float64(a.unwrap_str()) {
-        Ok(n) => Datum::Float64(n.into()),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_float64(a.unwrap_str())
+        .map(|n| Datum::Float64(n.into()))
+        .err_into()
 }
 
-fn cast_string_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
-    match strconv::parse_decimal(a.unwrap_str()) {
-        Ok(d) => Datum::from(match d.scale().cmp(&scale) {
-            Ordering::Less => d.significand() * 10_i128.pow(u32::from(scale - d.scale())),
-            Ordering::Equal => d.significand(),
-            Ordering::Greater => d.significand() / 10_i128.pow(u32::from(d.scale() - scale)),
-        }),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_decimal(a.unwrap_str())
+        .map(|d| {
+            Datum::from(match d.scale().cmp(&scale) {
+                Ordering::Less => d.significand() * 10_i128.pow(u32::from(scale - d.scale())),
+                Ordering::Equal => d.significand(),
+                Ordering::Greater => d.significand() / 10_i128.pow(u32::from(d.scale() - scale)),
+            })
+        })
+        .err_into()
 }
 
-fn cast_string_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_date(a.unwrap_str()) {
-        Ok(d) => Datum::Date(d),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_date(a.unwrap_str())
+        .map(Datum::Date)
+        .err_into()
 }
 
-fn cast_string_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_time(a.unwrap_str()) {
-        Ok(t) => Datum::Time(t),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_time<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_time(a.unwrap_str())
+        .map(Datum::Time)
+        .err_into()
 }
 
-fn cast_string_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_timestamp(a.unwrap_str()) {
-        Ok(ts) => Datum::Timestamp(ts),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_timestamp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_timestamp(a.unwrap_str())
+        .map(Datum::Timestamp)
+        .err_into()
 }
 
-fn cast_string_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_timestamptz(a.unwrap_str()) {
-        Ok(ts) => Datum::TimestampTz(ts),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_timestamptz<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_timestamptz(a.unwrap_str())
+        .map(Datum::TimestampTz)
+        .err_into()
 }
 
-fn cast_string_to_interval<'a>(a: Datum<'a>) -> Datum<'a> {
-    match strconv::parse_interval(a.unwrap_str()) {
-        Ok(iv) => Datum::Interval(iv),
-        Err(_) => Datum::Null,
-    }
+fn cast_string_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    strconv::parse_interval(a.unwrap_str())
+        .map(Datum::Interval)
+        .err_into()
 }
 
 fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -2445,18 +2438,18 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => Ok(cast_decimal_to_int64(a)),
             UnaryFunc::CastSignificandToFloat32 => Ok(cast_significand_to_float32(a)),
             UnaryFunc::CastSignificandToFloat64 => Ok(cast_significand_to_float64(a)),
-            UnaryFunc::CastStringToBool => Ok(cast_string_to_bool(a)),
-            UnaryFunc::CastStringToBytes => Ok(cast_string_to_bytes(a, temp_storage)),
-            UnaryFunc::CastStringToInt32 => Ok(cast_string_to_int32(a)),
-            UnaryFunc::CastStringToInt64 => Ok(cast_string_to_int64(a)),
-            UnaryFunc::CastStringToFloat32 => Ok(cast_string_to_float32(a)),
-            UnaryFunc::CastStringToFloat64 => Ok(cast_string_to_float64(a)),
-            UnaryFunc::CastStringToDecimal(scale) => Ok(cast_string_to_decimal(a, *scale)),
-            UnaryFunc::CastStringToDate => Ok(cast_string_to_date(a)),
-            UnaryFunc::CastStringToTime => Ok(cast_string_to_time(a)),
-            UnaryFunc::CastStringToTimestamp => Ok(cast_string_to_timestamp(a)),
-            UnaryFunc::CastStringToTimestampTz => Ok(cast_string_to_timestamptz(a)),
-            UnaryFunc::CastStringToInterval => Ok(cast_string_to_interval(a)),
+            UnaryFunc::CastStringToBool => cast_string_to_bool(a),
+            UnaryFunc::CastStringToBytes => cast_string_to_bytes(a, temp_storage),
+            UnaryFunc::CastStringToInt32 => cast_string_to_int32(a),
+            UnaryFunc::CastStringToInt64 => cast_string_to_int64(a),
+            UnaryFunc::CastStringToFloat32 => cast_string_to_float32(a),
+            UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
+            UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
+            UnaryFunc::CastStringToDate => cast_string_to_date(a),
+            UnaryFunc::CastStringToTime => cast_string_to_time(a),
+            UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
+            UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
+            UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
             UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
             UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
             UnaryFunc::CastDateToString => Ok(cast_date_to_string(a, temp_storage)),

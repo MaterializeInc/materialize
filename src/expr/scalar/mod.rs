@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::mem;
 
 use repr::regex::Regex;
+use repr::strconv::ParseError;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -509,9 +510,40 @@ pub enum EvalError {
     },
     UnknownUnits(String),
     UnterminatedLikeEscapeSequence,
+    Parse(ParseError),
+}
+
+impl std::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            EvalError::DivisionByZero => f.write_str("division by zero"),
+            EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
+            EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
+            EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
+            EvalError::InvalidByteSequence {
+                byte_sequence,
+                encoding_name,
+            } => write!(
+                f,
+                "invalid byte sequence '{}' for encoding '{}'",
+                byte_sequence, encoding_name
+            ),
+            EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
+            EvalError::UnterminatedLikeEscapeSequence => {
+                f.write_str("unterminated escape sequence in LIKE")
+            }
+            EvalError::Parse(e) => e.fmt(f),
+        }
+    }
 }
 
 impl std::error::Error for EvalError {}
+
+impl From<ParseError> for EvalError {
+    fn from(e: ParseError) -> EvalError {
+        EvalError::Parse(e)
+    }
+}
 
 #[cfg(test)]
 mod tests {

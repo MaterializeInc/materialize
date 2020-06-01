@@ -67,21 +67,21 @@ SELECT INTERVAL '1-2 3' HOUR;
 1 year 2 months 03:00:00
 
 # Disallow components to be set twice.
-statement error Invalid INTERVAL '1 year 2 years': YEAR field set twice
+statement error invalid input syntax for interval: YEAR field set twice: "1 year 2 years"
 SELECT INTERVAL '1 year 2 years'
 
-statement error Invalid INTERVAL '1-2 3-4': YEAR or MONTH field set twice
+statement error invalid input syntax for interval: YEAR or MONTH field set twice: "1-2 3-4"
 SELECT INTERVAL '1-2 3-4'
 
-statement error Invalid INTERVAL '1-2 3 year': YEAR field set twice
+statement error invalid input syntax for interval: YEAR field set twice: "1-2 3 year"
 SELECT INTERVAL '1-2 3 year'
 
-statement error Invalid INTERVAL '1-2 3': MONTH field set twice
+statement error invalid input syntax for interval: MONTH field set twice: "1-2 3"
 SELECT INTERVAL '1-2 3' MONTH;
 
 # 5 would be parsed as second, but the H:M:S.NS
 # group was already set by 3:4/
-statement error Invalid INTERVAL '1-2 3:4 5': SECOND field set twice
+statement error invalid input syntax for interval: SECOND field set twice: "1-2 3:4 5"
 SELECT INTERVAL '1-2 3:4 5';
 
 # Treat trailing TimeUnit as terminating range.
@@ -142,7 +142,7 @@ SELECT INTERVAL '1:2:3.4 5-6 7' DAY;
 
 # Disambiguate component (YEAR), but disallow because
 # the group it's in has been closed.
-statement error Invalid INTERVAL '1:2:3.4 5-6 7': YEAR field set twice
+statement error invalid input syntax for interval: YEAR field set twice: "1:2:3.4 5-6 7"
 SELECT INTERVAL '1:2:3.4 5-6 7' YEAR;
 
 # Negative components
@@ -220,17 +220,17 @@ SELECT INTERVAL '0-0 0 0:0:0.0';
 00:00:00
 
 # Oversized components in SQL standard-style variables
-statement error Invalid INTERVAL '100-13': MONTH must be \(-12, 12\), got 13
+statement error invalid input syntax for interval: MONTH must be \(-12, 12\), got 13: "100-13"
 SELECT INTERVAL '100-13';
 
-statement error Invalid INTERVAL '100-11 366 250:61': MINUTE must be \(-59, 59\), got 61
+statement error invalid input syntax for interval: MINUTE must be \(-59, 59\), got 61: "100-11 366 250:61"
 SELECT INTERVAL '100-11 366 250:61';
 
-statement error Invalid INTERVAL '100-11 366 250:59:61': SECOND must be \(-60, 60\), got 61
+statement error invalid input syntax for interval: SECOND must be \(-60, 60\), got 61: "100-11 366 250:59:61"
 SELECT INTERVAL '100-11 366 250:59:61';
 
 # Invalid syntax
-statement error Invalid INTERVAL '1:2:3.4.5': Invalid syntax at offset 7: provided Dot but expected None
+statement error invalid input syntax for interval: Invalid syntax at offset 7: provided Dot but expected None: "1:2:3.4.5"
 SELECT INTERVAL '1:2:3.4.5';
 
 statement error
@@ -382,10 +382,10 @@ SELECT INTERVAL '1-2' HOUR;
 ----
 1 year 2 months
 
-statement error Invalid INTERVAL '1-2 hour': Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR'
+statement error invalid input syntax for interval: Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR': "1-2 hour"
 SELECT INTERVAL '1-2 hour';
 
-statement error Invalid INTERVAL '1-2hour': Invalid syntax at offset 3: provided TimeUnit\(Hour\) but expected None
+statement error invalid input syntax for interval: Invalid syntax at offset 3: provided TimeUnit\(Hour\) but expected None: "1-2hour"
 SELECT INTERVAL '1-2hour';
 
 # Use larger numbers.
@@ -422,11 +422,11 @@ SELECT INTERVAL '1-2 3:4 5 day';
 1 year 2 months 5 days 03:04:00
 
 # Mix style allowed, but cannot assigning to closed group.
-statement error Invalid INTERVAL '1-2 3:4 5 second': SECOND field set twice
+statement error invalid input syntax for interval: SECOND field set twice: "1-2 3:4 5 second"
 SELECT INTERVAL '1-2 3:4 5 second';
 
 # Commutativity means this is also not allowed.
-statement error Invalid INTERVAL '1-2 5 second 3:4': HOUR, MINUTE, SECOND field set twice
+statement error invalid input syntax for interval: HOUR, MINUTE, SECOND field set twice: "1-2 5 second 3:4"
 SELECT INTERVAL '1-2 5 second 3:4';
 
 # Fractional month in addition to other fields.
@@ -594,10 +594,10 @@ SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.9999999
 
 ## Overflows
 
-statement error INTERVAL '768614336404564651 year': Overflows maximum months; cannot exceed 9223372036854775807 months
+statement error Overflows maximum months; cannot exceed 9223372036854775807 months
 SELECT INTERVAL '768614336404564651 year';
 
-statement error INTERVAL '768614336404564650.7 year': Overflows maximum months; cannot exceed 9223372036854775807 months
+statement error Overflows maximum months; cannot exceed 9223372036854775807 months
 SELECT INTERVAL '768614336404564650.7 year';
 
 statement error Unable to parse value as a number at index 0: number too large to fit in target type
@@ -606,25 +606,25 @@ SELECT INTERVAL '9223372036854775808 months';
 statement error Unable to parse value as a number at index 0: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 months';
 
-statement error INTERVAL '106751991167300 days .1 month': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167300 days .1 month';
 
-statement error INTERVAL '106751991167301 days': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167301 days';
 
-statement error INTERVAL '106751991167300.9 days': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '106751991167300.9 days';
 
-statement error INTERVAL '9223372036854775807 seconds 1 hour': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775807 seconds 1 hour';
 
-statement error INTERVAL '9223372036854771807 seconds 1.9 hour': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854771807 seconds 1.9 hour';
 
-statement error INTERVAL '9223372036854775807 seconds 1 minute': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 
-statement error INTERVAL '9223372036854775707 seconds 1.9 minute': Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
+statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
 statement error Unable to parse value as a number at index 0: number too large to fit in target type

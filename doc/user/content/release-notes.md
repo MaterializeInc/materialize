@@ -46,6 +46,12 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+<span id="v0.3.1"></span>
+## 0.3.1 (Unreleased)
+
+- Produce runtime errors when casting from string to any other data type, rather
+  than producing `NULL` if the cast failed.
+
 <span id="v0.3.0"></span>
 ## 0.2.2 &rarr; 0.3.0
 

@@ -23,15 +23,16 @@
 //! string representations for the corresponding PostgreSQL type. Deviations
 //! should be considered a bug.
 
-use std::{f32, f64};
+use std::error::Error;
+use std::fmt;
 
 use chrono::offset::TimeZone;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use failure::{bail, format_err};
+use serde::{Deserialize, Serialize};
 
 use ore::fmt::FormatBuffer;
 
-use crate::datetime::{DateTimeField, ParsedDateTime};
+use crate::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::decimal::Decimal;
 use crate::jsonb::{Jsonb, JsonbRef};
 use crate::Interval;
@@ -47,11 +48,11 @@ pub enum Nestable {
 /// The accepted values are "true", "false", "yes", "no", "on", "off", "1", and
 /// "0", or any unambiguous prefix of one of those values. Leading or trailing
 /// whitespace is permissible.
-pub fn parse_bool(s: &str) -> Result<bool, failure::Error> {
+pub fn parse_bool(s: &str) -> Result<bool, ParseError> {
     match s.trim().to_lowercase().as_str() {
         "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(true),
         "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => Ok(false),
-        _ => bail!("unable to parse bool"),
+        _ => Err(ParseError::new("bool", s)),
     }
 }
 
@@ -82,8 +83,10 @@ where
 ///
 /// Valid values are whatever the [`FromStr`] implementation on `i32` accepts,
 /// plus leading and trailing whitespace.
-pub fn parse_int32(s: &str) -> Result<i32, failure::Error> {
-    Ok(s.trim().parse()?)
+pub fn parse_int32(s: &str) -> Result<i32, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::new("int4", s).with_details(e))
 }
 
 /// Writes an [`i32`] to `buf`.
@@ -96,8 +99,10 @@ where
 }
 
 /// Parses an `i64` from `s`.
-pub fn parse_int64(s: &str) -> Result<i64, failure::Error> {
-    Ok(s.trim().parse()?)
+pub fn parse_int64(s: &str) -> Result<i64, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::new("int8", s).with_details(e))
 }
 
 /// Writes an `i64` to `buf`.
@@ -110,13 +115,15 @@ where
 }
 
 /// Parses an `f32` from `s`.
-pub fn parse_float32(s: &str) -> Result<f32, failure::Error> {
-    Ok(match s.trim().to_lowercase().as_str() {
-        "inf" | "infinity" | "+inf" | "+infinity" => f32::INFINITY,
-        "-inf" | "-infinity" => f32::NEG_INFINITY,
-        "nan" => f32::NAN,
-        s => s.parse()?,
-    })
+pub fn parse_float32(s: &str) -> Result<f32, ParseError> {
+    match s.trim().to_lowercase().as_str() {
+        "inf" | "infinity" | "+inf" | "+infinity" => Ok(f32::INFINITY),
+        "-inf" | "-infinity" => Ok(f32::NEG_INFINITY),
+        "nan" => Ok(f32::NAN),
+        s => s
+            .parse()
+            .map_err(|e| ParseError::new("float4", s).with_details(e)),
+    }
 }
 
 /// Writes an `f32` to `buf`.
@@ -137,13 +144,15 @@ where
 }
 
 /// Parses an `f64` from `s`.
-pub fn parse_float64(s: &str) -> Result<f64, failure::Error> {
-    Ok(match s.trim().to_lowercase().as_str() {
-        "inf" | "infinity" | "+inf" | "+infinity" => f64::INFINITY,
-        "-inf" | "-infinity" => f64::NEG_INFINITY,
-        "nan" => f64::NAN,
-        s => s.parse()?,
-    })
+pub fn parse_float64(s: &str) -> Result<f64, ParseError> {
+    match s.trim().to_lowercase().as_str() {
+        "inf" | "infinity" | "+inf" | "+infinity" => Ok(f64::INFINITY),
+        "-inf" | "-infinity" => Ok(f64::NEG_INFINITY),
+        "nan" => Ok(f64::NAN),
+        s => s
+            .parse()
+            .map_err(|e| ParseError::new("float8", s).with_details(e)),
+    }
 }
 
 /// Writes an `f64` to `buf`.
@@ -181,9 +190,9 @@ where
 /// <time zone interval> ::=
 ///     <sign> <hours value> <colon> <minutes value>
 /// ```
-fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), failure::Error> {
+fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), String> {
     if s.is_empty() {
-        bail!("Timestamp string is empty!")
+        return Err("timestamp string is empty".into());
     }
 
     // PostgreSQL special date-time inputs
@@ -198,7 +207,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), failur
         ));
     }
 
-    let (ts_string, tz_string) = crate::datetime::split_timestamp_string(s);
+    let (ts_string, tz_string) = datetime::split_timestamp_string(s);
 
     let pdt = ParsedDateTime::build_parsed_datetime_timestamp(&ts_string)?;
     let d: NaiveDate = pdt.compute_date()?;
@@ -207,17 +216,17 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, i64), failur
     let offset = if tz_string.is_empty() {
         0
     } else {
-        crate::datetime::parse_timezone_offset_second(tz_string)?
+        datetime::parse_timezone_offset_second(tz_string)?
     };
 
     Ok((d, t, offset))
 }
 
 /// Parses a [`NaiveDate`] from `s`.
-pub fn parse_date(s: &str) -> Result<NaiveDate, failure::Error> {
+pub fn parse_date(s: &str) -> Result<NaiveDate, ParseError> {
     match parse_timestamp_string(s) {
         Ok((date, _, _)) => Ok(date),
-        Err(e) => bail!("Invalid DATE '{}': {}", s, e),
+        Err(e) => Err(ParseError::new("date", s).with_details(e)),
     }
 }
 
@@ -239,11 +248,10 @@ where
 ///     <hours value> <colon> <minutes value> <colon> <seconds integer value>
 ///     [ <period> [ <seconds fraction> ] ]
 /// ```
-pub fn parse_time(s: &str) -> Result<NaiveTime, failure::Error> {
-    match ParsedDateTime::build_parsed_datetime_time(&s) {
-        Ok(pdt) => pdt.compute_time(),
-        Err(e) => bail!("Invalid TIME '{}': {}", s, e),
-    }
+pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
+    ParsedDateTime::build_parsed_datetime_time(&s)
+        .and_then(|pdt| pdt.compute_time())
+        .map_err(|e| ParseError::new("time", s).with_details(e))
 }
 
 /// Writes a [`NaiveDateTime`] timestamp to `buf`.
@@ -259,10 +267,10 @@ where
 }
 
 /// Parses a `NaiveDateTime` from `s`.
-pub fn parse_timestamp(s: &str) -> Result<NaiveDateTime, failure::Error> {
+pub fn parse_timestamp(s: &str) -> Result<NaiveDateTime, ParseError> {
     match parse_timestamp_string(s) {
         Ok((date, time, _)) => Ok(date.and_time(time)),
-        Err(e) => bail!("Invalid TIMESTAMP '{}': {}", s, e),
+        Err(e) => Err(ParseError::new("timestamp", s).with_details(e)),
     }
 }
 
@@ -279,20 +287,16 @@ where
 }
 
 /// Parses a `DateTime<Utc>` from `s`.
-pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, failure::Error> {
-    let (date, time, offset) = match parse_timestamp_string(s) {
-        Ok((date, time, tz_string)) => (date, time, tz_string),
-        Err(e) => bail!("Invalid TIMESTAMPTZ '{}': {}", s, e),
-    };
-
-    let ts = date.and_time(time);
-
-    let dt_fixed_offset = FixedOffset::east(offset as i32)
-        .from_local_datetime(&ts)
-        .earliest()
-        .ok_or_else(|| format_err!("Invalid tz conversion"))?;
-
-    Ok(DateTime::<Utc>::from_utc(dt_fixed_offset.naive_utc(), Utc))
+pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
+    parse_timestamp_string(s)
+        .and_then(|(date, time, offset)| {
+            let offset = FixedOffset::east(offset as i32)
+                .from_local_datetime(&date.and_time(time))
+                .earliest()
+                .ok_or_else(|| "invalid timezone conversion".to_owned())?;
+            Ok(DateTime::<Utc>::from_utc(offset.naive_utc(), Utc))
+        })
+        .map_err(|e| ParseError::new("timestamptz", s).with_details(e))
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.
@@ -326,26 +330,17 @@ where
 ///   | <minutes value> [ <colon> <seconds value> ]
 ///   | <seconds value>
 /// ```
-pub fn parse_interval(s: &str) -> Result<Interval, failure::Error> {
+pub fn parse_interval(s: &str) -> Result<Interval, ParseError> {
     parse_interval_w_disambiguator(s, DateTimeField::Second)
 }
 
 /// Parse an interval string, using a specific sql_parser::ast::DateTimeField
 /// to identify ambiguous elements. For more information about this operation,
 /// see the doucmentation on ParsedDateTime::build_parsed_datetime_interval.
-pub fn parse_interval_w_disambiguator(
-    s: &str,
-    d: DateTimeField,
-) -> Result<Interval, failure::Error> {
-    let pdt = match ParsedDateTime::build_parsed_datetime_interval(&s, d) {
-        Ok(pdt) => pdt,
-        Err(e) => bail!("Invalid INTERVAL '{}': {}", s, e),
-    };
-
-    match pdt.compute_interval() {
-        Ok(i) => Ok(i),
-        Err(e) => bail!("Invalid INTERVAL '{}': {}", s, e),
-    }
+pub fn parse_interval_w_disambiguator(s: &str, d: DateTimeField) -> Result<Interval, ParseError> {
+    ParsedDateTime::build_parsed_datetime_interval(&s, d)
+        .and_then(|pdt| pdt.compute_interval())
+        .map_err(|e| ParseError::new("interval", s).with_details(e))
 }
 
 pub fn format_interval<F>(buf: &mut F, iv: Interval) -> Nestable
@@ -356,8 +351,10 @@ where
     Nestable::MayNeedEscaping
 }
 
-pub fn parse_decimal(s: &str) -> Result<Decimal, failure::Error> {
-    s.trim().parse()
+pub fn parse_decimal(s: &str) -> Result<Decimal, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::new("decimal", s).with_details(e))
 }
 
 pub fn format_decimal<F>(buf: &mut F, d: &Decimal) -> Nestable
@@ -376,38 +373,42 @@ where
     Nestable::MayNeedEscaping
 }
 
-pub fn parse_bytes(s: &str) -> Result<Vec<u8>, failure::Error> {
+pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     // If the input starts with "\x", then the remaining bytes are hex encoded
     // [0]. Otherwise the bytes use the traditional "escape" format. [1]
     //
     // [0]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.9
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
     if s.starts_with("\\x") {
-        Ok(hex::decode(&s[2..])?)
+        hex::decode(&s[2..]).map_err(|e| ParseError::new("bytea", s).with_details(e))
     } else {
-        parse_bytes_traditional(s.as_bytes())
+        parse_bytes_traditional(s)
     }
 }
 
-fn parse_bytes_traditional(buf: &[u8]) -> Result<Vec<u8>, failure::Error> {
+fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
     // Bytes are interpreted literally, save for the special escape sequences
     // "\\", which represents a single backslash, and "\NNN", where each N
     // is an octal digit, which represents the byte whose octal value is NNN.
     let mut out = Vec::new();
-    let mut bytes = buf.iter().fuse();
+    let mut bytes = s.as_bytes().iter().fuse();
     while let Some(&b) = bytes.next() {
         if b != b'\\' {
             out.push(b);
             continue;
         }
         match bytes.next() {
-            None => bail!("bytea input ends with escape character"),
+            None => {
+                return Err(ParseError::new("bytea", s).with_details("ends with escape character"))
+            }
             Some(b'\\') => out.push(b'\\'),
             b => match (b, bytes.next(), bytes.next()) {
                 (Some(d2 @ b'0'..=b'3'), Some(d1 @ b'0'..=b'7'), Some(d0 @ b'0'..=b'7')) => {
                     out.push(((d2 - b'0') << 6) + ((d1 - b'0') << 3) + (d0 - b'0'));
                 }
-                _ => bail!("invalid bytea escape sequence"),
+                _ => {
+                    return Err(ParseError::new("bytea", s).with_details("invalid escape sequence"))
+                }
             },
         }
     }
@@ -422,8 +423,10 @@ where
     Nestable::Yes
 }
 
-pub fn parse_jsonb(s: &str) -> Result<Jsonb, failure::Error> {
-    s.trim().parse()
+pub fn parse_jsonb(s: &str) -> Result<Jsonb, ParseError> {
+    s.trim()
+        .parse()
+        .map_err(|e| ParseError::new("jsonb", s).with_details(e))
 }
 
 pub fn format_jsonb<F>(buf: &mut F, jsonb: JsonbRef) -> Nestable
@@ -455,19 +458,26 @@ where
     }
 }
 
-pub fn parse_list<T>(
+pub fn parse_list<T, E>(
     s: &str,
     mut make_null: impl FnMut() -> T,
-    mut parse_elem: impl FnMut(&str) -> Result<T, failure::Error>,
-) -> Result<Vec<T>, failure::Error> {
+    mut parse_elem: impl FnMut(&str) -> Result<T, E>,
+) -> Result<Vec<T>, ParseError>
+where
+    E: fmt::Display,
+{
+    let err = |details| ParseError::new("list", s).with_details(details);
+
+    macro_rules! bail {
+        ($($arg:tt)*) => { return Err(err(format!($($arg)*))) };
+    }
+
     let mut elems = vec![];
     let mut chars = s.chars().peekable();
     match chars.next() {
         // start of list
         Some('{') => (),
-        Some(other) => {
-            bail!("expected '{{', found {}", other);
-        }
+        Some(other) => bail!("expected '{{', found {}", other),
         None => bail!("unexpected end of input"),
     }
     loop {
@@ -507,7 +517,8 @@ pub fn parse_list<T>(
                         None => bail!("unexpected end of input"),
                     }
                 }
-                elems.push(parse_elem(&elem_text)?);
+                let elem = parse_elem(&elem_text).map_err(|e| err(e.to_string()))?;
+                elems.push(elem);
             }
             // a nested list
             Some('{') => {
@@ -523,7 +534,8 @@ pub fn parse_list<T>(
                         None => bail!("unexpected end of input"),
                     }
                 }
-                elems.push(parse_elem(&elem_text)?);
+                let elem = parse_elem(&elem_text).map_err(|e| err(e.to_string()))?;
+                elems.push(elem);
             }
             // an unescaped elem
             Some(_) => {
@@ -544,7 +556,7 @@ pub fn parse_list<T>(
                 elems.push(if elem_text.trim() == "NULL" {
                     make_null()
                 } else {
-                    parse_elem(&elem_text)?
+                    parse_elem(&elem_text).map_err(|e| err(e.to_string()))?
                 });
             }
             None => bail!("unexpected end of input"),
@@ -668,3 +680,47 @@ where
         self.0
     }
 }
+
+/// An error while parsing input as a type.
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct ParseError {
+    type_name: String,
+    input: String,
+    details: Option<String>,
+}
+
+impl ParseError {
+    // To ensure that reversing the parameters causes a compile-time error, we
+    // require that `type_name` be a string literal, even though `ParseError`
+    // itself stores the type name as a `String`.
+    fn new<S>(type_name: &'static str, input: S) -> ParseError
+    where
+        S: Into<String>,
+    {
+        ParseError {
+            type_name: type_name.into(),
+            input: input.into(),
+            details: None,
+        }
+    }
+
+    fn with_details<D>(mut self, details: D) -> ParseError
+    where
+        D: fmt::Display,
+    {
+        self.details = Some(details.to_string());
+        self
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid input syntax for {}: ", self.type_name)?;
+        if let Some(details) = &self.details {
+            write!(f, "{}: ", details)?;
+        }
+        write!(f, "\"{}\"", self.input)
+    }
+}
+
+impl Error for ParseError {}

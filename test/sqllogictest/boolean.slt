@@ -45,12 +45,8 @@ tR                true
 tRuE              true
 TRUE              true
 
-# TODO(benesch): this should return an error, not null, when we support
-# runtime errors.
-query B
+query error invalid input syntax for bool: "blah"
 SELECT 'blah'::bool
-----
-NULL
 
 query error Cannot apply operator Not to non-boolean type Int32
 SELECT NOT 1
