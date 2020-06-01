@@ -28,7 +28,8 @@ use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
-use sql::{Session, Statement};
+use sql::ast::Statement;
+use sql::session::Session;
 
 use crate::codec::Codec;
 use crate::message::{
@@ -347,7 +348,7 @@ where
     }
 
     async fn query(&mut self, mut session: Session, sql: String) -> Result<State, comm::Error> {
-        let stmts = match sql::parse(sql) {
+        let stmts = match sql::parse::parse(sql) {
             Ok(stmts) => stmts,
             Err(err) => {
                 let session = match self
@@ -377,7 +378,7 @@ where
         sql: String,
     ) -> Result<State, comm::Error> {
         let (tx, rx) = futures::channel::oneshot::channel();
-        let stmts = match sql::parse(sql.clone()) {
+        let stmts = match sql::parse::parse(sql.clone()) {
             Ok(stmts) => stmts,
             Err(err) => {
                 return self

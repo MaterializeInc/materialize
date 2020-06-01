@@ -13,7 +13,8 @@ use std::pin::Pin;
 use derivative::Derivative;
 
 use dataflow_types::{PeekResponse, Update};
-use sql::{Session, Statement};
+use sql::ast::Statement;
+use sql::session::Session;
 
 /// The requests the client can make of a [`Coordinator`](crate::Coordinator).
 #[derive(Debug)]

@@ -20,11 +20,13 @@
 //!
 //! It's important to avoid trailing whitespace everywhere, because it plays havoc with SLT
 
-use crate::expr::{AggregateExpr, JoinKind, RelationExpr, ScalarExpr};
+use std::collections::{BTreeMap, HashMap};
+
 use expr::explain::{Bracketed, Indices, Separated};
 use expr::{Id, IdHumanizer, RowSetFinishing};
 use repr::{RelationType, ScalarType};
-use std::collections::{BTreeMap, HashMap};
+
+use crate::plan::expr::{AggregateExpr, JoinKind, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct Explanation<'a> {

@@ -23,10 +23,10 @@ use failure::bail;
 
 use repr::{Datum, Row, ScalarType};
 
+use crate::plan::Params;
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
-use crate::Params;
 
 const APPLICATION_NAME: ServerVar<&str> = ServerVar {
     name: unicase::Ascii::new("application_name"),
