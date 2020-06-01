@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use expr::GlobalId;
 use ore::cast::CastFrom;
-use sql::{DatabaseSpecifier, FullName};
+use sql::names::{DatabaseSpecifier, FullName};
 
 use crate::catalog::error::{Error, ErrorKind};
 

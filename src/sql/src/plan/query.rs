@@ -37,21 +37,22 @@ use sql_parser::ast::{
 };
 use uuid::Uuid;
 
-use ::expr::{Id, RowSetFinishing};
 use dataflow_types::Timestamp;
+use expr::{Id, RowSetFinishing};
 use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
 };
 
-use super::expr::{
+use crate::names::PartialName;
+use crate::plan::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, NullaryFunc,
     RelationExpr, ScalarExpr, TableFunc, UnaryFunc, VariadicFunc,
 };
-use super::scope::{Scope, ScopeItem, ScopeItemName};
-use super::statement::StatementContext;
-use super::{normalize, unsupported};
-use crate::names::PartialName;
+use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
+use crate::plan::statement::StatementContext;
+use crate::plan::transform;
+use crate::{normalize, unsupported};
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -66,7 +67,7 @@ pub fn plan_root_query(
     mut query: Query,
     lifetime: QueryLifetime,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
-    crate::transform::transform(&mut query);
+    transform::transform(&mut query);
     let qcx = QueryContext::root(scx, lifetime);
     let (expr, scope, finishing) = plan_query(&qcx, &query)?;
     let typ = qcx.relation_type(&expr);

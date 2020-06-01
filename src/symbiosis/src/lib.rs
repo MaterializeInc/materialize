@@ -38,9 +38,9 @@ use pgrepr::Jsonb;
 use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::catalog::Catalog;
-use sql::{
-    normalize, scalar_type_from_sql, FullName, MutationKind, Plan, PlanContext, StatementContext,
-};
+use sql::names::FullName;
+use sql::normalize;
+use sql::plan::{scalar_type_from_sql, MutationKind, Plan, PlanContext, StatementContext};
 
 pub struct Postgres {
     client: tokio_postgres::Client,

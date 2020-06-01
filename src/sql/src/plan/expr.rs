@@ -23,7 +23,7 @@ pub use expr::{
     AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc,
 };
 
-use crate::Params;
+use crate::plan::Params;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like expr::RelationExpr, except where otherwise noted below.
@@ -713,28 +713,32 @@ impl AggregateExpr {
 }
 
 pub mod decorrelation {
-
-    //! Module level documentation goes here.
-    //!
-    //! Decorrelation is the process of transforming a `sql::expr::RelationExpr` into a `expr::RelationExpr`,
-    //! importantly replacing instances of `ScalarExpr` that may contain subqueries (e.g. `SELECT` or `EXISTS`)
+    //! Decorrelation is the process of transforming a `sql::expr::RelationExpr`
+    //! into a `expr::RelationExpr`, importantly replacing instances of
+    //! `ScalarExpr` that may contain subqueries (e.g. `SELECT` or `EXISTS`)
     //! with scalar expressions that contain none of these.
     //!
-    //! Informally, a subquery should be viewed as a query that is executed in the context of some outer relation,
-    //! for each row of that relation. The subqueries often contain references to the columns of the outer relation.
+    //! Informally, a subquery should be viewed as a query that is executed in
+    //! the context of some outer relation, for each row of that relation. The
+    //! subqueries often contain references to the columns of the outer
+    //! relation.
     //!
-    //! The transformation we perform maintains an `outer` relation and then traverses the relation expression that
-    //! may contain references to those outer columns. As subqueries are discovered, the current relation expression
-    //! is recast as the outer expression until such a point as the scalar expression's evaluation can be determined
-    //! and appended to each row of the previously outer relation.
+    //! The transformation we perform maintains an `outer` relation and then
+    //! traverses the relation expression that may contain references to those
+    //! outer columns. As subqueries are discovered, the current relation
+    //! expression is recast as the outer expression until such a point as the
+    //! scalar expression's evaluation can be determined and appended to each
+    //! row of the previously outer relation.
     //!
-    //! It is important that the outer columns (the initial columns) act as keys for all nested computation. When
-    //! counts or other aggregations are performed, they should include not only the indicated keys but also all of
-    //! the outer columns.
+    //! It is important that the outer columns (the initial columns) act as keys
+    //! for all nested computation. When counts or other aggregations are
+    //! performed, they should include not only the indicated keys but also all
+    //! of the outer columns.
     //!
-    //! The decorrelation transformation is initialized with an empty outer relation, but it seems entirely appropriate
-    //! to decorrelate queries that contain "holes" from prepared statements, as if the query was a subquery against a
-    //! relation containing the assignments of values to those holes.
+    //! The decorrelation transformation is initialized with an empty outer
+    //! relation, but it seems entirely appropriate to decorrelate queries that
+    //! contain "holes" from prepared statements, as if the query was a subquery
+    //! against a relation containing the assignments of values to those holes.
 
     use std::collections::{BTreeSet, HashMap};
     use std::mem;
@@ -743,9 +747,11 @@ pub mod decorrelation {
     use repr::RelationType;
     use repr::*;
 
-    use crate::expr::RelationExpr;
-    use crate::expr::ScalarExpr;
-    use crate::expr::{AggregateExpr, BinaryFunc, ColumnMap, ColumnOrder, ColumnRef, JoinKind};
+    use crate::plan::expr::RelationExpr;
+    use crate::plan::expr::ScalarExpr;
+    use crate::plan::expr::{
+        AggregateExpr, BinaryFunc, ColumnMap, ColumnOrder, ColumnRef, JoinKind,
+    };
 
     impl RelationExpr {
         /// Rewrite `self` into a `expr::RelationExpr`.

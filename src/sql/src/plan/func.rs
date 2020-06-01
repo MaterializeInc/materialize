@@ -19,7 +19,7 @@ use sql_parser::ast::Expr;
 
 use super::expr::{BinaryFunc, ScalarExpr, UnaryFunc, VariadicFunc};
 use super::query::ExprContext;
-use super::unsupported;
+use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Mirrored from [PostgreSQL's `typcategory`][typcategory].

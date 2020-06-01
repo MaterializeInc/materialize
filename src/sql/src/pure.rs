@@ -26,8 +26,7 @@ use crate::normalize;
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
 /// time to complete.
-
-pub async fn purify_statement(mut stmt: Statement) -> Result<Statement, failure::Error> {
+pub async fn purify(mut stmt: Statement) -> Result<Statement, failure::Error> {
     if let Statement::CreateSource {
         col_names,
         connector,

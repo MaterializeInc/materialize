@@ -21,7 +21,7 @@ use sql_parser::ast::{
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
-use crate::statement::StatementContext;
+use crate::plan::statement::StatementContext;
 use crate::unsupported;
 
 pub fn ident(ident: Ident) -> String {
@@ -253,7 +253,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
-    use crate::PlanContext;
+    use crate::plan::PlanContext;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {

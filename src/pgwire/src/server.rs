@@ -18,7 +18,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 use tokio_util::codec::Framed;
 
-use sql::Session;
+use sql::session::Session;
 
 use crate::codec::{self, Codec, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
