@@ -627,6 +627,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "datadriven"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23ca1ac4998c1b4e8ca9d0efa04cf164d2ef0eeb9e2f52684648dd2d6f500e45"
+dependencies = [
+ "failure",
+]
+
+[[package]]
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
@@ -3192,6 +3201,7 @@ dependencies = [
 name = "sql-parser"
 version = "0.1.0"
 dependencies = [
+ "datadriven",
  "failure",
  "lazy_static",
  "log",

@@ -1,0 +1,68 @@
+# Copyright 2020 sqlparser-rs contributors. All rights reserved.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# This file is derived from the sqlparser-rs project, available at
+# https://github.com/andygrove/sqlparser-rs. It was incorporated
+# directly into Materialize on December 21, 2019.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+EXPLAIN SQL FOR SELECT 665
+----
+EXPLAIN SQL FOR SELECT 665
+=>
+Explain { stage: Sql, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("665")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } }
+
+parse-statement
+EXPLAIN RAW PLAN FOR SELECT 665
+----
+EXPLAIN RAW PLAN FOR SELECT 665
+=>
+Explain { stage: RawPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("665")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } }
+
+parse-statement
+EXPLAIN DECORRELATED PLAN FOR SELECT 665
+----
+EXPLAIN DECORRELATED PLAN FOR SELECT 665
+=>
+Explain { stage: DecorrelatedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("665")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } }
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR SELECT 665
+----
+EXPLAIN OPTIMIZED PLAN FOR SELECT 665
+=>
+Explain { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("665")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } }
+
+parse-statement
+EXPLAIN PLAN FOR SELECT 665
+----
+EXPLAIN OPTIMIZED PLAN FOR SELECT 665
+=>
+Explain { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("665")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } }
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR VIEW foo
+----
+EXPLAIN OPTIMIZED PLAN FOR VIEW foo
+=>
+Explain { stage: OptimizedPlan, explainee: View(ObjectName([Ident("foo")])), options: ExplainOptions { typed: false } }
+
+parse-statement
+EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
+----
+EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
+=>
+Explain { stage: OptimizedPlan, explainee: View(ObjectName([Ident("foo")])), options: ExplainOptions { typed: true } }

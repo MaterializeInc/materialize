@@ -1,0 +1,200 @@
+# Copyright 2020 sqlparser-rs contributors. All rights reserved.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# This file is derived from the sqlparser-rs project, available at
+# https://github.com/andygrove/sqlparser-rs. It was incorporated
+# directly into Materialize on December 21, 2019.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+SELECT 1, 2, FROM a
+----
+error:
+Parse error:
+SELECT 1, 2, FROM a
+             ^^^^
+expected expression, but found reserved keyword
+
+parse-statement
+UPDATE t WHERE 1
+----
+error:
+Parse error:
+UPDATE t WHERE 1
+         ^^^^^
+Expected SET, found: WHERE
+
+parse-statement
+UPDATE t SET a = 1 extrabadstuff
+----
+error:
+Parse error:
+UPDATE t SET a = 1 extrabadstuff
+                   ^^^^^^^^^^^^^
+Expected end of statement, found: extrabadstuff
+
+parse-statement
+SELECT ALL DISTINCT name FROM customer
+----
+error:
+Parse error:
+SELECT ALL DISTINCT name FROM customer
+       ^^^^^^^^^^^^
+Cannot specify both ALL and DISTINCT in SELECT
+
+parse-statement
+INSERT public.customer (id, name, active) VALUES (1, 2, 3)
+----
+error:
+Parse error:
+INSERT public.customer (id, name, active) VALUES (1, 2, 3)
+       ^^^^^^
+Expected INTO, found: public
+
+parse-statement
+SELECT foo AS
+----
+error:
+Parse error:
+SELECT foo AS
+             ^
+Expected an identifier after AS, found: EOF
+
+parse-statement
+SELECT 1 FROM foo AS
+----
+error:
+Parse error:
+SELECT 1 FROM foo AS
+                    ^
+Expected an identifier after AS, found: EOF
+
+parse-statement
+SELECT count(ALL DISTINCT + x) FROM customer
+----
+error:
+Parse error:
+SELECT count(ALL DISTINCT + x) FROM customer
+             ^^^^^^^^^^^^
+Cannot specify both ALL and DISTINCT in function: count
+
+parse-statement
+SELECT EXTRACT(MILLISECOND FROM d)
+----
+error:
+Parse error:
+SELECT EXTRACT(MILLISECOND FROM d)
+               ^^^^^^^^^^^
+Expected valid extract field, found: MILLISECOND
+
+parse-statement
+SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)
+----
+error:
+Parse error:
+SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)
+                                  ^
+Expected end of statement, found: (
+
+parse-statement
+SELECT 1 WHERE 1 < ANY SELECT 2
+----
+error:
+Parse error:
+SELECT 1 WHERE 1 < ANY SELECT 2
+                       ^^^^^^
+Expected (, found: SELECT
+
+parse-statement
+SELECT 1 WHERE 1 < NONE (SELECT 2)
+----
+error:
+Parse error:
+SELECT 1 WHERE 1 < NONE (SELECT 2)
+                                ^
+Expected ), found: 2
+
+parse-statement
+SELECT 1 WHERE 1 < ANY (SELECT 2
+----
+error:
+Parse error:
+SELECT 1 WHERE 1 < ANY (SELECT 2
+                                ^
+Expected ), found: EOF
+
+parse-statement
+SELECT 1 WHERE 1 + ANY (SELECT 2)
+----
+error:
+Parse error:
+SELECT 1 WHERE 1 + ANY (SELECT 2)
+                 ^
+Expected comparison operator, found: +
+
+parse-statement
+SELECT EXISTS (NULL)
+----
+error:
+Parse error:
+SELECT EXISTS (NULL)
+               ^^^^
+Expected SELECT, VALUES, or a subquery in the query body, found: NULL
+
+parse-statement
+SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
+----
+error:
+Parse error:
+SELECT SELECT 1 FROM bar WHERE 1=1 FROM baz
+              ^
+Expected end of statement, found: 1
+
+parse-statement
+SELECT foo FROM
+
+----
+----
+error:
+Parse error:
+
+^
+Expected identifier, found: EOF
+----
+----
+
+parse-statement
+
+
+SEL
+
+ECT
+----
+error:
+Parse error:
+SEL
+^^^
+Expected a keyword at the beginning of a statement, found: SEL
+
+parse-statement
+SELECT foo
+FROM bar+1 ORDER
+BY
+----
+error:
+Parse error:
+FROM bar+1 ORDER
+        ^
+Expected end of statement, found: +

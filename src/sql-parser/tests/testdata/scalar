@@ -1,0 +1,320 @@
+# Copyright 2020 sqlparser-rs contributors. All rights reserved.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# This file is derived from the sqlparser-rs project, available at
+# https://github.com/andygrove/sqlparser-rs. It was incorporated
+# directly into Materialize on December 21, 2019.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Parameters
+
+parse-scalar
+$1
+----
+Parameter(1)
+
+parse-scalar
+$91 + $42
+----
+BinaryOp { left: Parameter(91), op: Plus, right: Parameter(42) }
+
+parse-scalar
+NOT salary = ''
+----
+UnaryOp { op: Not, expr: BinaryOp { left: Identifier([Ident("salary")]), op: Eq, right: Value(SingleQuotedString("")) } }
+
+parse-scalar
+salary <> 'Not Provided' AND salary <> ''
+----
+BinaryOp { left: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(SingleQuotedString("Not Provided")) }, op: And, right: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(SingleQuotedString("")) } }
+
+parse-scalar
+name LIKE '%a'
+----
+BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(SingleQuotedString("%a")) }
+
+parse-scalar
+name NOT LIKE '%a'
+----
+BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(SingleQuotedString("%a")) }
+
+parse-scalar
+name LIKE '%a' IS NULL
+----
+IsNull(BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(SingleQuotedString("%a")) })
+
+parse-scalar
+name NOT LIKE '%a' IS NULL
+----
+IsNull(BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(SingleQuotedString("%a")) })
+
+# Casts
+
+parse-scalar roundtrip
+id::bigint
+----
+id::bigint
+
+parse-scalar roundtrip
+CAST(id AS BIGINT)
+----
+id::bigint
+
+parse-scalar roundtrip
+id::double precision
+----
+id::double
+
+parse-scalar roundtrip
+id::timestamp with time zone
+----
+id::timestamp with time zone
+
+parse-scalar roundtrip
+(id::timestamp with time zone::timestamp without time zone  )  ::  double precision::text
+----
+(id::timestamp with time zone::timestamp)::double::text
+
+parse-scalar roundtrip
+id::numeric FROM customer
+----
+id::numeric
+
+parse-scalar roundtrip
+CAST(id AS dec)
+----
+id::numeric
+
+parse-scalar roundtrip
+CAST(id AS decimal)
+----
+id::numeric
+
+# Extract
+
+parse-scalar
+EXTRACT(YEAR FROM d)
+----
+Extract { field: Year, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(MILLENIUM FROM d)
+----
+Extract { field: Millenium, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(CENTURY FROM d)
+----
+Extract { field: Century, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(YEAR FROM d)
+----
+Extract { field: Year, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(ISOYEAR FROM d)
+----
+Extract { field: IsoYear, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(QUARTER FROM d)
+----
+Extract { field: Quarter, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(MONTH FROM d)
+----
+Extract { field: Month, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(DAY FROM d)
+----
+Extract { field: Day, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(HOUR FROM d)
+----
+Extract { field: Hour, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(MINUTE FROM d)
+----
+Extract { field: Minute, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(SECOND FROM d)
+----
+Extract { field: Second, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(MILLISECONDS FROM d)
+----
+Extract { field: Milliseconds, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(MICROSECONDS FROM d)
+----
+Extract { field: Microseconds, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(TIMEZONE FROM d)
+----
+Extract { field: Timezone, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(TIMEZONE_HOUR FROM d)
+----
+Extract { field: TimezoneHour, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(TIMEZONE_MINUTE FROM d)
+----
+Extract { field: TimezoneMinute, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(WEEK FROM d)
+----
+Extract { field: WeekOfYear, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(DOY FROM d)
+----
+Extract { field: DayOfYear, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(DOW FROM d)
+----
+Extract { field: DayOfWeek, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(ISODOW FROM d)
+----
+Extract { field: IsoDayOfWeek, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+EXTRACT(EPOCH FROM d)
+----
+Extract { field: Epoch, expr: Identifier([Ident("d")]) }
+
+parse-scalar
+sqrt(id)
+----
+Function(Function { name: ObjectName([Ident("sqrt")]), args: Args([Identifier([Ident("id")])]), filter: None, over: None, distinct: false })
+
+parse-scalar roundtrip
+(a + b) - (c + d)
+----
+(a + b) - (c + d)
+
+parse-scalar roundtrip
+CASE WHEN bar IS NULL THEN 'null' WHEN bar = 0 THEN '=0' WHEN bar >= 0 THEN '>=0' ELSE '<0' END
+----
+CASE WHEN bar IS NULL THEN 'null' WHEN bar = 0 THEN '=0' WHEN bar >= 0 THEN '>=0' ELSE '<0' END
+
+parse-scalar
+CASE foo WHEN 1 THEN 'Y' ELSE 'N' END
+----
+Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1"))], results: [Value(SingleQuotedString("Y"))], else_result: Some(Value(SingleQuotedString("N"))) }
+
+parse-scalar
+(SELECT 1) + (SELECT 2)
+----
+BinaryOp { left: Subquery(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), op: Plus, right: Subquery(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("2")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }) }
+
+parse-scalar
+1 < ANY (SELECT 2)
+----
+Any { left: Value(Number("1")), op: Lt, right: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("2")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, some: false }
+
+parse-scalar
+LIST[]
+----
+List([])
+
+parse-scalar
+LIST[1, 'foo']
+----
+List([Value(Number("1")), Value(SingleQuotedString("foo"))])
+
+parse-scalar
+LIST[LIST[1 + 1, 2], a || b]
+----
+List([List([BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("1")) }, Value(Number("2"))]), BinaryOp { left: Identifier([Ident("a")]), op: JsonConcat, right: Identifier([Ident("b")]) }])
+
+parse-scalar
+a -> b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonGet, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a ->> b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonGetAsText, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a #> b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonGetPath, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a #>> b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonGetPathAsText, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a @> b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsJson, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a <@ b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonContainedInJson, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a ? b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsField, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a ?| b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsAnyFields, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a ?& b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsAllFields, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a || b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonConcat, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a #- b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonDeletePath, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a @? b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsPath, right: Identifier([Ident("b")]) }
+
+parse-scalar
+a @@ b
+----
+BinaryOp { left: Identifier([Ident("a")]), op: JsonApplyPathPredicate, right: Identifier([Ident("b")]) }

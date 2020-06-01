@@ -1,0 +1,212 @@
+# Copyright 2020 sqlparser-rs contributors. All rights reserved.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# This file is derived from the sqlparser-rs project, available at
+# https://github.com/andygrove/sqlparser-rs. It was incorporated
+# directly into Materialize on December 21, 2019.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Null
+
+parse-scalar
+NULL
+----
+Value(Null)
+
+# Strings
+
+parse-scalar
+'Jim''s salary'
+----
+Value(SingleQuotedString("Jim\'s salary"))
+
+# Numbers
+
+parse-scalar
+1.0
+----
+Value(Number("1.0"))
+
+parse-scalar
+.1
+----
+Value(Number(".1"))
+
+parse-scalar
+1.0E2
+----
+Value(Number("1.0E2"))
+
+parse-scalar
+0.300000000000000004
+----
+Value(Number("0.300000000000000004"))
+
+parse-scalar
+9007199254740993.0
+----
+Value(Number("9007199254740993.0"))
+
+parse-scalar
+'one'
+----
+Value(SingleQuotedString("one"))
+
+parse-scalar
+X'deadBEEF'
+----
+Value(HexStringLiteral("deadBEEF"))
+
+# Dates.
+
+parse-scalar
+DATE '1999-01-01'
+----
+Value(Date("1999-01-01"))
+
+parse-scalar
+DATE 'invalid date'
+----
+Value(Date("invalid date"))
+
+parse-scalar
+TIME '01:23:34'
+----
+Value(Time("01:23:34"))
+
+parse-scalar
+TIME 'invalid time'
+----
+Value(Time("invalid time"))
+
+parse-scalar
+TIMESTAMP '1999-01-01 01:23:34.555'
+----
+Value(Timestamp("1999-01-01 01:23:34.555"))
+
+parse-scalar
+TIMESTAMPTZ '1999-01-01 01:23:34.555'
+----
+Value(TimestampTz("1999-01-01 01:23:34.555"))
+
+parse-scalar
+TIMESTAMP WITH TIME ZONE '1999-01-01 01:23:34.555'
+----
+Value(TimestampTz("1999-01-01 01:23:34.555"))
+
+parse-scalar
+TIMESTAMP WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
+----
+Value(Timestamp("1999-01-01 01:23:34.555"))
+
+parse-scalar
+TIMESTAMP 'invalid timestamptx'
+----
+Value(Timestamp("invalid timestamptx"))
+
+parse-scalar
+TIMESTAMPTZ 'invalid timestamptx'
+----
+Value(TimestampTz("invalid timestamptx"))
+
+parse-scalar
+TIMESTAMP WITH TIME ZONE 'invalid timestamptx'
+----
+Value(TimestampTz("invalid timestamptx"))
+
+parse-scalar
+TIMESTAMP WITHOUT TIME ZONE 'invalid timestamptx'
+----
+Value(Timestamp("invalid timestamptx"))
+
+parse-scalar
+INTERVAL '1' YEAR
+----
+Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Year, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL 'invalid interval' YEAR
+----
+Value(Interval(IntervalValue { value: "invalid interval", precision_high: Year, precision_low: Year, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '1 year'
+----
+Value(Interval(IntervalValue { value: "1 year", precision_high: Year, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '1' MONTH
+----
+Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Month, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '1 month'
+----
+Value(Interval(IntervalValue { value: "1 month", precision_high: Year, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '1-1'
+----
+Value(Interval(IntervalValue { value: "1-1", precision_high: Year, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '1 year 1 month'
+----
+Value(Interval(IntervalValue { value: "1 year 1 month", precision_high: Year, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '10' DAY
+----
+Value(Interval(IntervalValue { value: "10", precision_high: Year, precision_low: Day, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '10' HOUR
+----
+Value(Interval(IntervalValue { value: "10", precision_high: Year, precision_low: Hour, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '10' MINUTE
+----
+Value(Interval(IntervalValue { value: "10", precision_high: Year, precision_low: Minute, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '10'
+----
+Value(Interval(IntervalValue { value: "10", precision_high: Year, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '0.01'
+----
+Value(Interval(IntervalValue { value: "0.01", precision_high: Year, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '1 1:1:1.1'
+----
+Value(Interval(IntervalValue { value: "1 1:1:1.1", precision_high: Year, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '1 4:5' DAY TO HOUR
+----
+Value(Interval(IntervalValue { value: "1 4:5", precision_high: Day, precision_low: Hour, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL 'invalid interval' DAY TO HOUR
+----
+Value(Interval(IntervalValue { value: "invalid interval", precision_high: Day, precision_low: Hour, fsec_max_precision: None }))
+
+parse-scalar
+INTERVAL '01:01:01.111111111' SECOND (5)
+----
+Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Year, precision_low: Second, fsec_max_precision: Some(5) }))
