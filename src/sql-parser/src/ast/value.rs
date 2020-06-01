@@ -48,14 +48,6 @@ pub enum Value {
     HexStringLiteral(String),
     /// Boolean value true or false
     Boolean(bool),
-    /// `DATE '...'` literals
-    Date(String),
-    /// `TIME '...'` literals
-    Time(String),
-    /// `TIMESTAMP '...'` literals
-    Timestamp(String),
-    /// `TIMESTAMP WITH TIME ZONE` literals
-    TimestampTz(String),
     /// INTERVAL literals, roughly in the following format:
     ///
     /// ```text
@@ -83,26 +75,6 @@ impl AstDisplay for Value {
                 f.write_str("'");
             }
             Value::Boolean(v) => f.write_str(v),
-            Value::Date(v) => {
-                f.write_str("DATE '");
-                f.write_node(&escape_single_quote_string(v));
-                f.write_str("'");
-            }
-            Value::Time(v) => {
-                f.write_str("TIME '");
-                f.write_node(&escape_single_quote_string(v));
-                f.write_str("'");
-            }
-            Value::Timestamp(v) => {
-                f.write_str("TIMESTAMP '");
-                f.write_node(&escape_single_quote_string(v));
-                f.write_str("'");
-            }
-            Value::TimestampTz(v) => {
-                f.write_str("TIMESTAMP WITH TIME ZONE '");
-                f.write_node(&escape_single_quote_string(v));
-                f.write_str("'");
-            }
             Value::Interval(IntervalValue {
                 value,
                 precision_high: _,

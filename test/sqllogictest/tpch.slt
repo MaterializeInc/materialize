@@ -1896,7 +1896,7 @@ ORDER BY
 | | | |
 | | | | %14 =
 | | | | | InnerJoin %12 %13 on true
-| | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= 1995-01-01)) && (datetots(#10) < (1995-01-01 + 1 year)))
+| | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= strtodate("1995-01-01"))) && (datetots(#10) < (strtodate("1995-01-01") + 1 year)))
 | | | | | Map
 | | | | | Reduce group=() sum(#4)
 | | | | | Map (5dec * #0)
