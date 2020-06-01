@@ -29,21 +29,21 @@ statement ok
 CREATE TABLE v (m INT PRIMARY KEY, str3 TEXT);
 
 statement ok
-INSERT INTO t SELECT i, to_english(i) FROM generate_series(1, 5) AS g(i);
+INSERT INTO t SELECT i, i*10 FROM generate_series(1, 5) AS g(i);
 
 statement ok
-INSERT INTO u SELECT i, to_english(i) FROM generate_series(1, 5) AS g(i);
+INSERT INTO u SELECT i, i*10 FROM generate_series(1, 5) AS g(i);
 
 statement ok
-INSERT INTO v SELECT i, to_english(i) FROM generate_series(1, 5) AS g(i);
+INSERT INTO v SELECT i, i*10 FROM generate_series(1, 5) AS g(i);
 
 # Another test of subqueries within an apply join.
 
 query I
 SELECT
-	(SELECT * FROM (VALUES ((SELECT x FROM (VALUES (1)) AS s (x)) + y)))
+	(SELECT * FROM (VALUES ((SELECT * FROM (VALUES (1)) AS s) + y)))
 FROM
-	(VALUES (1), (2), (3)) AS t (y)
+	(SELECT column1 AS y FROM (VALUES (1), (2), (3)))
 ----
 2
 3
@@ -55,22 +55,32 @@ FROM
 statement ok
 CREATE TABLE table9 (
     _bool BOOL,
-    _bytes BYTES,
-    _date DATE,
+    _bytes BYTEA,
     _decimal DECIMAL,
-    _float4 FLOAT4,
-    _float8 FLOAT8,
-    _inet INET,
-    _int4 INT4,
-    _int8 INT8,
+    _float4 FLOAT,
+    _float8 FLOAT,
+    _int8 INT,
     _interval INTERVAL,
     _jsonb JSONB,
     _string TEXT,
-    _time TIME,
     _timestamp TIMESTAMP,
-    _timestamptz TIMESTAMPTZ,
-    _uuid UUID
-); INSERT INTO table9 DEFAULT VALUES;
+    _timestamptz TIMESTAMPTZ
+);
+
+statement ok
+INSERT INTO table9 VALUES (
+  true,
+  '',
+  1,
+  1,
+  1,
+  1,
+  '1m',
+  '{}',
+  '',
+  '2020-05-26 14:23:36.157383-04',
+  '2020-05-26 14:23:36.157383-04'
+)
 
 query B
 SELECT
@@ -92,44 +102,47 @@ WHERE
                         tab_27927._float8
                         IN (
                                 CASE
-                                WHEN NULL
-                                THEN div(
-                                    tab_27927._float4::FLOAT8,
-                                    tab_27927._float4::FLOAT8
-                                )::FLOAT8
+                                WHEN NULL::BOOL
+                                THEN
+                                    tab_27927._float4::FLOAT / tab_27927._float4::FLOAT
                                 ELSE tab_27927._float4
                                 END,
                                 tab_27927._float4,
-                                tab_27927._float8::FLOAT8
-                                + NULL::FLOAT8,
+                                tab_27927._float8::FLOAT
+                                + NULL::FLOAT,
                                 tab_27927._float4
                             )
                     )
         WHERE
             EXISTS(
                 SELECT
-                    2470039497:::OID AS col_85224
+                    2470039497 AS col_85224
                 FROM
                     table9 AS tab_27932
-                ORDER BY
-                    tab_27932._string ASC,
-                    tab_27932._interval DESC,
-                    tab_27932._uuid DESC
                 LIMIT
-                    37:::INT8
+                    37
             )
         LIMIT
-            11:::INT8
+            11
     )
 LIMIT
-    89:::INT8;
+    89;
 ----
 true
 
 # Regression test for #37454: untyped null produced at top level.
 
 statement ok
-CREATE TABLE x (a INT8); CREATE TABLE y (b INT8); INSERT INTO x VALUES (1); INSERT INTO y VALUES (2);
+CREATE TABLE x (a INT)
+
+statement ok
+CREATE TABLE y (b INT)
+
+statement ok
+INSERT INTO x VALUES (1)
+
+statement ok
+INSERT INTO y VALUES (2);
 
 query II
 SELECT a, (SELECT a FROM y) FROM x

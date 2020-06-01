@@ -30,10 +30,10 @@ CREATE TABLE kv (
 )
 
 # Aggregate functions return NULL if there are no rows.
-query IIIIRRRRBBT
-SELECT min(1), max(1), count(1), sum_int(1), avg(1), sum(1), stddev(1), variance(1), bool_and(true), bool_and(false) FROM kv
+query IIIRRRR
+SELECT min(1), max(1), count(1), avg(1), sum(1), stddev(1), variance(1) FROM kv
 ----
-NULL NULL 0 NULL NULL NULL NULL NULL NULL NULL
+NULL NULL 0 NULL NULL NULL NULL
 
 # Regression test for #29695
 query T
@@ -42,12 +42,12 @@ SELECT min(NULL)
 NULL
 
 # Aggregate functions return NULL if there are no rows.
-query T
+statement error supported
 SELECT array_agg(1) FROM kv
 ----
 NULL
 
-query T
+statement error supported
 SELECT json_agg(1) FROM kv
 ----
 NULL
@@ -57,17 +57,27 @@ SELECT jsonb_agg(1) FROM kv
 ----
 NULL
 
-query IIIIRRRRBBT
-SELECT min(v), max(v), count(v), sum_int(1), avg(v), sum(v), stddev(v), variance(v), bool_and(v = 1), bool_and(v = 1) FROM kv
+query IIIRRRR
+SELECT min(v), max(v), count(v), avg(v), sum(v), stddev(v), variance(v) FROM kv
 ----
-NULL NULL 0 NULL NULL NULL NULL NULL NULL NULL
+NULL NULL 0 NULL NULL NULL NULL
 
-query T
+statement error supported
+SELECT bool_and(v = 1) FROM kv
+----
+NULL
+
+statement error supported
+SELECT bool_or(v = 1) FROM kv
+----
+NULL
+
+statement error supported
 SELECT array_agg(v) FROM kv
 ----
 NULL
 
-query T
+statement error supported
 SELECT json_agg(v) FROM kv
 ----
 NULL
@@ -78,26 +88,22 @@ SELECT jsonb_agg(v) FROM kv
 NULL
 
 # Aggregate functions triggers aggregation and computation when there is no source.
-query IIIIRRRRBBT
-SELECT min(1), count(1), max(1), sum_int(1), avg(1)::float, sum(1), stddev(1), variance(1), bool_and(true), bool_or(true)
+query IIIRRRR
+SELECT min(1), count(1), max(1), avg(1)::float, sum(1), stddev(1), variance(1)
 ----
-1 1 1 1 1 1 NULL NULL true true 01
+1 1 1 1 1 NULL NULL
 
 # Aggregate functions triggers aggregation and computation when there is no source.
-query T
+statement error supported
 SELECT array_agg(1)
-----
-{1}
 
-query T
+statement error supported
 SELECT json_agg(1)
-----
-[1]
 
 query T
 SELECT jsonb_agg(1)
 ----
-[1]
+[1.0]
 
 # Some aggregate functions are not normalized to NULL when given a NULL
 # argument.
@@ -106,10 +112,8 @@ SELECT count(NULL)
 ----
 0
 
-query T
+statement error supported
 SELECT json_agg(NULL)
-----
-[null]
 
 query T
 SELECT jsonb_agg(NULL)
@@ -118,21 +122,17 @@ SELECT jsonb_agg(NULL)
 
 # This should ideally return {NULL}, but this is a pathological case, and
 # Postgres has the same behavior, so it's sufficient for now.
-statement error ambiguous call
+statement error supported
 SELECT array_agg(NULL)
 
 # With an explicit cast, this works as expected.
-query T
+statement error supported
 SELECT array_agg(NULL::TEXT)
-----
-{NULL}
 
 # Regression test for #25724 (problem with typed NULLs and distsql planning).
 # The previous query doesn't run under distsql.
-query T
+statement error supported
 SELECT array_agg(NULL::TEXT) FROM (VALUES (1)) AS t(x)
-----
-{NULL}
 
 # Check that COALESCE using aggregate results over an empty table
 # work properly.
@@ -140,11 +140,6 @@ query I
 SELECT COALESCE(max(1), 0) FROM generate_series(1,0)
 ----
 0
-
-query I
-SELECT count_rows() FROM generate_series(1,100)
-----
-100
 
 # Same, using arithmetic on COUNT.
 query I
@@ -176,26 +171,22 @@ INSERT INTO kv VALUES
 (8, 4, 2, 'A')
 
 # Aggregate functions triggers aggregation and computation for every row even when applied to a constant.
-query IIIIRRRRBBT
-SELECT min(1), count(1), max(1), sum_int(1), avg(1)::float, sum(1), stddev(1), variance(1)::float, bool_and(true), bool_or(true) FROM kv
+query IIIRRRR
+SELECT min(1), count(1), max(1), avg(1)::float, sum(1), stddev(1)::float, variance(1)::float FROM kv
 ----
-1 6 1 6 1 6 0 0 true true
+1 6 1 1 6 0 0
 
 # Aggregate functions triggers aggregation and computation for every row even when applied to a constant.
-query T
+statement error supported
 SELECT array_agg(1) FROM kv
-----
-{1,1,1,1,1,1}
 
-query T
+statement error supported
 SELECT json_agg(1) FROM kv
-----
-[1, 1, 1, 1, 1, 1]
 
 query T
 SELECT jsonb_agg(1) FROM kv
 ----
-[1, 1, 1, 1, 1, 1]
+[1.0,1.0,1.0,1.0,1.0,1.0]
 
 # Even with no aggregate functions, grouping occurs in the presence of GROUP BY.
 query I rowsort
@@ -211,11 +202,12 @@ SELECT 3 FROM kv HAVING TRUE
 ----
 3
 
-query error pgcode 42803 column "k" must appear in the GROUP BY clause or be used in an aggregate function
+query error does not exist
 SELECT count(*), k FROM kv
 
-query error unsupported comparison operator: <string> < <int>
-SELECT count(*) FROM kv GROUP BY s < 5
+# #3164
+# query error unsupported comparison operator: <string> < <int>
+# SELECT count(*) FROM kv GROUP BY s < 5
 
 query II rowsort
 SELECT count(*), k FROM kv GROUP BY k
@@ -326,11 +318,10 @@ NULL 1 5
 
 # Selecting and grouping on a function expression works.
 query IT rowsort
-SELECT count(*), upper(s) FROM kv GROUP BY upper(s)
+SELECT count(*), length(s) FROM kv GROUP BY length(s)
 ----
 1 NULL
-2 B
-3 A
+5 1
 
 # Selecting and grouping on a constant works.
 query I
@@ -345,16 +336,16 @@ SELECT count(*) FROM kv GROUP BY length('abc')
 
 # Selecting a function of something which is grouped works.
 query IT rowsort
-SELECT count(*), upper(s) FROM kv GROUP BY s
+SELECT count(*), length(s) FROM kv GROUP BY s
 ----
-1 A
+1 1
 1 NULL
-2 A
-2 B
+2 1
+2 1
 
 # Selecting a value that is not grouped, even if a function of it it, does not work.
-query error column "s" must appear in the GROUP BY clause or be used in an aggregate function
-SELECT count(*), s FROM kv GROUP BY upper(s)
+query error does not exist
+SELECT count(*), s FROM kv GROUP BY length(s)
 
 # Selecting and grouping on a more complex expression works.
 query II rowsort
@@ -379,19 +370,19 @@ SELECT count(*), k+v FROM kv GROUP BY k, v
 1 9
 1 NULL
 
-query error column "v" must appear in the GROUP BY clause or be used in an aggregate function
+query error does not exist
 SELECT count(*), k+v FROM kv GROUP BY k
 
-query error column "k" must appear in the GROUP BY clause or be used in an aggregate function
+query error does not exist
 SELECT count(*), k+v FROM kv GROUP BY v
 
-query error column "v" must appear in the GROUP BY clause or be used in an aggregate function
+query error does not exist
 SELECT count(*), v/(k+v) FROM kv GROUP BY k+v
 
 query error aggregate functions are not allowed in WHERE
 SELECT k FROM kv WHERE avg(k) > 1
 
-query error aggregate function calls cannot be nested
+query error nested aggregate functions are not allowed
 SELECT max(avg(k)) FROM kv
 
 # Test case from #2761.
@@ -411,9 +402,13 @@ a 2
 b 2
 
 query TII rowsort
-SELECT upper(s), count(DISTINCT s), count(DISTINCT upper(s)) FROM kv GROUP BY upper(s) HAVING count(DISTINCT s) > 1
+SELECT
+  length(s),
+  count(DISTINCT s),
+  count(DISTINCT length(s))
+FROM kv GROUP BY length(s) HAVING count(DISTINCT s) > 1
 ----
-A 2 1
+1 3 1
 
 query II rowsort
 SELECT max(k), min(v) FROM kv HAVING min(v) > 2
@@ -424,22 +419,22 @@ SELECT max(k), min(v) FROM kv HAVING max(v) > 2
 ----
 8 2
 
-query error pgcode 42803 aggregate function calls cannot be nested
+query error nested aggregate functions are not allowed
 SELECT max(k), min(v) FROM kv HAVING max(min(v)) > 2
 
-query error argument of HAVING must be type bool, not type int
+query error does not exist
 SELECT max(k), min(v) FROM kv HAVING k
 
 # Expressions listed in the HAVING clause must conform to same validation as the SELECT clause (grouped or aggregated).
-query error column "k" must appear in the GROUP BY clause or be used in an aggregate function
+query error does not exist
 SELECT 3 FROM kv GROUP BY v HAVING k > 5
 
 # pg has a special case for grouping on primary key, which would allow this, but we do not.
 # See http://www.postgresql.org/docs/current/static/sql-select.html#SQL-GROUPBY
-query error column "v" must appear in the GROUP BY clause or be used in an aggregate function
+query error does not exist
 SELECT 3 FROM kv GROUP BY k HAVING v > 2
 
-query error column "k" must appear in the GROUP BY clause or be used in an aggregate function
+query error does not exist
 SELECT k FROM kv HAVING k > 7
 
 query error syntax error at or near ","
@@ -465,7 +460,7 @@ SELECT count(1) from kv
 ----
 6
 
-query error unknown signature: count\(int, int\)
+query error count function requires exactly one non-star argument
 SELECT count(k, v) FROM kv
 
 query II
@@ -509,10 +504,9 @@ SELECT count(*), count(k), count(kv.v) FROM kv
 count  count  count
 6      6      5
 
-query I
+# #3179
+statement error invalid position
 SELECT count(kv.*) FROM kv
-----
-6
 
 query III
 SELECT count(DISTINCT k), count(DISTINCT v), count(DISTINCT (v)) FROM kv
@@ -520,56 +514,55 @@ SELECT count(DISTINCT k), count(DISTINCT v), count(DISTINCT (v)) FROM kv
 6 2 2
 
 query TIII rowsort
-SELECT upper(s), count(DISTINCT k), count(DISTINCT v), count(DISTINCT (v)) FROM kv GROUP BY upper(s)
+SELECT length(s), count(DISTINCT k), count(DISTINCT v), count(DISTINCT (v)) FROM kv GROUP BY length(s)
 ----
-A    3 2 2
-B    2 1 1
+1    5 2 2
 NULL 1 0 0
 
+# #1195
+# query I
+# SELECT count((k, v)) FROM kv
+# ----
+# 6
+#
+# query I
+# SELECT count(DISTINCT (k, v)) FROM kv
+# ----
+# 6
+#
+# query I
+# SELECT count(DISTINCT (k, (v))) FROM kv
+# ----
+# 6
+#
+# query I
+# SELECT count((k, v)) FROM kv LIMIT 1
+# ----
+# 6
+#
+# query I
+# SELECT count((k, v)) FROM kv OFFSET 1
+# ----
+#
+# query II
+# SELECT count(NULL::int), count((NULL, NULL))
+# ----
+# 0 1
 
-query I
-SELECT count((k, v)) FROM kv
-----
-6
-
-query I
-SELECT count(DISTINCT (k, v)) FROM kv
-----
-6
-
-query I
-SELECT count(DISTINCT (k, (v))) FROM kv
-----
-6
 
 query I
 SELECT count(*) FROM kv a, kv b
 ----
 36
 
-query I
+# #3179
+statement error invalid position
 SELECT count(DISTINCT a.*) FROM kv a, kv b
-----
-6
-
-query I
-SELECT count((k, v)) FROM kv LIMIT 1
-----
-6
-
-query I
-SELECT count((k, v)) FROM kv OFFSET 1
-----
 
 query I
 SELECT count(k)+count(kv.v) FROM kv
 ----
 11
-
-query II
-SELECT count(NULL::int), count((NULL, NULL))
-----
-0 1
 
 query IIII
 SELECT min(k), max(k), min(v), max(v) FROM kv
@@ -582,25 +575,17 @@ SELECT min(k), max(k), min(v), max(v) FROM kv WHERE k > 8
 ----
 NULL NULL NULL NULL
 
-query TT
+query error supported
 SELECT array_agg(k), array_agg(s) FROM (SELECT k, s FROM kv ORDER BY k)
-----
-{1,3,5,6,7,8}  {a,a,NULL,b,b,A}
 
-query T
+query error supported
 SELECT array_agg(k) || 1 FROM (SELECT k FROM kv ORDER BY k)
-----
-{1,3,5,6,7,8,1}
 
-query T
+query error supported
 SELECT array_agg(s) FROM kv WHERE s IS NULL
-----
-{NULL}
 
-query T
+query error supported
 SELECT json_agg(s) FROM kv WHERE s IS NULL
-----
-[null]
 
 query T
 SELECT jsonb_agg(s) FROM kv WHERE s IS NULL
@@ -608,31 +593,41 @@ SELECT jsonb_agg(s) FROM kv WHERE s IS NULL
 [null]
 
 query RRRR
-SELECT avg(k), avg(v), sum(k), sum(v) FROM kv
+SELECT avg(k)::FLOAT, avg(v)::FLOAT, sum(k)::FLOAT, sum(v)::FLOAT FROM kv
 ----
 5 2.8 30 14
 
 query RRRR
-SELECT avg(k::decimal), avg(v::decimal), sum(k::decimal), sum(v::decimal) FROM kv
+SELECT
+  avg(k::decimal)::float,
+  avg(v::decimal)::float,
+  sum(k::decimal)::float,
+  sum(v::decimal)::float
+FROM kv
 ----
 5 2.8 30 14
 
 query RRRR
-SELECT avg(DISTINCT k), avg(DISTINCT v), sum(DISTINCT k), sum(DISTINCT v) FROM kv
+SELECT
+  avg(DISTINCT k)::FLOAT,
+  avg(DISTINCT v)::FLOAT,
+  sum(DISTINCT k)::FLOAT,
+  sum(DISTINCT v)::FLOAT
+FROM kv
 ----
 5 3 30 6
 
 query R
-SELECT avg(k) * 2.0 + max(v)::DECIMAL FROM kv
+SELECT (avg(k) * 2.0 + max(v)::DECIMAL)::FLOAT FROM kv
 ----
-14.0
+14
 
 # Verify things work with distsql when some of the nodes emit no results in the
 # local stage.
 query R
-SELECT avg(k) * 2.0 + max(v)::DECIMAL FROM kv WHERE w*2 = k
+SELECT (avg(k) * 2.0 + max(v)::DECIMAL)::FLOAT FROM kv WHERE w*2 = k
 ----
-14.0
+14
 
 # Grouping columns can be eliminated, but should still return zero rows (i.e.
 # shouldn't use scalar GroupBy).
@@ -686,22 +681,22 @@ SELECT avg(b), sum(b) FROM abc
 # ----
 # 3 years 5 mons 7 days 00:00:19
 
-query error unknown signature: avg\(varchar\)
+query error Unimplemented
 SELECT avg(a) FROM abc
 
-query error unknown signature: avg\(bool\)
+query error Unimplemented
 SELECT avg(c) FROM abc
 
-query error unknown signature: avg\(tuple{varchar, bool}\)
+query error Unimplemented
 SELECT avg((a,c)) FROM abc
 
-query error unknown signature: sum\(varchar\)
+query error Unimplemented
 SELECT sum(a) FROM abc
 
-query error unknown signature: sum\(bool\)
+query error Unimplemented
 SELECT sum(c) FROM abc
 
-query error unknown signature: sum\(tuple{varchar, bool}\)
+query error Unimplemented
 SELECT sum((a,c)) FROM abc
 
 statement ok
@@ -760,20 +755,21 @@ SELECT max(y) FROM xyz WHERE x = 7
 ----
 NULL
 
-query I
-SELECT min(x) FROM xyz WHERE (y, z) = (2, 3.0)
-----
-1
-
-query I
-SELECT max(x) FROM xyz WHERE (z, y) = (3.0, 2)
-----
-1
+# #1195
+# query I
+# SELECT min(x) FROM xyz WHERE (y, z) = (2, 3.0)
+# ----
+# 1
+#
+# query I
+# SELECT max(x) FROM xyz WHERE (z, y) = (3.0, 2)
+# ----
+# 1
 
 # VARIANCE/STDDEV
 
 query RRR
-SELECT variance(x), variance(y::decimal), round(variance(z), 14) FROM xyz
+SELECT variance(x)::FLOAT, variance(y::decimal)::FLOAT, variance(z)::DECIMAL(38, 14) FROM xyz
 ----
 9 4.5 6.33333333333333
 
@@ -788,9 +784,9 @@ SELECT variance(x) FROM xyz WHERE x = 1
 NULL
 
 query RRR
-SELECT stddev(x), stddev(y::decimal), round(stddev(z), 14) FROM xyz
+SELECT stddev(x)::FLOAT, stddev(y::decimal)::FLOAT, stddev(z)::DECIMAL(38, 14) FROM xyz
 ----
-3  2.1213203435596425732  2.51661147842358
+3  2.121320343559 2.51661147842358
 
 query R
 SELECT stddev(x) FROM xyz WHERE x = 1
@@ -863,23 +859,19 @@ true
 statement ok
 CREATE TABLE bools (b BOOL)
 
-query BB
+query error supported
 SELECT bool_and(b), bool_or(b) FROM bools
-----
-NULL NULL
 
 statement OK
 INSERT INTO bools VALUES (true), (true), (true)
 
-query BB
+query error supported
 SELECT bool_and(b), bool_or(b) FROM bools
-----
-true true
 
 statement OK
 INSERT INTO bools VALUES (false), (false)
 
-query BB
+query error supported
 SELECT bool_and(b), bool_or(b) FROM bools
 ----
 false true
@@ -893,20 +885,15 @@ false true
 # ----
 # false false
 
-query T
+# #2804
+query error does not exist
 SELECT concat_agg(s) FROM (SELECT s FROM kv ORDER BY k)
-----
-aabbA
 
-query T
+query error does not exist
 SELECT json_agg(s) FROM (SELECT s FROM kv ORDER BY k)
-----
-["a", "a", null, "b", "b", "A"]
 
-query T
+query error does not exist
 SELECT jsonb_agg(s) FROM (SELECT s FROM kv ORDER BY k)
-----
-["a", "a", null, "b", "b", "A"]
 
 # Verify that FILTER works.
 
@@ -954,93 +941,24 @@ query error aggregate functions are not allowed in FILTER
 SELECT v, count(*) FILTER (WHERE count(*) > 5) FROM filter_test GROUP BY v
 
 # Tests with * inside GROUP BY.
-query I
-SELECT 1 FROM kv GROUP BY kv.*
-----
-1
-1
-1
-1
-1
-1
-
-query R rowsort
-SELECT sum(abc.d) FROM kv JOIN abc ON kv.k >= abc.d GROUP BY kv.*
-----
-1.1
-6.1
-6.1
-6.1
-6.1
-
-# opt_test is used for tests around the single-row optimization for MIN/MAX.
-statement ok
-CREATE TABLE opt_test (k INT PRIMARY KEY, v INT)
-
-statement ok
-INSERT INTO opt_test VALUES (1, NULL), (2, 10), (3, NULL), (4, 5)
-
-# Verify that we correctly add the v IS NOT NULL constraint (which restricts the span).
-# Without the "v IS NOT NULL" constraint, this result would incorrectly be NULL.
-query I
-SELECT min(v) FROM opt_test
-----
-5
-
-# Cross-check against a query without this optimization.
-query I
-SELECT min(v) FROM opt_test@primary
-----
-5
-
-# Repeat test when there is an existing filter.
-query I
-SELECT min(v) FROM opt_test WHERE k <> 4
-----
-10
-
-# Verify that we don't use the optimization if there is a GROUP BY.
-query I rowsort
-SELECT min(v) FROM opt_test GROUP BY k
-----
-NULL
-NULL
-5
-10
-
-query I rowsort
-SELECT max(v) FROM opt_test GROUP BY k
-----
-NULL
-NULL
-5
-10
-
-# not supported yet
-# statement ok
-# CREATE TABLE xor_bytes (a bytes, b int, c int)
-#
-# statement ok
-# INSERT INTO xor_bytes VALUES
-#   (b'\x01\x01', 1, 3),
-#   (b'\x02\x01', 1, 1),
-#   (b'\x04\x01', 2, -5),
-#   (b'\x08\x01', 2, -1),
-#   (b'\x10\x01', 2, 0)
-#
-# query TI
-# SELECT to_hex(xor_agg(a)), xor_agg(c) FROM xor_bytes
+# query I
+# SELECT 1 FROM kv GROUP BY kv.*
 # ----
-# 1f01 6
+# 1
+# 1
+# 1
+# 1
+# 1
+# 1
 #
-# query TII
-# SELECT to_hex(xor_agg(a)), b, xor_agg(c) FROM xor_bytes GROUP BY b ORDER BY b
+# query R rowsort
+# SELECT sum(abc.d) FROM kv JOIN abc ON kv.k >= abc.d GROUP BY kv.*
 # ----
-# 0300  1   2
-# 1c01  2   4
-#
-# statement error arguments to xor must all be the same length
-# SELECT xor_agg(i) FROM (VALUES (b'\x01'), (b'\x01\x01')) AS a(i)
+# 1.1
+# 6.1
+# 6.1
+# 6.1
+# 6.1
 
 query BB
 SELECT max(true), min(true)
@@ -1064,21 +982,21 @@ CREATE TABLE xy(x TEXT, y TEXT);
 statement ok
 INSERT INTO xy(x, y) VALUES ('a', 'b'), ('c', 'd')
 
-# Grouping and rendering tuples.
-query T rowsort
-SELECT (b, a) FROM ab GROUP BY (b, a)
-----
-(2,1)
-(4,3)
-
-query TT rowsort
-SELECT min(y), (b, a)
- FROM ab, xy GROUP BY (x, (a, b))
-----
-b  (2,1)
-d  (2,1)
-b  (4,3)
-d  (4,3)
+# #1195
+# query T rowsort
+# SELECT (b, a) FROM ab GROUP BY (b, a)
+# ----
+# (2,1)
+# (4,3)
+#
+# query TT rowsort
+# SELECT min(y), (b, a)
+#  FROM ab, xy GROUP BY (x, (a, b))
+# ----
+# b  (2,1)
+# d  (2,1)
+# b  (4,3)
+# d  (4,3)
 
 # Test that ordering on GROUP BY columns is maintained.
 statement ok
@@ -1145,28 +1063,6 @@ SELECT z, x, max(y) FROM group_ord GROUP BY x, z ORDER BY x
 2  7  2
 2  8  4
 
-# If the underlying ordering isn't from the primary index, it needs to be hinted
-# for now.
-query II rowsort
-SELECT z, max(y) FROM group_ord@foo GROUP BY z
-----
-5  4
-2  4
-3  2
-
-# Test that a merge join is used on two aggregate subqueries with orderings on
-# the GROUP BY columns. Note that an ORDER BY is not necessary on the
-# subqueries.
-query IIII rowsort
-SELECT * FROM (SELECT x, max(y) FROM group_ord GROUP BY x) JOIN (SELECT z, min(y) FROM group_ord@foo GROUP BY z) ON x = z
-----
-5  NULL  5  4
-3  4     3  2
-
-# Regression test for #23798 until #10495 is fixed.
-statement error function reserved for internal use
-SELECT final_variance(1.2, 1.2, 123) FROM kv
-
 # Regression test for #25533 (crash when propagating filter through GROUP BY).
 query I
 SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
@@ -1178,18 +1074,16 @@ SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
 1
 
 # Regression test for distsql aggregator crash when using hash aggregation.
-query IT rowsort
+query error supported
 SELECT v, array_agg('a') FROM kv GROUP BY v
 ----
 2     {a,a,a}
 4     {a,a}
 NULL  {a}
 
-# Regression test for #26419
-query I
+# #3183
+statement error Internal
 SELECT 123 FROM kv ORDER BY max(v)
-----
-123
 
 subtest string_agg
 
@@ -1200,37 +1094,17 @@ CREATE TABLE string_agg_test (
   employee TEXT
 )
 
-query IT colnames
+statement error supported
 SELECT company_id, string_agg(employee, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
 
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, b',')
-FROM string_agg_test
-GROUP BY company_id
-ORDER BY company_id;
-----
-company_id  string_agg
-
-query IT colnames
+statement error supported
 SELECT company_id, string_agg(employee, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, NULL)
-FROM string_agg_test
-GROUP BY company_id
-ORDER BY company_id;
-----
-company_id  string_agg
 
 statement OK
 INSERT INTO string_agg_test VALUES
@@ -1245,12 +1119,12 @@ INSERT INTO string_agg_test VALUES
   (9, 3, 'C'),
   (10, 2, 'B')
 
-query error pq: unimplemented: aggregate functions with multiple non-constant expressions are not supported
+query error supported
 SELECT company_id, string_agg(employee, employee)
 FROM string_agg_test
 GROUP BY company_id;
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(employee, ',')
 FROM string_agg_test
 GROUP BY company_id
@@ -1262,7 +1136,7 @@ company_id  string_agg
 3           C,C,C
 4           D,D,D,D
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(DISTINCT employee, ',')
 FROM string_agg_test
 GROUP BY company_id
@@ -1274,8 +1148,8 @@ company_id  string_agg
 3           C
 4           D
 
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, b',')
+query error supported
+SELECT company_id, string_agg(employee::BYTEA, b',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
@@ -1286,7 +1160,7 @@ company_id  string_agg
 3           C,C,C
 4           D,D,D,D
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(employee, '')
 FROM string_agg_test
 GROUP BY company_id
@@ -1298,8 +1172,8 @@ company_id  string_agg
 3           CCC
 4           DDDD
 
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, b'')
+query error supported
+SELECT company_id, string_agg(employee::BYTEA, b'')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
@@ -1310,7 +1184,7 @@ company_id  string_agg
 3           CCC
 4           DDDD
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(employee, NULL)
 FROM string_agg_test
 GROUP BY company_id
@@ -1322,8 +1196,8 @@ company_id  string_agg
 3           CCC
 4           DDDD
 
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, NULL)
+query error supported
+SELECT company_id, string_agg(employee::BYTEA, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
@@ -1334,7 +1208,7 @@ company_id  string_agg
 3           CCC
 4           DDDD
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(NULL::TEXT, ',')
 FROM string_agg_test
 GROUP BY company_id
@@ -1346,8 +1220,8 @@ company_id  string_agg
 3           NULL
 4           NULL
 
-query IT colnames
-SELECT company_id, string_agg(NULL::BYTES, b',')
+query error supported
+SELECT company_id, string_agg(NULL::BYTEA, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
@@ -1358,7 +1232,7 @@ company_id  string_agg
 3           NULL
 4           NULL
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(NULL::TEXT, NULL)
 FROM string_agg_test
 GROUP BY company_id
@@ -1370,8 +1244,8 @@ company_id  string_agg
 3           NULL
 4           NULL
 
-query IT colnames
-SELECT company_id, string_agg(NULL::BYTES, NULL)
+query error supported
+SELECT company_id, string_agg(NULL::BYTEA, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
@@ -1382,7 +1256,7 @@ company_id  string_agg
 3           NULL
 4           NULL
 
-query error pq: ambiguous call: string_agg\(unknown, unknown\)
+query error supported
 SELECT company_id, string_agg(NULL, NULL)
 FROM string_agg_test
 GROUP BY company_id
@@ -1390,271 +1264,103 @@ ORDER BY company_id;
 
 # Now test the window function version of string_agg.
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(employee, ',')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           A
-2           B
-2           B,B
-3           C
-3           C,C
-3           C,C,C
-4           D
-4           D,D
-4           D,D,D
-4           D,D,D,D
 
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, b',')
+query error supported
+SELECT company_id, string_agg(employee::BYTEA, b',')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           A
-2           B
-2           B,B
-3           C
-3           C,C
-3           C,C,C
-4           D
-4           D,D
-4           D,D,D
-4           D,D,D,D
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(employee, '')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           A
-2           B
-2           BB
-3           C
-3           CC
-3           CCC
-4           D
-4           DD
-4           DDD
-4           DDDD
 
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, b'')
+query error supported
+SELECT company_id, string_agg(employee::BYTEA, b'')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           A
-2           B
-2           BB
-3           C
-3           CC
-3           CCC
-4           D
-4           DD
-4           DDD
-4           DDDD
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(employee, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           A
-2           B
-2           BB
-3           C
-3           CC
-3           CCC
-4           D
-4           DD
-4           DDD
-4           DDDD
 
-query IT colnames
-SELECT company_id, string_agg(employee::BYTES, NULL)
+query error supported
+SELECT company_id, string_agg(employee::BYTEA, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           A
-2           B
-2           BB
-3           C
-3           CC
-3           CCC
-4           D
-4           DD
-4           DDD
-4           DDDD
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(NULL::TEXT, employee)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-2           NULL
-3           NULL
-3           NULL
-3           NULL
-4           NULL
-4           NULL
-4           NULL
-4           NULL
 
-query IT colnames
-SELECT company_id, string_agg(NULL::BYTES, employee::BYTES)
+query error supported
+SELECT company_id, string_agg(NULL::BYTEA, employee::BYTEA)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-2           NULL
-3           NULL
-3           NULL
-3           NULL
-4           NULL
-4           NULL
-4           NULL
-4           NULL
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(NULL::TEXT, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-2           NULL
-3           NULL
-3           NULL
-3           NULL
-4           NULL
-4           NULL
-4           NULL
-4           NULL
 
-query IT colnames
-SELECT company_id, string_agg(NULL::BYTES, NULL)
+query error supported
+SELECT company_id, string_agg(NULL::BYTEA, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-2           NULL
-3           NULL
-3           NULL
-3           NULL
-4           NULL
-4           NULL
-4           NULL
-4           NULL
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(NULL, NULL::TEXT)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-2           NULL
-3           NULL
-3           NULL
-3           NULL
-4           NULL
-4           NULL
-4           NULL
-4           NULL
 
-query IT colnames
-SELECT company_id, string_agg(NULL, NULL::BYTES)
+query error supported
+SELECT company_id, string_agg(NULL, NULL::BYTEA)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-2           NULL
-3           NULL
-3           NULL
-3           NULL
-4           NULL
-4           NULL
-4           NULL
-4           NULL
 
-query error pq: ambiguous call: string_agg\(unknown, unknown\)
+query error supported
 SELECT company_id, string_agg(NULL, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(employee, lower(employee))
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           A
-2           BbB
-2           BbB
-3           CcCcC
-3           CcCcC
-3           CcCcC
-4           DdDdDdD
-4           DdDdDdD
-4           DdDdDdD
-4           DdDdDdD
 
-query IT colnames
+query error supported
 SELECT company_id, string_agg(lower(employee), employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
-----
-company_id  string_agg
-1           a
-2           bBb
-2           bBb
-3           cCcCc
-3           cCcCc
-3           cCcCc
-4           dDdDdDd
-4           dDdDdDd
-4           dDdDdDd
-4           dDdDdDd
 
-statement error pq: unknown signature: string_agg\(string, string, string\)
+query error supported
 SELECT company_id, string_agg(employee, employee, employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error pq: unknown signature: string_agg\(string\)
+query error supported
 SELECT company_id, string_agg(employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
@@ -1674,7 +1380,7 @@ INSERT INTO string_agg_test2 VALUES
   (3, 1, 'C'),
   (4, 1, 'D')
 
-query IT colnames
+query error supported
 SELECT e.company_id, string_agg(e.employee, ', ')
 FROM (
   SELECT employee, company_id
@@ -1683,24 +1389,18 @@ FROM (
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
-----
-company_id  string_agg
-1           A, B, C, D
 
-query IT colnames
+query error supported
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
-  SELECT employee::BYTES, company_id
+  SELECT employee::BYTEA, company_id
   FROM string_agg_test2
   ORDER BY employee
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
-----
-company_id  string_agg
-1           A, B, C, D
 
-query IT colnames
+query error supported
 SELECT e.company_id, string_agg(e.employee, ', ')
 FROM (
   SELECT employee, company_id
@@ -1709,24 +1409,18 @@ FROM (
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
-----
-company_id  string_agg
-1           D, C, B, A
 
-query IT colnames
+query error supported
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
-  SELECT employee::BYTES, company_id
+  SELECT employee::BYTEA, company_id
   FROM string_agg_test2
   ORDER BY employee DESC
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
-----
-company_id  string_agg
-1           D, C, B, A
 
-query IT colnames
+query error supported
 SELECT e.company_id, string_agg(e.employee, NULL)
 FROM (
   SELECT employee, company_id
@@ -1735,38 +1429,27 @@ FROM (
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
-----
-company_id  string_agg
-1           DCBA
 
-query IT colnames
+query error supported
 SELECT e.company_id, string_agg(e.employee, NULL)
 FROM (
-  SELECT employee::BYTES, company_id
+  SELECT employee::BYTEA, company_id
   FROM string_agg_test2
   ORDER BY employee DESC
   ) AS e
 GROUP BY e.company_id
 ORDER BY e.company_id;
-----
-company_id  string_agg
-1           DCBA
 
 statement OK
 DROP TABLE string_agg_test2
 
 # Regression test for #28836.
 
-query T
-SELECT string_agg('foo', CAST ((SELECT NULL) AS BYTES)) OVER ();
-----
-foo
+query error supported
+SELECT string_agg('foo', CAST ((SELECT NULL) AS BYTEA)) OVER ();
 
-# Regression test for #30166.
-query T
+query error supported
 SELECT array_agg(generate_series(1, 2))
-----
-{1,2}
 
 # Regression test for #31882.
 
@@ -1776,11 +1459,8 @@ CREATE TABLE uvw (u INT, v INT, w INT)
 statement ok
 INSERT INTO uvw VALUES (1, 2, 3), (1, 2, 3), (3, 2, 1), (3, 2, 3)
 
-query IIT rowsort
+query error supported
 SELECT u, v, array_agg(w) AS s FROM (SELECT * FROM uvw ORDER BY w) GROUP BY u, v
-----
-3  2  {1,3}
-1  2  {3,3}
 
 # Regression test for #36433: don't panic with count_agg if a post-render produces an error.
 
