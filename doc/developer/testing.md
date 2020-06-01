@@ -86,6 +86,17 @@ As mentioned above, the Rust unit/integration tests follow the standard
 convention, and live in a `mod tests { ... }` block alongside the code
 they test, or in a `tests/` subdirectory of the crate they test, respectively.
 
+The expected output of tests written with
+[datadriven](https://github.com/justinj/datadriven) can be updated by running
+them with the `REWRITE` env var set:
+
+```shell
+$ REWRITE=1 cargo test
+```
+
+When using `REWRITE` it's important to inspect the diff carefully to ensure
+nothing changed unexpectedly.
+
 ### Clippy, formatting, and linting
 
 CI also performs the lawful evil task of ensuring "good code style" with the following tools:
