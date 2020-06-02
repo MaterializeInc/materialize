@@ -7,7 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `test_util` provides utilities for test programs and demos that run against Materialize.
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 
-pub mod generator;
-pub mod kafka;
+/// Generates and returns bytes of length `len`.
+pub fn generate_bytes(len: usize) -> Vec<u8> {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(len)
+        .map(|c| c as u8)
+        .collect::<Vec<u8>>()
+}

@@ -49,7 +49,7 @@ pub async fn create_source_and_views(
 pub async fn query_materialized_view_until(
     client: &Client,
     view_name: &str,
-    expected_total_records: i64,
+    expected_total_records: u64,
 ) -> Result<(), anyhow::Error> {
     let query = format!("SELECT * FROM {view_name};", view_name = view_name);
     log::info!("querying view=> {}", query);
@@ -60,7 +60,7 @@ pub async fn query_materialized_view_until(
         match client.query_one(&*query, &[]).await {
             Ok(row) => {
                 let count: i64 = row.get("count");
-                if count == expected_total_records {
+                if count as u64 == expected_total_records {
                     log::info!(
                         "Found all {} records, done querying.",
                         expected_total_records

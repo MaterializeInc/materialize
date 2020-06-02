@@ -7,7 +7,4 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! `test_util` provides utilities for test programs and demos that run against Materialize.
-
-pub mod generator;
-pub mod kafka;
+pub mod bytes;

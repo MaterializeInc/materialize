@@ -2144,6 +2144,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "structopt",
+ "test-util",
  "thiserror",
  "tokio",
  "tokio-postgres",
@@ -3391,6 +3392,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "rand",
  "rdkafka",
 ]
 

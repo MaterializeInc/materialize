@@ -23,3 +23,4 @@ structopt = "0.3.11"
 thiserror = "1.0.19"
 tokio = { version = "0.2.21", features = ["full"] }
 tokio-postgres = "0.5.1"
+test-util = { path = "../../test-util" }
