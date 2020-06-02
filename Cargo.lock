@@ -2132,6 +2132,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aws-util",
+ "bytes",
  "chrono",
  "env_logger",
  "futures",
@@ -3390,7 +3391,6 @@ name = "test-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
  "chrono",
  "rand",
  "rdkafka",

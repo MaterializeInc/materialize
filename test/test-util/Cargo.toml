@@ -7,7 +7,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.31"
-bytes = "0.5.4"
 chrono = "0.4.11"
 rand = "0.7.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }

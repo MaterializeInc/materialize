@@ -13,6 +13,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
+use bytes::Bytes;
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{
     CreateStreamInput, DeleteStreamInput, DescribeStreamInput, Kinesis, KinesisClient,
@@ -132,10 +133,10 @@ pub async fn put_records_one_second(
 ) -> Result<u64, anyhow::Error> {
     // Generate records.
     let mut records: Vec<PutRecordsRequestEntry> = Vec::new();
-    for bytes in generator::bytes::generate_bytes(records_per_second) {
+    for _ in 0..records_per_second {
         // todo: make the records more realistic json blobs
         records.push(PutRecordsRequestEntry {
-            data: bytes,
+            data: Bytes::from(generator::bytes::generate_bytes(30)),
             explicit_hash_key: Some(shard_starting_hash_key.to_owned()), // explicitly push to the current shard
             partition_key: DUMMY_PARTITION_KEY.to_owned(), // will be overridden by "explicit_hash_key"
         });
