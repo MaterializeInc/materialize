@@ -3392,8 +3392,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "log",
  "rand",
  "rdkafka",
+ "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]
