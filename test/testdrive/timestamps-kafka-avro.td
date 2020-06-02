@@ -104,7 +104,7 @@ $ kafka-ingest format=avro topic=data2 schema=${schema} timestamp=1
 
 
 ! SELECT * FROM view_byo;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro schema=${consistency} topic=data-consistency timestamp=1
 {"source": "testdrive-data-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 1}
@@ -131,7 +131,7 @@ b  sum
 2  1
 
 !SELECT * FROM view_empty
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro schema=${consistency} topic=data-consistency timestamp=2
 {"source": "testdrive-data3-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 10, "offset": 0}

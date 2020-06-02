@@ -83,16 +83,16 @@ $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 
 
 ! SELECT * FROM view_byo;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 ! SELECT * FROM view_empty;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
 {"source": "testdrive-data2-${testdrive.seed}", "partition_count": 2 , "partition_id": 0, "timestamp": 1, "offset": 0}
 
 ! SELECT * FROM view_empty;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro topic=data-consistency  schema=${consistency}
 {"source": "testdrive-data2-${testdrive.seed}", "partition_count": 2 , "partition_id": 1, "timestamp": 1, "offset": 0}
@@ -108,7 +108,7 @@ $ kafka-ingest format=avro topic=data-consistency  schema=${consistency}
 {"source": "testdrive-data-${testdrive.seed}", "partition_count": 2 , "partition_id": 0, "timestamp": 1, "offset": 1}
 
 ! SELECT * FROM view_byo;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro topic=data-consistency  schema=${consistency}
 {"source": "testdrive-data-${testdrive.seed}", "partition_count": 2 , "partition_id": 1, "timestamp": 1, "offset": 1}
@@ -289,7 +289,7 @@ $ kafka-ingest format=avro topic=data-consistency2 schema=${consistency}
 
 
 ! SELECT * FROM data_multi;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 
 $ kafka-ingest partition=0 format=avro topic=data-multi schema=${schema} timestamp=1
@@ -301,7 +301,7 @@ $ kafka-ingest partition=1 format=avro topic=data-multi schema=${schema} timesta
 
 
 ! SELECT * FROM data_multi;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ kafka-add-partitions topic=data-multi total-partitions=4
 
