@@ -38,7 +38,7 @@ a,b
 > CREATE MATERIALIZED VIEW view_byo2 AS SELECT * FROM data_byo2
 
 ! SELECT * FROM view_byo;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ file-append path=data-consistency.csv
 \${testdrive.temp-dir}/data.csv,1,0,1,2
