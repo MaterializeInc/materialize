@@ -220,13 +220,13 @@ SELECT INTERVAL '0-0 0 0:0:0.0';
 00:00:00
 
 # Oversized components in SQL standard-style variables
-statement error invalid input syntax for interval: MONTH must be \(-12, 12\), got 13: "100-13"
+statement error invalid input syntax for interval: MONTH must be \[-12, 12\], got 13: "100-13"
 SELECT INTERVAL '100-13';
 
-statement error invalid input syntax for interval: MINUTE must be \(-59, 59\), got 61: "100-11 366 250:61"
+statement error invalid input syntax for interval: MINUTE must be \[-59, 59\], got 61: "100-11 366 250:61"
 SELECT INTERVAL '100-11 366 250:61';
 
-statement error invalid input syntax for interval: SECOND must be \(-60, 60\), got 61: "100-11 366 250:59:61"
+statement error invalid input syntax for interval: SECOND must be \[-60, 60\], got 61: "100-11 366 250:59:61"
 SELECT INTERVAL '100-11 366 250:59:61';
 
 # Invalid syntax

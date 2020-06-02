@@ -582,32 +582,32 @@ impl ParsedDateTime {
     pub fn check_datelike_bounds(&self) -> Result<()> {
         if let Some(month) = self.month {
             if month.unit < 1 || month.unit > 12 {
-                return Err(format!("MONTH must be (1, 12), got {}", month.unit));
+                return Err(format!("MONTH must be [1, 12], got {}", month.unit));
             };
         }
         if let Some(day) = self.day {
             if day.unit < 1 || day.unit > 31 {
-                return Err(format!("DAY must be (1, 31), got {}", day.unit));
+                return Err(format!("DAY must be [1, 31], got {}", day.unit));
             };
         }
         if let Some(hour) = self.hour {
             if hour.unit < 0 || hour.unit > 23 {
-                return Err(format!("HOUR must be (0, 23), got {}", hour.unit));
+                return Err(format!("HOUR must be [0, 23], got {}", hour.unit));
             };
         }
         if let Some(minute) = self.minute {
             if minute.unit < 0 || minute.unit > 59 {
-                return Err(format!("MINUTE must be (0, 59), got {}", minute.unit));
+                return Err(format!("MINUTE must be [0, 59], got {}", minute.unit));
             };
         }
 
         if let Some(second) = self.second {
             if second.unit < 0 || second.unit > 60 {
-                return Err(format!("SECOND must be (0, 60), got {}", second.unit));
+                return Err(format!("SECOND must be [0, 60], got {}", second.unit));
             };
             if second.fraction < 0 || second.fraction > 1_000_000_000 {
                 return Err(format!(
-                    "NANOSECOND must be (0, 1_000_000_000), got {}",
+                    "NANOSECOND must be [0, 1_000_000_000], got {}",
                     second.fraction
                 ));
             };
@@ -622,23 +622,23 @@ impl ParsedDateTime {
             Year | Month => {
                 if let Some(month) = self.month {
                     if month.unit < -12 || month.unit > 12 {
-                        return Err(format!("MONTH must be (-12, 12), got {}", month.unit));
+                        return Err(format!("MONTH must be [-12, 12], got {}", month.unit));
                     };
                 }
             }
             Hour | Minute | Second => {
                 if let Some(minute) = self.minute {
                     if minute.unit < -59 || minute.unit > 59 {
-                        return Err(format!("MINUTE must be (-59, 59), got {}", minute.unit));
+                        return Err(format!("MINUTE must be [-59, 59], got {}", minute.unit));
                     };
                 }
                 if let Some(second) = self.second {
                     if second.unit < -60 || second.unit > 60 {
-                        return Err(format!("SECOND must be (-60, 60), got {}", second.unit));
+                        return Err(format!("SECOND must be [-60, 60], got {}", second.unit));
                     };
                     if second.fraction < -1_000_000_000 || second.fraction > 1_000_000_000 {
                         return Err(format!(
-                            "NANOSECOND must be (-1_000_000_000, 1_000_000_000), got {}",
+                            "NANOSECOND must be [-1_000_000_000, 1_000_000_000], got {}",
                             second.fraction
                         ));
                     };
