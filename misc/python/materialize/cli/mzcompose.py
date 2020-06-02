@@ -74,6 +74,7 @@ def build_compose_file(
     * Replace `mzimage` with fingerprinted image names
     """
     images = []
+    default = os.getenv(f"MZBUILD_DOCKER_TAG", None)
     with open(config_file) as f:
         compose = yaml.safe_load(f)
         # strip mzconduct top-level key, if it exists
@@ -86,9 +87,7 @@ def build_compose_file(
                     raise errors.BadSpec(f"mzcompose: unknown image {image_name}")
 
                 image = repo.images[image_name]
-                override_tag = os.environ.get(
-                    f"MZBUILD_{image.env_var_name()}_TAG", None
-                )
+                override_tag = os.getenv(f"MZBUILD_{image.env_var_name()}_TAG", default)
                 if override_tag is not None:
                     config["image"] = image.docker_name(override_tag)
                     print(
