@@ -128,13 +128,14 @@ pub enum SequencedCommand {
         /// The identifier of the peek request to cancel.
         conn_id: u32,
     },
-    /// Create a local input named `id`
+    /// Create a local input named `index.on_id`
     CreateLocalInput {
         /// A name to use for the input.
         name: String,
-        /// A globally unique identifier to use for the source.
+        /// A globally unique identifier to use for the local input's index.
         index_id: GlobalId,
-        /// TODO(wangandi) what does this describe?
+        /// Contains the global id of the local input
+        /// and the keys that its index is arranged on
         index: IndexDesc,
         /// The relation type of the input.
         on_type: RelationType,
