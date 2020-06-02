@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::Context;
 use tokio_postgres::Client;
 
-use test_util::mz as mz_util;
+use test_util::mz_client;
 
 pub async fn create_source_and_views(
     client: &Client,
@@ -56,7 +56,7 @@ pub async fn query_materialized_view_until(
     let query = format!("SELECT * FROM {view_name};", view_name = view_name);
     log::info!("querying view=> {}", query);
 
-    let row = mz_util::try_query_one(&client, &*query, Duration::from_secs(1)).await?;
+    let row = mz_client::try_query_one(&client, &*query, Duration::from_secs(1)).await?;
     let count: i64 = row.get("count");
     if count as u64 == expected_total_records {
         log::info!(

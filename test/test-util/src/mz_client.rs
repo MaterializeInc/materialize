@@ -13,9 +13,9 @@ use tokio_postgres::{Client, Error, NoTls, Row};
 
 /// Create and return a new PostgreSQL client, spawning off the connection
 /// object along the way.
-pub async fn client(user: &str, host: &str, port: u16) -> Result<Client, anyhow::Error> {
+pub async fn client(host: &str, port: u16) -> Result<Client, anyhow::Error> {
     let (mz_client, conn) = tokio_postgres::Config::new()
-        .user(user)
+        .user("mzd")
         .host(host)
         .port(port)
         .connect(NoTls)
@@ -25,7 +25,7 @@ pub async fn client(user: &str, host: &str, port: u16) -> Result<Client, anyhow:
     // so spawn it off to run on its own.
     tokio::spawn(async move {
         if let Err(e) = conn.await {
-            log::info!("connection error: {}", e);
+            panic!("connection error: {}", e);
         }
     });
 

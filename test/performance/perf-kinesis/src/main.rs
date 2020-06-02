@@ -32,7 +32,7 @@ use rand::Rng;
 use rusoto_core::Region;
 use structopt::StructOpt;
 
-use test_util::mz as mz_util;
+use test_util::mz_client;
 
 mod kinesis;
 mod mz;
@@ -85,7 +85,7 @@ async fn run() -> Result<(), anyhow::Error> {
     });
 
     // Initialize connection to materialized instance.
-    let client = mz_util::client("mzd", &args.materialized_host, args.materialized_port)
+    let client = mz_client::client(&args.materialized_host, args.materialized_port)
         .await
         .context("creating postgres client")?;
 
