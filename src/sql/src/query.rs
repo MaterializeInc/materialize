@@ -1475,7 +1475,7 @@ fn plan_expr_returning_name<'a>(
                 if let ScalarType::Date = typ.scalar_type {
                     expr = plan_cast_internal(
                         ecx,
-                        CastContext::Implicit("EXTRACT", ImplicitCastMod::None),
+                        CastContext::Implicit("EXTRACT"),
                         expr,
                         ScalarType::Timestamp,
                     )?;
@@ -1642,7 +1642,7 @@ pub fn plan_homogeneous_exprs(
     for (expr, typ) in pending.into_iter().map(Option::unwrap) {
         match plan_cast_internal(
             ecx,
-            CastContext::Implicit(name, ImplicitCastMod::PermitStringToAny),
+            CastContext::Implicit(name),
             expr,
             best_target_type.clone().unwrap(),
         ) {
@@ -1920,7 +1920,7 @@ fn plan_function<'a>(
             };
             plan_cast_internal(
                 ecx,
-                CastContext::Implicit("internal.avg_promotion", ImplicitCastMod::None),
+                CastContext::Implicit("internal.avg_promotion"),
                 expr,
                 output_type,
             )
@@ -1982,7 +1982,7 @@ fn plan_function<'a>(
                     // because sqrt is an inherently imprecise operation.
                     let expr = plan_cast_internal(
                         ecx,
-                        CastContext::Implicit("sqrt", ImplicitCastMod::None),
+                        CastContext::Implicit("sqrt"),
                         expr,
                         ScalarType::Float64,
                     )?;
@@ -2030,13 +2030,8 @@ pub fn plan_to_jsonb(
                 typ
             )
         }
-        _ => plan_cast_internal(
-            ecx,
-            CastContext::Implicit(name, ImplicitCastMod::PermitAnyToString),
-            arg,
-            ScalarType::String,
-        )?
-        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        _ => plan_cast_internal(ecx, CastContext::Implicit(name), arg, ScalarType::String)?
+            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
     })
 }
 
@@ -2241,7 +2236,7 @@ fn plan_arithmetic_op<'a>(
                         .unwrap();
                 lexpr = match plan_cast_internal(
                     ecx,
-                    CastContext::Implicit(&op_string, ImplicitCastMod::None),
+                    CastContext::Implicit(&op_string),
                     lexpr,
                     best_target_type.clone(),
                 ) {
@@ -2255,7 +2250,7 @@ fn plan_arithmetic_op<'a>(
                 };
                 rexpr = match plan_cast_internal(
                     ecx,
-                    CastContext::Implicit(&op_string, ImplicitCastMod::None),
+                    CastContext::Implicit(&op_string),
                     rexpr,
                     best_target_type.clone(),
                 ) {
@@ -2904,7 +2899,7 @@ fn unnest(expr: &Expr) -> &Expr {
     }
 }
 
-fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<ScalarType> {
+pub fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<ScalarType> {
     iter.into_iter()
         .max_by_key(|scalar_type| match scalar_type {
             ScalarType::Unknown => 0,
@@ -2923,28 +2918,16 @@ fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<Scalar
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CastContext<'a> {
     Explicit,
-    Implicit(&'a str, ImplicitCastMod),
+    Implicit(&'a str),
 }
 
 impl<'a> fmt::Display for CastContext<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CastContext::Explicit => f.write_str("CAST"),
-            CastContext::Implicit(s, _) => write!(f, "{}", s),
+            CastContext::Implicit(s) => write!(f, "{}", s),
         }
     }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-/// Describes different behaviors of implicit casts.
-pub enum ImplicitCastMod {
-    None,
-    /// Permit any type to be cast as a string. Used in variadic functions that
-    /// take the "any" parameter.
-    PermitAnyToString,
-    /// Permit a string to be cast to any type. Used to allow string literals to
-    /// be implicitly cast to any type.
-    PermitStringToAny,
 }
 
 /// Plans a cast between two `RelationExpr`s of different types. If it is
@@ -2962,41 +2945,10 @@ pub fn plan_cast_internal<'a>(
     use UnaryFunc::*;
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
 
-    if let CastContext::Implicit(_, cast_mod) = ccx {
-        match (&from_scalar_type, &to_scalar_type) {
-            (String, String) | (Unknown, String) => {}
-            (_, String) if cast_mod != ImplicitCastMod::PermitAnyToString => bail!(
-                "{} does not support implicitly casting from {:?} to {:?}; request an explicit cast",
-                ccx,
-                from_scalar_type,
-                to_scalar_type
-            ),
-            (String, _) if cast_mod != ImplicitCastMod::PermitStringToAny => bail!(
-                "{} does not support implicitly casting from {:?} to {:?}; request an explicit cast",
-                ccx,
-                from_scalar_type,
-                to_scalar_type
-            ),
-            (Float32, Int64)
-            | (Float32, Decimal(_, _))
-            | (Float64, Int32)
-            | (Float64, Int64)
-            | (Float64, Decimal(_, _))
-            | (Decimal(_, _), Int32)
-            | (Decimal(_, _), Int64) => bail!(
-                "{} does not support implicitly casting from {:?} to {:?}; request an explicit cast",
-                ccx,
-                from_scalar_type,
-                to_scalar_type
-            ),
-            _ => {}
-        }
-    }
-
     let expr = match (from_scalar_type, to_scalar_type.clone()) {
         (Bool, String) => expr.call_unary(match ccx {
             CastContext::Explicit => CastBoolToStringExplicit,
-            CastContext::Implicit(_, _) => CastBoolToStringImplicit,
+            CastContext::Implicit(_) => CastBoolToStringImplicit,
         }),
         (Int32, Bool) => expr.call_unary(CastInt32ToBool),
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
@@ -3097,6 +3049,37 @@ pub fn plan_cast_internal<'a>(
     Ok(expr)
 }
 
+pub fn plan_cast_implicit<'a>(
+    ecx: &ExprContext<'a>,
+    ccx: CastContext<'a>,
+    expr: ScalarExpr,
+    to_scalar_type: ScalarType,
+) -> Result<ScalarExpr, failure::Error> {
+    use ScalarType::*;
+    let from_scalar_type = ecx.column_type(&expr).scalar_type;
+
+    match (&from_scalar_type, &to_scalar_type) {
+        (String, String) | (Unknown, String) => {}
+        (String, _)
+        | (_, String)
+        | (Float32, Int64)
+        | (Float32, Decimal(_, _))
+        | (Float64, Int32)
+        | (Float64, Int64)
+        | (Float64, Decimal(_, _))
+        | (Decimal(_, _), Int32)
+        | (Decimal(_, _), Int64) => bail!(
+            "{} does not support implicitly casting from {:?} to {:?}; request an explicit cast",
+            ccx,
+            from_scalar_type,
+            to_scalar_type
+        ),
+        _ => {}
+    }
+
+    plan_cast_internal(ecx, ccx, expr, to_scalar_type)
+}
+
 fn promote_number_floatdec<'a>(
     ecx: &ExprContext<'a>,
     name: &str,
@@ -3104,12 +3087,9 @@ fn promote_number_floatdec<'a>(
 ) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Float32 | ScalarType::Float64 | ScalarType::Decimal(_, _) => expr,
-        ScalarType::Unknown | ScalarType::Int32 | ScalarType::Int64 => plan_cast_internal(
-            ecx,
-            CastContext::Implicit(name, ImplicitCastMod::None),
-            expr,
-            ScalarType::Float64,
-        )?,
+        ScalarType::Unknown | ScalarType::Int32 | ScalarType::Int64 => {
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Float64)?
+        }
         other => bail!("{} has non-numeric type {:?}", name, other),
     })
 }
@@ -3121,12 +3101,9 @@ fn promote_int_int64<'a>(
 ) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Int64 => expr,
-        ScalarType::Unknown | ScalarType::Int32 => plan_cast_internal(
-            ecx,
-            CastContext::Implicit(name, ImplicitCastMod::None),
-            expr,
-            ScalarType::Int64,
-        )?,
+        ScalarType::Unknown | ScalarType::Int32 => {
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Int64)?
+        }
         other => bail!("{} has non-integer type {:?}", name, other,),
     })
 }

@@ -464,13 +464,13 @@ SELECT round((SELECT * FROM nums));
 ----
 NULL
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round((SELECT * FROM nums), 2)
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(5.0, (SELECT * FROM nums))
 
 query R
@@ -478,22 +478,22 @@ SELECT round(5.0, CAST ((SELECT * FROM nums) AS integer))
 ----
 NULL
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS double precision), 3)
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), 3)
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(true, 3)
 
-statement error
+query error
 SELECT round(true)
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), 3.0)
 
-statement error
+query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), CAST (3.0 AS float))
 
 query I
@@ -501,7 +501,7 @@ SELECT 2147483646+1
 ----
 2147483647
 
-statement error numeric field overflow
+query error numeric field overflow
 SELECT 2147483647+1
 
 query I
@@ -509,8 +509,8 @@ SELECT 9223372036854775806::bigint+1::bigint
 ----
 9223372036854775807
 
-statement error numeric field overflow
+query error numeric field overflow
 SELECT 9223372036854775807::bigint+1::bigint
 
-statement error numeric field overflow
+query error numeric field overflow
 SELECT 9223372036854775807::bigint-(-1)::bigint

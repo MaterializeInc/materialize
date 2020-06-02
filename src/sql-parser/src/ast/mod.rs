@@ -470,6 +470,16 @@ impl AstDisplay for Expr {
 }
 impl_display!(Expr);
 
+impl Expr {
+    pub fn is_arg_string_literal(&self) -> bool {
+        if let Expr::Value(Value::SingleQuotedString(_)) = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowSpec {
