@@ -21,7 +21,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
-use ore::vector::VecExt;
+use ore::vector::repurpose_allocation;
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
@@ -125,7 +125,7 @@ where
                         let row = row_packer.finish_and_reuse();
                         results.push(Ok((key, row)));
                     }
-                    datums = datums_local.repurpose_allocation();
+                    datums = repurpose_allocation(datums_local);
                     // Return accumulated results.
                     results
                 })
