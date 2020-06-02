@@ -94,9 +94,6 @@ where
                     // First, evaluate the key selector expressions.
                     // If any error we produce their errors as output and note
                     // the fact that the key was not correctly produced.
-                    // TODO(frank): this allocation could be re-used if we were
-                    // more clever about where it came from (e.g. allocated with
-                    // lifetime `'storage` in `flat_map_ref`).
                     let mut datums_local = std::mem::take(&mut datums);
                     datums_local.extend(row.iter().take(columns_needed));
                     for expr in group_key_clone.iter() {
