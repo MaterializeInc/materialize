@@ -2091,7 +2091,19 @@ where
                     if *candidate > 0 {
                         candidate.saturating_sub(1)
                     } else {
-                        bail!("At least one input has no complete timestamps yet.");
+                        let unstarted = uses_ids
+                            .iter()
+                            .filter(|id| {
+                                self.indexes
+                                    .upper_of(id)
+                                    .expect("id not found")
+                                    .less_equal(&0)
+                            })
+                            .collect::<Vec<_>>();
+                        bail!(
+                            "At least one input has no complete timestamps yet: {:?}",
+                            unstarted
+                        );
                     }
                 } else {
                     // A complete trace can be read in its final form with this time.
@@ -2112,7 +2124,22 @@ where
         if since.less_equal(&timestamp) {
             Ok(timestamp)
         } else {
-            bail!("Timestamp ({}) is not valid for all inputs", timestamp);
+            let invalid = uses_ids
+                .iter()
+                .filter(|id| {
+                    !self
+                        .indexes
+                        .since_of(id)
+                        .expect("id not found")
+                        .less_equal(&timestamp)
+                })
+                .map(|id| (id, self.indexes.since_of(id)))
+                .collect::<Vec<_>>();
+            bail!(
+                "Timestamp ({}) is not valid for all inputs: {:?}",
+                timestamp,
+                invalid
+            );
         }
     }
 
