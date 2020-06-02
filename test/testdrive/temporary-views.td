@@ -94,3 +94,6 @@ unknown catalog item 'double_temp_v'
 
 ! SELECT * FROM temp_v;
 unknown catalog item 'temp_v'
+
+! CREATE TEMP VIEW mz_foo.a AS SELECT 1
+cannot create temporary item in non-temporary schema

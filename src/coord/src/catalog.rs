@@ -764,12 +764,20 @@ impl Catalog {
                     }
                 }
                 Op::CreateItem { id, name, item } => {
-                    if !item.is_temporary() {
+                    if item.is_temporary() {
+                        if name.database != DatabaseSpecifier::Ambient
+                            || name.schema != MZ_TEMP_SCHEMA
+                        {
+                            return Err(Error::new(ErrorKind::InvalidTemporarySchema));
+                        }
+                    } else {
                         if item.uses().iter().any(|id| match self.try_get_by_id(*id) {
                             Some(entry) => entry.item().is_temporary(),
                             None => temporary_ids.contains(&id),
                         }) {
-                            return Err(Error::new(ErrorKind::TemporaryItem(id.to_string())));
+                            return Err(Error::new(ErrorKind::InvalidTemporaryDependency(
+                                id.to_string(),
+                            )));
                         }
                         let database_id = match &name.database {
                             DatabaseSpecifier::Name(name) => tx.load_database_id(&name)?,

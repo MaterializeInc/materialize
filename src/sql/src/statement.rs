@@ -1610,7 +1610,7 @@ impl<'a> StatementContext<'a> {
     pub fn allocate_temporary_name(&self, name: PartialName) -> FullName {
         FullName {
             database: DatabaseSpecifier::Ambient,
-            schema: "mz_temp".to_owned(),
+            schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
             item: name.item,
         }
     }
