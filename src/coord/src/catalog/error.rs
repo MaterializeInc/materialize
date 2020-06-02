@@ -30,7 +30,8 @@ pub(crate) enum ErrorKind {
     UnacceptableSchemaName(String),
     ReadOnlySystemSchema(String),
     SchemaNotEmpty(String),
-    TemporaryItem(String),
+    InvalidTemporaryDependency(String),
+    InvalidTemporarySchema,
     UnsatisfiableLoggingDependency { depender_name: String },
     Storage(rusqlite::Error),
 }
@@ -64,7 +65,8 @@ impl std::error::Error for Error {
             | ErrorKind::UnacceptableSchemaName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
             | ErrorKind::SchemaNotEmpty(_)
-            | ErrorKind::TemporaryItem(_)
+            | ErrorKind::InvalidTemporaryDependency(_)
+            | ErrorKind::InvalidTemporarySchema
             | ErrorKind::UnsatisfiableLoggingDependency { .. } => None,
             ErrorKind::Storage(e) => Some(e),
         }
@@ -93,11 +95,14 @@ impl fmt::Display for Error {
                 write!(f, "system schema '{}' cannot be modified", name)
             }
             ErrorKind::SchemaNotEmpty(name) => write!(f, "cannot drop non-empty schema '{}'", name),
-            ErrorKind::TemporaryItem(name) => write!(
+            ErrorKind::InvalidTemporaryDependency(name) => write!(
                 f,
                 "non-temporary items cannot depend on temporary item '{}'",
                 name
             ),
+            ErrorKind::InvalidTemporarySchema => {
+                write!(f, "cannot create temporary item in non-temporary schema")
+            }
             ErrorKind::UnsatisfiableLoggingDependency { depender_name } => write!(
                 f,
                 "catalog item '{}' depends on system logging, but logging is disabled",
