@@ -9,13 +9,6 @@ default-run = "materialized"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 
-[lib]
-path = "lib.rs"
-
-[[bin]]
-name = "materialized"
-path = "bin/materialized.rs"
-
 [dependencies]
 async-trait = "0.1.31"
 backtrace = { version = "0.3.48", features = ["coresymbolication"] }

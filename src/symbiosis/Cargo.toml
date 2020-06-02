@@ -5,9 +5,6 @@ version = "0.1.0"
 edition = "2018"
 publish = false
 
-[lib]
-path = "lib.rs"
-
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 dataflow-types = { path = "../dataflow-types" }

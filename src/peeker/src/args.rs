@@ -19,7 +19,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::{Error, Result};
 
-static DEFAULT_CONFIG: &str = include_str!("config.toml");
+static DEFAULT_CONFIG: &str = include_str!("../config.toml");
 
 #[derive(Debug)]
 pub struct Args {

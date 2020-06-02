@@ -7,9 +7,7 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/MaterializeInc/avro-rs"
 edition = "2018"
-
-[lib]
-path = "lib.rs"
+autobenches = false
 
 [features]
 snappy = ["byteorder", "crc", "snap"]
