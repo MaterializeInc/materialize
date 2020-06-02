@@ -275,38 +275,6 @@ struct DataPlaneInfo {
     worker_count: i32,
 }
 
-/// Refreshes metadata for a single consumer
-fn refresh_metadata(
-    consumer: &BaseConsumer<GlueConsumerContext>,
-    topic: &str,
-    expected_partitions: i32,
-) -> bool {
-    match consumer.fetch_metadata(Some(topic), Duration::from_secs(1)) {
-        Ok(md) => match md.topics().iter().find(|mdt| mdt.name() == topic) {
-            None => {
-                warn!("Topic {} not found in Kafka metadata", topic);
-                false
-            }
-            Some(mdt) => {
-                let partitions = mdt.partitions().len();
-                if partitions < expected_partitions.try_into().unwrap() {
-                    warn!(
-                        "Topic {} does not have as many partitions as expected ({} < {})",
-                        topic, partitions, expected_partitions
-                    );
-                    false
-                } else {
-                    true
-                }
-            }
-        },
-        Err(e) => {
-            warn!("Error refreshing Kafka metadata: {}", e);
-            false
-        }
-    }
-}
-
 impl DataPlaneInfo {
     fn new(
         topic_name: String,
@@ -437,48 +405,40 @@ impl DataPlaneInfo {
 
     /// Create a new partition queue and adds it to the list of existing consumers
     fn create_partition_queue(&mut self, partition_id: i32) -> bool {
-        if refresh_metadata(self.consumer.as_ref(), &self.topic_name, partition_id + 1) {
-            // Collect old partition assignments
-            let tpl = self.consumer.assignment().unwrap();
-            // Create list from assignments
-            let mut partition_list = TopicPartitionList::new();
-            for partition in tpl.elements_for_topic(&self.topic_name) {
-                partition_list.add_partition_offset(
-                    partition.topic(),
-                    partition.partition(),
-                    partition.offset(),
-                );
-            }
-            // Add new partition
-            partition_list.add_partition_offset(&self.topic_name, partition_id, Offset::Beginning);
-            self.consumer.assign(&partition_list).unwrap();
-            let partition_queue = self
-                .consumer
-                .split_partition_queue(&self.topic_name, partition_id);
-            if let Some(partition_queue) = partition_queue {
-                self.partition_consumers
-                    .push_front(PartitionConsumer::new(partition_id, partition_queue));
-                assert_eq!(
-                    self.consumer
-                        .assignment()
-                        .unwrap()
-                        .elements_for_topic(&self.topic_name)
-                        .len(),
-                    self.partition_consumers.len()
-                );
-                self.partition_metrics.insert(
-                    partition_id,
-                    PartitionMetrics::new(
-                        &self.topic_name,
-                        &self.source_id,
-                        &partition_id.to_string(),
-                    ),
-                );
-                self.consumer.poll(Duration::from_secs(0));
-                true
-            } else {
-                false
-            }
+        // Collect old partition assignments
+        let tpl = self.consumer.assignment().unwrap();
+        // Create list from assignments
+        let mut partition_list = TopicPartitionList::new();
+        for partition in tpl.elements_for_topic(&self.topic_name) {
+            partition_list.add_partition_offset(
+                partition.topic(),
+                partition.partition(),
+                partition.offset(),
+            );
+        }
+        // Add new partition
+        partition_list.add_partition_offset(&self.topic_name, partition_id, Offset::Beginning);
+        self.consumer.assign(&partition_list).unwrap();
+        let partition_queue = self
+            .consumer
+            .split_partition_queue(&self.topic_name, partition_id);
+        if let Some(partition_queue) = partition_queue {
+            self.partition_consumers
+                .push_front(PartitionConsumer::new(partition_id, partition_queue));
+            assert_eq!(
+                self.consumer
+                    .assignment()
+                    .unwrap()
+                    .elements_for_topic(&self.topic_name)
+                    .len(),
+                self.partition_consumers.len()
+            );
+            self.partition_metrics.insert(
+                partition_id,
+                PartitionMetrics::new(&self.topic_name, &self.source_id, &partition_id.to_string()),
+            );
+            self.consumer.poll(Duration::from_secs(0));
+            true
         } else {
             false
         }
