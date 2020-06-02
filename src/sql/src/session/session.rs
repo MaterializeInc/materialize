@@ -23,7 +23,6 @@ use failure::bail;
 
 use repr::{Datum, Row, ScalarType};
 
-use crate::names::DatabaseSpecifier;
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
@@ -296,8 +295,8 @@ impl Session {
     }
 
     /// Returns the value of the `database` configuration parameter.
-    pub fn database(&self) -> DatabaseSpecifier {
-        DatabaseSpecifier::Name(self.database.value().to_owned())
+    pub fn database(&self) -> &str {
+        self.database.value()
     }
 
     /// Returns the value of the `extra_float_digits` configuration parameter.
@@ -427,75 +426,5 @@ impl Session {
     /// Get a portal for mutation
     pub fn get_portal_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
         self.portals.get_mut(portal_name)
-    }
-}
-
-/// A trait for a session that exposes only the parameters that should impact
-/// the planning of a SQL query.
-pub trait PlanSession: fmt::Debug {
-    /// Returns the value of the `database` configuration parameter.
-    fn database(&self) -> DatabaseSpecifier;
-
-    /// Returns the value of the `search_path` configuration parameter.
-    fn search_path(&self) -> &[&str];
-
-    /// Constructs an owned version of this `PlanSession`.
-    fn to_owned(&self) -> Box<dyn PlanSession + Send>;
-}
-
-impl PlanSession for Session {
-    fn database(&self) -> DatabaseSpecifier {
-        self.database()
-    }
-
-    fn search_path(&self) -> &[&str] {
-        self.search_path()
-    }
-
-    fn to_owned(&self) -> Box<dyn PlanSession + Send> {
-        Box::new(OwnedPlanSession {
-            database: self.database(),
-            search_path: self.search_path.value,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct OwnedPlanSession {
-    database: DatabaseSpecifier,
-    search_path: &'static [&'static str],
-}
-
-impl PlanSession for OwnedPlanSession {
-    fn database(&self) -> DatabaseSpecifier {
-        self.database.clone()
-    }
-
-    fn search_path(&self) -> &[&str] {
-        self.search_path
-    }
-
-    fn to_owned(&self) -> Box<dyn PlanSession + Send> {
-        Box::new(self.clone())
-    }
-}
-
-/// A [`PlanSession`] that errors if any of its parameters are accessed.
-/// Useful for planning internal SQL queries that should not depend on any
-/// session state.
-#[derive(Clone, Debug)]
-pub struct InternalSession;
-
-impl PlanSession for InternalSession {
-    fn database(&self) -> DatabaseSpecifier {
-        DatabaseSpecifier::Ambient
-    }
-
-    fn search_path(&self) -> &[&str] {
-        &[]
-    }
-
-    fn to_owned(&self) -> Box<dyn PlanSession + Send> {
-        Box::new(self.clone())
     }
 }

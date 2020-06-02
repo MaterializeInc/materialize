@@ -42,7 +42,7 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
 
-use crate::catalog::sql::SqlVal;
+use crate::catalog::storage::{self, SqlVal};
 use crate::coord;
 
 /// Number of seconds that must elapse before we update watermarks again
@@ -554,7 +554,7 @@ pub struct Timestamper {
     byo_sources: HashMap<SourceInstanceId, ByoTimestampConsumer>,
 
     /// Connection to the underlying SQL lite instance
-    storage: Arc<Mutex<crate::catalog::sql::Connection>>,
+    storage: Arc<Mutex<storage::Connection>>,
 
     tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
     rx: std::sync::mpsc::Receiver<TimestampMessage>,
@@ -775,7 +775,7 @@ fn identify_consistency_format(enc: DataEncoding, env: Envelope) -> ConsistencyF
 impl Timestamper {
     pub fn new(
         config: &TimestampConfig,
-        storage: Arc<Mutex<crate::catalog::sql::Connection>>,
+        storage: Arc<Mutex<storage::Connection>>,
         tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
     ) -> Self {
@@ -817,7 +817,7 @@ impl Timestamper {
         }
     }
 
-    fn storage(&self) -> MutexGuard<crate::catalog::sql::Connection> {
+    fn storage(&self) -> MutexGuard<storage::Connection> {
         self.storage.lock().expect("lock poisoned")
     }
 

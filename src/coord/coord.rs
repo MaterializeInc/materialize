@@ -45,6 +45,7 @@ use expr::{
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
+use sql::catalog::Catalog as _;
 use sql::{
     DatabaseSpecifier, ExplainOptions, FullName, MutationKind, ObjectType, Params, Plan,
     PlanContext, PreparedStatement, Session, Statement,
@@ -52,7 +53,7 @@ use sql::{
 use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
-use crate::catalog::{self, Catalog, CatalogItem, ConnCatalog, SinkConnectorState, SYSTEM_CONN_ID};
+use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};
@@ -319,7 +320,11 @@ where
             match msg {
                 Message::Command(Command::Startup { session, tx }) => {
                     let mut messages = vec![];
-                    if self.catalog.resolve_database(&session.database()).is_err() {
+                    let catalog = self.catalog.for_session(&session);
+                    if catalog
+                        .resolve_database(catalog.default_database())
+                        .is_err()
+                    {
                         messages.push(StartupMessage::UnknownSessionDatabase);
                     }
                     self.catalog.create_temporary_schema(session.conn_id());
@@ -546,7 +551,9 @@ where
         let ops = self.catalog.drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
             .expect("unable to drop temporary items for conn_id");
-        self.catalog.drop_temporary_schema(conn_id);
+        self.catalog
+            .drop_temporary_schema(conn_id)
+            .expect("unable to drop temporary schema");
     }
 
     fn sequence_plan(
@@ -2204,8 +2211,7 @@ where
         let pcx = PlanContext::default();
         match sql::plan(
             &pcx,
-            &ConnCatalog::new(&self.catalog, session.conn_id()),
-            session,
+            &self.catalog.for_session(session),
             stmt.clone(),
             params,
         ) {
@@ -2214,8 +2220,7 @@ where
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
                     let plan = block_on(postgres.execute(
                         &pcx,
-                        &ConnCatalog::new(&self.catalog, session.conn_id()),
-                        session,
+                        &self.catalog.for_session(session),
                         &stmt,
                     ))?;
                     Ok((pcx, plan))
@@ -2232,11 +2237,7 @@ where
         stmt: Option<Statement>,
     ) -> Result<(), failure::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
-            match sql::describe(
-                &ConnCatalog::new(&self.catalog, session.conn_id()),
-                session,
-                stmt.clone(),
-            ) {
+            match sql::describe(&self.catalog.for_session(session), stmt.clone()) {
                 Ok((desc, param_types)) => (desc, param_types),
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
@@ -2468,13 +2469,7 @@ fn open_catalog(
                 let stmt = sql::parse(log_view.sql.to_owned())
                     .expect("failed to parse bootstrap sql")
                     .into_element();
-                match sql::plan(
-                    &pcx,
-                    &ConnCatalog::new(catalog, SYSTEM_CONN_ID),
-                    &sql::InternalSession,
-                    stmt,
-                    &params,
-                ) {
+                match sql::plan(&pcx, &catalog.for_system_session(), stmt, &params) {
                     Ok(Plan::CreateView {
                         name: _,
                         view,
