@@ -33,3 +33,4 @@ pub mod sync;
 pub mod test;
 pub mod thread;
 pub mod tokio;
+pub mod vector;
