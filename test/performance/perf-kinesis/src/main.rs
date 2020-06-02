@@ -26,20 +26,13 @@
 /// stream, should not drift over time. (These measurements should become more concrete as
 /// we get more experience running this test).
 ///
-/// TODOs:
-///     - Parameterize queries_per_second.
-///     - Get this test to run nightly.
-///     - Handle this token error: {"__type":"ExpiredTokenException","message":"The security token included in the request is expired"}
-///     - Expand the use cases the test is covering:
-///         - Add a new "existing_records" argument that pre-loads that number of records into the
-///           target Kinesis stream. This should effectively mock what "catching up" will look like
-///           when Materialize connects to an existing stream.
 ///
 use anyhow::Context;
 use rand::Rng;
 use rusoto_core::Region;
 use structopt::StructOpt;
-use tokio_postgres::NoTls;
+
+use test_util::mz_client;
 
 mod kinesis;
 mod mz;
@@ -92,21 +85,9 @@ async fn run() -> Result<(), anyhow::Error> {
     });
 
     // Initialize connection to materialized instance.
-    let (client, conn) = tokio_postgres::Config::new()
-        .user("mzd")
-        .host(&args.materialized_host)
-        .port(args.materialized_port)
-        .connect(NoTls)
+    let client = mz_client::client(&args.materialized_host, args.materialized_port)
         .await
         .context("creating postgres client")?;
-
-    // The connection object performs the actual communication with the database,
-    // so spawn it off to run on its own.
-    tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            log::error!("connection error: {}", e);
-        }
-    });
 
     // Create Kinesis source and materialized view.
     mz::create_source_and_views(&client, stream_arn).await?;

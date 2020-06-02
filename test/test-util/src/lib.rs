@@ -11,3 +11,4 @@
 
 pub mod generator;
 pub mod kafka;
+pub mod mz_client;
