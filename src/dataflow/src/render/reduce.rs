@@ -21,6 +21,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
+use ore::vector::VecExt;
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
@@ -82,6 +83,7 @@ where
             }
 
             let mut row_packer = RowPacker::new();
+            let mut datums = vec![];
             let (key_val_input, mut err_input): (
                 Collection<_, Result<(Row, Row), DataflowError>, _>,
                 _,
@@ -95,9 +97,10 @@ where
                     // TODO(frank): this allocation could be re-used if we were
                     // more clever about where it came from (e.g. allocated with
                     // lifetime `'storage` in `flat_map_ref`).
-                    let datums = row.iter().take(columns_needed).collect::<Vec<_>>();
+                    let mut datums_local = std::mem::take(&mut datums);
+                    datums_local.extend(row.iter().take(columns_needed));
                     for expr in group_key_clone.iter() {
-                        match expr.eval(&datums, &temp_storage) {
+                        match expr.eval(&datums_local, &temp_storage) {
                             Ok(val) => row_packer.push(val),
                             Err(e) => {
                                 results.push(Err(e.into()));
@@ -112,7 +115,7 @@ where
                     if results.is_empty() {
                         let key = row_packer.finish_and_reuse();
                         for aggr in aggregates_clone.iter() {
-                            match aggr.expr.eval(&datums, &temp_storage) {
+                            match aggr.expr.eval(&datums_local, &temp_storage) {
                                 Ok(val) => {
                                     row_packer.push(val);
                                 }
@@ -125,6 +128,7 @@ where
                         let row = row_packer.finish_and_reuse();
                         results.push(Ok((key, row)));
                     }
+                    datums = datums_local.repurpose_allocation();
                     // Return accumulated results.
                     results
                 })
