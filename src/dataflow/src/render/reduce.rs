@@ -21,7 +21,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr};
-use ore::vector::repurpose_allocation;
+use ore::vec::repurpose_allocation;
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use super::context::Context;
