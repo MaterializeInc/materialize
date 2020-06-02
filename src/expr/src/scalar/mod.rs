@@ -10,10 +10,11 @@
 use std::collections::HashSet;
 use std::mem;
 
-use repr::regex::Regex;
+use serde::{Deserialize, Serialize};
+
+use repr::adt::regex::Regex;
 use repr::strconv::ParseError;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
-use serde::{Deserialize, Serialize};
 
 use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 

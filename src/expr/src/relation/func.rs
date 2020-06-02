@@ -13,9 +13,11 @@ use std::fmt;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use repr::decimal::Significand;
+use repr::adt::decimal::Significand;
+use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use std::iter;
@@ -619,7 +621,7 @@ pub struct CaptureGroupDesc {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct AnalyzedRegex(repr::regex::Regex, Vec<CaptureGroupDesc>);
+pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>);
 
 impl AnalyzedRegex {
     pub fn new(s: &str) -> Result<Self, regex::Error> {
@@ -640,7 +642,7 @@ impl AnalyzedRegex {
                 nullable: true,
             })
             .collect();
-        Ok(Self(repr::regex::Regex(r), descs))
+        Ok(Self(ReprRegex(r), descs))
     }
     pub fn capture_groups_len(&self) -> usize {
         self.1.len()
@@ -648,7 +650,7 @@ impl AnalyzedRegex {
     pub fn capture_groups_iter(&self) -> impl Iterator<Item = &CaptureGroupDesc> {
         self.1.iter()
     }
-    pub fn inner(&self) -> &regex::Regex {
+    pub fn inner(&self) -> &Regex {
         &(self.0).0
     }
 }

@@ -12,12 +12,13 @@ use std::cell::RefCell;
 use std::fmt;
 use std::mem::{size_of, transmute};
 
-use crate::decimal::Significand;
-use crate::scalar::Interval;
-use crate::Datum;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+
+use crate::adt::decimal::Significand;
+use crate::adt::interval::Interval;
+use crate::Datum;
 
 /// A packed representation for `Datum`s.
 ///

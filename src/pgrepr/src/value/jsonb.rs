@@ -16,7 +16,7 @@ use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 /// A wrapper for [`repr::Jsonb`] that can be serialized and deserialized
 /// to the PostgreSQL binary format.
 #[derive(Debug)]
-pub struct Jsonb(pub repr::jsonb::Jsonb);
+pub struct Jsonb(pub repr::adt::jsonb::Jsonb);
 
 impl ToSql for Jsonb {
     fn to_sql(
@@ -44,7 +44,7 @@ impl<'a> FromSql<'a> for Jsonb {
         if raw.len() < 1 || raw[0] != 1 {
             return Err("unsupported jsonb encoding version".into());
         }
-        Ok(Jsonb(repr::jsonb::Jsonb::from_slice(&raw[1..])?))
+        Ok(Jsonb(repr::adt::jsonb::Jsonb::from_slice(&raw[1..])?))
     }
 
     fn accepts(ty: &Type) -> bool {

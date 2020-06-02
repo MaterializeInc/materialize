@@ -26,8 +26,8 @@ use avro::schema::{
     SchemaPieceOrNamed,
 };
 use avro::types::{DecimalValue, Value};
-use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
-use repr::jsonb::{JsonbPacker, JsonbRef};
+use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
+use repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
@@ -1015,7 +1015,7 @@ mod tests {
     use std::fs::File;
 
     use avro::types::{DecimalValue, Value};
-    use repr::decimal::Significand;
+    use repr::adt::decimal::Significand;
     use repr::{Datum, RelationDesc};
 
     use super::*;

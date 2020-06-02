@@ -15,7 +15,7 @@
 
 use std::fmt;
 
-use repr::datetime::DateTimeField;
+use repr::adt::datetime::DateTimeField;
 
 use super::ValueError;
 use crate::ast::display::{AstDisplay, AstFormatter};

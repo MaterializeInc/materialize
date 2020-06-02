@@ -15,8 +15,8 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
 use ore::fmt::FormatBuffer;
-use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::jsonb::JsonbRef;
+use repr::adt::decimal::MAX_DECIMAL_PRECISION;
+use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{self, Nestable};
 use repr::{Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
