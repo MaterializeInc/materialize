@@ -33,11 +33,11 @@ fn test_parse_date_errors() {
     );
     run_test_parse_date_errors(
         "2001-13-01",
-        "invalid input syntax for date: MONTH must be (1, 12), got 13: \"2001-13-01\"",
+        "invalid input syntax for date: MONTH must be [1, 12], got 13: \"2001-13-01\"",
     );
     run_test_parse_date_errors(
         "2001-12-32",
-        "invalid input syntax for date: DAY must be (1, 31), got 32: \"2001-12-32\"",
+        "invalid input syntax for date: DAY must be [1, 31], got 32: \"2001-12-32\"",
     );
     run_test_parse_date_errors(
         "2001-01-02 04",
@@ -69,15 +69,15 @@ fn test_parse_time() {
 fn test_parse_time_errors() {
     run_test_parse_time_errors(
         "26:01:02.345",
-        "invalid input syntax for time: HOUR must be (0, 23), got 26: \"26:01:02.345\"",
+        "invalid input syntax for time: HOUR must be [0, 23], got 26: \"26:01:02.345\"",
     );
     run_test_parse_time_errors(
         "01:60:02.345",
-        "invalid input syntax for time: MINUTE must be (0, 59), got 60: \"01:60:02.345\"",
+        "invalid input syntax for time: MINUTE must be [0, 59], got 60: \"01:60:02.345\"",
     );
     run_test_parse_time_errors(
         "01:02:61.345",
-        "invalid input syntax for time: SECOND must be (0, 60), got 61: \"01:02:61.345\"",
+        "invalid input syntax for time: SECOND must be [0, 60], got 61: \"01:02:61.345\"",
     );
     run_test_parse_time_errors(
         "03.456",
@@ -136,11 +136,11 @@ fn test_parse_timestamp_errors() {
     );
     run_test_parse_timestamp_errors(
         "2001-13-01",
-        "invalid input syntax for timestamp: MONTH must be (1, 12), got 13: \"2001-13-01\"",
+        "invalid input syntax for timestamp: MONTH must be [1, 12], got 13: \"2001-13-01\"",
     );
     run_test_parse_timestamp_errors(
         "2001-12-32",
-        "invalid input syntax for timestamp: DAY must be (1, 31), got 32: \"2001-12-32\"",
+        "invalid input syntax for timestamp: DAY must be [1, 31], got 32: \"2001-12-32\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 04",
@@ -149,15 +149,15 @@ fn test_parse_timestamp_errors() {
 
     run_test_parse_timestamp_errors(
         "2001-01-02 26:01:02.345",
-        "invalid input syntax for timestamp: HOUR must be (0, 23), got 26: \"2001-01-02 26:01:02.345\"",
+        "invalid input syntax for timestamp: HOUR must be [0, 23], got 26: \"2001-01-02 26:01:02.345\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 01:60:02.345",
-        "invalid input syntax for timestamp: MINUTE must be (0, 59), got 60: \"2001-01-02 01:60:02.345\"",
+        "invalid input syntax for timestamp: MINUTE must be [0, 59], got 60: \"2001-01-02 01:60:02.345\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 01:02:61.345",
-        "invalid input syntax for timestamp: SECOND must be (0, 60), got 61: \"2001-01-02 01:02:61.345\"",
+        "invalid input syntax for timestamp: SECOND must be [0, 60], got 61: \"2001-01-02 01:02:61.345\"",
     );
 
     fn run_test_parse_timestamp_errors(s: &str, e: &str) {
