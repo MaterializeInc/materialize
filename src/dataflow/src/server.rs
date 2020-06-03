@@ -971,12 +971,13 @@ impl PendingPeek {
         }
 
         Ok(if let Some(columns) = &self.project {
+            let mut row_packer = repr::RowPacker::new();
             results
                 .iter()
                 .map({
                     move |row| {
                         let datums = row.unpack();
-                        Row::pack(columns.iter().map(|i| datums[*i]))
+                        row_packer.pack(columns.iter().map(|i| datums[*i]))
                     }
                 })
                 .collect()

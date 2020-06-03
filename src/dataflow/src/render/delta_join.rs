@@ -247,10 +247,12 @@ where
                                 let permutation = (0 .. source_columns.len()).map(|c| {
                                     source_columns.iter().position(|x| &c == x).expect("Did not find required column in output")
                                 }).collect::<Vec<_>>();
-                                update_stream = update_stream.map(move |row| {
-                                    let datums = row.unpack();
-                                    Row::pack(permutation.iter().map(|c| datums[*c]))
-                                });
+                                update_stream = update_stream.map({
+                                    let mut row_packer = repr::RowPacker::new();
+                                    move |row| {
+                                        let datums = row.unpack();
+                                        row_packer.pack(permutation.iter().map(|c| datums[*c]))
+                                }});
 
                                 update_stream.leave()
                             });
@@ -300,6 +302,7 @@ where
         Ok((row, row_key))
     });
 
+    let mut row_packer = repr::RowPacker::new();
     let oks = dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
@@ -307,21 +310,22 @@ where
             // Prefix key selector must populate `key` with key from prefix `row`.
             *key = row_key.clone();
         },
-        |(prev_row, _prev_row_key), diff1, next_row, diff2| {
+        move |(prev_row, _prev_row_key), diff1, next_row, diff2| {
             // Output selector must produce (d_out, r_out) for each match.
             // TODO: We can improve this.
             let prev_datums = prev_row.unpack();
             let next_datums = next_row.unpack();
             // Append columns on to accumulated columns.
             (
+                // TODO: This is a Fn closure and so cannot re-use a RowPacker.
                 Row::pack(prev_datums.into_iter().chain(next_datums)),
                 diff1 * diff2,
             )
         },
         // Three default values, for decoding keys into.
-        Row::pack::<_, Datum>(None),
-        Row::pack::<_, Datum>(None),
-        Row::pack::<_, Datum>(None),
+        repr::RowPacker::with_capacity(0).pack::<_, Datum>(None),
+        repr::RowPacker::with_capacity(0).pack::<_, Datum>(None),
+        repr::RowPacker::with_capacity(0).pack::<_, Datum>(None),
     );
 
     (oks, errs)

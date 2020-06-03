@@ -50,12 +50,13 @@ impl ColumnKnowledge {
                 .unwrap_or_else(|| typ.column_types.iter().map(DatumKnowledge::from).collect()),
             RelationExpr::Constant { rows, typ } => {
                 if rows.len() == 1 {
+                    let mut row_packer = repr::RowPacker::new();
                     rows[0]
                         .0
                         .iter()
                         .zip(typ.column_types.iter())
                         .map(|(datum, typ)| DatumKnowledge {
-                            value: Some((repr::Row::pack(Some(datum.clone())), typ.clone())),
+                            value: Some((row_packer.pack(Some(datum.clone())), typ.clone())),
                             nullable: datum == Datum::Null,
                         })
                         .collect()

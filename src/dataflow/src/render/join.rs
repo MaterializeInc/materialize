@@ -185,13 +185,14 @@ where
 
                 // We exploit the demand information to restrict `prev` to its demanded columns.
                 let (prev_keyed, es) = joined.map_fallible({
+                    let mut row_packer = repr::RowPacker::new();
                     move |row| {
                         let datums = row.unpack();
                         let temp_storage = RowArena::new();
                         let key = Row::try_pack(
                             prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
                         )?;
-                        let row = Row::pack(prev_vals.iter().map(|i| datums[*i]));
+                        let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
                         Ok((key, row))
                     }
                 });
@@ -201,30 +202,36 @@ where
 
                 match self.arrangement(&inputs[*input], &next_keys[..]) {
                     Some(ArrangementFlavor::Local(oks, es)) => {
+                        let mut row_packer = repr::RowPacker::new();
                         joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
                             let prev_datums = old.unpack();
                             let next_datums = new.unpack();
                             // TODO: We could in principle apply some predicates here, and avoid
                             // constructing output rows that will be filtered out soon.
-                            Some(Row::pack(
-                                prev_datums
-                                    .iter()
-                                    .chain(next_vals.iter().map(|i| &next_datums[*i])),
-                            ))
+                            Some(
+                                row_packer.pack(
+                                    prev_datums
+                                        .iter()
+                                        .chain(next_vals.iter().map(|i| &next_datums[*i])),
+                                ),
+                            )
                         });
                         errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
                     }
                     Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                        let mut row_packer = repr::RowPacker::new();
                         joined = prev_keyed.join_core(&oks, move |_keys, old, new| {
                             let prev_datums = old.unpack();
                             let next_datums = new.unpack();
                             // TODO: We could in principle apply some predicates here, and avoid
                             // constructing output rows that will be filtered out soon.
-                            Some(Row::pack(
-                                prev_datums
-                                    .iter()
-                                    .chain(next_vals.iter().map(|i| &next_datums[*i])),
-                            ))
+                            Some(
+                                row_packer.pack(
+                                    prev_datums
+                                        .iter()
+                                        .chain(next_vals.iter().map(|i| &next_datums[*i])),
+                                ),
+                            )
                         });
                         errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
                     }
@@ -267,12 +274,15 @@ where
                 .collect::<Vec<_>>();
 
             (
-                joined.map(move |row| {
-                    let datums = row.unpack();
-                    Row::pack(position_or.iter().map(|pos_or| match pos_or {
-                        Result::Ok(index) => datums[*index],
-                        Result::Err(datum) => *datum,
-                    }))
+                joined.map({
+                    let mut row_packer = repr::RowPacker::new();
+                    move |row| {
+                        let datums = row.unpack();
+                        row_packer.pack(position_or.iter().map(|pos_or| match pos_or {
+                            Result::Ok(index) => datums[*index],
+                            Result::Err(datum) => *datum,
+                        }))
+                    }
                 }),
                 errs,
             )

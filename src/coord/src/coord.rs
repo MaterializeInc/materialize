@@ -44,7 +44,7 @@ use expr::{
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
+use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
 use sql::catalog::Catalog as _;
 use sql::{
     DatabaseSpecifier, ExplainOptions, FullName, MutationKind, ObjectType, Params, Plan,
@@ -1086,12 +1086,13 @@ where
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, failure::Error> {
+        let mut row_packer = repr::RowPacker::new();
         Ok(send_immediate_rows(
             session
                 .vars()
                 .iter()
                 .map(|v| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::String(v.name()),
                         Datum::String(&v.value()),
                         Datum::String(v.description()),
@@ -1107,7 +1108,7 @@ where
         name: String,
     ) -> Result<ExecuteResponse, failure::Error> {
         let variable = session.get(&name)?;
-        let row = Row::pack(&[Datum::String(&variable.value())]);
+        let row = repr::RowPacker::with_capacity(0).pack(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
 
@@ -1388,7 +1389,7 @@ where
                 explanation.to_string()
             }
         };
-        let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
+        let rows = vec![RowPacker::with_capacity(0).pack(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
 
@@ -1459,18 +1460,21 @@ where
 
         let mut rows = view_information
             .into_iter()
-            .map(|(name, class, queryable, materialized)| {
-                let mut datums = vec![Datum::from(name.as_str())];
-                if full {
-                    datums.push(Datum::from(class));
-                    if show_queryable {
-                        datums.push(Datum::from(queryable));
+            .map({
+                let mut row_packer = RowPacker::new();
+                move |(name, class, queryable, materialized)| {
+                    let mut datums = vec![Datum::from(name.as_str())];
+                    if full {
+                        datums.push(Datum::from(class));
+                        if show_queryable {
+                            datums.push(Datum::from(queryable));
+                        }
+                        if !limit_materialized {
+                            datums.push(Datum::from(materialized));
+                        }
                     }
-                    if !limit_materialized {
-                        datums.push(Datum::from(materialized));
-                    }
+                    row_packer.pack(&datums)
                 }
-                Row::pack(&datums)
             })
             .collect::<Vec<_>>();
         rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
@@ -2463,7 +2467,7 @@ fn open_catalog(
             for log_view in logging_config.active_views() {
                 let pcx = PlanContext::default();
                 let params = Params {
-                    datums: Row::pack(&[]),
+                    datums: RowPacker::with_capacity(0).pack(&[]),
                     types: vec![],
                 };
                 let stmt = sql::parse(log_view.sql.to_owned())

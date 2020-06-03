@@ -35,7 +35,7 @@ use smallvec::SmallVec;
 /// We avoid the need for the first set of padding by only providing access to the `Datum`s via calls to `ptr::read_unaligned`, which on modern x86 is barely penalized.
 /// We avoid the need for the second set of padding by not providing mutable access to the `Datum`. Instead, `Row` is append-only.
 ///
-/// A `Row` can be built from a collection of `Datum`s using `Row::pack`
+/// A `Row` can be built from a collection of `Datum`s using `Row::pack`, but it often more efficient to use and re-use a `RowPacker` which can avoid unneccesary allocations.
 ///
 /// ```
 /// # use repr::{Row, Datum};
@@ -104,7 +104,7 @@ pub struct DatumDictIter<'a> {
     prev_key: Option<&'a str>,
 }
 
-/// `RowPacker` is used to build a `Row`. It is usually simpler to use `Row::pack` instead, but sometimes awkward control flow might require using `RowPacker` directly.
+/// `RowPacker` is used to build a `Row`.
 ///
 /// ```
 /// # use repr::{Row, Datum, RowPacker};
@@ -653,6 +653,19 @@ impl RowPacker {
         for datum in iter {
             self.push(*datum.borrow());
         }
+    }
+
+    /// Extends `self` with the contents of an iterator.
+    pub fn pack<'a, I, D>(&mut self, iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.data.clear();
+        for datum in iter {
+            self.push(*datum.borrow());
+        }
+        self.finish_and_reuse()
     }
 
     /// Like [`RowPacker::extend`], but the provided iterator is allowed to

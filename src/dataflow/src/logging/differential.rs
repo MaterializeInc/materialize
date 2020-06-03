@@ -20,7 +20,7 @@ use timely::logging::WorkerIdentifier;
 use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
-use repr::{Datum, Row};
+use repr::{Datum, RowPacker};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -81,8 +81,9 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total()
             .map({
+                let mut row_packer = RowPacker::new();
                 move |((op, worker), count)| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::Int64(op as i64),
                         Datum::Int64(worker as i64),
                         Datum::Int64(count[0] as i64),
@@ -104,8 +105,9 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total()
             .map({
+                let mut row_packer = RowPacker::new();
                 move |((op, worker), count)| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::Int64(op as i64),
                         Datum::Int64(worker as i64),
                         Datum::Int64(count as i64),
@@ -128,10 +130,13 @@ pub fn construct<A: Allocate>(
                 let key = variant.index_by();
                 let key_clone = key.clone();
                 let trace = collection
-                    .map(move |row| {
-                        let datums = row.unpack();
-                        let key_row = Row::pack(key.iter().map(|k| datums[*k]));
-                        (key_row, row)
+                    .map({
+                        let mut row_packer = RowPacker::new();
+                        move |row| {
+                            let datums = row.unpack();
+                            let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
+                            (key_row, row)
+                        }
                     })
                     .arrange_by_key()
                     .trace;

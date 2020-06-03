@@ -494,6 +494,7 @@ where
     collection
         .map(move |((key, hash), row)| ((key, hash % modulus), row))
         .reduce_named("ReduceHierarchical", {
+            let mut row_packer = repr::RowPacker::new();
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
@@ -508,7 +509,7 @@ where
                     // hierarchical aggregations; should that belief be incorrect, we
                     // should certainly revise this implementation.
                     let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
-                    target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+                    target.push((row_packer.pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
                 }
             }
         })

@@ -306,10 +306,8 @@ END $$;
             .clone();
         let mut rows = vec![];
         let postgres_rows = self.client.query(&*query, &[]).await?;
+        let mut row = RowPacker::new();
         for postgres_row in postgres_rows.iter() {
-            // NOTE We can't use Row::pack here because PostgresRow::get_opt insists on allocating data for strings,
-            // which has to live somewhere while the iterator is running.
-            let mut row = RowPacker::new();
             for c in 0..postgres_row.len() {
                 row = push_column(
                     row,
@@ -319,7 +317,7 @@ END $$;
                     desc.typ().column_types[c].nullable,
                 )?;
             }
-            rows.push(row.finish());
+            rows.push(row.finish_and_reuse());
         }
         Ok(rows)
     }
