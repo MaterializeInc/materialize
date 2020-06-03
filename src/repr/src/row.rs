@@ -18,6 +18,7 @@ use crate::Datum;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 /// A packed representation for `Datum`s.
 ///
@@ -57,9 +58,15 @@ use serde::{Deserialize, Serialize};
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
+///
+/// # Performance
+///
+/// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
+/// It is best to re-use a `RowPacker` across multiple `Row` creation calls, as this
+/// avoids the allocations involved in `RowPacker::new()`.
 #[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: Box<[u8]>,
+    data: SmallVec<[u8; 16]>,
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -671,10 +678,12 @@ impl RowPacker {
     }
 
     /// Finish packing and return a `Row`.
+    ///
+    /// This does not re-use the allocation of `RowPacker`, which means this
+    /// method has relatively few advantages over `finish_and_reuse()`.
     pub fn finish(self) -> Row {
         Row {
-            // drop excess capacity
-            data: self.data.into_boxed_slice(),
+            data: SmallVec::from(&self.data[..]),
         }
     }
 
@@ -686,7 +695,7 @@ impl RowPacker {
     /// In principle this can reduce the amount of interaction with the
     /// allocator, as opposed to creating new row packers for each row.
     pub fn finish_and_reuse(&mut self) -> Row {
-        let data = Box::<[u8]>::from(&self.data[..]);
+        let data = SmallVec::from(&self.data[..]);
         self.data.clear();
         Row { data }
     }
