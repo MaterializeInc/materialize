@@ -322,9 +322,9 @@ where
             )
         },
         // Three default values, for decoding keys into.
-        repr::RowPacker::with_capacity(0).pack::<_, Datum>(None),
-        repr::RowPacker::with_capacity(0).pack::<_, Datum>(None),
-        repr::RowPacker::with_capacity(0).pack::<_, Datum>(None),
+        Row::pack::<_, Datum>(None),
+        Row::pack::<_, Datum>(None),
+        Row::pack::<_, Datum>(None),
     );
 
     (oks, errs)

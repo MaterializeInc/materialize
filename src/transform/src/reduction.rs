@@ -277,8 +277,7 @@ impl FoldConstants {
                 }) {
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
-                    let mut old_rows =
-                        vec![(repr::RowPacker::with_capacity(0).pack::<_, Datum>(None), 1)];
+                    let mut old_rows = vec![(repr::Row::pack::<_, Datum>(None), 1)];
                     let mut row_packer = repr::RowPacker::new();
                     for input in inputs.iter() {
                         if let RelationExpr::Constant { rows, .. } = input {

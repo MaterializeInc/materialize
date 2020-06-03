@@ -21,7 +21,7 @@ use std::fmt;
 
 use failure::bail;
 
-use repr::{Datum, RowPacker, ScalarType};
+use repr::{Datum, Row, ScalarType};
 
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
@@ -403,7 +403,7 @@ impl Session {
             Portal {
                 statement_name,
                 parameters: Params {
-                    datums: RowPacker::with_capacity(0).pack(params.iter().map(|(d, _t)| d)),
+                    datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     types: params.into_iter().map(|(_d, t)| t).collect(),
                 },
                 result_formats: result_formats.into_iter().map(Into::into).collect(),
