@@ -914,8 +914,9 @@ where
                         .collect::<Vec<_>>();
 
                     let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let (ok_collection, new_err_collection) =
-                        ok_collection.flat_map_fallible(move |input_row| {
+                    let (ok_collection, new_err_collection) = ok_collection.flat_map_fallible({
+                        let mut row_packer = repr::RowPacker::new();
+                        move |input_row| {
                             let datums = input_row.unpack();
                             let replace = replace.clone();
                             let temp_storage = RowArena::new();
@@ -930,33 +931,31 @@ where
                             let output_rows = func.eval(exprs, &temp_storage);
                             output_rows
                                 .into_iter()
-                                .map({
-                                    let mut row_packer = repr::RowPacker::new();
-                                    move |output_row| {
-                                        Ok::<_, DataflowError>(
-                                            row_packer.pack(
-                                                datums
-                                                    .iter()
-                                                    .cloned()
-                                                    .chain(output_row.iter())
-                                                    .zip(replace.iter())
-                                                    .map(|(datum, demand)| {
-                                                        if let Some(bogus) = demand {
-                                                            bogus.clone()
-                                                        } else {
-                                                            datum
-                                                        }
-                                                    }),
-                                            ),
-                                        )
-                                    }
+                                .map(|output_row| {
+                                    Ok::<_, DataflowError>(
+                                        row_packer.pack(
+                                            datums
+                                                .iter()
+                                                .cloned()
+                                                .chain(output_row.iter())
+                                                .zip(replace.iter())
+                                                .map(|(datum, demand)| {
+                                                    if let Some(bogus) = demand {
+                                                        bogus.clone()
+                                                    } else {
+                                                        datum
+                                                    }
+                                                }),
+                                        ),
+                                    )
                                 })
                                 // The collection avoids the lifetime issues of the `datums` borrow,
                                 // which allows us to avoid multiple unpackings of `input_row`. We
                                 // could avoid this allocation with a custom iterator that understands
                                 // the borrowing, but it probably isn't the leading order issue here.
                                 .collect::<Vec<_>>()
-                        });
+                        }
+                    });
                     let err_collection = err_collection.concat(&new_err_collection);
 
                     self.collections
