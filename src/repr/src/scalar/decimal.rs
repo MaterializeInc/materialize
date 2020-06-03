@@ -125,6 +125,10 @@ impl Significand {
         self.0
     }
 
+    pub fn abs(&self) -> Significand {
+        Significand(self.0.abs())
+    }
+
     /// Constructs a [`Decimal`] by imbuing this `Significand` with the
     /// specified `scale`.
     pub fn with_scale(self, scale: u8) -> Decimal {

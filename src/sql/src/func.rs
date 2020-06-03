@@ -577,10 +577,6 @@ impl<'a> ArgImplementationMatcher<'a> {
         }
 
         f.op = match f.op {
-            Unary(UnaryFunc::AbsDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::AbsDecimal(s)),
-                _ => unreachable!(),
-            },
             Unary(UnaryFunc::CeilDecimal(_)) => match types[0] {
                 ScalarType::Decimal(_, s) => Unary(UnaryFunc::CeilDecimal(s)),
                 _ => unreachable!(),
@@ -699,7 +695,7 @@ lazy_static! {
                 impls! {
                     params!(Int32) => Unary(UnaryFunc::AbsInt32),
                     params!(Int64) => Unary(UnaryFunc::AbsInt64),
-                    params!(Decimal(0, 0)) => Unary(UnaryFunc::AbsDecimal(0)),
+                    params!(Decimal(0, 0)) => Unary(UnaryFunc::AbsDecimal),
                     params!(Float32) => Unary(UnaryFunc::AbsFloat32),
                     params!(Float64) => Unary(UnaryFunc::AbsFloat64)
                 }
