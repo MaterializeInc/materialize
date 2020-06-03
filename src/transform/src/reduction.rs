@@ -56,6 +56,7 @@ impl FoldConstants {
                     // `aggregates`.
                     let mut groups = BTreeMap::new();
                     let temp_storage2 = RowArena::new();
+                    let mut row_packer = repr::RowPacker::new();
                     for (row, diff) in rows {
                         // We currently maintain the invariant that any negative
                         // multiplicities will be consolidated away before they
@@ -71,10 +72,9 @@ impl FoldConstants {
                             .iter()
                             .map(|e| e.eval(&datums, &temp_storage2))
                             .collect::<Result<Vec<_>, _>>()?;
-                        let mut row_packer = repr::RowPacker::new();
                         let val = aggregates
                             .iter()
-                            .map(move |agg| {
+                            .map(|agg| {
                                 Ok::<_, TransformError>(
                                     row_packer.pack(&[agg.expr.eval(&datums, &temp_storage)?]),
                                 )
