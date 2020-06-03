@@ -2682,6 +2682,7 @@ dependencies = [
  "criterion",
  "failure",
  "hex",
+ "itertools",
  "ordered-float",
  "ore",
  "rand",
