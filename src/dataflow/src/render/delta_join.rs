@@ -302,7 +302,6 @@ where
         Ok((row, row_key))
     });
 
-    let mut row_packer = repr::RowPacker::new();
     let oks = dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
