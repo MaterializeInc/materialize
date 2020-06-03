@@ -153,7 +153,7 @@ impl<'a> From<&BorrowedMessage<'a>> for MessageParts {
     }
 }
 
-/// Creates a Kafka config
+/// Creates a Kafka config.
 fn create_kafka_config(
     name: &str,
     url: &Url,
@@ -161,22 +161,62 @@ fn create_kafka_config(
     config_options: &HashMap<String, String>,
 ) -> ClientConfig {
     let mut kafka_config = ClientConfig::new();
-    let group_id_prefix = group_id_prefix.unwrap_or_else(String::new);
-    kafka_config.set(
-        "group.id",
-        &format!("{}materialize-{}", group_id_prefix, name),
-    );
+
+    // Broker configuration.
+    kafka_config.set("bootstrap.servers", &url.to_string());
+
+    // Opt-out of Kafka's offset management facilities. Whenever we restart,
+    // we want to restart from the beginning of the topic.
+    //
+    // This is likely to change soon. See #3060 and #2490.
     kafka_config
         .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .set("topic.metadata.refresh.interval.ms", "30000") // 30 seconds
-        .set("fetch.message.max.bytes", "134217728")
-        .set("bootstrap.servers", &url.to_string());
+        .set("auto.offset.reset", "earliest");
 
+    // How often to refresh metadata from the Kafka broker. This can have a
+    // minor impact on startup latency and latency after adding a new partition,
+    // as the metadata for a partition must be fetched before we can retrieve
+    // data from it. We try to manually trigger metadata fetches when it makes
+    // sense, but if those manual fetches fail, this is the interval at which we
+    // retry.
+    //
+    // 30s may seem low, but the default is 5m. More frequent metadata refresh
+    // rates are surprising to Kafka users, as topic partition counts hardly
+    // ever change in production.
+    kafka_config.set("topic.metadata.refresh.interval.ms", "30000"); // 30 seconds
+
+    kafka_config.set("fetch.message.max.bytes", "134217728");
+
+    // Consumer group ID. We'd prefer not to set this at all, as we don't use
+    // Kafka's consumer group support, but librdkafka requires it, and users
+    // expect it.
+    //
+    // This is partially dictated by the user and partially dictated by us.
+    // Users can set a prefix so they can see which consumers belong to which
+    // Materialize deployment, but we set a suffix to ensure uniqueness. A
+    // unique consumer group ID is the most surefire way to ensure that
+    // librdkafka does not try to perform its own consumer group balancing,
+    // which would wreak havoc with our careful partition assignment strategy.
+    kafka_config.set(
+        "group.id",
+        &format!(
+            "{}materialize-{}",
+            group_id_prefix.unwrap_or_else(String::new),
+            name
+        ),
+    );
+
+    // Patch the librdkafka debug log system into the Rust `log` ecosystem.
+    // This is a very simple integration at the moment; enabling `debug`-level
+    // logs for the `librdkafka` target enables the full firehouse of librdkafka
+    // debug logs. We may want to investigate finer-grained control.
     if log_enabled!(target: "librdkafka", log::Level::Debug) {
         kafka_config.set("debug", "all");
     }
 
+    // Set additional configuration operations from the user. While these look
+    // arbitrary, other layers of the system tightly control which configuration
+    // options are allowable.
     for (k, v) in config_options {
         kafka_config.set(k, v);
     }
@@ -439,7 +479,9 @@ impl DataPlaneInfo {
         // happen automatically [0].
         //
         // [0]: https://github.com/edenhill/librdkafka/issues/2917
-        let _ = self.consumer.fetch_metadata(Some(&self.topic_name), Duration::from_secs(0));
+        let _ = self
+            .consumer
+            .fetch_metadata(Some(&self.topic_name), Duration::from_secs(0));
 
         let partition_queue = self
             .consumer
