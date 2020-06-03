@@ -14,9 +14,7 @@ import itertools
 import os
 import re
 import shlex
-import socket
 import subprocess
-import sys
 import time
 import webbrowser
 from datetime import datetime, timezone
@@ -30,7 +28,6 @@ from typing import (
     List,
     Match,
     Optional,
-    TextIO,
     Type,
     TypeVar,
     Union,
