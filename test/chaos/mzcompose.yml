@@ -83,14 +83,6 @@ mzconduct:
 
     # Helper workflows
 
-#    start-everything:
-#      steps:
-#        - step: start-services
-#          services: [materialized, dashboard]
-#        - step: wait-for-tcp
-#          host: materialized
-#          port: 6875
-#
     start-everything:
       steps:
         - step: start-services
