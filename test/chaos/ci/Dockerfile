@@ -9,10 +9,6 @@
 
 FROM ubuntu:bionic
 
-RUN apt-get update && apt-get -qy install \
-    ca-certificates \
-    wait-for-it
-
 COPY chaos /usr/local/bin
 
 ENTRYPOINT ["chaos"]
