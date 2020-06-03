@@ -30,7 +30,7 @@ services:
     ports:
       - *materialized
     init: true
-    command: -w 4
+    command: -w ${MZ_THREADS:-4}
 
   dashboard:
     mzbuild: dashboard
@@ -48,7 +48,6 @@ mzconduct:
         - step: run
           service: perf-kinesis
           daemon: false
-          command: >-
         - step: down
           destroy_volumes: true
 
@@ -59,7 +58,15 @@ mzconduct:
         - step: run
           service: perf-kinesis
           daemon: true
-          command: >-
+
+    nightly:
+      steps:
+        - step: start-services
+          services: [materialized]
+        - step: wait-for-mz
+        - step: run
+          service: perf-kinesis
+          daemon: true
 
     # Helper workflows
 
@@ -67,6 +74,4 @@ mzconduct:
       steps:
         - step: start-services
           services: [materialized, dashboard]
-        - step: wait-for-tcp
-          host: materialized
-          port: 6875
+        - step: wait-for-mz
