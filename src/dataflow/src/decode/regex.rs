@@ -55,13 +55,12 @@ where
                             Some(captures) => captures,
                             None => continue,
                         };
-                        row_packer.extend(captures.iter().skip(1).map(
-                            |m| Datum::from( m.map(
-                                |m| m.as_str())
-                            )
-                        ).chain(iter::once(line_no.map(Datum::Int64).into())));
                         session.give((
-                            row_packer.finish_and_reuse(),
+                            row_packer.pack(captures.iter().skip(1).map(
+                                |m| Datum::from( m.map(
+                                    |m| m.as_str())
+                                )
+                            ).chain(iter::once(line_no.map(Datum::Int64).into()))),
                             *cap.time(),
                             1,
                         ));
