@@ -1,0 +1,98 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+# Map from host-port:internal port
+#
+# This mostly just shows all the ports that are available to the host system, if you want
+# to change these you must restart the docker-compose cluster.
+x-port-mappings:
+  - &materialized 6875:6875
+  - &grafana 3000:3000
+  - &schema-registry 8081:8081
+  - &kafka 9092:9092
+
+version: '3.7'
+services:
+  chaos:
+    init: true
+    mzbuild: chaos
+    environment:
+      - RUST_LOG=chaos=debug,info
+    depends_on: [materialized]
+
+  materialized:
+    mzbuild: materialized
+    ports:
+      - *materialized
+    init: true
+    command: -w 4
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:5.3.0
+    ports:
+      - *kafka
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9991
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.2.1
+    ports:
+      - *schema-registry
+    environment:
+      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
+      - SCHEMA_REGISTRY_HOST_NAME=localhost
+    depends_on: [kafka, zookeeper]
+
+  dashboard:
+    mzbuild: dashboard
+    environment:
+      - 'MATERIALIZED_URL=materialized:6875'
+    ports:
+      - *grafana
+
+mzconduct:
+  workflows:
+    kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 1
+            --message-count 10000
+
+    # Helper workflows
+
+    start-everything:
+      steps:
+        - step: start-services
+          services: [materialized, kafka, schema-registry, dashboard]
+        - step: wait-for-tcp
+          host: kafka
+          port: 9092
+        - step: wait-for-tcp
+          host: schema-registry
+          port: 8081
+        - step: wait-for-tcp
+          host: materialized
+          port: 6875

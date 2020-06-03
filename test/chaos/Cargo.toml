@@ -1,0 +1,17 @@
+[package]
+name = "chaos"
+description = "Chaos test integrations with Materialize."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0.31"
+env_logger = "0.7.1"
+log = "0.4.8"
+md-5 = "0.8"
+ore = { path = "../../src/ore" }
+rand = "0.7.3"
+structopt = "0.3.11"
+test-util = { path = "../test-util" }
+tokio = { version = "0.2.21", features = ["full"] }
