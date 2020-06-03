@@ -468,7 +468,7 @@ where
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
-                    message: WorkerFeedback::CreateSource(source_id, _sc),
+                    message: WorkerFeedback::CreateSource(source_id),
                 }) => {
                     if let Some(entry) = self.catalog.try_get_by_id(source_id.sid) {
                         if let CatalogItem::Source(s) = entry.item() {
@@ -482,7 +482,18 @@ where
                         // Someone already dropped the source
                     }
                 }
-
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::FastForwardSource(source_id, partition_id, offset),
+                }) => {
+                    ts_tx
+                        .send(TimestampMessage::FastForward(
+                            source_id,
+                            partition_id,
+                            offset,
+                        ))
+                        .expect("Failed to send CREATE Instance notice to timestamper");
+                }
                 Message::AdvanceSourceTimestamp {
                     id,
                     partition_count,

@@ -24,14 +24,12 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{
-    ExternalSourceConnector, FileSourceConnector, MzOffset, SourceError, Timestamp,
-};
+use dataflow_types::{MzOffset, SourceError, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 
 use super::SourceOutput;
 use crate::operator::StreamExt;
-use crate::server::TimestampHistories;
+use crate::server::{TimestampHistories, TimestampMetadataChange};
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
 
@@ -308,16 +306,11 @@ where
             .borrow_mut()
             .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::File(FileSourceConnector {
-                    path: path.clone(),
-                    tail: read_style == FileReadStyle::TailFollowFd,
-                }),
-                config.consistency,
-            )),
-        ));
+        config
+            .timestamp_tx
+            .as_ref()
+            .borrow_mut()
+            .push(TimestampMetadataChange::StartTimestamping(config.id));
         Some(config.timestamp_tx)
     } else {
         None

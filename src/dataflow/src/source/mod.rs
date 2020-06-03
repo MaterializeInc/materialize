@@ -22,7 +22,7 @@ use timely::{scheduling::Activator, Data};
 use dataflow_types::{Consistency, Timestamp};
 use expr::SourceInstanceId;
 
-use crate::server::{TimestampChanges, TimestampHistories};
+use crate::server::{TimestampChanges, TimestampHistories, TimestampMetadataChange};
 
 mod file;
 mod kafka;
@@ -52,13 +52,14 @@ pub struct SourceConfig<'a, G> {
     /// The total count of workers
     pub worker_count: usize,
     // Timestamping fields.
-    // TODO: document these.
-    /// TODO(ncrooks)
+    /// Timestamp Updates sent by the timestamping thread to individual workers
     pub timestamp_histories: TimestampHistories,
-    /// TODO(ncrooks)
+    /// Metadata channel to propagate timestamping control information to coordinator/timestamper
     pub timestamp_tx: TimestampChanges,
-    /// TODO(ncrooks)
+    /// Source consistency type: BYO or RT
     pub consistency: Consistency,
+    /// Maximum Batch Size for this source (determines the maximum number of messages that can be timestamped at once)
+    pub max_ts_batch_size: i64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -147,7 +148,7 @@ impl Drop for SourceToken {
                 .as_ref()
                 .unwrap()
                 .borrow_mut()
-                .push((self.id, None));
+                .push(TimestampMetadataChange::StopTimestamping(self.id));
         }
     }
 }

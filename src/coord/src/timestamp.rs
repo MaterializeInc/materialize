@@ -174,6 +174,7 @@ pub struct TimestampConfig {
 pub enum TimestampMessage {
     Add(SourceInstanceId, SourceConnector),
     DropInstance(SourceInstanceId),
+    FastForward(SourceInstanceId, PartitionId, MzOffset),
     Shutdown,
 }
 
@@ -859,6 +860,25 @@ impl Timestamper {
         }
     }
 
+    /// This function ensures that for:
+    /// 1) real-time sources, the next "timestamping" round will include enough information that the
+    /// this (pid,offset) can be timestamped.
+    /// 2) byo sources, this function has currently no effect
+    fn fast_forward_source(&mut self, id: SourceInstanceId, pid: PartitionId, offset: MzOffset) {
+        // println!("Received fast forward source message");
+        let consumer = self.rt_sources.get_mut(&id);
+        if let Some(consumer) = consumer {
+            // The last partition offset is used to mark the last offset that has been timestamped.
+            // To fast-forward the offset, we simply mark this offset as the last timestamped offset
+            // (this will ensure that the next timestamping round will timestamp a greater offset)
+            if let Some(last_offset) = consumer.last_partition_offset.get_mut(&pid) {
+                if *last_offset < offset {
+                    *last_offset = offset;
+                } // else has already caught up
+            }
+        }
+    }
+
     /// Updates list of timestamp sources based on coordinator information. If using
     /// using the real-time timestamping logic, then maintain a list of Kafka consumers
     /// that poll topics to check how much data has been generated. If using the Kafka
@@ -956,6 +976,9 @@ impl Timestamper {
                         .expect("Failed to execute delete statement");
                     self.rt_sources.remove(&id);
                     self.byo_sources.remove(&id);
+                }
+                TimestampMessage::FastForward(id, pid, offset) => {
+                    self.fast_forward_source(id, pid, offset);
                 }
                 TimestampMessage::Shutdown => return true,
             }

@@ -12,9 +12,7 @@ use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
-};
+use dataflow_types::{KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{error, info, log_enabled, warn};
@@ -35,7 +33,7 @@ use url::Url;
 
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
-use crate::server::TimestampHistories;
+use crate::server::{TimestampChanges, TimestampHistories, TimestampMetadataChange};
 
 // Global Kafka metrics.
 lazy_static! {
@@ -613,14 +611,24 @@ struct ControlPlaneInfo {
     partition_metadata: HashMap<i32, ConsInfo>,
     /// Optional: Materialize Offset from which source should start reading (default is 0)
     start_offset: MzOffset,
+    /// Timestamp channel to communicate timestamp metadata updates back to coordinator/timestamper
+    timestamp_tx: TimestampChanges,
+    /// Max number of messages that can be timestamped at once
+    max_ts_batch_size: i64,
 }
 
 impl ControlPlaneInfo {
-    fn new(start_offset: MzOffset) -> ControlPlaneInfo {
+    fn new(
+        start_offset: MzOffset,
+        max_ts_batch_size: i64,
+        timestamp_tx: TimestampChanges,
+    ) -> ControlPlaneInfo {
         ControlPlaneInfo {
             last_closed_ts: 0,
             partition_metadata: HashMap::new(),
+            max_ts_batch_size,
             start_offset,
+            timestamp_tx,
         }
     }
 
@@ -650,6 +658,27 @@ impl ControlPlaneInfo {
             },
         );
     }
+
+    fn request_fast_forward(
+        &self,
+        id: SourceInstanceId,
+        pid: i32,
+        current_offset: MzOffset,
+        timestamps: &TimestampHistories,
+    ) {
+        let last_offset = peek_highest_offset(&id, pid, timestamps);
+        if current_offset.offset - last_offset.offset > self.max_ts_batch_size {
+            // Data processing is more than one batch ahead of timestamp processing,
+            // request fast-forward
+            self.timestamp_tx.as_ref().borrow_mut().push(
+                TimestampMetadataChange::FastForwardTimestamping(
+                    id,
+                    PartitionId::Kafka(pid),
+                    current_offset,
+                ),
+            );
+        } // else do nothing
+    }
 }
 
 /// This function activates the necessary timestamping information when a source is first created
@@ -657,20 +686,18 @@ impl ControlPlaneInfo {
 /// 1) it inserts an entry in the timestamp_history datastructure
 /// 2) it notifies the coordinator that timestamping should begin by inserting an entry in the
 /// timestamp_tx channel
-fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSourceConnector) {
+fn activate_source_timestamping<G>(config: &SourceConfig<G>) {
     let prev = config
         .timestamp_histories
         .borrow_mut()
         .insert(config.id.clone(), HashMap::new());
     // Check that this is the first time this source id is registered
     assert!(prev.is_none());
-    config.timestamp_tx.as_ref().borrow_mut().push((
-        config.id,
-        Some((
-            ExternalSourceConnector::Kafka(connector),
-            config.consistency.clone(),
-        )),
-    ));
+    config
+        .timestamp_tx
+        .as_ref()
+        .borrow_mut()
+        .push(TimestampMetadataChange::StartTimestamping(config.id));
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
@@ -690,9 +717,9 @@ where
         config_options,
         start_offset,
         group_id_prefix,
-    } = connector.clone();
+    } = connector;
 
-    activate_source_timestamping(&config, connector);
+    activate_source_timestamping(&config);
 
     let SourceConfig {
         name,
@@ -702,120 +729,158 @@ where
         timestamp_tx,
         worker_id,
         worker_count,
+        max_ts_batch_size,
         ..
     } = config;
 
-    let (stream, capability) = source(id, Some(timestamp_tx), scope, &name.clone(), move |info| {
-        // Create activator for source
-        let activator = scope.activator_for(&info.address[..]);
+    let (stream, capability) = source(
+        id,
+        Some(timestamp_tx.clone()),
+        scope,
+        &name.clone(),
+        move |info| {
+            // Create activator for source
+            let activator = scope.activator_for(&info.address[..]);
 
-        // Create control plane information (Consistency-related information)
-        let mut cp_info = ControlPlaneInfo::new(MzOffset {
-            offset: start_offset,
-        });
+            // Create control plane information (Consistency-related information)
+            let mut cp_info = ControlPlaneInfo::new(
+                MzOffset {
+                    offset: start_offset,
+                },
+                max_ts_batch_size,
+                timestamp_tx,
+            );
 
-        // Create dataplane information (Kafka-related information)
-        let mut dp_info = DataPlaneInfo::new(
-            topic.clone(),
-            name.clone(),
-            id.clone(),
-            create_kafka_config(&name, &url, group_id_prefix, &config_options),
-            Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
-            worker_id,
-            worker_count,
-        );
-        dp_info.refresh_source_information(&mut cp_info, &activator);
-
-        move |cap, output| {
-            // Accumulate updates to BYTES_READ_COUNTER;
-            let mut bytes_read = 0;
-            dp_info.source_metrics.operator_scheduled_counter.inc();
-            // Repeatedly interrogate Kafka for messages. Cease when
-            // Kafka stops returning new data, or after 10 milliseconds.
-            let timer = std::time::Instant::now();
-
-            // Check if the capability can be downgraded (this is independent of whether
-            // there are new messages that can be processed) as timestamps can become
-            // closed in the absence of messages
-            downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
-
+            // Create dataplane information (Kafka-related information)
+            let mut dp_info = DataPlaneInfo::new(
+                topic.clone(),
+                name.clone(),
+                id.clone(),
+                create_kafka_config(&name, &url, group_id_prefix, &config_options),
+                Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
+                worker_id,
+                worker_count,
+            );
             dp_info.refresh_source_information(&mut cp_info, &activator);
 
-            while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
-                let partition = message.partition;
-                let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
-                let offset = MzOffset::from(message.offset);
+            move |cap, output| {
+                // Accumulate updates to BYTES_READ_COUNTER;
+                let mut bytes_read = 0;
+                dp_info.source_metrics.operator_scheduled_counter.inc();
+                // Repeatedly interrogate Kafka for messages. Cease when
+                // Kafka stops returning new data, or after 10 milliseconds.
+                let timer = std::time::Instant::now();
 
-                partition_metrics.offset_received.set(offset.offset);
+                // Check if the capability can be downgraded (this is independent of whether
+                // there are new messages that can be processed) as timestamps can become
+                // closed in the absence of messages
+                downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
 
-                // Determine the timestamp to which we need to assign this message
-                let ts = find_matching_timestamp(&id, partition, offset, &timestamp_histories);
-                match ts {
-                    None => {
-                        // We have not yet decided on a timestamp for this message,
-                        // we need to buffer the message
-                        dp_info.buffer_message(message);
+                dp_info.refresh_source_information(&mut cp_info, &activator);
+
+                while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
+                    let partition = message.partition;
+                    let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
+                    let offset = MzOffset::from(message.offset);
+
+                    partition_metrics.offset_received.set(offset.offset);
+
+                    // Determine the timestamp to which we need to assign this message
+                    let ts = find_matching_timestamp(&id, partition, offset, &timestamp_histories);
+                    match ts {
+                        None => {
+                            // We have not yet decided on a timestamp for this message,
+                            // we need to buffer the message
+                            cp_info.request_fast_forward(
+                                id,
+                                partition,
+                                offset,
+                                &timestamp_histories,
+                            );
+                            dp_info.buffer_message(message);
+                            activator.activate();
+                            return SourceStatus::Alive;
+                        }
+                        Some(ts) => {
+                            // Note: empty and null payload/keys are currently
+                            // treated as the same thing.
+                            let key = message.key.unwrap_or_default();
+                            let out = message.payload.unwrap_or_default();
+                            // Entry for partition_metadata is guaranteed to exist as messages
+                            // are only processed when dp_info.needs_refresh=false, which is
+                            // after we have updated the partition_metadata for a partition and
+                            // created a partition queue for it.
+                            cp_info
+                                .partition_metadata
+                                .get_mut(&partition)
+                                .unwrap()
+                                .offset = offset;
+                            bytes_read += key.len() as i64;
+                            bytes_read += out.len() as i64;
+                            let ts_cap = cap.delayed(&ts);
+                            output.session(&ts_cap).give(SourceOutput::new(
+                                key,
+                                out,
+                                Some(Into::<KafkaOffset>::into(offset).offset),
+                            ));
+
+                            partition_metrics.offset_ingested.set(offset.offset);
+                            partition_metrics.messages_ingested.inc();
+
+                            downgrade_capability(
+                                &id,
+                                cap,
+                                &mut cp_info,
+                                &mut dp_info,
+                                &timestamp_histories,
+                            );
+                        }
+                    }
+
+                    if timer.elapsed().as_millis() > 10 {
+                        // We didn't drain the entire queue, so indicate that we
+                        // should run again. We suppress the activation when the
+                        // queue is drained, as in that case librdkafka is
+                        // configured to unpark our thread when a new message
+                        // arrives.
+                        if bytes_read > 0 {
+                            KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
+                        }
                         activator.activate();
                         return SourceStatus::Alive;
                     }
-                    Some(ts) => {
-                        // Note: empty and null payload/keys are currently
-                        // treated as the same thing.
-                        let key = message.key.unwrap_or_default();
-                        let out = message.payload.unwrap_or_default();
-                        // Entry for partition_metadata is guaranteed to exist as messages
-                        // are only processed when dp_info.needs_refresh=false, which is
-                        // after we have updated the partition_metadata for a partition and
-                        // created a partition queue for it.
-                        cp_info
-                            .partition_metadata
-                            .get_mut(&partition)
-                            .unwrap()
-                            .offset = offset;
-                        bytes_read += key.len() as i64;
-                        bytes_read += out.len() as i64;
-                        let ts_cap = cap.delayed(&ts);
-                        output.session(&ts_cap).give(SourceOutput::new(
-                            key,
-                            out,
-                            Some(Into::<KafkaOffset>::into(offset).offset),
-                        ));
-
-                        partition_metrics.offset_ingested.set(offset.offset);
-                        partition_metrics.messages_ingested.inc();
-
-                        downgrade_capability(
-                            &id,
-                            cap,
-                            &mut cp_info,
-                            &mut dp_info,
-                            &timestamp_histories,
-                        );
-                    }
                 }
-
-                if timer.elapsed().as_millis() > 10 {
-                    // We didn't drain the entire queue, so indicate that we
-                    // should run again. We suppress the activation when the
-                    // queue is drained, as in that case librdkafka is
-                    // configured to unpark our thread when a new message
-                    // arrives.
-                    if bytes_read > 0 {
-                        KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
-                    }
-                    activator.activate();
-                    return SourceStatus::Alive;
+                if bytes_read > 0 {
+                    KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                 }
+                // Ensure that we poll kafka more often than the eviction timeout
+                activator.activate_after(Duration::from_secs(60));
+                SourceStatus::Alive
             }
-            if bytes_read > 0 {
-                KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
-            }
-            // Ensure that we poll kafka more often than the eviction timeout
-            activator.activate_after(Duration::from_secs(60));
-            SourceStatus::Alive
-        }
-    });
+        },
+    );
     (stream, Some(capability))
+}
+
+/// Returns the highest offset for which a timestamp exists
+fn peek_highest_offset(
+    id: &SourceInstanceId,
+    partition: i32,
+    timestamp_histories: &TimestampHistories,
+) -> MzOffset {
+    match timestamp_histories.borrow().get(id) {
+        None => MzOffset { offset: 0 },
+        Some(entries) => match entries.get(&PartitionId::Kafka(partition)) {
+            None => MzOffset { offset: 0 },
+            Some(entries) => {
+                if let Some((_, _, offset)) = entries.front() {
+                    offset.clone()
+                } else {
+                    MzOffset { offset: 0 }
+                }
+            }
+        },
+    }
 }
 
 /// For a given offset, returns an option type returning the matching timestamp or None

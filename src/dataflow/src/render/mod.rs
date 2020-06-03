@@ -253,7 +253,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     encoding,
                     envelope,
                     consistency,
-                    max_ts_batch: _,
+                    max_ts_batch,
                 } = src.connector
                 {
                     let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
@@ -290,6 +290,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         worker_id: worker_index,
                         // Assumption: worker.peers() == total number of workers in Materialize
                         worker_count: worker_peers,
+                        max_ts_batch_size: max_ts_batch,
                     };
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
