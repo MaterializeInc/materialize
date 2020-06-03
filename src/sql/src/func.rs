@@ -659,28 +659,28 @@ macro_rules! params(
     };
 );
 
-/// Provides shorthand for writing `FuncImpl` declarations.
-macro_rules! impls(
-    { $($params:expr => $op:expr),+ } => {
-        {vec![
-            $(FuncImpl {
-                params: $params.into(),
-                op: $op,
-            },)+
-        ]}
-     };
-);
-
 /// Provides a macro to write HashMap "literals" for matching function names to
 /// `Vec<FuncImpl>`.
 macro_rules! func_impls(
-    { $($key:expr => $value:expr),+ } => {
-        {
-            let mut m: HashMap<&str, Vec<FuncImpl>> = HashMap::new();
-            $(m.insert($key, $value);)+
-            m
-        }
-     };
+    {
+        $(
+            $name:expr => {
+                $($params:expr => $op:expr),+
+            }
+        ),+
+    } => {{
+        let mut m: HashMap<&str, Vec<FuncImpl>> = HashMap::new();
+        $(
+            let impls = vec![
+                $(FuncImpl {
+                    params: $params.into(),
+                    op: $op,
+                },)+
+            ];
+            m.insert($name, impls);
+        )+
+        m
+    }};
 );
 
 lazy_static! {
@@ -692,126 +692,86 @@ lazy_static! {
         use ScalarType::*;
         func_impls! {
             "abs" => {
-                impls! {
-                    params!(Int32) => Unary(UnaryFunc::AbsInt32),
-                    params!(Int64) => Unary(UnaryFunc::AbsInt64),
-                    params!(Decimal(0, 0)) => Unary(UnaryFunc::AbsDecimal),
-                    params!(Float32) => Unary(UnaryFunc::AbsFloat32),
-                    params!(Float64) => Unary(UnaryFunc::AbsFloat64)
-                }
+                params!(Int32) => Unary(UnaryFunc::AbsInt32),
+                params!(Int64) => Unary(UnaryFunc::AbsInt64),
+                params!(Decimal(0, 0)) => Unary(UnaryFunc::AbsDecimal),
+                params!(Float32) => Unary(UnaryFunc::AbsFloat32),
+                params!(Float64) => Unary(UnaryFunc::AbsFloat64)
             },
             "ascii" => {
-                impls! {
-                    params!(String) => Unary(UnaryFunc::Ascii)
-                }
+                params!(String) => Unary(UnaryFunc::Ascii)
             },
             "ceil" => {
-                impls! {
-                    params!(Float32) => Unary(UnaryFunc::CeilFloat32),
-                    params!(Float64) => Unary(UnaryFunc::CeilFloat64),
-                    params!(Decimal(0, 0)) => Unary(UnaryFunc::CeilDecimal(0))
-                }
+                params!(Float32) => Unary(UnaryFunc::CeilFloat32),
+                params!(Float64) => Unary(UnaryFunc::CeilFloat64),
+                params!(Decimal(0, 0)) => Unary(UnaryFunc::CeilDecimal(0))
             },
             "coalesce" => {
-                impls! {
-                    AnyHomogeneous(String) => Variadic(VariadicFunc::Coalesce)
-                }
+                AnyHomogeneous(String) => Variadic(VariadicFunc::Coalesce)
             },
             "concat" => {
-                impls! {
-                    Repeat(vec![StringAny]) => Variadic(VariadicFunc::Concat)
-                }
+                Repeat(vec![StringAny]) => Variadic(VariadicFunc::Concat)
             },
             "convert_from" => {
-                impls! {
-                    params!(Bytes, String) => Binary(BinaryFunc::ConvertFrom)
-                }
+                params!(Bytes, String) => Binary(BinaryFunc::ConvertFrom)
             },
             "date_trunc" => {
-                impls! {
-                    params!(String, Timestamp) => Binary(BinaryFunc::DateTruncTimestamp),
-                    params!(String, TimestampTz) => Binary(BinaryFunc::DateTruncTimestampTz)
-                }
+                params!(String, Timestamp) => Binary(BinaryFunc::DateTruncTimestamp),
+                params!(String, TimestampTz) => Binary(BinaryFunc::DateTruncTimestampTz)
             },
             "floor" => {
-                impls! {
-                    params!(Float32) => Unary(UnaryFunc::FloorFloat32),
-                    params!(Float64) => Unary(UnaryFunc::FloorFloat64),
-                    params!(Decimal(0, 0)) => Unary(UnaryFunc::FloorDecimal(0))
-                }
+                params!(Float32) => Unary(UnaryFunc::FloorFloat32),
+                params!(Float64) => Unary(UnaryFunc::FloorFloat64),
+                params!(Decimal(0, 0)) => Unary(UnaryFunc::FloorDecimal(0))
             },
             "jsonb_array_length" => {
-                impls! {
-                    params!(Jsonb) => Unary(UnaryFunc::JsonbArrayLength)
-                }
+                params!(Jsonb) => Unary(UnaryFunc::JsonbArrayLength)
             },
             "jsonb_build_array" => {
-                impls! {
-                    Exact(vec![]) => Variadic(VariadicFunc::JsonbBuildArray),
-                    Repeat(vec![JsonbAny]) => Variadic(VariadicFunc::JsonbBuildArray)
-                }
+                Exact(vec![]) => Variadic(VariadicFunc::JsonbBuildArray),
+                Repeat(vec![JsonbAny]) => Variadic(VariadicFunc::JsonbBuildArray)
             },
             "jsonb_build_object" => {
-                impls! {
-                    Exact(vec![]) => Variadic(VariadicFunc::JsonbBuildObject),
-                    Repeat(vec![ExplicitStringAny, JsonbAny]) =>
-                        Variadic(VariadicFunc::JsonbBuildObject)
-                }
+                Exact(vec![]) => Variadic(VariadicFunc::JsonbBuildObject),
+                Repeat(vec![ExplicitStringAny, JsonbAny]) =>
+                    Variadic(VariadicFunc::JsonbBuildObject)
             },
             "jsonb_pretty" => {
-                impls! {
-                    params!(Jsonb) => Unary(UnaryFunc::JsonbPretty)
-                }
+                params!(Jsonb) => Unary(UnaryFunc::JsonbPretty)
             },
             "jsonb_strip_nulls" => {
-                impls! {
-                    params!(Jsonb) => Unary(UnaryFunc::JsonbStripNulls),
-                    // jsonb_strip_nulls does not want to cast NULLs to JSONB.
-                    params!(Unknown) => Unary(UnaryFunc::JsonbStripNulls)
-                }
+                params!(Jsonb) => Unary(UnaryFunc::JsonbStripNulls),
+                // jsonb_strip_nulls does not want to cast NULLs to JSONB.
+                params!(Unknown) => Unary(UnaryFunc::JsonbStripNulls)
             },
             "jsonb_typeof" => {
-                impls! {
-                    params!(Jsonb) => Unary(UnaryFunc::JsonbTypeof)
-                }
+                params!(Jsonb) => Unary(UnaryFunc::JsonbTypeof)
             },
             "length" => {
-                impls! {
-                    params!(Bytes) => Unary(UnaryFunc::LengthBytes),
-                    params!(String) => Variadic(VariadicFunc::LengthString),
-                    params!(String, String) => Variadic(VariadicFunc::LengthString)
-                }
+                params!(Bytes) => Unary(UnaryFunc::LengthBytes),
+                params!(String) => Variadic(VariadicFunc::LengthString),
+                params!(String, String) => Variadic(VariadicFunc::LengthString)
             },
             "replace" => {
-                impls! {
-                    params!(String, String, String) => Variadic(VariadicFunc::Replace)
-                }
+                params!(String, String, String) => Variadic(VariadicFunc::Replace)
             },
             "round" => {
-                impls! {
-                    params!(Float32) => Unary(UnaryFunc::RoundFloat32),
-                    params!(Float64) => Unary(UnaryFunc::RoundFloat64),
-                    params!(Decimal(0,0)) => Unary(UnaryFunc::RoundDecimal(0)),
-                    params!(Decimal(0,0), Int64) => Binary(BinaryFunc::RoundDecimal(0))
-                }
+                params!(Float32) => Unary(UnaryFunc::RoundFloat32),
+                params!(Float64) => Unary(UnaryFunc::RoundFloat64),
+                params!(Decimal(0,0)) => Unary(UnaryFunc::RoundDecimal(0)),
+                params!(Decimal(0,0), Int64) => Binary(BinaryFunc::RoundDecimal(0))
             },
             "substr" => {
-                impls! {
-                    params!(String, Int64) => Variadic(VariadicFunc::Substr),
-                    params!(String, Int64, Int64) => Variadic(VariadicFunc::Substr)
-                }
+                params!(String, Int64) => Variadic(VariadicFunc::Substr),
+                params!(String, Int64, Int64) => Variadic(VariadicFunc::Substr)
             },
             "substring" => {
-                impls! {
-                    params!(String, Int64) => Variadic(VariadicFunc::Substr),
-                    params!(String, Int64, Int64) => Variadic(VariadicFunc::Substr)
-                }
+                params!(String, Int64) => Variadic(VariadicFunc::Substr),
+                params!(String, Int64, Int64) => Variadic(VariadicFunc::Substr)
             },
             "to_char" => {
-                impls! {
-                    params!(Timestamp, String) => Binary(BinaryFunc::ToCharTimestamp),
-                    params!(TimestampTz, String) => Binary(BinaryFunc::ToCharTimestampTz)
-                }
+                params!(Timestamp, String) => Binary(BinaryFunc::ToCharTimestamp),
+                params!(TimestampTz, String) => Binary(BinaryFunc::ToCharTimestampTz)
             },
             // > Returns the value as json or jsonb. Arrays and composites
             // > are converted (recursively) to arrays and objects;
@@ -824,14 +784,10 @@ lazy_static! {
             //
             // https://www.postgresql.org/docs/current/functions-json.html
             "to_jsonb" => {
-                impls! {
-                    vec![JsonbAny] => ExprOnly
-                }
+                vec![JsonbAny] => ExprOnly
             },
             "to_timestamp" => {
-                impls! {
-                    params!(Float64) => Unary(UnaryFunc::ToTimestamp)
-                }
+                params!(Float64) => Unary(UnaryFunc::ToTimestamp)
             }
         }
     };
