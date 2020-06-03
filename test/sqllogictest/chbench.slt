@@ -235,7 +235,7 @@ ORDER BY ol_number
 | Get materialize.public.orderline (u19)
 | Filter (datetots(#6) > 2007-01-02 00:00:00)
 | Reduce group=(#3) sum(#7) sum(#8) count(#7) count(#8) countall(null)
-| Map (((i32todec(#1) * 10000000dec) / i64todec(if (#3 = 0) then {null} else {#3})) / 10dec), (((#2 * 10000000dec) / (i64todec(if (#4 = 0) then {null} else {#4}) * 100dec)) * 10dec)
+| Map (((i32todec(#1) * 10000000dec) / i64todec(if (#3 = 0) then {null} else {#3})) / 10dec), (((#2 * 10000000dec) / i64todec(if (#4 = 0) then {null} else {#4})) / 10dec)
 | Project (#0..#2, #6, #7, #5)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#5)
@@ -819,14 +819,14 @@ ORDER BY ordercount DESC
 | | demand = (#14, #26)
 | Filter (#26 = "GERMANY")
 | Reduce group=() sum(#14)
-| Map ((i32todec(#0) * 1000dec) * 5dec)
+| Map (i32todec(#0) * 5dec)
 | ArrangeBy ()
 
 %8 =
 | Join %3 %7
 | | implementation = Differential %3 %7.()
 | | demand = (#0, #1, #3)
-| Filter ((i32todec(#1) * 1000000dec) > #3)
+| Filter ((i32todec(#1) * 1000dec) > #3)
 | Project (#0, #1)
 
 Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
@@ -1517,7 +1517,7 @@ ORDER BY substr(c_state, 1, 1)
 | Get materialize.public.customer (u6)
 | Filter (((((((substr(#11, 1, 1) = "1") || (substr(#11, 1, 1) = "2")) || (substr(#11, 1, 1) = "3")) || (substr(#11, 1, 1) = "4")) || (substr(#11, 1, 1) = "5")) || (substr(#11, 1, 1) = "6")) || (substr(#11, 1, 1) = "7")), (#16 > 0dec)
 | Reduce group=() sum(#16) count(#16)
-| Map (((#0 * 10000000dec) / (i64todec(if (#1 = 0) then {null} else {#1}) * 100dec)) * 10dec)
+| Map (((#0 * 10000000dec) / i64todec(if (#1 = 0) then {null} else {#1})) / 10dec)
 | ArrangeBy ()
 
 %2 =
