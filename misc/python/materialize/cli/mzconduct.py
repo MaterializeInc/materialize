@@ -732,7 +732,7 @@ class RunStep(WorkflowStep):
         self,
         *,
         service: str,
-        command: str,
+        command: Optional[str] = None,
         daemon: bool = False,
         entrypoint: Optional[str] = None,
     ) -> None:
@@ -742,7 +742,8 @@ class RunStep(WorkflowStep):
         if entrypoint:
             cmd.append(f"--entrypoint={entrypoint}")
         cmd.append(service)
-        cmd.extend(shlex.split(command))
+        if command is not None:
+            cmd.extend(shlex.split(command))
         self._command = cmd
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
