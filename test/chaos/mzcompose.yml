@@ -80,6 +80,11 @@ mzconduct:
             --kafka-url kafka:9092
             --kafka-partitions 1
             --message-count 10000
+        - step: pause-container
+          container: chaos_kafka_1
+          loop_time: 300
+          running_time: 10
+          paused_time: 10
 
     # Helper workflows
 
