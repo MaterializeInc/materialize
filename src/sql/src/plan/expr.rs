@@ -621,7 +621,7 @@ impl ScalarExpr {
             ScalarExpr::Parameter(n) => {
                 let datum = parameters.datums.iter().nth(*n - 1).unwrap();
                 let scalar_type = &parameters.types[*n - 1];
-                let row = RowPacker::with_capacity(0).pack(&[datum]);
+                let row = Row::pack(&[datum]);
                 let column_type = ColumnType::new(scalar_type.clone()).nullable(datum.is_null());
                 mem::replace(self, ScalarExpr::Literal(row, column_type));
             }
@@ -647,7 +647,7 @@ impl ScalarExpr {
     }
 
     pub fn literal(datum: Datum, column_type: ColumnType) -> ScalarExpr {
-        let row = RowPacker::with_capacity(0).pack(&[datum]);
+        let row = Row::pack(&[datum]);
         ScalarExpr::Literal(row, column_type)
     }
 

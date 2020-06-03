@@ -1108,7 +1108,7 @@ where
         name: String,
     ) -> Result<ExecuteResponse, failure::Error> {
         let variable = session.get(&name)?;
-        let row = repr::RowPacker::with_capacity(0).pack(&[Datum::String(&variable.value())]);
+        let row = repr::Row::pack(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
 
@@ -1389,7 +1389,7 @@ where
                 explanation.to_string()
             }
         };
-        let rows = vec![RowPacker::with_capacity(0).pack(&[Datum::from(&*explanation_string)])];
+        let rows = vec![Row::pack(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))
     }
 
@@ -2467,7 +2467,7 @@ fn open_catalog(
             for log_view in logging_config.active_views() {
                 let pcx = PlanContext::default();
                 let params = Params {
-                    datums: RowPacker::with_capacity(0).pack(&[]),
+                    datums: Row::pack(&[]),
                     types: vec![],
                 };
                 let stmt = sql::parse::parse(log_view.sql.to_owned())

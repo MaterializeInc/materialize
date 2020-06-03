@@ -136,7 +136,7 @@ pub trait DecoderState {
 }
 
 fn pack_with_line_no(datum: Datum, line_no: Option<i64>) -> Row {
-    RowPacker::with_capacity(0).pack(iter::once(datum).chain(line_no.map(Datum::from)))
+    Row::pack(iter::once(datum).chain(line_no.map(Datum::from)))
 }
 
 fn bytes_to_datum(bytes: &[u8]) -> Datum {

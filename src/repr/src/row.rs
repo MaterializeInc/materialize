@@ -620,7 +620,7 @@ impl RowPacker {
     /// Allocates an empty row packer.
     pub fn new() -> Self {
         // TODO: Determine if this is the best default choice.
-        Self::with_capacity(1024 * 16)
+        Self::with_capacity(0)
     }
     /// Allocates an empty row packer with a supplied capacity.
     pub fn with_capacity(capacity: usize) -> Self {

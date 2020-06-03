@@ -69,7 +69,7 @@ impl ScalarExpr {
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ColumnType) -> Self {
-        let row = res.map(|datum| repr::RowPacker::with_capacity(0).pack(&[datum]));
+        let row = res.map(|datum| Row::pack(&[datum]));
         ScalarExpr::Literal(row, typ)
     }
 
