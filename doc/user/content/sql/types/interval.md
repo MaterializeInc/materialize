@@ -11,9 +11,9 @@ menu:
 Detail | Info
 -------|-----
 **Quick Syntax** | `INTERVAL '1' MINUTE` <br/> `INTERVAL '1-2 3 4:5:6.7'` <br/>`INTERVAL '1 year 2.3 days 4.5 seconds'`
-**Size** | 32 bytes
-**Min value** | -9223372036854775807 months, -9223372036854775807 seconds, -999999999 nanoseconds
-**Max value** | 9223372036854775807 months, 9223372036854775807 seconds, 999999999 nanoseconds
+**Size** | 20 bytes
+**Min value** | -178956970 years -7 months -2236962132 days -07:59:59.999999
+**Max value** | 178956970 years 7 months 2236962132 days 07:59:59.999999
 
 ## Syntax
 

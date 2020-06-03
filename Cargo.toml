@@ -26,6 +26,7 @@ members = [
     "src/testdrive",
     "src/transform",
     "test/chaos",
+    "test/correctness",
     "test/metabase/smoketest",
     "test/performance/perf-kinesis",
     "test/smith",

@@ -220,17 +220,17 @@ SELECT INTERVAL '0-0 0 0:0:0.0';
 00:00:00
 
 # Oversized components in SQL standard-style variables
-statement error invalid input syntax for interval: MONTH must be \(-12, 12\), got 13: "100-13"
+statement error invalid input syntax for interval: MONTH must be \[-12, 12\], got 13: "100-13"
 SELECT INTERVAL '100-13';
 
-statement error invalid input syntax for interval: MINUTE must be \(-59, 59\), got 61: "100-11 366 250:61"
+statement error invalid input syntax for interval: MINUTE must be \[-59, 59\], got 61: "100-11 366 250:61"
 SELECT INTERVAL '100-11 366 250:61';
 
-statement error invalid input syntax for interval: SECOND must be \(-60, 60\), got 61: "100-11 366 250:59:61"
+statement error invalid input syntax for interval: SECOND must be \[-60, 60\], got 61: "100-11 366 250:59:61"
 SELECT INTERVAL '100-11 366 250:59:61';
 
 # Invalid syntax
-statement error invalid input syntax for interval: Invalid syntax at offset 7: provided Dot but expected None: "1:2:3.4.5"
+statement error invalid input syntax for interval: have unprocessed tokens .500000000
 SELECT INTERVAL '1:2:3.4.5';
 
 statement error
@@ -367,26 +367,19 @@ SELECT INTERVAL '+1 year +2 days +3:4:5.6';
 # Differentiate between trailing DateTimeField name and
 # PostgreSQL TimeUnit.
 query T
-SELECT INTERVAL '1-2' MONTH;
+SELECT INTERVAL '01:02:03' MINUTE;
 ----
-1 year 2 months
-
-statement error
-SELECT INTERVAL '1-2 month';
-
-statement error
-SELECT INTERVAL '1-2month';
+01:02:00
 
 query T
-SELECT INTERVAL '1-2' HOUR;
+SELECT INTERVAL '01:02:03minute';
 ----
-1 year 2 months
+01:02:03
 
-statement error invalid input syntax for interval: Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR': "1-2 hour"
-SELECT INTERVAL '1-2 hour';
-
-statement error invalid input syntax for interval: Invalid syntax at offset 3: provided TimeUnit\(Hour\) but expected None: "1-2hour"
-SELECT INTERVAL '1-2hour';
+query T
+SELECT INTERVAL '01:02:03minute hour day year';
+----
+01:02:03
 
 # Use larger numbers.
 query T
@@ -510,6 +503,20 @@ SELECT INTERVAL '2-3 3:4' DAY(1)
 statement error Expected literal int, found: -
 SELECT INTERVAL '1 day 2-3 4' SECOND(-1);
 
+# Arbitrary punctuation delimiters
+query T
+SELECT interval '02-01!1~01:02:03';
+----
+2 years 1 month 1 day 01:02:03
+
+query T
+SELECT interval '1! hour';
+----
+01:00:00
+
+statement error
+SELECT interval '02!01!1~01:02:03';
+
 ## Math
 
 # Support negating interval
@@ -575,22 +582,33 @@ SELECT INTERVAL '-1-2 -3 -4:5:6.7' + INTERVAL '1-2 3 4:5:6.7'
 00:00:00
 
 ## Largest values
+query T
+SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds'
+----
+2236962132 days 07:59:59.999999
 
 query T
-SELECT INTERVAL '9223372036854775807 months 9223372036854775807 seconds';
+SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds'
 ----
-768614336404564650 years 7 months 106751991167300 days 15:30:07
+-2236962132 days -07:59:59.999999
 
-query T
-SELECT INTERVAL '-9223372036854775807 months -9223372036854775807 seconds';
-----
--768614336404564650 years -7 months -106751991167300 days -15:30:07
+statement error invalid input syntax for interval: exceeds min/max interval duration
+SELECT INTERVAL '2147483647 days 2147483648 hours'
+
+statement error invalid input syntax for interval: exceeds min/max interval duration
+SELECT INTERVAL '-2147483647 days -2147483648 hours'
+
+statement error interval out of range
+SELECT INTERVAL '2147483647 days 2147483647 hours 59 minutes 59.999999 seconds' + INTERVAL '1';
+
+statement error interval out of range
+SELECT INTERVAL '-2147483647 days -2147483647 hours -59 minutes -59.999999 seconds' - INTERVAL '1';
 
 # Largest number of cumulative nanoseconds
 query T
 SELECT INTERVAL '0.999999999 months 0.999999999 days 0.999999999 hours 0.999999999 minutes 0.999999999 seconds';
 ----
-31 days 01:00:56.702351
+31 days 01:01:00.997318
 
 ## Overflows
 
@@ -600,10 +618,10 @@ SELECT INTERVAL '768614336404564651 year';
 statement error Overflows maximum months; cannot exceed 9223372036854775807 months
 SELECT INTERVAL '768614336404564650.7 year';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 19: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 months';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 20: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 months';
 
 statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
@@ -627,8 +645,14 @@ SELECT INTERVAL '9223372036854775807 seconds 1 minute';
 statement error Overflows maximum seconds; cannot exceed 9223372036854775807 seconds
 SELECT INTERVAL '9223372036854775707 seconds 1.9 minute';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 19: number too large to fit in target type
 SELECT INTERVAL '9223372036854775808 seconds';
 
-statement error Unable to parse value as a number at index 0: number too large to fit in target type
+statement error Unable to parse value as a number at index 20: number too large to fit in target type
 SELECT INTERVAL '-9223372036854775808 seconds';
+
+# 0 interval equality
+query B
+SELECT (interval '-1' day + interval '1' day) = (interval '1' day + interval '-1' day)
+----
+true

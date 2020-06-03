@@ -788,6 +788,11 @@ SELECT EXTRACT(doy FROM DATE '2000-01-01'), EXTRACT(doy FROM DATE '2000-12-31')
 ----
 1 366
 
+query RR
+SELECT EXTRACT(EPOCH from INTERVAL '-1' MINUTE), EXTRACT(MINUTE from INTERVAL '-1' MINUTE)
+----
+-60 -1
+
 query T
 SELECT to_char(TIMESTAMPTZ '1997-02-03 11:12:59.9', 'YYYY-MM-DD HH24:MI:SS.MS TZ')
 ----
@@ -971,6 +976,9 @@ SELECT DATE '2007-02-01TT15:04:05'
 statement error invalid input syntax for date: Cannot determine format of all parts: "2007-02-01  T  T  15:04:05"
 SELECT DATE '2007-02-01  T  T  15:04:05'
 
+statement error invalid input syntax for date: Invalid timezone string \(T\): named timezones are not supported. Failed to parse T at token index 0
+SELECT DATE '2007-02-01  T '
+
 # Test casting time to interval & vice versa
 
 query T
@@ -988,8 +996,27 @@ SELECT interval '-01:02:03.04'::time;
 ----
 22:57:56.96
 
+query T
+SELECT interval '-3 days -2 hours'::time;
+----
+22:00:00
+
 # Test using date as a column name.
 query T
 SELECT date FROM (SELECT column1 AS date FROM (VALUES ('2020-01-01')))
 ----
 2020-01-01
+
+# Arbitrary punctuation as delimiter
+query T
+SELECT '"2020-03-17 ~02:36:56~"'::timestamp;
+----
+2020-03-17 02:36:56
+
+query T
+SELECT '"2020!03-17 #?~T~02:36:56#"'::timestamp;
+----
+2020-03-17 02:36:56
+
+query error invalid input syntax for timestamp: have unprocessed tokens 56
+select TIMESTAMP '"2020-03-17 ~02:36:~56~"';

@@ -53,7 +53,7 @@ use repr::strconv::{
 };
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::{Session, Statement};
-use sql_parser::parser::{Parser as SqlParser, ParserError as SqlParserError};
+use sql_parser::parser::ParserError as SqlParserError;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -558,7 +558,7 @@ impl State {
         location: Location,
     ) -> Result<Outcome<'a>, failure::Error> {
         // get statement
-        let statements = match SqlParser::parse_sql(sql.to_string()) {
+        let statements = match sql_parser::parser::parse_statements(sql.to_string()) {
             Ok(statements) => statements,
             Err(error) => {
                 if output.is_err() {

@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
 use repr::datetime::DateTimeField;
@@ -35,15 +33,15 @@ fn test_parse_date_errors() {
     );
     run_test_parse_date_errors(
         "2001-13-01",
-        "invalid input syntax for date: MONTH must be (1, 12), got 13: \"2001-13-01\"",
+        "invalid input syntax for date: MONTH must be [1, 12], got 13: \"2001-13-01\"",
     );
     run_test_parse_date_errors(
         "2001-12-32",
-        "invalid input syntax for date: DAY must be (1, 31), got 32: \"2001-12-32\"",
+        "invalid input syntax for date: DAY must be [1, 31], got 32: \"2001-12-32\"",
     );
     run_test_parse_date_errors(
         "2001-01-02 04",
-        "invalid input syntax for date: unknown format: \"2001-01-02 04\"",
+        "invalid input syntax for date: have unprocessed tokens 4: \"2001-01-02 04\"",
     );
     fn run_test_parse_date_errors(s: &str, e: &str) {
         assert_eq!(
@@ -71,19 +69,23 @@ fn test_parse_time() {
 fn test_parse_time_errors() {
     run_test_parse_time_errors(
         "26:01:02.345",
-        "invalid input syntax for time: HOUR must be (0, 23), got 26: \"26:01:02.345\"",
+        "invalid input syntax for time: HOUR must be [0, 23], got 26: \"26:01:02.345\"",
     );
     run_test_parse_time_errors(
         "01:60:02.345",
-        "invalid input syntax for time: MINUTE must be (0, 59), got 60: \"01:60:02.345\"",
+        "invalid input syntax for time: MINUTE must be [0, 59], got 60: \"01:60:02.345\"",
     );
     run_test_parse_time_errors(
         "01:02:61.345",
-        "invalid input syntax for time: SECOND must be (0, 60), got 61: \"01:02:61.345\"",
+        "invalid input syntax for time: SECOND must be [0, 60], got 61: \"01:02:61.345\"",
     );
     run_test_parse_time_errors(
         "03.456",
-        "invalid input syntax for time: unknown format: \"03.456\"",
+        "invalid input syntax for time: have unprocessed tokens 3.456000000: \"03.456\"",
+    );
+    run_test_parse_time_errors(
+        "03.456",
+        "invalid input syntax for time: have unprocessed tokens 3.456000000: \"03.456\"",
     );
 
     fn run_test_parse_time_errors(s: &str, e: &str) {
@@ -134,28 +136,28 @@ fn test_parse_timestamp_errors() {
     );
     run_test_parse_timestamp_errors(
         "2001-13-01",
-        "invalid input syntax for timestamp: MONTH must be (1, 12), got 13: \"2001-13-01\"",
+        "invalid input syntax for timestamp: MONTH must be [1, 12], got 13: \"2001-13-01\"",
     );
     run_test_parse_timestamp_errors(
         "2001-12-32",
-        "invalid input syntax for timestamp: DAY must be (1, 31), got 32: \"2001-12-32\"",
+        "invalid input syntax for timestamp: DAY must be [1, 31], got 32: \"2001-12-32\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 04",
-        "invalid input syntax for timestamp: unknown format: \"2001-01-02 04\"",
+        "invalid input syntax for timestamp: have unprocessed tokens 4: \"2001-01-02 04\"",
     );
 
     run_test_parse_timestamp_errors(
         "2001-01-02 26:01:02.345",
-        "invalid input syntax for timestamp: HOUR must be (0, 23), got 26: \"2001-01-02 26:01:02.345\"",
+        "invalid input syntax for timestamp: HOUR must be [0, 23], got 26: \"2001-01-02 26:01:02.345\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 01:60:02.345",
-        "invalid input syntax for timestamp: MINUTE must be (0, 59), got 60: \"2001-01-02 01:60:02.345\"",
+        "invalid input syntax for timestamp: MINUTE must be [0, 59], got 60: \"2001-01-02 01:60:02.345\"",
     );
     run_test_parse_timestamp_errors(
         "2001-01-02 01:02:61.345",
-        "invalid input syntax for timestamp: SECOND must be (0, 60), got 61: \"2001-01-02 01:02:61.345\"",
+        "invalid input syntax for timestamp: SECOND must be [0, 60], got 61: \"2001-01-02 01:02:61.345\"",
     );
 
     fn run_test_parse_timestamp_errors(s: &str, e: &str) {
@@ -274,90 +276,40 @@ fn test_parse_interval_monthlike() {
 fn test_parse_interval_durationlike() {
     use DateTimeField::*;
 
-    run_test_parse_interval_durationlike(
-        "10",
-        Interval {
-            duration: Duration::new(10, 0),
-            ..Default::default()
-        },
-    );
+    run_test_parse_interval_durationlike("10", Interval::new(0, 10, 0).unwrap());
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Day,
-        Interval {
-            duration: Duration::new(10 * 24 * 60 * 60, 0),
-            ..Default::default()
-        },
+        Interval::new(0, 10 * 24 * 60 * 60, 0).unwrap(),
     );
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Hour,
-        Interval {
-            duration: Duration::new(10 * 60 * 60, 0),
-            ..Default::default()
-        },
+        Interval::new(0, 10 * 60 * 60, 0).unwrap(),
     );
 
     run_test_parse_interval_durationlike_from_sql(
         "10",
         Minute,
-        Interval {
-            duration: Duration::new(10 * 60, 0),
-            ..Default::default()
-        },
+        Interval::new(0, 10 * 60, 0).unwrap(),
     );
 
-    run_test_parse_interval_durationlike_from_sql(
-        "10",
-        Second,
-        Interval {
-            duration: Duration::new(10, 0),
-            ..Default::default()
-        },
-    );
+    run_test_parse_interval_durationlike_from_sql("10", Second, Interval::new(0, 10, 0).unwrap());
 
-    run_test_parse_interval_durationlike(
-        "0.01",
-        Interval {
-            duration: Duration::new(0, 10_000_000),
-            ..Default::default()
-        },
-    );
+    run_test_parse_interval_durationlike("0.01", Interval::new(0, 0, 10_000_000).unwrap());
 
     run_test_parse_interval_durationlike(
         "1 2:3:4.5",
-        Interval {
-            duration: Duration::new(93_784, 500_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, 93_784, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_durationlike(
         "-1 2:3:4.5",
-        Interval {
-            duration: Duration::new(79_015, 500_000_000),
-            is_positive_dur: false,
-            ..Default::default()
-        },
+        Interval::new(0, -79_015, -500_000_000).unwrap(),
     );
 
-    run_test_parse_interval_durationlike(
-        "1 -2:3:4.5",
-        Interval {
-            duration: Duration::new(79_015, 500_000_000),
-            ..Default::default()
-        },
-    );
-
-    run_test_parse_interval_durationlike(
-        "1 2:3",
-        Interval {
-            duration: Duration::new(93_780, 0),
-            ..Default::default()
-        },
-    );
     fn run_test_parse_interval_durationlike(s: &str, expected: Interval) {
         let actual = strconv::parse_interval(s).unwrap();
         assert_eq!(actual, expected);
@@ -378,67 +330,35 @@ fn test_parse_interval_full() {
 
     run_test_parse_interval_full(
         "6-7 1 2:3:4.5",
-        Interval {
-            months: 79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: true,
-        },
+        Interval::new(79, 93_784, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 1 2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: true,
-        },
+        Interval::new(-79, 93_784, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "6-7 -1 -2:3:4.5",
-        Interval {
-            months: 79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: false,
-        },
+        Interval::new(79, -93_784, -500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 -1 -2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(93_784, 500_000_000),
-            is_positive_dur: false,
-        },
+        Interval::new(-79, -93_784, -500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 1 -2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(79_015, 500_000_000),
-            is_positive_dur: true,
-        },
+        Interval::new(-79, 79_015, 500_000_000).unwrap(),
     );
 
     run_test_parse_interval_full(
         "-6-7 -1 2:3:4.5",
-        Interval {
-            months: -79,
-            duration: Duration::new(79_015, 500_000_000),
-            is_positive_dur: false,
-        },
+        Interval::new(-79, -79_015, -500_000_000).unwrap(),
     );
 
-    run_test_parse_interval_full_from_sql(
-        "-6-7 1",
-        Minute,
-        Interval {
-            months: -79,
-            duration: Duration::new(60, 0),
-            is_positive_dur: true,
-        },
-    );
+    run_test_parse_interval_full_from_sql("-6-7 1", Minute, Interval::new(-79, 60, 0).unwrap());
 
     fn run_test_parse_interval_full(s: &str, expected: Interval) {
         let actual = strconv::parse_interval(s).unwrap();

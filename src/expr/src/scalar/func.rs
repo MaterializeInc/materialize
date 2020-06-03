@@ -96,6 +96,10 @@ fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64().abs())
 }
 
+fn abs_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_decimal().abs())
+}
+
 fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().abs())
 }
@@ -374,12 +378,16 @@ fn cast_time_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_time_to_interval<'a>(a: Datum<'a>) -> Datum<'a> {
+fn cast_time_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let t = a.unwrap_time();
-    Datum::Interval(repr::Interval {
-        duration: std::time::Duration::new(t.num_seconds_from_midnight() as u64, t.nanosecond()),
-        ..Default::default()
-    })
+    match repr::Interval::new(
+        0,
+        t.num_seconds_from_midnight() as i64,
+        t.nanosecond() as i64,
+    ) {
+        Ok(i) => Ok(Datum::Interval(i)),
+        Err(_) => Err(EvalError::IntervalOutOfRange),
+    }
 }
 
 fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -418,11 +426,16 @@ fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datu
 
 fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
     let mut i = a.unwrap_interval();
-    if !i.is_positive_dur {
-        i = i + repr::Interval {
-            duration: std::time::Duration::from_secs(86400),
-            ..Default::default()
-        };
+
+    // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
+    if i.duration < 0 {
+        i = repr::Interval::new(0, 86400, 0)
+            .unwrap()
+            .checked_add(
+                &repr::Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64)
+                    .unwrap(),
+            )
+            .unwrap();
     }
 
     Datum::Time(NaiveTime::from_hms_nano(
@@ -536,7 +549,7 @@ fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(match b {
         Datum::Interval(i) => {
             let dt = add_timestamp_months(dt, i.months);
-            add_timestamp_duration(dt, i.is_positive_dur, i.duration)
+            dt + i.duration_as_chrono()
         }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     })
@@ -548,7 +561,7 @@ fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let new_ndt = match b {
         Datum::Interval(i) => {
             let dt = add_timestamp_months(dt, i.months);
-            add_timestamp_duration(dt, i.is_positive_dur, i.duration)
+            dt + i.duration_as_chrono()
         }
         _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     };
@@ -576,30 +589,14 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, interval.months);
-    Datum::Timestamp(add_timestamp_duration(
-        dt,
-        interval.is_positive_dur,
-        interval.duration,
-    ))
+    Datum::Timestamp(dt + interval.duration_as_chrono())
 }
 
 fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
-    let date = match chrono::Duration::from_std(interval.duration) {
-        Ok(d) => d,
-        Err(_) => return Datum::Null,
-    };
-
-    let time = if interval.is_positive_dur {
-        let (t, _) = time.overflowing_add_signed(date);
-        t
-    } else {
-        let (t, _) = time.overflowing_sub_signed(date);
-        t
-    };
-
-    Datum::Time(time)
+    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());
+    Datum::Time(t)
 }
 
 fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -636,7 +633,11 @@ fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().round())
 }
 
-fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
+fn round_decimal_unary<'a>(a: Datum<'a>, a_scale: u8) -> Datum<'a> {
+    round_decimal_binary(a, Datum::Int64(0), a_scale)
+}
+
+fn round_decimal_binary<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
     let round_to = b.unwrap_int64();
     let decimal = a.unwrap_decimal().with_scale(a_scale);
     Datum::from(decimal.round(round_to).significand())
@@ -675,43 +676,20 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
 }
 
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let inverse = match b {
-        Datum::Interval(i) => {
-            let mut res = i;
-            res.months = -res.months;
-            res.is_positive_dur = !res.is_positive_dur;
-            Datum::Interval(res)
-        }
-        _ => panic!(
-            "Tried to do timestamptz subtraction with non-interval: {:?}",
-            b
-        ),
-    };
-    add_timestamp_interval(a, inverse)
+    add_timestamp_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
 fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let inverse = match b {
-        Datum::Interval(i) => {
-            let mut res = i;
-            res.months = -res.months;
-            res.is_positive_dur = !res.is_positive_dur;
-            Datum::Interval(res)
-        }
-        _ => panic!(
-            "Tried to do timestamptz subtraction with non-interval: {:?}",
-            b
-        ),
-    };
-    add_timestamptz_interval(a, inverse)
+    add_timestamptz_interval(a, Datum::Interval(-b.unwrap_interval()))
 }
 
-fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
+fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
     if months == 0 {
         return dt;
     }
 
-    let mut months: i32 = months.try_into().expect("fewer than i64 months");
+    let mut months = months;
+
     let (mut year, mut month, mut day) = (dt.year(), dt.month0() as i32, dt.day());
     let years = months / 12;
     year += years;
@@ -742,25 +720,15 @@ fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
     new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
 }
 
-fn add_timestamp_duration(
-    dt: NaiveDateTime,
-    is_positive: bool,
-    duration: std::time::Duration,
-) -> NaiveDateTime {
-    let d = chrono::Duration::from_std(duration).expect("a duration that fits into i64 seconds");
-    if is_positive {
-        dt + d
-    } else {
-        dt - d
-    }
-}
-
 fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
-fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_interval() + b.unwrap_interval())
+fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_interval()
+        .checked_add(&b.unwrap_interval())
+        .ok_or(EvalError::IntervalOutOfRange)
+        .map(Datum::from)
 }
 
 fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -805,8 +773,11 @@ fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_time() - b.unwrap_time())
 }
 
-fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_interval() - b.unwrap_interval())
+fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_interval()
+        .checked_add(&-b.unwrap_interval())
+        .ok_or(EvalError::IntervalOutOfRange)
+        .map(Datum::from)
 }
 
 fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -815,30 +786,14 @@ fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
     let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
     let dt = add_timestamp_months(dt, -interval.months);
-    Datum::Timestamp(add_timestamp_duration(
-        dt,
-        !interval.is_positive_dur,
-        interval.duration,
-    ))
+    Datum::Timestamp(dt - interval.duration_as_chrono())
 }
 
 fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let time = a.unwrap_time();
     let interval = b.unwrap_interval();
-    let date = match chrono::Duration::from_std(interval.duration) {
-        Ok(d) => d,
-        Err(_) => return Datum::Null,
-    };
-
-    let time = if interval.is_positive_dur {
-        let (t, _) = time.overflowing_sub_signed(date);
-        t
-    } else {
-        let (t, _) = time.overflowing_add_signed(date);
-        t
-    };
-
-    Datum::Time(time)
+    let (t, _) = time.overflowing_sub_signed(interval.duration_as_chrono());
+    Datum::Time(t)
 }
 
 fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1931,7 +1886,7 @@ impl BinaryFunc {
             BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddDecimal => Ok(eager!(add_decimal)),
-            BinaryFunc::AddInterval => Ok(eager!(add_interval)),
+            BinaryFunc::AddInterval => eager!(add_interval),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
             BinaryFunc::SubFloat32 => Ok(eager!(sub_float32)),
@@ -1940,7 +1895,7 @@ impl BinaryFunc {
             BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
             BinaryFunc::SubTimestampInterval => Ok(eager!(sub_timestamp_interval)),
             BinaryFunc::SubTimestampTzInterval => Ok(eager!(sub_timestamptz_interval)),
-            BinaryFunc::SubInterval => Ok(eager!(sub_interval)),
+            BinaryFunc::SubInterval => eager!(sub_interval),
             BinaryFunc::SubDate => Ok(eager!(sub_date)),
             BinaryFunc::SubDateInterval => Ok(eager!(sub_date_interval)),
             BinaryFunc::SubTime => Ok(eager!(sub_time)),
@@ -1986,7 +1941,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
-            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal, *scale)),
+            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
         }
     }
@@ -2280,6 +2235,7 @@ pub enum UnaryFunc {
     AbsInt64,
     AbsFloat32,
     AbsFloat64,
+    AbsDecimal,
     CastBoolToStringExplicit,
     CastBoolToStringImplicit,
     CastInt32ToBool,
@@ -2387,6 +2343,7 @@ pub enum UnaryFunc {
     JsonbPretty,
     RoundFloat32,
     RoundFloat64,
+    RoundDecimal(u8),
 }
 
 impl UnaryFunc {
@@ -2414,6 +2371,7 @@ impl UnaryFunc {
             UnaryFunc::AbsInt64 => Ok(abs_int64(a)),
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
+            UnaryFunc::AbsDecimal => Ok(abs_decimal(a)),
             UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
             UnaryFunc::CastBoolToStringImplicit => Ok(cast_bool_to_string_implicit(a)),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
@@ -2456,7 +2414,7 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToString(scale) => {
                 Ok(cast_decimal_to_string(a, *scale, temp_storage))
             }
-            UnaryFunc::CastTimeToInterval => Ok(cast_time_to_interval(a)),
+            UnaryFunc::CastTimeToInterval => cast_time_to_interval(a),
             UnaryFunc::CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
             UnaryFunc::CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
             UnaryFunc::CastTimestampToTimestampTz => Ok(cast_timestamp_to_timestamptz(a)),
@@ -2551,6 +2509,7 @@ impl UnaryFunc {
             UnaryFunc::JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
+            UnaryFunc::RoundDecimal(scale) => Ok(round_decimal_unary(a, *scale)),
         }
     }
 
@@ -2655,7 +2614,7 @@ impl UnaryFunc {
             CeilFloat64 | FloorFloat64 | RoundFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
-            CeilDecimal(scale) | FloorDecimal(scale) => {
+            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) => {
                 match input_type.scalar_type {
                     ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
                     _ => unreachable!(),
@@ -2667,7 +2626,7 @@ impl UnaryFunc {
             SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
-            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
+            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
 
             ExtractIntervalEpoch
             | ExtractIntervalYear
@@ -2766,6 +2725,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::NegInterval => f.write_str("-"),
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
+            UnaryFunc::AbsDecimal => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
@@ -2877,6 +2837,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
             UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
             UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
+            UnaryFunc::RoundDecimal(_) => f.write_str("roundunary"),
         }
     }
 }

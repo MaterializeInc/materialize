@@ -1877,7 +1877,7 @@ mod tests {
     use crate::ast::visit::Visit;
     use crate::ast::visit_mut::VisitMut;
     use crate::ast::Ident;
-    use crate::parser::Parser;
+    use crate::parser;
     use std::error::Error;
 
     #[test]
@@ -1902,7 +1902,7 @@ mod tests {
             }
         }
 
-        let mut stmts = Parser::parse_sql(
+        let mut stmts = parser::parse_statements(
             r#"
             WITH a01 AS (SELECT 1)
                 SELECT *, a02.*, a03 AS a04

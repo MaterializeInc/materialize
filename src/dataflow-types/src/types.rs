@@ -73,11 +73,14 @@ pub struct Update {
     pub diff: isize,
 }
 
+/// A description of view or index to be added to the local context
+/// for a dataflow
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc {
     pub id: GlobalId,
     pub relation_expr: OptimizedRelationExpr,
-    /// is_some if building a view, none otherwise
+    /// If a building a view, the types of columns of the built view
+    /// None if building an index
     pub typ: Option<RelationType>,
 }
 
@@ -614,6 +617,8 @@ pub struct KafkaSinkConnectorBuilder {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+/// An index storing processed updates so they can be queried
+/// or reused in other computations
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,

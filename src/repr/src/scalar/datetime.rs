@@ -11,7 +11,6 @@ use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::fmt;
 use std::str::FromStr;
-use std::time::Duration;
 
 use chrono::{NaiveDate, NaiveTime};
 
@@ -207,20 +206,20 @@ impl ParsedDateTime {
             self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
         }
 
-        // Handle negative seconds with positive nanos or vice versa.
-        if nanos < 0 && seconds > 0 {
-            nanos += 1_000_000_000_i64;
-            seconds -= 1;
-        } else if nanos > 0 && seconds < 0 {
-            nanos -= 1_000_000_000_i64;
-            seconds += 1;
-        }
+        let months: i32 = match months.try_into() {
+            Ok(m) => m,
+            Err(_) => {
+                return Err(format!(
+                    "exceeds min/max months (+/-2147483647); have {}",
+                    months
+                ))
+            }
+        };
 
-        Ok(Interval {
-            months,
-            duration: Duration::new(seconds.abs() as u64, nanos.abs() as u32),
-            is_positive_dur: seconds >= 0 && nanos >= 0,
-        })
+        match Interval::new(months, seconds, nanos) {
+            Ok(i) => Ok(i),
+            Err(e) => Err(e.to_string()),
+        }
     }
     /// Adds the appropriate values from self's ParsedDateTime to `months`,
     /// `seconds`, and `nanos`. These fields are then appropriate to construct
@@ -282,7 +281,7 @@ impl ParsedDateTime {
                 })?;
 
                 let m_f_ns = m_f
-                    .checked_mul(30 * seconds_multiplier(Day))
+                    .checked_mul(30 * super::seconds_multiplier(Day))
                     .ok_or_else(|| "Intermediate overflow in MONTH fraction".to_owned())?;
 
                 // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000
@@ -304,7 +303,7 @@ impl ParsedDateTime {
                 };
 
                 *seconds = t
-                    .checked_mul(seconds_multiplier(d))
+                    .checked_mul(super::seconds_multiplier(d))
                     .and_then(|t_s| seconds.checked_add(t_s))
                     .ok_or_else(|| {
                         format!(
@@ -315,7 +314,7 @@ impl ParsedDateTime {
                     })?;
 
                 let t_f_ns = t_f
-                    .checked_mul(seconds_multiplier(dhms))
+                    .checked_mul(super::seconds_multiplier(dhms))
                     .ok_or_else(|| format!("Intermediate overflow in {} fraction", dhms))?;
 
                 // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000
@@ -394,12 +393,26 @@ impl ParsedDateTime {
         use DateTimeField::*;
 
         let mut pdt = ParsedDateTime::default();
-
         let mut value_parts = VecDeque::new();
+        let mut value_tokens = tokenize_time_str(value.trim())?;
+        let mut token_buffer = VecDeque::new();
 
-        let value_split = value.trim().split_whitespace().collect::<Vec<&str>>();
-        for s in value_split {
-            value_parts.push_back(tokenize_time_str(s)?);
+        while let Some(t) = value_tokens.pop_front() {
+            match t {
+                TimeStrToken::Delim => {
+                    if !token_buffer.is_empty() {
+                        value_parts.push_back(token_buffer.clone());
+                        token_buffer.clear();
+                    }
+                }
+                // Equivalent to trimming Colons from each leading element.
+                TimeStrToken::Colon if token_buffer.is_empty() => {}
+                _ => token_buffer.push_back(t),
+            }
+        }
+
+        if !token_buffer.is_empty() {
+            value_parts.push_back(token_buffer)
         }
 
         let mut annotated_parts = Vec::new();
@@ -465,6 +478,18 @@ impl ParsedDateTime {
                 }
                 TimePartFormat::PostgreSql(f) => fill_pdt_interval_pg(&mut ap.tokens, f, &mut pdt)?,
             }
+
+            // Consume unused TimeUnits for PG compat.
+            while let Some(TimeStrToken::TimeUnit(_)) = ap.tokens.front() {
+                ap.tokens.pop_front();
+            }
+
+            if !ap.tokens.is_empty() {
+                return Err(format!(
+                    "have unprocessed tokens {}",
+                    itertools::join(ap.tokens, "").trim_end(),
+                ));
+            }
         }
 
         Ok(pdt)
@@ -481,12 +506,22 @@ impl ParsedDateTime {
 
         fill_pdt_date(&mut pdt, &mut ts_actual)?;
 
-        if ts_actual.len() > 0 {
-            fill_pdt_time(&mut pdt, &mut ts_actual)?;
+        if let Some(TimeStrToken::DateTimeDelimiter) = ts_actual.front() {
+            ts_actual.pop_front();
+            ltrim_delim_or_colon(&mut ts_actual);
         }
+
+        fill_pdt_time(&mut pdt, &mut ts_actual)?;
         pdt.check_datelike_bounds()?;
 
-        Ok(pdt)
+        if ts_actual.is_empty() {
+            Ok(pdt)
+        } else {
+            Err(format!(
+                "have unprocessed tokens {}",
+                itertools::join(ts_actual, "").trim_end(),
+            ))
+        }
     }
     /// Builds a ParsedDateTime from a TIME string (`value`).
     ///
@@ -500,7 +535,14 @@ impl ParsedDateTime {
         fill_pdt_time(&mut pdt, &mut time_actual)?;
         pdt.check_datelike_bounds()?;
 
-        Ok(pdt)
+        if time_actual.is_empty() {
+            Ok(pdt)
+        } else {
+            Err(format!(
+                "have unprocessed tokens {}",
+                itertools::join(time_actual, "").trim_end(),
+            ))
+        }
     }
 
     /// Write to the specified field of a ParsedDateTime iff it is currently set
@@ -512,58 +554,60 @@ impl ParsedDateTime {
     ) -> Result<()> {
         use DateTimeField::*;
 
-        match f {
-            Year if self.year.is_none() => {
-                self.year = u;
+        if u.is_some() {
+            match f {
+                Year if self.year.is_none() => {
+                    self.year = u;
+                }
+                Month if self.month.is_none() => {
+                    self.month = u;
+                }
+                Day if self.day.is_none() => {
+                    self.day = u;
+                }
+                Hour if self.hour.is_none() => {
+                    self.hour = u;
+                }
+                Minute if self.minute.is_none() => {
+                    self.minute = u;
+                }
+                Second if self.second.is_none() => {
+                    self.second = u;
+                }
+                _ => return Err(format!("{} field set twice", f)),
             }
-            Month if self.month.is_none() => {
-                self.month = u;
-            }
-            Day if self.day.is_none() => {
-                self.day = u;
-            }
-            Hour if self.hour.is_none() => {
-                self.hour = u;
-            }
-            Minute if self.minute.is_none() => {
-                self.minute = u;
-            }
-            Second if self.second.is_none() => {
-                self.second = u;
-            }
-            _ => return Err(format!("{} field set twice", f)),
         }
         Ok(())
     }
     pub fn check_datelike_bounds(&self) -> Result<()> {
         if let Some(month) = self.month {
             if month.unit < 1 || month.unit > 12 {
-                return Err(format!("MONTH must be (1, 12), got {}", month.unit));
+                return Err(format!("MONTH must be [1, 12], got {}", month.unit));
             };
         }
         if let Some(day) = self.day {
             if day.unit < 1 || day.unit > 31 {
-                return Err(format!("DAY must be (1, 31), got {}", day.unit));
+                return Err(format!("DAY must be [1, 31], got {}", day.unit));
             };
         }
         if let Some(hour) = self.hour {
             if hour.unit < 0 || hour.unit > 23 {
-                return Err(format!("HOUR must be (0, 23), got {}", hour.unit));
+                return Err(format!("HOUR must be [0, 23], got {}", hour.unit));
             };
         }
         if let Some(minute) = self.minute {
             if minute.unit < 0 || minute.unit > 59 {
-                return Err(format!("MINUTE must be (0, 59), got {}", minute.unit));
+                return Err(format!("MINUTE must be [0, 59], got {}", minute.unit));
             };
         }
 
         if let Some(second) = self.second {
             if second.unit < 0 || second.unit > 60 {
-                return Err(format!("SECOND must be (0, 60), got {}", second.unit));
+                return Err(format!("SECOND must be [0, 60], got {}", second.unit));
             };
             if second.fraction < 0 || second.fraction > 1_000_000_000 {
                 return Err(format!(
-                    "NANOSECOND must be (0, 1_000_000_000), got {}",
+                    "NANOSECOND must be [0, 1_000_000_000], got {}",
                     second.fraction
                 ));
             };
@@ -578,23 +622,23 @@ impl ParsedDateTime {
             Year | Month => {
                 if let Some(month) = self.month {
                     if month.unit < -12 || month.unit > 12 {
-                        return Err(format!("MONTH must be (-12, 12), got {}", month.unit));
+                        return Err(format!("MONTH must be [-12, 12], got {}", month.unit));
                     };
                 }
             }
             Hour | Minute | Second => {
                 if let Some(minute) = self.minute {
                     if minute.unit < -59 || minute.unit > 59 {
-                        return Err(format!("MINUTE must be (-59, 59), got {}", minute.unit));
+                        return Err(format!("MINUTE must be [-59, 59], got {}", minute.unit));
                     };
                 }
                 if let Some(second) = self.second {
                     if second.unit < -60 || second.unit > 60 {
-                        return Err(format!("SECOND must be (-60, 60), got {}", second.unit));
+                        return Err(format!("SECOND must be [-60, 60], got {}", second.unit));
                     };
                     if second.fraction < -1_000_000_000 || second.fraction > 1_000_000_000 {
                         return Err(format!(
-                            "NANOSECOND must be (-1_000_000_000, 1_000_000_000), got {}",
+                            "NANOSECOND must be [-1_000_000_000, 1_000_000_000], got {}",
                             second.fraction
                         ));
                     };
@@ -626,17 +670,6 @@ impl ParsedDateTime {
     }
 }
 
-/// Returns the number of seconds in a single unit of `field`.
-fn seconds_multiplier(field: DateTimeField) -> i64 {
-    match field {
-        DateTimeField::Day => 60 * 60 * 24,
-        DateTimeField::Hour => 60 * 60,
-        DateTimeField::Minute => 60,
-        DateTimeField::Second => 1,
-        _other => unreachable!("Do not call with a non-duration field"),
-    }
-}
-
 /// Fills the year, month, and day fields of `pdt` using the `TimeStrToken`s in
 /// `actual`.
 ///
@@ -660,15 +693,11 @@ fn fill_pdt_date(
             val /= 100;
             pdt.year = Some(DateTimeFieldValue::new(val, 0));
             actual.pop_front();
-            // Trim remaining optional tokens
-            if let Some(Space) = actual.front() {
+            // Trim remaining optional tokens, but never an immediately
+            // following colon
+            if let Some(Delim) = actual.front() {
                 actual.pop_front();
-            }
-            if let Some(DateTimeDelimiter) = actual.front() {
-                actual.pop_front();
-            }
-            if let Some(Space) = actual.front() {
-                actual.pop_front();
+                ltrim_delim_or_colon(actual);
             }
             return Ok(());
         }
@@ -682,26 +711,20 @@ fn fill_pdt_date(
             Num(0), // month
             Dash,
             Num(0), // day
-            Space,
-            DateTimeDelimiter,
         ],
         vec![
             Num(0), // year
-            Space,
+            Delim,
             Num(0), // month
             Dash,
             Num(0), // day
-            Space,
-            DateTimeDelimiter,
         ],
         vec![
             Num(0), // year
-            Space,
+            Delim,
             Num(0), // month
-            Space,
+            Delim,
             Num(0), // day
-            Space,
-            DateTimeDelimiter,
         ],
     ];
 
@@ -740,11 +763,9 @@ fn fill_pdt_time(
         Some(TimePartFormat::SqlStandard(leading_field)) => {
             let mut expected = expected_dur_like_tokens(leading_field)?;
 
-            fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, 1)?;
-
-            Ok(())
+            fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, 1)
         }
-        _ => Err("unknown format".into()),
+        _ => Ok(()),
     }
 }
 
@@ -876,158 +897,124 @@ fn fill_pdt_from_tokens(
 
     let mut unit_buf: Option<DateTimeFieldValue> = None;
 
-    let mut seen_datetimedelimiter = false;
+    while let (Some(atok), Some(etok)) = (actual.front(), expected.front()) {
+        match (atok, etok) {
+            // The following forms of punctuation signal the end of a field and can
+            // trigger a write.
+            (Dash, Dash) | (Colon, Colon) => {
+                pdt.write_field_iff_none(current_field, unit_buf)?;
+                unit_buf = None;
+                current_field = current_field.next_smallest();
+            }
+            (Delim, Delim) => {
+                pdt.write_field_iff_none(current_field, unit_buf)?;
+                unit_buf = None;
+                current_field = current_field.next_smallest();
 
-    while let Some(atok) = actual.front() {
-        if let Some(etok) = expected.front() {
-            match (atok, etok) {
-                // The following forms of punctuation signal the end of a field and can
-                // trigger a write.
-                (Dash, Dash) | (Colon, Colon) => {
-                    pdt.write_field_iff_none(current_field, unit_buf)?;
-                    unit_buf = None;
-                    current_field = current_field.next_smallest();
-                }
-                (Space, Space) => {
-                    pdt.write_field_iff_none(current_field, unit_buf)?;
-                    unit_buf = None;
-                    current_field = current_field.next_smallest();
+                // Spaces require special processing to allow users to enter an
+                // arbitrary number of delimiters wherever they're allowed. Note
+                // that this does not include colons.
+                actual.pop_front();
+                expected.pop_front();
+                i += 1;
 
-                    // Spaces require special processing to allow users to enter an arbitrary
-                    // number of spaces wherever spaces are allowed.
+                while let Some(Delim) = actual.front() {
                     actual.pop_front();
-                    expected.pop_front();
-                    i += 1;
-
-                    while let Some(Space) = actual.front() {
-                        actual.pop_front();
-                    }
-
-                    continue;
                 }
-                (TimeUnit(f), TimeUnit(_)) if unit_buf.is_some() => {
-                    if *f != current_field {
-                        return Err(format!(
+
+                continue;
+            }
+            (TimeUnit(f), TimeUnit(_)) => {
+                if unit_buf.is_some() && *f != current_field {
+                    return Err(format!(
                             "Invalid syntax at offset {}: provided TimeUnit({}) but expected TimeUnit({})",
                             i,
                             f,
                             current_field
                         ));
-                    }
                 }
-                (TimeUnit(f), TimeUnit(_)) if unit_buf.is_none() => {
-                    return Err(format!(
-                        "Invalid syntax: {} must be preceeded by a number, e.g. \'1{}\'",
-                        f, f
-                    ));
+            }
+            (Dot, Dot) => {}
+            (Num(val), Num(_)) => match unit_buf {
+                Some(_) => {
+                    return Err(
+                        "Invalid syntax; parts must be separated by '-', ':', or ' '".to_string(),
+                    )
                 }
-                // Dots do not denote terminating a field, so should not trigger a write.
-                (Dot, Dot) => {}
-                // break after all expected DateTimeDelimiters to allow more characters
-                // after the delimiter. This is a special case for `timestamp` data.
-                (DateTimeDelimiter, DateTimeDelimiter) if !seen_datetimedelimiter => {
-                    seen_datetimedelimiter = true;
-                    actual.pop_front();
-                    break;
+                None => {
+                    unit_buf = Some(DateTimeFieldValue {
+                        unit: *val * sign,
+                        fraction: 0,
+                    });
                 }
-                (_, DateTimeDelimiter) if !seen_datetimedelimiter => {
-                    break;
+            },
+            (Nanos(val), Nanos(_)) => match unit_buf {
+                Some(ref mut u) => {
+                    u.fraction = *val * sign;
                 }
-                (Num(val), Num(_)) => match unit_buf {
-                    Some(_) => {
-                        return Err(
-                            "Invalid syntax; parts must be separated by '-', ':', or ' '".into(),
-                        )
-                    }
-                    None => {
-                        unit_buf = Some(DateTimeFieldValue {
-                            unit: *val * sign,
-                            fraction: 0,
-                        });
-                    }
-                },
-                (Nanos(val), Nanos(_)) => match unit_buf {
+                None => {
+                    unit_buf = Some(DateTimeFieldValue {
+                        unit: 0,
+                        fraction: *val * sign,
+                    });
+                }
+            },
+            (Num(n), Nanos(_)) => {
+                // Create disposable copy of n.
+                let mut nc = *n;
+
+                let mut width = 0;
+                // Destructively count the number of digits in n.
+                while nc != 0 {
+                    nc /= 10;
+                    width += 1;
+                }
+
+                let mut n = *n;
+
+                // Nanoseconds have 9 digits of precision.
+                let precision = 9;
+
+                if width > precision {
+                    // Trim n to its 9 most significant digits.
+                    n /= 10_i64.pow(width - precision);
+                } else {
+                    // Right-pad n with 0s.
+                    n *= 10_i64.pow(precision - width);
+                }
+
+                match unit_buf {
                     Some(ref mut u) => {
-                        u.fraction = *val * sign;
+                        u.fraction = n * sign;
                     }
                     None => {
                         unit_buf = Some(DateTimeFieldValue {
                             unit: 0,
-                            fraction: *val * sign,
+                            fraction: n * sign,
                         });
                     }
-                },
-                (Num(n), Nanos(_)) => {
-                    // Create disposable copy of n.
-                    let mut nc = *n;
-
-                    let mut width = 0;
-                    // Destructively count the number of digits in n.
-                    while nc != 0 {
-                        nc /= 10;
-                        width += 1;
-                    }
-
-                    let mut n = *n;
-
-                    // Nanoseconds have 9 digits of precision.
-                    let precision = 9;
-
-                    if width > precision {
-                        // Trim n to its 9 most significant digits.
-                        n /= 10_i64.pow(width - precision);
-                    } else {
-                        // Right-pad n with 0s.
-                        n *= 10_i64.pow(precision - width);
-                    }
-
-                    match unit_buf {
-                        Some(ref mut u) => {
-                            u.fraction = n * sign;
-                        }
-                        None => {
-                            unit_buf = Some(DateTimeFieldValue {
-                                unit: 0,
-                                fraction: n * sign,
-                            });
-                        }
-                    }
-                }
-                // Allow skipping expected spaces, numbers, dots, and nanoseconds.
-                (_, Num(_)) | (_, Dot) | (_, Nanos(_)) | (_, Space) => {
-                    expected.pop_front();
-                    continue;
-                }
-                (provided, expected) => {
-                    return Err(format!(
-                        "Invalid syntax at offset {}: provided {:?} but expected {:?}",
-                        i, provided, expected
-                    ))
                 }
             }
-            i += 1;
-        } else {
-            // actual has more tokens than expected.
-            return Err(format!(
-                "Invalid syntax at offset {}: provided {:?} but expected None",
-                i, atok,
-            ));
-        };
-
+            // Allow skipping expected spaces (Delim), numbers, dots, and nanoseconds.
+            (_, Num(_)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {
+                expected.pop_front();
+                continue;
+            }
+            (provided, expected) => {
+                return Err(format!(
+                    "Invalid syntax at offset {}: provided {:?} but expected {:?}",
+                    i, provided, expected
+                ))
+            }
+        }
+        i += 1;
         actual.pop_front();
         expected.pop_front();
     }
 
-    pdt.write_field_iff_none(current_field, unit_buf)?;
+    ltrim_delim_or_colon(actual);
 
-    // Trim all spaces and at most one DateTimeDelimeter off of end.
-    while let Some(t) = actual.front() {
-        match t {
-            Space => actual.pop_front(),
-            DateTimeDelimiter if !seen_datetimedelimiter => actual.pop_front(),
-            _ => break,
-        };
-    }
+    pdt.write_field_iff_none(current_field, unit_buf)?;
 
     Ok(())
 }
@@ -1046,6 +1033,7 @@ enum TimePartFormat {
 
 /// AnnotatedIntervalPart contains the tokens to be parsed, as well as the format
 /// to parse them.
+#[derive(Debug, Eq, PartialEq, Clone)]
 struct AnnotatedIntervalPart {
     pub tokens: VecDeque<TimeStrToken>,
     pub fmt: TimePartFormat,
@@ -1074,10 +1062,13 @@ fn determine_format_w_datetimefield(
 
     match toks.pop_front() {
         // Implies {?}{?}{?}, ambiguous case.
-        None | Some(Space) => Ok(None),
+        None | Some(Delim) => Ok(None),
         Some(Dot) => {
-            if let Some(Num(_)) = toks.front() {
-                toks.pop_front();
+            match toks.front() {
+                Some(Num(_)) | Some(Nanos(_)) => {
+                    toks.pop_front();
+                }
+                _ => {}
             }
             match toks.pop_front() {
                 // Implies {Num.NumTimeUnit}
@@ -1095,7 +1086,7 @@ fn determine_format_w_datetimefield(
             }
             match toks.pop_front() {
                 // Implies {H:M:?...}
-                Some(Colon) | Some(Space) | None => Ok(Some(SqlStandard(Hour))),
+                Some(Colon) | Some(Delim) | None => Ok(Some(SqlStandard(Hour))),
                 // Implies {M:S.NS}
                 Some(Dot) => Ok(Some(SqlStandard(Minute))),
                 _ => Err("Cannot determine format of all parts".into()),
@@ -1142,7 +1133,7 @@ fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken
 }
 
 /// Get the expected TimeStrTokens to parse TimePartFormat::SqlStandard parts,
-/// starting from some `DateTimeField`. Space tokens are never actually included
+/// starting from some `DateTimeField`. Delim tokens are never actually included
 /// in the output, but are illustrative of what the expected input of SQL
 /// Standard interval values looks like.
 fn expected_sql_standard_interval_tokens(from: DateTimeField) -> VecDeque<TimeStrToken> {
@@ -1153,9 +1144,9 @@ fn expected_sql_standard_interval_tokens(from: DateTimeField) -> VecDeque<TimeSt
         Num(0), // year
         Dash,
         Num(0), // month
-        Space,
+        Delim,
         Num(0), // day
-        Space,
+        Delim,
     ];
 
     let (start, end) = match from {
@@ -1187,12 +1178,19 @@ fn trim_and_return_sign(z: &mut VecDeque<TimeStrToken>) -> i64 {
     }
 }
 
+/// PostgreSQL treats out-of-place colons as errant punctuation marks, and
+/// trims them.
+fn ltrim_delim_or_colon(z: &mut VecDeque<TimeStrToken>) {
+    while Some(&TimeStrToken::Colon) == z.front() || Some(&TimeStrToken::Delim) == z.front() {
+        z.pop_front();
+    }
+}
+
 /// TimeStrToken represents valid tokens in time-like strings,
 /// i.e those used in INTERVAL, TIMESTAMP/TZ, DATE, and TIME.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TimeStrToken {
     Dash,
-    Space,
     Colon,
     Dot,
     Plus,
@@ -1205,6 +1203,28 @@ pub(crate) enum TimeStrToken {
     TimeUnit(DateTimeField),
     // Used to support ISO-formatted timestamps.
     DateTimeDelimiter,
+    // Space arbitrary non-enum punctuation (e.g. !), or leading/trailing
+    // colons.
+    Delim,
+}
+
+impl std::fmt::Display for TimeStrToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use TimeStrToken::*;
+        match self {
+            Dash => write!(f, "-"),
+            Colon => write!(f, ":"),
+            Dot => write!(f, "."),
+            Plus => write!(f, "+"),
+            Zulu => write!(f, "Z"),
+            Num(i) => write!(f, "{}", i),
+            Nanos(i) => write!(f, "{}", i),
+            TzName(n) => write!(f, "{}", n),
+            TimeUnit(d) => write!(f, "{:?}", d),
+            DateTimeDelimiter => write!(f, "T"),
+            Delim => write!(f, " "),
+        }
+    }
 }
 
 /// Convert a string from a time-like datatype (INTERVAL, TIMESTAMP/TZ, DATE, and TIME)
@@ -1230,12 +1250,26 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
     fn maybe_tokenize_num_buf(
         n: &mut String,
         i: usize,
+        is_frac: &mut bool,
         t: &mut VecDeque<TimeStrToken>,
     ) -> Result<()> {
         if !n.is_empty() {
-            t.push_back(parse_num(&n, i)?);
-            n.clear();
+            if *is_frac {
+                // Fractions only support 9 places of precision.
+                n.truncate(9);
+                let raw: i64 = n
+                    .parse()
+                    .map_err(|e| format!("couldn't parse fraction {}: {}", n, e))?;
+                // this is guaranteed to be ascii, so len is fine
+                let multiplicand = 1_000_000_000 / 10_i64.pow(n.len() as u32);
+                t.push_back(TimeStrToken::Nanos(raw * multiplicand));
+                n.clear();
+            } else {
+                t.push_back(parse_num(&n, i)?);
+                n.clear();
+            }
         }
+        *is_frac = false;
         Ok(())
     }
     fn maybe_tokenize_char_buf(c: &mut String, t: &mut VecDeque<TimeStrToken>) -> Result<()> {
@@ -1250,47 +1284,47 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
         }
         Ok(())
     }
-    let mut last_field_is_frac = false;
+    let mut next_num_is_frac = false;
     for (i, chr) in value.chars().enumerate() {
         if !num_buf.is_empty() && !char_buf.is_empty() {
             return Err("Could not tokenize".into());
         }
         match chr {
             '+' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Plus);
             }
             '-' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Dash);
             }
-            ' ' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
-                maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                toks.push_back(TimeStrToken::Space);
-            }
             ':' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Colon);
             }
             '.' => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
                 toks.push_back(TimeStrToken::Dot);
-                last_field_is_frac = true;
+                next_num_is_frac = true;
             }
             chr if chr.is_digit(10) => {
                 maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
-                num_buf.push(chr)
+                num_buf.push(chr);
             }
             chr if chr.is_ascii_alphabetic() => {
-                maybe_tokenize_num_buf(&mut num_buf, i, &mut toks)?;
-                char_buf.push(chr)
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
+                char_buf.push(chr);
             }
-            chr => {
+            chr if chr.is_ascii_whitespace() || chr.is_ascii_punctuation() => {
+                maybe_tokenize_num_buf(&mut num_buf, i, &mut next_num_is_frac, &mut toks)?;
+                maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
+                toks.push_back(TimeStrToken::Delim);
+            }
+            _ => {
                 return Err(format!(
                     "Invalid character at offset {} in {}: {:?}",
                     i, value, chr
@@ -1298,33 +1332,11 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
             }
         }
     }
-    if !num_buf.is_empty() {
-        if !last_field_is_frac {
-            toks.push_back(parse_num(&num_buf, 0)?);
-        } else {
-            // this is guaranteed to be ascii, so len is fine
-            let mut chars = num_buf.len();
-            // Fractions only support 9 places of precision.
-            let default_precision = 9;
-            if chars > default_precision {
-                num_buf = num_buf[..default_precision].to_string();
-                chars = default_precision;
-            }
-            let raw: i64 = num_buf
-                .parse()
-                .map_err(|e| format!("couldn't parse fraction {}: {}", num_buf, e))?;
-            let multiplicand = 1_000_000_000 / 10_i64.pow(chars as u32);
 
-            toks.push_back(TimeStrToken::Nanos(raw * multiplicand));
-        }
-    } else {
-        maybe_tokenize_char_buf(&mut char_buf, &mut toks)?
-    }
+    maybe_tokenize_num_buf(&mut num_buf, value.len(), &mut next_num_is_frac, &mut toks)?;
+    maybe_tokenize_char_buf(&mut char_buf, &mut toks)?;
 
-    // PostgreSQL inexplicably trims all leading colons from all timestamp parts.
-    while let Some(TimeStrToken::Colon) = toks.front() {
-        toks.pop_front();
-    }
+    ltrim_delim_or_colon(&mut toks);
 
     Ok(toks)
 }
@@ -1383,7 +1395,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>> {
             ' ' => {
                 parse_num(&mut toks, &num_buf, split_nums, i)?;
                 num_buf.clear();
-                toks.push(TimeStrToken::Space);
+                toks.push(TimeStrToken::Delim);
             }
             ':' => {
                 parse_num(&mut toks, &num_buf, split_nums, i)?;
@@ -1602,12 +1614,12 @@ mod test {
         use TimeStrToken::*;
         assert_eq!(
             expected_sql_standard_interval_tokens(Year),
-            vec![Num(0), Dash, Num(0), Space]
+            vec![Num(0), Dash, Num(0), Delim]
         );
 
         assert_eq!(
             expected_sql_standard_interval_tokens(Day),
-            vec![Num(0), Space,]
+            vec![Num(0), Delim]
         );
         assert_eq!(
             expected_sql_standard_interval_tokens(Hour),
@@ -1876,15 +1888,7 @@ mod test {
                 "0-0 0",
                 Year,
                 1,
-                "Invalid syntax at offset 1: provided Space but expected Dash",
-            ),
-            // If you have Nanos, you cannot convert to Num.
-            (
-                "1 2.3",
-                "0 0.0YEAR",
-                Year,
-                1,
-                "Invalid syntax at offset 4: provided Nanos(300000000) but expected TimeUnit(Year)",
+                "Invalid syntax at offset 1: provided Delim but expected Dash",
             ),
         ];
         for test in test_cases.iter() {
@@ -2057,11 +2061,6 @@ mod test {
                 Month,
                 "Invalid syntax at offset 3: provided Dot but expected TimeUnit(Year)",
             ),
-            (
-                "YEAR",
-                Year,
-                "Invalid syntax: YEAR must be preceeded by a number, e.g. \'1YEAR\'",
-            ),
             // Running into this error means that determine_format_w_datetimefield
             // failed.
             (
@@ -2227,11 +2226,6 @@ mod test {
                 "1-2:3.4",
                 Minute,
                 "Invalid syntax at offset 1: provided Dash but expected Colon",
-            ),
-            (
-                "1:2.2.",
-                Minute,
-                "Invalid syntax at offset 5: provided Dot but expected None",
             ),
             (
                 "1YEAR",
@@ -2797,7 +2791,7 @@ mod test {
             (
                 "-:::::1.27",
                 Second,
-                "Invalid syntax at offset 2: provided Colon but expected None",
+                "have unprocessed tokens 1.270000000",
             ),
             (
                 "-1 ::.27",
@@ -2808,7 +2802,7 @@ mod test {
             (
                 "1:2:3.4.5",
                 Second,
-                "Invalid syntax at offset 7: provided Dot but expected None",
+                "have unprocessed tokens .500000000",
             ),
             (
                 "1+2:3.4",
@@ -2824,16 +2818,6 @@ mod test {
                 "0 foo",
                 Second,
                 "invalid DateTimeField: FOO",
-            ),
-            (
-                "1-2 hour",
-                Second,
-                "Invalid syntax: HOUR must be preceeded by a number, e.g. '1HOUR'",
-            ),
-            (
-                "1-2hour",
-                Second,
-                "Invalid syntax at offset 3: provided TimeUnit(Hour) but expected None",
             ),
             (
                 "1-2 3:4 5 second",
@@ -2854,22 +2838,22 @@ mod test {
             (
                 "9223372036854775808 months",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 19: number too large to fit in target type",
             ),
             (
                 "-9223372036854775808 months",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 20: number too large to fit in target type",
             ),
             (
                 "9223372036854775808 seconds",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 19: number too large to fit in target type",
             ),
             (
                 "-9223372036854775808 seconds",
                 Day,
-                "Unable to parse value as a number at index 0: number too large to fit in target type",
+                "Unable to parse value as a number at index 20: number too large to fit in target type",
             ),
         ];
         for test in test_cases.iter() {
@@ -3256,10 +3240,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 21:56:55.5
-        Interval {
-            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, 21 * 60 * 60 + 56 * 60 + 55, 500_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3270,11 +3251,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -21:56:55.5
-        Interval {
-            is_positive_dur: false,
-            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, -(21 * 60 * 60 + 56 * 60 + 55), -500_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3283,10 +3260,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 23:59:59.73
-        Interval {
-            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, 23 * 60 * 60 + 59 * 60 + 59, 730_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3295,11 +3269,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -23:59:59.73
-        Interval {
-            months: 0,
-            is_positive_dur: false,
-            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
-        },
+        Interval::new(0, -(23 * 60 * 60 + 59 * 60 + 59), -730_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3312,11 +3282,12 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -1 year -4 months +13 days +07:07:53.220828
-        Interval {
-            months: -16,
-            is_positive_dur: true,
-            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_255),
-        },
+        Interval::new(
+            -16,
+            13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53,
+            220_828_255,
+        )
+        .unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3329,11 +3300,12 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -1 year -4 months +13 days +07:07:53.220828255
-        Interval {
-            months: -16,
-            is_positive_dur: true,
-            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_255),
-        },
+        Interval::new(
+            -16,
+            13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53,
+            220_828_255,
+        )
+        .unwrap(),
     );
 
     fn run_test_parseddatetime_compute_interval(pdt: ParsedDateTime, expected: Interval) {

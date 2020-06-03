@@ -1845,7 +1845,7 @@ where
     // Finalization includes optimization, but also validation of various invariants
     // such as ensuring that the `as_of` frontier is in advance of the various `since`
     // frontiers of participating data inputs.
-    pub fn broadcast_dataflow_creation(&mut self, mut dataflow: DataflowDesc) {
+    fn broadcast_dataflow_creation(&mut self, mut dataflow: DataflowDesc) {
         // Optimize the dataflow across views, and any other ways that appeal.
         transform::optimize_dataflow(&mut dataflow);
 
@@ -1856,14 +1856,14 @@ where
         );
     }
 
-    pub fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
+    fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::DropSinks(dataflow_names),
         )
     }
 
-    pub fn drop_indexes(&mut self, indexes: Vec<(GlobalId, &catalog::Index)>) {
+    fn drop_indexes(&mut self, indexes: Vec<(GlobalId, &catalog::Index)>) {
         let mut trace_keys = Vec::new();
         for (id, idx) in indexes {
             if let Some(index_state) = self.indexes.remove(&id) {
@@ -1907,7 +1907,7 @@ where
         broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
     }
 
-    pub fn report_catalog_update(&mut self, id: GlobalId, name: String, insert: bool) {
+    fn report_catalog_update(&mut self, id: GlobalId, name: String, insert: bool) {
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::AppendLog(MaterializedEvent::Catalog(id, name, insert)),

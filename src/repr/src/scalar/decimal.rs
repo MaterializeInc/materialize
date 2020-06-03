@@ -125,6 +125,10 @@ impl Significand {
         self.0
     }
 
+    pub fn abs(&self) -> Significand {
+        Significand(self.0.abs())
+    }
+
     /// Constructs a [`Decimal`] by imbuing this `Significand` with the
     /// specified `scale`.
     pub fn with_scale(self, scale: u8) -> Decimal {
@@ -301,6 +305,13 @@ impl Decimal {
     /// Returns the scale of the decimal.
     pub fn scale(&self) -> u8 {
         self.scale
+    }
+
+    pub fn abs(&self) -> Decimal {
+        Decimal {
+            significand: self.significand.abs(),
+            scale: self.scale,
+        }
     }
 
     /// Computes the floor of this decimal: the nearest integer less than or

@@ -164,12 +164,15 @@ pub(crate) fn build_local_input<A: Allocate>(
     let worker_logging = worker.log_register().get("timely");
     worker.dataflow_core::<Timestamp, _, _, _>(&name, worker_logging, Box::new(()), |_, scope| {
         scope.clone().region(|region| {
+            // A local input has two parts: 1) the arrangement/index where the
+            // data is being stored, identified by the index_id
+            // 2) the source stream that data comes in from, which is identified
+            //    by the source_id, passed into this method as index.on_id
             let mut context = Context::<_, _, _, Timestamp>::new();
             let ((handle, capability), stream) = region.new_unordered_input();
             if worker_index == 0 {
                 local_inputs.insert(index.on_id, LocalInput { handle, capability });
             }
-            // TODO: why do we use `index.on_id` here instead of `index_id`? Are they the same?
             let get_expr = RelationExpr::global_get(index.on_id, on_type);
             let err_collection = Collection::empty(region);
             context
