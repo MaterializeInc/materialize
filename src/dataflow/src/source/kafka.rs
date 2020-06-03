@@ -338,6 +338,9 @@ impl DataPlaneInfo {
         cp_info: &mut ControlPlaneInfo,
         activator: &Activator,
     ) {
+        // Serve any consumer-global callbacks.
+        self.consumer.poll(Duration::from_secs(0));
+
         if self.needs_refresh {
             info!(
                 "Refreshing Source Metadata for Source {} Current Partition Count: {} Expected Partition Count: {}",
@@ -456,7 +459,6 @@ impl DataPlaneInfo {
                 partition_id,
                 PartitionMetrics::new(&self.topic_name, &self.source_id, &partition_id.to_string()),
             );
-            self.consumer.poll(Duration::from_secs(0));
             true
         } else {
             false
