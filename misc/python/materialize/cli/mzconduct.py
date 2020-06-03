@@ -708,6 +708,48 @@ class DropKafkaTopicsStep(WorkflowStep):
             say(f"INFO: error purging topics: {e}")
 
 
+@Steps.register("pause-container")
+class PauseContainerStep(WorkflowStep):
+    """Pauses and unpauses the designated Docker container.
+
+    Params:
+        container: The Docker container to pause
+        loop: True to continually pause and unpause, False to pause and unpause once
+        wait: The number of seconds to wait before sleeping (default: 30)
+        sleep: The number of seconds to pause for (default: 30)
+    """
+
+    def __init__(
+        self, container: str, loop: bool, wait: int = 30, sleep: int = 30
+    ) -> None:
+        self._container = container
+        self._wait = wait
+        self._sleep = sleep
+        self._loop = loop
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        if self._loop:
+            print(f"Pausing {self._container} for {self._sleep} seconds, looping:")
+            while True:
+                self.pause_and_unpause()
+        else:
+            print(f"Pausing {self._container} for {self._sleep} seconds")
+            self.pause_and_unpause()
+
+    def pause_and_unpause(self) -> None:
+        time.sleep(self._wait)
+
+        try:
+            spawn.runv(["docker", "pause", self._container])
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"Unable to pause container ", self._container, ": ", e)
+
+        try:
+            spawn.runv(["docker", "unpause", self._container])
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"Unable to unpause container ", self._container, ": ", e)
+
+
 @Steps.register("workflow")
 class WorkflowWorkflowStep(WorkflowStep):
     def __init__(self, workflow: str) -> None:

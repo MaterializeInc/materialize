@@ -69,6 +69,7 @@ def runv(
 def capture(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = ...,
+    stdin: Union[None, int, IO[bytes]] = None,
     unicode: Literal[False] = ...,
     stderr_too: bool = False,
 ) -> bytes:
@@ -79,6 +80,7 @@ def capture(
 def capture(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = ...,
+    stdin: Union[None, int, IO[bytes]] = None,
     *,
     unicode: Literal[True],
     stderr_too: bool = False,
@@ -89,6 +91,7 @@ def capture(
 def capture(
     args: Sequence[Union[Path, str]],
     cwd: Optional[Path] = None,
+    stdin: Union[None, int, IO[bytes]] = None,
     unicode: bool = False,
     stderr_too: bool = False,
 ) -> Union[str, bytes]:
@@ -117,5 +120,5 @@ def capture(
     """
     stderr = subprocess.STDOUT if stderr_too else None
     return subprocess.check_output(  # type: ignore
-        args, cwd=cwd, universal_newlines=unicode, stderr=stderr
+        args, cwd=cwd, input=stdin, universal_newlines=unicode, stderr=stderr
     )
