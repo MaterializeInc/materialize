@@ -349,6 +349,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "env_logger",
+ "futures",
  "log",
  "md-5",
  "ore",
