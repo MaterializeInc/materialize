@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use dataflow_types::{
     ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
@@ -49,7 +50,6 @@ lazy_static! {
 /// Per-Kafka source metrics.
 pub struct SourceMetrics {
     operator_scheduled_counter: IntCounter,
-    metadata_refresh_counter: IntCounter,
     capability: UIntGauge,
 }
 
@@ -59,12 +59,6 @@ impl SourceMetrics {
             static ref OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
                 "mz_operator_scheduled_total",
                 "The number of times the kafka client got invoked for this source",
-                &["topic", "source_id", "worker_id"]
-            )
-            .unwrap();
-            static ref METADATA_REFRESH_COUNTER: IntCounterVec = register_int_counter_vec!(
-                "mz_kafka_metadata_refresh_total",
-                "The number of times the kafka client had to refresh metadata for this source",
                 &["topic", "source_id", "worker_id"]
             )
             .unwrap();
@@ -78,7 +72,6 @@ impl SourceMetrics {
         let labels = &[topic_name, source_id, worker_id];
         SourceMetrics {
             operator_scheduled_counter: OPERATOR_SCHEDULED_COUNTER.with_label_values(labels),
-            metadata_refresh_counter: METADATA_REFRESH_COUNTER.with_label_values(labels),
             capability: CAPABILITY.with_label_values(labels),
         }
     }
@@ -292,15 +285,8 @@ struct DataPlaneInfo {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
-    /// The current number of partitions. If needs_refresh is set to false, then
-    /// current_partition_count == expected_partition_count == consumers.len() == partition_metadata.len()
-    current_partition_count: i32,
-    /// The expected number of partitions. If needs_refresh is set to false, then
-    /// current_partition_count == expected_partition_count
-    expected_partition_count: i32,
-    /// Field is set to true when we have detected that metadata is out-of-date and needs
-    /// to be refreshed
-    needs_refresh: bool,
+    /// The number of known partitions.
+    known_partitions: i32,
     /// Per-source metrics.
     source_metrics: SourceMetrics,
     /// Per-partition metrics.
@@ -332,9 +318,7 @@ impl DataPlaneInfo {
             source_name,
             source_id,
             partition_consumers: VecDeque::new(),
-            needs_refresh: true,
-            current_partition_count: 0,
-            expected_partition_count: 1,
+            known_partitions: 0,
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
             worker_count: worker_count.try_into().unwrap(),
@@ -346,8 +330,8 @@ impl DataPlaneInfo {
     /// Ex: a partition count of 4 for 3 workers will assign worker 0 with partitions 0,3,
     /// worker 1 with partition 1, and worker 2 with partition 2
     fn get_worker_partition_count(&self) -> i32 {
-        let pcount = self.current_partition_count / self.worker_count;
-        if self.worker_id < (self.current_partition_count % self.worker_count) {
+        let pcount = self.known_partitions / self.worker_count;
+        if self.worker_id < (self.known_partitions % self.worker_count) {
             pcount + 1
         } else {
             pcount
@@ -370,80 +354,33 @@ impl DataPlaneInfo {
         self.partition_consumers.len().try_into().unwrap()
     }
 
-    /// Refreshes source information for the expected partition count
-    /// 1) creates new partition queues and assigns each to an individual partition
-    /// 2) creates appropriate source metadata
-    pub fn refresh_source_information(
-        &mut self,
-        cp_info: &mut ControlPlaneInfo,
-        activator: &Activator,
-    ) {
-        // Serve any consumer-global callbacks.
-        self.consumer.poll(Duration::from_secs(0));
-
-        if self.needs_refresh {
-            info!(
-                "Refreshing Source Metadata for Source {} Current Partition Count: {} Expected Partition Count: {}",
-                self.source_name, self.current_partition_count, self.expected_partition_count
-            );
-            self.source_metrics.metadata_refresh_counter.inc();
-            if self.update_partition_queue_list(cp_info) {
-                self.needs_refresh = false;
-                activator.activate();
-            } else {
-                // If did not successfully refresh, retry after 1 second
-                activator.activate_after(Duration::from_secs(1));
+    /// Ensures that a partition queue for `pid` exists.
+    fn ensure_partition(&mut self, cp_info: &mut ControlPlaneInfo, pid: i32) {
+        for i in self.known_partitions..=pid {
+            if self.has_partition(i) {
+                self.create_partition_queue(i);
             }
+            cp_info.update_partition_metadata(i);
         }
-        // Verify that invariants hold if successfully refreshed
-        assert!(
-            self.needs_refresh || cp_info.get_partition_count() == self.current_partition_count
-        );
-        assert!(
-            self.needs_refresh
-                || self.get_partition_consumers_count() == self.get_worker_partition_count()
-        );
-    }
+        self.known_partitions = cmp::max(self.known_partitions, pid + 1);
 
-    /// Marks a source as needing refresh, along with the expected partition count
-    pub fn set_needs_refresh(&mut self, expected_pcount: i32) {
-        self.needs_refresh = true;
-        assert!(expected_pcount > self.current_partition_count);
-        self.expected_partition_count = expected_pcount
-    }
-
-    /// Update the list of Kafka consumers to match the number of partitions
-    /// We currently create one consumer per partition
-    #[must_use]
-    fn update_partition_queue_list(&mut self, cp_info: &mut ControlPlaneInfo) -> bool {
-        let next_pid = self.current_partition_count;
-        let to_add = self.expected_partition_count - next_pid;
-        // Kafka Partitions are assigned Ids in a monotonically increasing fashion,
-        // starting from 0
-        for i in 0..to_add {
-            let pid: i32 = next_pid + i;
-            if self.has_partition(pid) {
-                if !self.create_partition_queue(pid) {
-                    // If failed to create consumer, stop and exit
-                    return false;
-                }
-            }
-            cp_info.update_partition_metadata(pid);
-            self.current_partition_count += 1;
-        }
         assert_eq!(
             self.get_worker_partition_count(),
             self.get_partition_consumers_count()
         );
         assert_eq!(
-            self.current_partition_count as usize,
+            self.known_partitions as usize,
             cp_info.partition_metadata.len()
         );
-        true
     }
 
-    /// Create a new partition queue and adds it to the list of existing consumers
-    fn create_partition_queue(&mut self, partition_id: i32) -> bool {
+    /// Creates a new partition queue for `partition_id`.
+    fn create_partition_queue(&mut self, partition_id: i32) {
+        info!(
+            "Activating Kafka queue for {} [{}] (source {}) on worker {}",
+            self.topic_name, partition_id, self.source_id, self.worker_id
+        );
+
         // Collect old partition assignments
         let tpl = self.consumer.assignment().unwrap();
         // Create list from assignments
@@ -457,7 +394,9 @@ impl DataPlaneInfo {
         }
         // Add new partition
         partition_list.add_partition_offset(&self.topic_name, partition_id, Offset::Beginning);
-        self.consumer.assign(&partition_list).unwrap();
+        self.consumer
+            .assign(&partition_list)
+            .expect("assignment known to be valid");
 
         // Trick librdkafka into updating its metadata for the topic so that we
         // start seeing data for the partition immediately. Otherwise we might
@@ -485,26 +424,22 @@ impl DataPlaneInfo {
 
         let partition_queue = self
             .consumer
-            .split_partition_queue(&self.topic_name, partition_id);
-        if let Some(partition_queue) = partition_queue {
-            self.partition_consumers
-                .push_front(PartitionConsumer::new(partition_id, partition_queue));
-            assert_eq!(
-                self.consumer
-                    .assignment()
-                    .unwrap()
-                    .elements_for_topic(&self.topic_name)
-                    .len(),
-                self.partition_consumers.len()
-            );
-            self.partition_metrics.insert(
-                partition_id,
-                PartitionMetrics::new(&self.topic_name, &self.source_id, &partition_id.to_string()),
-            );
-            true
-        } else {
-            false
-        }
+            .split_partition_queue(&self.topic_name, partition_id)
+            .expect("partition known to be valid");
+        self.partition_consumers
+            .push_front(PartitionConsumer::new(partition_id, partition_queue));
+        assert_eq!(
+            self.consumer
+                .assignment()
+                .unwrap()
+                .elements_for_topic(&self.topic_name)
+                .len(),
+            self.partition_consumers.len()
+        );
+        self.partition_metrics.insert(
+            partition_id,
+            PartitionMetrics::new(&self.topic_name, &self.source_id, &partition_id.to_string()),
+        );
     }
 
     /// This function checks whether any messages have been buffered. If yes, returns the buffered
@@ -518,14 +453,10 @@ impl DataPlaneInfo {
         cp_info: &ControlPlaneInfo,
         activator: &Activator,
     ) -> Option<MessageParts> {
-        assert!(
-            self.needs_refresh
-                || self.get_partition_consumers_count() == self.get_worker_partition_count()
-        );
         let mut next_message = None;
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
-        while !self.needs_refresh && attempts < consumer_count {
+        while attempts < consumer_count {
             let mut partition_queue = self.partition_consumers.pop_front().unwrap();
             let message = partition_queue.get_next_message();
             if let Some(message) = message {
@@ -576,10 +507,7 @@ impl DataPlaneInfo {
                 attempts += 1;
             }
         }
-        assert!(
-            self.needs_refresh
-                || self.get_partition_consumers_count() == self.get_worker_partition_count()
-        );
+        assert!(self.get_partition_consumers_count() == self.get_worker_partition_count());
         next_message
     }
 
@@ -645,13 +573,6 @@ impl ControlPlaneInfo {
             partition_metadata: HashMap::new(),
             start_offset,
         }
-    }
-
-    /// Returns the current number of partitions for which we have metadata entries
-    fn get_partition_count(&self) -> i32 {
-        // The number of partitions is always guaranteed to be smaller or equal than
-        // expected_partition_count (i32)
-        self.partition_metadata.len().try_into().unwrap()
     }
 
     /// Returns true if we currently know of particular partition. We know (and have updated the
@@ -747,22 +668,27 @@ where
             worker_id,
             worker_count,
         );
-        dp_info.refresh_source_information(&mut cp_info, &activator);
 
         move |cap, output| {
+            let timer = Instant::now();
+
+            dp_info.source_metrics.operator_scheduled_counter.inc();
+
             // Accumulate updates to BYTES_READ_COUNTER;
             let mut bytes_read = 0;
-            dp_info.source_metrics.operator_scheduled_counter.inc();
-            // Repeatedly interrogate Kafka for messages. Cease when
-            // Kafka stops returning new data, or after 10 milliseconds.
-            let timer = std::time::Instant::now();
+
+            // Trigger any waiting librdkafka callbacks. This should never
+            // return any messages, because we've set things up to receive those
+            // via individual partition queues.
+            {
+                let message = dp_info.consumer.poll(Duration::from_secs(0));
+                assert!(message.is_none());
+            }
 
             // Check if the capability can be downgraded (this is independent of whether
             // there are new messages that can be processed) as timestamps can become
             // closed in the absence of messages
             downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
-
-            dp_info.refresh_source_information(&mut cp_info, &activator);
 
             while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                 let partition = message.partition;
@@ -787,9 +713,8 @@ where
                         let key = message.key.unwrap_or_default();
                         let out = message.payload.unwrap_or_default();
                         // Entry for partition_metadata is guaranteed to exist as messages
-                        // are only processed when dp_info.needs_refresh=false, which is
-                        // after we have updated the partition_metadata for a partition and
-                        // created a partition queue for it.
+                        // are only processed after we have updated the partition_metadata for a
+                        // partition and created a partition queue for it.
                         cp_info
                             .partition_metadata
                             .get_mut(&partition)
@@ -889,95 +814,83 @@ fn downgrade_capability(
     dp_info: &mut DataPlaneInfo,
     timestamp_histories: &TimestampHistories,
 ) {
-    // We only downgrade the capability if this source is up-to-date with its metadata information
-    if !dp_info.needs_refresh {
-        let mut changed = false;
+    let mut changed = false;
 
-        // Determine which timestamps have been closed. A timestamp is closed once we have processed
-        // all messages that we are going to process for this timestamp across all partitions
-        // In practice, the following happens:
-        // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
-        // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
-        // in next_partition_ts
-        if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
-            // Iterate over each partition that we know about
-            for (pid, entries) in entries {
-                let pid = match pid {
-                    PartitionId::Kafka(pid) => *pid,
-                    _ => unreachable!(
-                        "timestamp.rs should never send messages with non-Kafka partitions \
+    // Determine which timestamps have been closed. A timestamp is closed once we have processed
+    // all messages that we are going to process for this timestamp across all partitions
+    // In practice, the following happens:
+    // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
+    // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
+    // in next_partition_ts
+    if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+        // Iterate over each partition that we know about
+        for (pid, entries) in entries {
+            let pid = match pid {
+                PartitionId::Kafka(pid) => *pid,
+                _ => unreachable!(
+                    "timestamp.rs should never send messages with non-Kafka partitions \
                                    to Kafka sources."
-                    ),
-                };
+                ),
+            };
 
-                // There is an entry for a partition for which we have no metadata. Must refresh before
-                // continuing
-                if pid >= dp_info.current_partition_count {
-                    // PIDs in Kafka are monotonically increasing and 0-indexed. Finding a PID of x means there
-                    // must be at least (x+1) partitions
-                    dp_info.set_needs_refresh(pid + 1);
-                    return;
-                }
+            dp_info.ensure_partition(cp_info, pid);
 
-                let last_offset = cp_info.partition_metadata.get(&pid).unwrap().offset;
+            let last_offset = cp_info.partition_metadata.get(&pid).unwrap().offset;
 
-                // Check whether timestamps can be closed on this partition
-                while let Some((partition_count, ts, offset)) = entries.front() {
-                    assert!(
+            // Check whether timestamps can be closed on this partition
+            while let Some((partition_count, ts, offset)) = entries.front() {
+                assert!(
                         *offset >= cp_info.start_offset,
                         "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
                         offset, cp_info.start_offset
                     );
 
-                    assert!(
-                        *ts > 0,
-                        "Internal error! Received a zero-timestamp. Materialize will crash now."
-                    );
+                assert!(
+                    *ts > 0,
+                    "Internal error! Received a zero-timestamp. Materialize will crash now."
+                );
 
-                    // This timestamp update was done with the expectation that there were more partitions
-                    // than we know about. We have to refresh metadata before continuing
-                    if *partition_count > cp_info.get_partition_count() {
-                        // New partition has been added, must refresh metadata before continuing
-                        dp_info.set_needs_refresh(*partition_count);
-                        return;
-                    }
+                // This timestamp update was done with the expectation that there were more partitions
+                // than we know about. Partition IDs are assigned contiguously
+                // starting from zero, so seeing a `partition_count` of N means
+                // that we should have partitions up to N-1.
+                dp_info.ensure_partition(cp_info, partition_count - 1);
 
-                    if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
-                        pmetrics
-                            .closed_ts
-                            .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
-                    }
+                if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
+                    pmetrics
+                        .closed_ts
+                        .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
+                }
 
-                    if !dp_info.has_partition(pid) || last_offset >= *offset {
-                        // We have either 1) seen all messages corresponding to this timestamp for this
-                        // partition 2) do not own this partition.
-                        // We can close the timestamp (on this partition) and remove the associated metadata
-                        cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
-                        entries.pop_front();
-                        changed = true;
-                    } else {
-                        // Offset isn't at a timestamp boundary, we take no action
-                        break;
-                    }
+                if !dp_info.has_partition(pid) || last_offset >= *offset {
+                    // We have either 1) seen all messages corresponding to this timestamp for this
+                    // partition 2) do not own this partition.
+                    // We can close the timestamp (on this partition) and remove the associated metadata
+                    cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
+                    entries.pop_front();
+                    changed = true;
+                } else {
+                    // Offset isn't at a timestamp boundary, we take no action
+                    break;
                 }
             }
+        }
 
-            //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
-            //  timestamp
-            // across partitions.
-            let min = cp_info
-                .partition_metadata
-                .iter()
-                .map(|(_, cons_info)| cons_info.ts)
-                .min()
-                .unwrap();
+        //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
+        //  timestamp
+        // across partitions.
+        let min = cp_info
+            .partition_metadata
+            .iter()
+            .map(|(_, cons_info)| cons_info.ts)
+            .min()
+            .unwrap_or(0);
 
-            // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-            if changed && min > 0 {
-                dp_info.source_metrics.capability.set(min);
-                cap.downgrade(&(&min + 1));
-                cp_info.last_closed_ts = min;
-            }
+        // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
+        if changed && min > 0 {
+            dp_info.source_metrics.capability.set(min);
+            cap.downgrade(&(&min + 1));
+            cp_info.last_closed_ts = min;
         }
     }
 }
