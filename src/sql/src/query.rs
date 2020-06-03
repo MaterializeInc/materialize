@@ -1544,6 +1544,23 @@ fn plan_expr_returning_name<'a>(
                 (expr.call_unary(func), None)
             }
             Expr::Collate { .. } => unsupported!("COLLATE"),
+            Expr::Coalesce { exprs } => {
+                assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: plan_homogeneous_exprs(
+                        "coalesce",
+                        ecx,
+                        exprs,
+                        Some(ScalarType::String),
+                    )?,
+                };
+                let name = ScopeItemName {
+                    table_name: None,
+                    column_name: Some("coalesce".into()),
+                };
+                (expr, Some(name))
+            }
             Expr::List(exprs) => {
                 let elem_type_hint = if let Some(ScalarType::List(elem_type_hint)) = type_hint {
                     Some(*elem_type_hint)

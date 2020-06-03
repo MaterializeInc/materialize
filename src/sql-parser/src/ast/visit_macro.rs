@@ -229,6 +229,10 @@ macro_rules! make_visitor {
                 visit_collate(self, expr, collation)
             }
 
+            fn visit_coalesce(&mut self, exprs: &'ast $($mut)* [Expr]) {
+                visit_coalesce(self, exprs)
+            }
+
             fn visit_extract(&mut self, field: &'ast $($mut)* ExtractField, expr: &'ast $($mut)* Expr) {
                 visit_extract(self, field, expr)
             }
@@ -1010,6 +1014,7 @@ macro_rules! make_visitor {
                 Expr::UnaryOp { expr, op } => visitor.visit_unary_op(expr, op),
                 Expr::Cast { expr, data_type } => visitor.visit_cast(expr, data_type),
                 Expr::Collate { expr, collation } => visitor.visit_collate(expr, collation),
+                Expr::Coalesce { exprs } => visitor.visit_coalesce(exprs),
                 Expr::Extract { field, expr } => visitor.visit_extract(field, expr),
                 Expr::Nested(expr) => visitor.visit_nested(expr),
                 Expr::Value(val) => visitor.visit_value(val),
@@ -1159,6 +1164,16 @@ macro_rules! make_visitor {
             visitor.visit_expr(expr);
             visitor.visit_object_name(collation);
         }
+
+        pub fn visit_coalesce<'ast, V: $name<'ast> + ?Sized>(
+            visitor: &mut V,
+            exprs: &'ast $($mut)* [Expr],
+        ) {
+            for expr in exprs {
+                visitor.visit_expr(expr);
+            }
+        }
+
 
         pub fn visit_extract<'ast, V: $name<'ast> + ?Sized>(
             visitor: &mut V,

@@ -210,6 +210,21 @@ EXTRACT(EPOCH FROM d)
 Extract { field: Epoch, expr: Identifier([Ident("d")]) }
 
 parse-scalar
+COALESCE(foo, bar)
+----
+Coalesce { exprs: [Identifier([Ident("foo")]), Identifier([Ident("bar")])] }
+
+parse-scalar
+COALESCE()
+----
+error:
+Parse error:
+COALESCE()
+         ^
+Expected an expression, found: )
+
+
+parse-scalar
 sqrt(id)
 ----
 Function(Function { name: ObjectName([Ident("sqrt")]), args: Args([Identifier([Ident("id")])]), filter: None, over: None, distinct: false })

@@ -108,7 +108,6 @@ pub struct FuncImpl {
 pub enum ParamList {
     Exact(Vec<ParamType>),
     Repeat(Vec<ParamType>),
-    AnyHomogeneous(ScalarType),
 }
 
 impl ParamList {
@@ -118,7 +117,6 @@ impl ParamList {
         match self {
             Self::Exact(p) => p.len() == input_len,
             Self::Repeat(p) => input_len % p.len() == 0 && input_len > 0,
-            Self::AnyHomogeneous(_) => input_len > 0,
         }
     }
 
@@ -129,7 +127,6 @@ impl ParamList {
         match self {
             Exact(p) => types.iter().zip(p.iter()).all(|(t, p)| t == p),
             Repeat(p) => types.iter().enumerate().all(|(i, t)| t == &p[i % p.len()]),
-            AnyHomogeneous(_) => types.iter().all(|t| *t == types[0]),
         }
     }
 }
@@ -331,20 +328,11 @@ impl<'a> ArgImplementationMatcher<'a> {
             let mut arg_types = Vec::new();
             let mut exact_matches = 0;
             let mut preferred_types = 0;
-            let best_target_type = if let ParamList::AnyHomogeneous(h) = &fimpl.params {
-                match super::query::best_target_type(raw_arg_types.iter().cloned()) {
-                    Some(t) => Some(ParamType::Plain(t.clone())),
-                    None => Some(ParamType::Plain(h.clone())),
-                }
-            } else {
-                None
-            };
 
             for (i, (arg, raw_arg_type)) in args.iter().zip(raw_arg_types.iter()).enumerate() {
                 let param_type = match &fimpl.params {
                     ParamList::Exact(p) => &p[i],
                     ParamList::Repeat(p) => &p[i % p.len()],
-                    ParamList::AnyHomogeneous(_) => best_target_type.as_ref().unwrap(),
                 };
 
                 let arg_type = if param_type == raw_arg_type {
@@ -606,9 +594,6 @@ impl<'a> ArgImplementationMatcher<'a> {
         params: ParamList,
     ) -> Result<Vec<ScalarExpr>, failure::Error> {
         match params {
-            ParamList::AnyHomogeneous(h) => {
-                super::query::plan_homogeneous_exprs(self.ident, self.ecx, args, Some(h))
-            }
             ParamList::Exact(p) => {
                 let mut exprs = Vec::new();
                 for (arg, param) in args.iter().zip(p.iter()) {
@@ -705,9 +690,6 @@ lazy_static! {
                 params!(Float32) => Unary(UnaryFunc::CeilFloat32),
                 params!(Float64) => Unary(UnaryFunc::CeilFloat64),
                 params!(Decimal(0, 0)) => Unary(UnaryFunc::CeilDecimal(0))
-            },
-            "coalesce" => {
-                AnyHomogeneous(String) => Variadic(VariadicFunc::Coalesce)
             },
             "concat" => {
                 Repeat(vec![StringAny]) => Variadic(VariadicFunc::Concat)

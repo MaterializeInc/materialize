@@ -300,6 +300,7 @@ impl Parser {
                 "LIST" => self.parse_list(),
                 "CASE" => self.parse_case_expr(),
                 "CAST" => self.parse_cast_expr(),
+                "COALESCE" => self.parse_coalesce_expr(),
                 "EXISTS" => self.parse_exists_expr(),
                 "EXTRACT" => self.parse_extract_expr(),
                 "INTERVAL" => self.parse_literal_interval(),
@@ -557,6 +558,13 @@ impl Parser {
         let exists_node = Expr::Exists(Box::new(self.parse_query()?));
         self.expect_token(&Token::RParen)?;
         Ok(exists_node)
+    }
+
+    fn parse_coalesce_expr(&mut self) -> Result<Expr, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let exprs = self.parse_comma_separated(Parser::parse_expr)?;
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::Coalesce { exprs })
     }
 
     fn parse_extract_expr(&mut self) -> Result<Expr, ParserError> {
