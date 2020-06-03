@@ -168,14 +168,9 @@ fn create_kafka_config(
     );
     kafka_config
         .set("enable.auto.commit", "false")
-        .set("enable.partition.eof", "false")
         .set("auto.offset.reset", "earliest")
-        .set("session.timeout.ms", "6000")
-        .set("max.poll.interval.ms", "300000") // 5 minutes
         .set("fetch.message.max.bytes", "134217728")
-        .set("enable.sparse.connections", "true")
-        .set("bootstrap.servers", &url.to_string())
-        .set("partition.assignment.strategy", "roundrobin");
+        .set("bootstrap.servers", &url.to_string());
 
     if log_enabled!(target: "librdkafka", log::Level::Debug) {
         kafka_config.set("debug", "all");
