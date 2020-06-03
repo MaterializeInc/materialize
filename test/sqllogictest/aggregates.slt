@@ -76,7 +76,7 @@ query RRRRRR colnames
 SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t
 ----
 variance        var_samp        var_pop         stddev          stddev_samp     stddev_pop
-0.916666600000  0.916666600000  0.687500000000  0.957427072940  0.957427072940  0.829156197588
+0.916666666666  0.916666666666  0.687500000000  0.957427107755  0.957427107755  0.829156197588
 
 query RRRRRR
 SELECT variance(a), var_samp(a), var_pop(a), stddev(a), stddev_samp(a), stddev_pop(a) FROM t2
