@@ -7,12 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::VecDeque;
 use std::thread;
 
 use differential_dataflow::hashable::Hashable;
 use log::error;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
+use rdkafka::error::{KafkaError, RDKafkaError};
 use rdkafka::message::Message;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
@@ -23,6 +25,8 @@ use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
 use interchange::avro::{DiffPair, Encoder};
 use repr::{RelationDesc, Row};
+
+static KAFKA_SINK_FUEL: usize = 10000;
 
 #[derive(Clone)]
 pub struct SinkProducerContext;
@@ -85,39 +89,65 @@ pub fn kafka<G>(
             .create_with_context(SinkProducerContext)
             .expect("creating kafka producer for kafka sinks failed"),
     );
+    let mut queue: VecDeque<(Row, Diff)> = VecDeque::new();
+    let mut vector = Vec::new();
+    let mut encoded_buffer = None;
 
     let name = format!("kafka-{}", id);
     stream.sink(
         Exchange::new(move |_| sink_hash),
         &name.clone(),
         move |input| {
-            // TODO(rkhaitan): can we use a better execution model where we
-            // limit the number of inputs we consume at a time?
             input.for_each(|_, rows| {
-                for (row, _time, diff) in rows.iter() {
-                    let diff_pair = if *diff < 0 {
+                rows.swap(&mut vector);
+
+                for (row, _time, diff) in vector.drain(..) {
+                    queue.push_back((row, diff));
+                }
+            });
+
+            for _ in 0..KAFKA_SINK_FUEL {
+                let (encoded, count) = if let Some((encoded, count)) = encoded_buffer.take() {
+                    (encoded, count)
+                } else if queue.is_empty() {
+                    return;
+                } else {
+                    let (row, diff) = queue.pop_front().expect("queue known to be nonempty");
+
+                    if diff == 0 {
+                        // Explicitly refuse to send no-op records
+                        continue;
+                    };
+
+                    let diff_pair = if diff < 0 {
                         DiffPair {
-                            before: Some(row),
+                            before: Some(&row),
                             after: None,
                         }
                     } else {
                         DiffPair {
                             before: None,
-                            after: Some(row),
+                            after: Some(&row),
                         }
                     };
+
                     let buf = encoder.encode_unchecked(connector.schema_id, diff_pair);
-                    for _ in 0..diff.abs() {
-                        let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&buf);
-                        if let Err((e, _)) = producer.inner().send(record) {
-                            // TODO(rkhaitan): can we yield and retry sending
-                            // if the error is specifically a Kafka backpressure
-                            // error?
-                            error!("unable to produce in {}: {}", name, e);
-                        }
+                    (buf, diff.abs())
+                };
+
+                let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
+                if let Err((e, _)) = producer.inner().send(record) {
+                    error!("unable to produce in {}: {}", name, e);
+                    if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
+                        encoded_buffer = Some((encoded, count));
+                        return;
                     }
                 }
-            });
+
+                if count > 1 {
+                    encoded_buffer = Some((encoded, count - 1));
+                }
+            }
         },
     )
 }
