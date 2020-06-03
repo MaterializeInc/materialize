@@ -1745,8 +1745,9 @@ SELECT jsonb_array_length('[1,2,3,{"f1":1,"f2":[5,6]},4]'::JSONB)
 ----
 5
 
+# implicit conversion from string to JSONB
 query I
-SELECT jsonb_array_length('[]'::JSONB)
+SELECT jsonb_array_length('[]')
 ----
 0
 

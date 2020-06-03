@@ -96,6 +96,10 @@ fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int64().abs())
 }
 
+fn abs_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
+    Datum::from(a.unwrap_decimal().with_scale(scale).abs().significand())
+}
+
 fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float32().abs())
 }
@@ -629,7 +633,11 @@ fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().round())
 }
 
-fn round_decimal<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
+fn round_decimal_unary<'a>(a: Datum<'a>, a_scale: u8) -> Datum<'a> {
+    round_decimal_binary(a, Datum::Int64(0), a_scale)
+}
+
+fn round_decimal_binary<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
     let round_to = b.unwrap_int64();
     let decimal = a.unwrap_decimal().with_scale(a_scale);
     Datum::from(decimal.round(round_to).significand())
@@ -1933,7 +1941,7 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
             BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
-            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal, *scale)),
+            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
         }
     }
@@ -2225,6 +2233,7 @@ pub enum UnaryFunc {
     SqrtFloat64,
     AbsInt32,
     AbsInt64,
+    AbsDecimal(u8),
     AbsFloat32,
     AbsFloat64,
     CastBoolToStringExplicit,
@@ -2334,6 +2343,7 @@ pub enum UnaryFunc {
     JsonbPretty,
     RoundFloat32,
     RoundFloat64,
+    RoundDecimal(u8),
 }
 
 impl UnaryFunc {
@@ -2359,6 +2369,7 @@ impl UnaryFunc {
             UnaryFunc::NegInterval => Ok(neg_interval(a)),
             UnaryFunc::AbsInt32 => Ok(abs_int32(a)),
             UnaryFunc::AbsInt64 => Ok(abs_int64(a)),
+            UnaryFunc::AbsDecimal(scale) => Ok(abs_decimal(a, *scale)),
             UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
             UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
             UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
@@ -2498,6 +2509,7 @@ impl UnaryFunc {
             UnaryFunc::JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
+            UnaryFunc::RoundDecimal(scale) => Ok(round_decimal_unary(a, *scale)),
         }
     }
 
@@ -2602,7 +2614,7 @@ impl UnaryFunc {
             CeilFloat64 | FloorFloat64 | RoundFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
-            CeilDecimal(scale) | FloorDecimal(scale) => {
+            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) => {
                 match input_type.scalar_type {
                     ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
                     _ => unreachable!(),
@@ -2614,7 +2626,7 @@ impl UnaryFunc {
             SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
-            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
+            | AbsInt32 | AbsInt64 | AbsDecimal(_) | AbsFloat32 | AbsFloat64 => input_type,
 
             ExtractIntervalEpoch
             | ExtractIntervalYear
@@ -2713,6 +2725,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::NegInterval => f.write_str("-"),
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
+            UnaryFunc::AbsDecimal(_) => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
@@ -2824,6 +2837,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
             UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
             UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
+            UnaryFunc::RoundDecimal(_) => f.write_str("roundunary"),
         }
     }
 }
