@@ -178,9 +178,11 @@ impl fmt::Display for Token {
 }
 
 impl Token {
+    #[cfg(test)]
     pub fn make_keyword(keyword: &str) -> Self {
         Token::make_word(keyword, None)
     }
+
     pub fn make_word(word: &str, quote_style: Option<char>) -> Self {
         let word_uppercase = word.to_uppercase();
         //TODO: need to reintroduce FnvHashSet at some point .. iterating over keywords is
