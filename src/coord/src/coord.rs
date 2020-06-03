@@ -1086,7 +1086,7 @@ where
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let mut row_packer = repr::RowPacker::new();
+        let mut row_packer = RowPacker::new();
         Ok(send_immediate_rows(
             session
                 .vars()
@@ -1108,7 +1108,7 @@ where
         name: String,
     ) -> Result<ExecuteResponse, failure::Error> {
         let variable = session.get(&name)?;
-        let row = repr::Row::pack(&[Datum::String(&variable.value())]);
+        let row = Row::pack(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
 

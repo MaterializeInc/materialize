@@ -432,7 +432,7 @@ impl Row {
         let mut packer = RowPacker::new();
         packer.extend(iter);
         // drop the excess capacity
-        packer.finish_and_reuse()
+        packer.finish()
     }
 
     /// Like [`Row::pack`], but the provided iterator is allowed to produce an
@@ -447,7 +447,7 @@ impl Row {
         let mut packer = RowPacker::new();
         packer.try_extend(iter)?;
         // drop the excess capacity
-        Ok(packer.finish_and_reuse())
+        Ok(packer.finish())
     }
 
     /// Pack a slice of `Datum`s into a `Row`.
@@ -463,7 +463,7 @@ impl Row {
         let needed = slice.iter().map(|d| datum_size(d)).sum();
         let mut packer = RowPacker::with_capacity(needed);
         packer.extend(slice.iter());
-        packer.finish_and_reuse()
+        packer.finish()
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
@@ -655,7 +655,10 @@ impl RowPacker {
         }
     }
 
-    /// Extends `self` with the contents of an iterator.
+    /// Creates a new `Row` from an iterator.
+    ///
+    /// Unlike `Row::pack`, this re-uses the `RowPacker` to avoid
+    /// unneccesary allocations.
     pub fn pack<'a, I, D>(&mut self, iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
@@ -999,7 +1002,7 @@ impl RowArena {
     {
         let mut packer = RowPacker::new();
         f(&mut packer);
-        self.push_row(packer.finish_and_reuse()).unpack_first()
+        self.push_row(packer.finish()).unpack_first()
     }
 }
 
