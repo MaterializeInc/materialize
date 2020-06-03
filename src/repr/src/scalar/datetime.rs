@@ -11,7 +11,6 @@ use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::fmt;
 use std::str::FromStr;
-use std::time::Duration;
 
 use chrono::{NaiveDate, NaiveTime};
 
@@ -207,20 +206,20 @@ impl ParsedDateTime {
             self.add_field(field, &mut months, &mut seconds, &mut nanos)?;
         }
 
-        // Handle negative seconds with positive nanos or vice versa.
-        if nanos < 0 && seconds > 0 {
-            nanos += 1_000_000_000_i64;
-            seconds -= 1;
-        } else if nanos > 0 && seconds < 0 {
-            nanos -= 1_000_000_000_i64;
-            seconds += 1;
-        }
+        let months: i32 = match months.try_into() {
+            Ok(m) => m,
+            Err(_) => {
+                return Err(format!(
+                    "exceeds min/max months (+/-2147483647); have {}",
+                    months
+                ))
+            }
+        };
 
-        Ok(Interval {
-            months,
-            duration: Duration::new(seconds.abs() as u64, nanos.abs() as u32),
-            is_positive_dur: seconds >= 0 && nanos >= 0,
-        })
+        match Interval::new(months, seconds, nanos) {
+            Ok(i) => Ok(i),
+            Err(e) => Err(e.to_string()),
+        }
     }
     /// Adds the appropriate values from self's ParsedDateTime to `months`,
     /// `seconds`, and `nanos`. These fields are then appropriate to construct
@@ -282,7 +281,7 @@ impl ParsedDateTime {
                 })?;
 
                 let m_f_ns = m_f
-                    .checked_mul(30 * seconds_multiplier(Day))
+                    .checked_mul(30 * super::seconds_multiplier(Day))
                     .ok_or_else(|| "Intermediate overflow in MONTH fraction".to_owned())?;
 
                 // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000
@@ -304,7 +303,7 @@ impl ParsedDateTime {
                 };
 
                 *seconds = t
-                    .checked_mul(seconds_multiplier(d))
+                    .checked_mul(super::seconds_multiplier(d))
                     .and_then(|t_s| seconds.checked_add(t_s))
                     .ok_or_else(|| {
                         format!(
@@ -315,7 +314,7 @@ impl ParsedDateTime {
                     })?;
 
                 let t_f_ns = t_f
-                    .checked_mul(seconds_multiplier(dhms))
+                    .checked_mul(super::seconds_multiplier(dhms))
                     .ok_or_else(|| format!("Intermediate overflow in {} fraction", dhms))?;
 
                 // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000
@@ -668,17 +667,6 @@ impl ParsedDateTime {
             DateTimeField::Minute => self.minute,
             DateTimeField::Second => self.second,
         }
-    }
-}
-
-/// Returns the number of seconds in a single unit of `field`.
-fn seconds_multiplier(field: DateTimeField) -> i64 {
-    match field {
-        DateTimeField::Day => 60 * 60 * 24,
-        DateTimeField::Hour => 60 * 60,
-        DateTimeField::Minute => 60,
-        DateTimeField::Second => 1,
-        _other => unreachable!("Do not call with a non-duration field"),
     }
 }
 
@@ -3252,10 +3240,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 21:56:55.5
-        Interval {
-            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, 21 * 60 * 60 + 56 * 60 + 55, 500_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3266,11 +3251,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -21:56:55.5
-        Interval {
-            is_positive_dur: false,
-            duration: Duration::new(21 * 60 * 60 + 56 * 60 + 55, 500_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, -(21 * 60 * 60 + 56 * 60 + 55), -500_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3279,10 +3260,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // 23:59:59.73
-        Interval {
-            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
-            ..Default::default()
-        },
+        Interval::new(0, 23 * 60 * 60 + 59 * 60 + 59, 730_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3291,11 +3269,7 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -23:59:59.73
-        Interval {
-            months: 0,
-            is_positive_dur: false,
-            duration: Duration::new(23 * 60 * 60 + 59 * 60 + 59, 730_000_000),
-        },
+        Interval::new(0, -(23 * 60 * 60 + 59 * 60 + 59), -730_000_000).unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3308,11 +3282,12 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -1 year -4 months +13 days +07:07:53.220828
-        Interval {
-            months: -16,
-            is_positive_dur: true,
-            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_255),
-        },
+        Interval::new(
+            -16,
+            13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53,
+            220_828_255,
+        )
+        .unwrap(),
     );
     run_test_parseddatetime_compute_interval(
         ParsedDateTime {
@@ -3325,11 +3300,12 @@ fn test_parseddatetime_compute_interval() {
             ..Default::default()
         },
         // -1 year -4 months +13 days +07:07:53.220828255
-        Interval {
-            months: -16,
-            is_positive_dur: true,
-            duration: Duration::new(13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53, 220_828_255),
-        },
+        Interval::new(
+            -16,
+            13 * 60 * 60 * 24 + 7 * 60 * 60 + 7 * 60 + 53,
+            220_828_255,
+        )
+        .unwrap(),
     );
 
     fn run_test_parseddatetime_compute_interval(pdt: ParsedDateTime, expected: Interval) {
