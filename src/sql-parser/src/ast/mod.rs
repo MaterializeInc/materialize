@@ -254,6 +254,11 @@ pub enum Expr {
         expr: Box<Expr>,
         collation: ObjectName,
     },
+    /// COALESCE(<expr>, ...)
+    ///
+    /// While COALESCE has the same syntax as a function call, its semantics are
+    /// extremely unusual, and are better captured with a dedicated AST node.
+    Coalesce { exprs: Vec<Expr> },
     /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr>),
     /// A literal value, such as string, number, date or NULL
@@ -382,6 +387,11 @@ impl AstDisplay for Expr {
                 f.write_node(&expr);
                 f.write_str(" COLLATE ");
                 f.write_node(&collation);
+            }
+            Expr::Coalesce { exprs } => {
+                f.write_str("COALESCE(");
+                f.write_node(&display_comma_separated(&exprs));
+                f.write_str(")");
             }
             Expr::Nested(ast) => {
                 f.write_str("(");
