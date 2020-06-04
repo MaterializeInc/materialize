@@ -16,7 +16,7 @@ operations provided by the standard [`subprocess`][subprocess] module.
 """
 
 from pathlib import Path
-from typing import Iterable, Sequence, Union, Optional, IO, overload
+from typing import Dict, Sequence, Union, Optional, IO, overload
 from typing_extensions import Literal
 import subprocess
 
@@ -31,6 +31,7 @@ def runv(
     stdin: Union[None, int, IO[bytes]] = None,
     stdout: Union[None, int, IO[bytes]] = None,
     capture_output: bool = False,
+    env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     """Verbosely run a subprocess.
 
@@ -49,6 +50,7 @@ def runv(
             fields on the returned `subprocess.CompletedProcess`. Note that
             setting this parameter to true will override the behavior of the
             `stdout` parameter.
+        env: If present, overwrite the environment with this dict
 
     Raises:
         OSError: The process cannot be executed, e.g. because the specified
@@ -61,7 +63,7 @@ def runv(
         stdout = subprocess.PIPE
         stderr = subprocess.PIPE
     return subprocess.run(
-        args, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, check=True
+        args, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, check=True, env=env,
     )
 
 

@@ -14,9 +14,7 @@ import itertools
 import os
 import re
 import shlex
-import socket
 import subprocess
-import sys
 import time
 import webbrowser
 from datetime import datetime, timezone
@@ -30,7 +28,6 @@ from typing import (
     List,
     Match,
     Optional,
-    TextIO,
     Type,
     TypeVar,
     Union,
@@ -315,6 +312,8 @@ class Composition:
             raw_comp = mzcomp.get("mzconduct")
             workflows = {}
             if raw_comp is not None:
+                # TODO: move this into the workflow so that it can use env vars that are
+                # manually defined.
                 raw_comp = _substitute_env_vars(raw_comp)
                 name = raw_comp.get("name", name)
                 for workflow_name, raw_w in raw_comp["workflows"].items():
@@ -331,8 +330,17 @@ class Composition:
                                 f"Unable to construct {step_name} with args {a}: {e}"
                             )
                         built_steps.append(step)
+                    env = raw_w.get("env")
+                    if not isinstance(env, dict) and env is not None:
+                        raise BadSpec(
+                            f"Workflow {workflow_name} has wrong type for env: "
+                            f"expected mapping, got {type(env).__name__}: {env}",
+                        )
                     workflows[workflow_name] = Workflow(
-                        workflow_name, built_steps, raw_w.get("include_compose")
+                        workflow_name,
+                        built_steps,
+                        env=env,
+                        include_compose=raw_w.get("include_compose"),
                     )
 
             compositions[name] = Composition(
@@ -402,10 +410,12 @@ class Workflow:
         self,
         name: str,
         steps: List["WorkflowStep"],
+        env: Optional[Dict[str, str]] = None,
         include_compose: Optional[List[str]] = None,
     ) -> None:
         self.name = name
         self.include_compose = include_compose or []
+        self.env = env or {}
         self._steps = steps
         self._parent: Optional["Workflow"] = None
 
@@ -422,7 +432,7 @@ class Workflow:
     def with_parent(self, parent: Optional["Workflow"]) -> "Workflow":
         """Create a new workflow from this one, but with access to the properties on the parent
         """
-        w = Workflow(self.name, self._steps, self.include_compose)
+        w = Workflow(self.name, self._steps, self.env, self.include_compose)
         w._parent = parent
         return w
 
@@ -438,10 +448,15 @@ class Workflow:
             step.run(comp, self.with_parent(parent_workflow))
 
     def mzcompose_up(self, services: List[str]) -> None:
-        mzcompose_up(services, self._docker_extra_args())
+        mzcompose_up(services, self._docker_extra_args(), extra_env=self.env)
 
-    def mzcompose_run(self, services: List[str]) -> None:
-        mzcompose_run(services, self._docker_extra_args())
+    def mzcompose_run(self, services: List[str], service_ports: bool = True) -> None:
+        mzcompose_run(
+            services,
+            self._docker_extra_args(),
+            service_ports=service_ports,
+            extra_env=self.env,
+        )
 
     def _docker_extra_args(self) -> List[str]:
         """Get additional docker arguments specified by this workflow context
@@ -773,6 +788,21 @@ class WorkflowWorkflowStep(WorkflowStep):
 
 @Steps.register("run")
 class RunStep(WorkflowStep):
+    """
+    Run a service using `mzcompose run`
+
+    Running a service behaves slightly differently than making it come up, importantly it
+    is not an _error_ if it ends at all.
+
+    Args:
+
+      - service: (required) the name of the service, from the mzcompose file
+      - entrypoint: Overwrite the entrypoint with this
+      - command: the command to run. These are the arguments to the entrypoint
+      - daemon: run as a daemon (default: False)
+      - service_ports: expose and use service ports. (Default: True)
+    """
+
     def __init__(
         self,
         *,
@@ -780,6 +810,7 @@ class RunStep(WorkflowStep):
         command: Optional[str] = None,
         daemon: bool = False,
         entrypoint: Optional[str] = None,
+        service_ports: bool = True,
     ) -> None:
         cmd = []
         if daemon:
@@ -789,11 +820,12 @@ class RunStep(WorkflowStep):
         cmd.append(service)
         if command is not None:
             cmd.extend(shlex.split(command))
+        self._service_ports = service_ports
         self._command = cmd
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
         try:
-            workflow.mzcompose_run(self._command)
+            workflow.mzcompose_run(self._command, service_ports=self._service_ports)
         except subprocess.CalledProcessError:
             raise Failed("giving up: {}".format(ui.shell_quote(self._command)))
 
@@ -843,21 +875,37 @@ class DownStep(WorkflowStep):
 
 
 def mzcompose_up(
-    services: List[str], args: Optional[List[str]] = None
+    services: List[str],
+    args: Optional[List[str]] = None,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     if args is None:
         args = []
     cmd = ["./mzcompose", "--mz-quiet", *args, "up", "-d"]
-    return spawn.runv(cmd + services)
+    return spawn.runv(cmd + services, env=_merge_env(extra_env))
 
 
 def mzcompose_run(
-    command: List[str], args: Optional[List[str]] = None
+    command: List[str],
+    args: Optional[List[str]] = None,
+    service_ports: bool = True,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     if args is None:
         args = []
-    cmd = ["./mzcompose", "--mz-quiet", *args, "run"]
-    return spawn.runv(cmd + command)
+    sp = ["--service-ports"] if service_ports else []
+    cmd = ["./mzcompose", "--mz-quiet", *args, "run", *sp, *command]
+    return spawn.runv(cmd, env=_merge_env(extra_env))
+
+
+def _merge_env(extra_env: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """Get a mapping that has values from os.environ overwritten by env, if present
+    """
+    env = cast(dict, os.environ)
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
+    return env
 
 
 def mzcompose_stop(services: List[str]) -> subprocess.CompletedProcess:
