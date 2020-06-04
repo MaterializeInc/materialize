@@ -251,29 +251,13 @@ class Composition:
     def web(self, service: str) -> None:
         """Best effort attempt to open the service in a web browser"""
         with cd(self._path):
-            ps = spawn.capture(["./mzcompose", "--mz-quiet", "ps"], unicode=True,)
-        # technically 'docker-compose ps' has a `--filter` flag but...
-        # https://github.com/docker/compose/issues/5996
-        service_lines = [
-            l.strip() for l in ps.splitlines() if service in l and "Up" in l
-        ]
-        if len(service_lines) == 1:
-            *_, port_config = service_lines[0].split()
-            if "," in port_config or " " in port_config or "->" not in port_config:
-                raise MzRuntimeError(
-                    "Unable to unambiguously determine listening port for service:"
-                    "\n{}".format(service_lines[0])
-                )
-            port = port_config.split(":")[1].split("-")[0]
-            webbrowser.open(f"http://localhost:{port}")
-        elif not service_lines:
+            ports = self.find_host_ports(service)
+        if len(ports) == 1:
+            webbrowser.open(f"http://localhost:{ports[0]}")
+        elif not ports:
             raise MzRuntimeError(f"No running services matched {service}")
         else:
-            raise MzRuntimeError(
-                "Too many services matched {}:\n{}".format(
-                    service, "\n".join(service_lines)
-                )
-            )
+            raise MzRuntimeError(f"Too many ports matched {service}, found: {ports}")
 
     @classmethod
     def find(cls, comp: str) -> "Composition":
@@ -336,6 +320,9 @@ class Composition:
                             f"Workflow {workflow_name} has wrong type for env: "
                             f"expected mapping, got {type(env).__name__}: {env}",
                         )
+                    # ensure that integers (e.g. ports) are treated as env vars
+                    if isinstance(env, dict):
+                        env = {k: str(v) for k, v in env.items()}
                     workflows[workflow_name] = Workflow(
                         workflow_name,
                         built_steps,
@@ -348,6 +335,23 @@ class Composition:
             )
 
         return compositions
+
+    def find_host_ports(self, service: str) -> List[str]:
+        """Find all ports open on the host for a given service
+        """
+        ps = spawn.capture(["./mzcompose", "--mz-quiet", "ps"], unicode=True)
+        # technically 'docker-compose ps' has a `--filter` flag but...
+        # https://github.com/docker/compose/issues/5996
+        service_lines = [
+            l.strip() for l in ps.splitlines() if service in l and "Up" in l
+        ]
+        ports = []
+        for line in service_lines:
+            line_parts = line.split()
+            host_tcp_parts = [p for p in line_parts if "/tcp" in p and "->" in p]
+            these_ports = [p.split(":")[1].split("-")[0] for p in host_tcp_parts]
+            ports.extend(these_ports)
+        return ports
 
 
 def _substitute_env_vars(val: T) -> T:
@@ -415,7 +419,7 @@ class Workflow:
     ) -> None:
         self.name = name
         self.include_compose = include_compose or []
-        self.env = env or {}
+        self.env = env if env is not None else {}
         self._steps = steps
         self._parent: Optional["Workflow"] = None
 
@@ -432,7 +436,9 @@ class Workflow:
     def with_parent(self, parent: Optional["Workflow"]) -> "Workflow":
         """Create a new workflow from this one, but with access to the properties on the parent
         """
-        w = Workflow(self.name, self._steps, self.env, self.include_compose)
+        env = parent.env.copy() if parent is not None else {}
+        env.update(self.env)
+        w = Workflow(self.name, self._steps, env, self.include_compose)
         w._parent = parent
         return w
 
@@ -547,19 +553,21 @@ class WaitForPgStep(WorkflowStep):
         host: the host postgres is listening on
         port: the port postgres is listening on
         timeout_secs: How long to wait for postgres to be up before failing (Default: 30)
-        query: The query to execute to ensure that it is running
+        query: The query to execute to ensure that it is running (Default: "Select 1")
+        service: The service that postgres is running as (Default: postgres)
     """
 
     def __init__(
         self,
         *,
         dbname: str,
-        port: int,
+        port: Optional[int] = None,
         host: str = "localhost",
         timeout_secs: int = 30,
         query: str = "SELECT 1",
         expected: Union[Iterable[Any], Literal["any"]] = (1,),
         print_result: bool = False,
+        service: str = "postgres",
     ) -> None:
         self._dbname = dbname
         self._host = host
@@ -568,12 +576,23 @@ class WaitForPgStep(WorkflowStep):
         self._query = query
         self._expected = expected
         self._print_result = print_result
+        self._service = service
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
+        if self._port is None:
+            ports = comp.find_host_ports(self._service)
+            if len(ports) != 1:
+                raise Failed(
+                    f"Unable to unambiguously determine port for {self._service}, "
+                    f"found ports: {','.join(ports)}"
+                )
+            port = int(ports[0])
+        else:
+            port = self._port
         wait_for_pg(
             dbname=self._dbname,
             host=self._host,
-            port=self._port,
+            port=port,
             timeout_secs=self._timeout_secs,
             query=self._query,
             expected=self._expected,
@@ -591,11 +610,12 @@ class WaitForMzStep(WaitForPgStep):
         *,
         dbname: str = "materialize",
         host: str = "localhost",
-        port: int = 6875,
+        port: Optional[int] = None,
         timeout_secs: int = 10,
         query: str = "SELECT 1",
         expected: Union[Iterable[Any], Literal["any"]] = (1,),
         print_result: bool = False,
+        service: str = "materialized",
     ) -> None:
         super().__init__(
             dbname=dbname,
@@ -605,6 +625,7 @@ class WaitForMzStep(WaitForPgStep):
             query=query,
             expected=expected,
             print_result=print_result,
+            service=service,
         )
 
 
@@ -613,9 +634,10 @@ class WaitForMysqlStep(WorkflowStep):
     """
     Params:
         host: The host mysql is running on
-        port: The port mysql is listening on
+        port: The port mysql is listening on (Default: discover host port)
         user: The user to connect as (Default: mysqluser)
         password: The password to use (Default: mysqlpw)
+        service: The name mysql is running as (Default: mysql)
     """
 
     def __init__(
@@ -624,21 +646,33 @@ class WaitForMysqlStep(WorkflowStep):
         user: str,
         password: str,
         host: str = "localhost",
-        port: int = 3306,
+        port: Optional[int] = None,
         timeout_secs: int = 10,
+        service: str = "mysql",
     ) -> None:
         self._user = user
         self._password = password
         self._host = host
         self._port = port
         self._timeout_secs = timeout_secs
+        self._service = service
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
+        if self._port is None:
+            ports = comp.find_host_ports(self._service)
+            if len(ports) != 1:
+                raise Failed(
+                    f"Could not unambiguously determing port for {self._service} "
+                    f"found: {','.join(ports)}"
+                )
+            port = int(ports[0])
+        else:
+            port = self._port
         wait_for_mysql(
             user=self._user,
             passwd=self._password,
             host=self._host,
-            port=self._port,
+            port=port,
             timeout_secs=self._timeout_secs,
         )
 

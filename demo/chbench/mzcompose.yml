@@ -13,13 +13,12 @@
 # This mostly just shows all the ports that are available to the host system, if you want
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
-  - &kafka 9092:9092
-  - &materialized 6875:6875
-  - &mysql 3306:3306
-  - &control-center 9021:9021
+  - &kafka ${KAFKA_PORT:-9092:9092}
+  - &materialized ${MZ_PORT:-6875:6875}
+  - &mysql ${MYSQL_PORT:-3306:3306}
+  - &control-center ${CC_PORT:-9021:9021}
   - &grafana 3000:3000
   - &metabase 3030:3000
-  - &prometheus 9090:9090
 
 version: '3.7'
 services:
@@ -211,6 +210,11 @@ mzconduct:
   name: chbench
   workflows:
     ci:
+      env:
+        MZ_PORT: 6875
+        KAFKA_PORT: 9092
+        MYSQL_PORT: 3306
+        CC_PORT: 9021
       steps:
       - step: down
         destroy_volumes: true
