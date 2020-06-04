@@ -46,9 +46,9 @@ def speaker(prefix: str, for_progress: bool = False) -> Callable[..., None]:
         mz> hello
     """
 
-    def say(msg: str, *fmt: str) -> None:
+    def say(msg: str) -> None:
         if not Verbosity.quiet:
-            print("{} {}".format(prefix, msg.format(*fmt)), file=sys.stderr)
+            print("{} {}".format(prefix, msg), file=sys.stderr)
 
     return say
 
