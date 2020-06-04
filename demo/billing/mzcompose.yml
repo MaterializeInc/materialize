@@ -9,9 +9,9 @@
 
 x-port-mappings:
   - &grafana 3000:3000
-  - &kafka 9092:9092
-  - &materialized 6875:6875
-  - &schema-registry 8081:8081
+  - &kafka ${KAFKA_PORT:-9092:9092}
+  - &materialized ${MZ_PORT:-6875:6875}
+  - &schema-registry ${SR_PORT:-8081:8081}
 
 version: '3.7'
 services:
@@ -80,6 +80,10 @@ volumes:
 mzconduct:
   workflows:
     ci:
+      env:
+        MZ_PORT: 6875
+        KAFKA_PORT: 9092
+        SR_PORT: 8081
       steps:
       - step: workflow
         workflow: start-everything

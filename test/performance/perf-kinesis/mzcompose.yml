@@ -13,7 +13,7 @@
 # This mostly just shows all the ports that are available to the host system, if you want
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
-  - &materialized 6875:6875
+  - &materialized ${MZ_PORT:-6875:6875}
   - &grafana 3000:3000
 
 version: '3.7'
@@ -42,6 +42,8 @@ services:
 mzconduct:
   workflows:
     ci:
+      env:
+        MZ_PORT: 6875
       steps:
         - step: workflow
           workflow: start-everything
