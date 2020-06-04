@@ -45,9 +45,9 @@ fn decode_decimal<R: Read>(
         None => decode_len(reader)?,
     };
     let mut buf = Vec::with_capacity(len);
-    // Safety: the elements will be initialized by the call to `read_exact`
-    // TODO (brennan) - this code already existed before my refactor. See
-    // if we can get rid of the `unsafe`.
+    // FIXME(brennan) - this is UB iff `reader`
+    // looks at the bytes. Nuke it during the avro decod3
+    // refactor.
     unsafe {
         buf.set_len(len);
     }
