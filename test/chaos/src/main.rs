@@ -174,6 +174,11 @@ async fn query_materialize(
                 hasher.input(&val);
             }
             return Ok(format!("{:x}", hasher.result()));
+        } else if count > message_count as i64 {
+            return Err(anyhow::Error::msg(format!(
+                "Expected {} rows, found {}",
+                message_count, count,
+            )));
         }
     }
 }
