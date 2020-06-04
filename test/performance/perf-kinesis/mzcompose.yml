@@ -38,6 +38,10 @@ services:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:
       - *grafana
+  prometheus_sql_exporter_mz:
+    mzbuild: ci-mz-sql-exporter
+    ports:
+      - ${MZ_SQL_EXPORTER_PORT:-9399}
 
 mzconduct:
   workflows:
@@ -54,9 +58,13 @@ mzconduct:
           destroy_volumes: true
 
     load-test:
+      env:
+        MZ_SQL_EXPORTER_PORT: "9400:9399"
       steps:
         - step: workflow
           workflow: start-everything
+        - step: start-services
+          services: [prometheus_sql_exporter_mz]
         - step: run
           service: perf-kinesis
           daemon: true
