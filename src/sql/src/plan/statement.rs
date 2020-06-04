@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
@@ -45,7 +46,7 @@ use crate::{normalize, unsupported};
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
-        { RelationDesc::empty().add_column("Database", ScalarType::String) };
+        { RelationDesc::empty().with_nonnull_column("Database", ScalarType::String) };
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::new(
         RelationType::new(vec![
             ColumnType::new(ScalarType::String),
@@ -67,9 +68,9 @@ lazy_static! {
         .map(Some),
     );
     static ref SHOW_COLUMNS_DESC: RelationDesc = RelationDesc::empty()
-        .add_column("Field", ScalarType::String)
-        .add_column("Nullable", ScalarType::String)
-        .add_column("Type", ScalarType::String);
+        .with_nonnull_column("Field", ScalarType::String)
+        .with_nonnull_column("Nullable", ScalarType::String)
+        .with_nonnull_column("Type", ScalarType::String);
 }
 
 pub fn make_show_objects_desc(
@@ -80,17 +81,17 @@ pub fn make_show_objects_desc(
     let col_name = object_type_as_plural_str(object_type);
     if full {
         let mut relation_desc = RelationDesc::empty()
-            .add_column(col_name, ScalarType::String)
-            .add_column("TYPE", ScalarType::String);
+            .with_nonnull_column(col_name, ScalarType::String)
+            .with_nonnull_column("TYPE", ScalarType::String);
         if ObjectType::View == object_type {
-            relation_desc = relation_desc.add_column("QUERYABLE", ScalarType::Bool);
+            relation_desc = relation_desc.with_nonnull_column("QUERYABLE", ScalarType::Bool);
         }
         if !materialized && (ObjectType::View == object_type || ObjectType::Source == object_type) {
-            relation_desc = relation_desc.add_column("MATERIALIZED", ScalarType::Bool);
+            relation_desc = relation_desc.with_nonnull_column("MATERIALIZED", ScalarType::Bool);
         }
         relation_desc
     } else {
-        RelationDesc::empty().add_column(col_name, ScalarType::String)
+        RelationDesc::empty().with_nonnull_column(col_name, ScalarType::String)
     }
 }
 
@@ -117,7 +118,7 @@ pub fn describe_statement(
         Statement::Explain {
             stage, explainee, ..
         } => (
-            Some(RelationDesc::empty().add_column(
+            Some(RelationDesc::empty().with_nonnull_column(
                 match stage {
                     ExplainStage::Sql => "Sql",
                     ExplainStage::RawPlan => "Raw Plan",
@@ -137,8 +138,8 @@ pub fn describe_statement(
         Statement::ShowCreateView { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("View", ScalarType::String)
-                    .add_column("Create View", ScalarType::String),
+                    .with_nonnull_column("View", ScalarType::String)
+                    .with_nonnull_column("Create View", ScalarType::String),
             ),
             vec![],
         ),
@@ -146,8 +147,8 @@ pub fn describe_statement(
         Statement::ShowCreateSource { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("Source", ScalarType::String)
-                    .add_column("Create Source", ScalarType::String),
+                    .with_nonnull_column("Source", ScalarType::String)
+                    .with_nonnull_column("Create Source", ScalarType::String),
             ),
             vec![],
         ),
@@ -155,8 +156,8 @@ pub fn describe_statement(
         Statement::ShowCreateSink { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("Sink", ScalarType::String)
-                    .add_column("Create Sink", ScalarType::String),
+                    .with_nonnull_column("Sink", ScalarType::String)
+                    .with_nonnull_column("Create Sink", ScalarType::String),
             ),
             vec![],
         ),
@@ -181,15 +182,18 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .add_column("name", ScalarType::String)
-                            .add_column("setting", ScalarType::String)
-                            .add_column("description", ScalarType::String),
+                            .with_nonnull_column("name", ScalarType::String)
+                            .with_nonnull_column("setting", ScalarType::String)
+                            .with_nonnull_column("description", ScalarType::String),
                     ),
                     vec![],
                 )
             } else {
                 (
-                    Some(RelationDesc::empty().add_column(variable.as_str(), ScalarType::String)),
+                    Some(
+                        RelationDesc::empty()
+                            .with_nonnull_column(variable.as_str(), ScalarType::String),
+                    ),
                     vec![],
                 )
             }
@@ -870,19 +874,7 @@ fn handle_create_view(
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
     let relation_expr = relation_expr.decorrelate();
-    let typ = desc.typ();
-    if !columns.is_empty() {
-        if columns.len() != typ.column_types.len() {
-            bail!(
-                "VIEW definition has {} columns, but query has {} columns",
-                columns.len(),
-                typ.column_types.len()
-            )
-        }
-        for (i, name) in columns.iter().enumerate() {
-            desc.set_name(i, Some(normalize::column_name(name.clone())));
-        }
-    }
+    desc = maybe_rename_columns(format!("view {}", name), desc, columns)?;
     let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
     let if_not_exists = *if_exists == IfExistsBehavior::Skip;
@@ -1270,22 +1262,10 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 Some(_) => bail!("ignore_source_keys must be a boolean"),
             };
             if ignore_source_keys {
-                desc.clear_keys();
+                desc = desc.without_keys();
             }
 
-            let typ = desc.typ();
-            if !col_names.is_empty() {
-                if col_names.len() != typ.column_types.len() {
-                    bail!(
-                        "SOURCE definition has {} columns, but expected {} columns",
-                        col_names.len(),
-                        typ.column_types.len()
-                    )
-                }
-                for (i, name) in col_names.iter().enumerate() {
-                    desc.set_name(i, Some(normalize::column_name(name.clone())));
-                }
-            }
+            desc = maybe_rename_columns(format!("source {}", name), desc, col_names)?;
 
             // TODO(benesch): the available metadata columns should not depend
             // on the format.
@@ -1296,7 +1276,11 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 (DataEncoding::Avro { .. }, _)
                 | (DataEncoding::Protobuf { .. }, _)
                 | (_, Envelope::Debezium) => (),
-                _ => desc.add_cols(external_connector.metadata_columns()),
+                _ => {
+                    for (name, ty) in external_connector.metadata_columns() {
+                        desc = desc.with_column(name, ty);
+                    }
+                }
             }
 
             let if_not_exists = *if_not_exists;
@@ -1324,6 +1308,36 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
         }
         other => unsupported!(format!("{:?}", other)),
     }
+}
+
+/// Renames the columns in `desc` with the names in `column_names` if
+/// `column_names` is non-empty.
+///
+/// Returns an error if the length of `column_names` is not either zero or the
+/// arity of `desc`.
+fn maybe_rename_columns(
+    context: impl fmt::Display,
+    desc: RelationDesc,
+    column_names: &[Ident],
+) -> Result<RelationDesc, failure::Error> {
+    if column_names.is_empty() {
+        return Ok(desc);
+    }
+
+    if column_names.len() != desc.typ().column_types.len() {
+        bail!(
+            "{0} definition names {1} columns, but {0} has {2} columns",
+            context,
+            column_names.len(),
+            desc.typ().column_types.len()
+        )
+    }
+
+    let new_names = column_names
+        .iter()
+        .map(|n| Some(normalize::column_name(n.clone())));
+
+    Ok(desc.with_names(new_names))
 }
 
 fn handle_drop_database(

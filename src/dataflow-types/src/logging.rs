@@ -208,114 +208,114 @@ impl LogVariant {
     pub fn schema(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("name", ScalarType::String)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("id", ScalarType::Int64)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("name", ScalarType::String)
+                .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("source_node", ScalarType::Int64)
-                .add_column("source_port", ScalarType::Int64)
-                .add_column("target_node", ScalarType::Int64)
-                .add_column("target_port", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("id", ScalarType::Int64)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("source_node", ScalarType::Int64)
+                .with_nonnull_column("source_port", ScalarType::Int64)
+                .with_nonnull_column("target_node", ScalarType::Int64)
+                .with_nonnull_column("target_port", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("elapsed_ns", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("id", ScalarType::Int64)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("elapsed_ns", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("duration_ns", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("id", ScalarType::Int64)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("duration_ns", ScalarType::Int64)
+                .with_nonnull_column("count", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("slot", ScalarType::Int64)
-                .add_column("value", ScalarType::Int64)
-                .add_keys(vec![0, 1, 2]),
+                .with_nonnull_column("id", ScalarType::Int64)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("slot", ScalarType::Int64)
+                .with_nonnull_column("value", ScalarType::Int64)
+                .with_key(vec![0, 1, 2]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
-                .add_column("worker", ScalarType::Int64)
-                .add_column("slept_for", ScalarType::Int64)
-                .add_column("requested", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
-                .add_keys(vec![0, 1, 2]),
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("slept_for", ScalarType::Int64)
+                .with_nonnull_column("requested", ScalarType::Int64)
+                .with_nonnull_column("count", ScalarType::Int64)
+                .with_key(vec![0, 1, 2]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
-                .add_column("operator", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("records", ScalarType::Int64)
-                .add_column("batches", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("operator", ScalarType::Int64)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("records", ScalarType::Int64)
+                .with_nonnull_column("batches", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
-                .add_column("operator", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("operator", ScalarType::Int64)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("count", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationDesc::empty()
-                .add_column("name", ScalarType::String)
-                .add_column("worker", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("name", ScalarType::String)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
-                .add_column("dataflow", ScalarType::String)
-                .add_column("source", ScalarType::String)
-                .add_column("worker", ScalarType::Int64),
+                .with_nonnull_column("dataflow", ScalarType::String)
+                .with_nonnull_column("source", ScalarType::String)
+                .with_nonnull_column("worker", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
-                .add_column("global_id", ScalarType::String)
-                .add_column("time", ScalarType::Int64),
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("time", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
-                .add_column("uuid", ScalarType::String)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("id", ScalarType::String)
-                .add_column("time", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("uuid", ScalarType::String)
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("id", ScalarType::String)
+                .with_nonnull_column("time", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationDesc::empty()
-                .add_column("worker", ScalarType::Int64)
-                .add_column("duration_ns", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("duration_ns", ScalarType::Int64)
+                .with_nonnull_column("count", ScalarType::Int64)
+                .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => RelationDesc::empty()
-                .add_column("global_id", ScalarType::String)
-                .add_column("column", ScalarType::Int64)
-                .add_column("key_group", ScalarType::Int64),
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("column", ScalarType::Int64)
+                .with_nonnull_column("key_group", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => RelationDesc::empty()
-                .add_column("child_id", ScalarType::String)
-                .add_column("child_column", ScalarType::Int64)
-                .add_column("parent_id", ScalarType::String)
-                .add_column("parent_column", ScalarType::Int64)
-                .add_column("key_group", ScalarType::Int64)
-                .add_keys(vec![0, 1, 4]),
+                .with_nonnull_column("child_id", ScalarType::String)
+                .with_nonnull_column("child_column", ScalarType::Int64)
+                .with_nonnull_column("parent_id", ScalarType::String)
+                .with_nonnull_column("parent_column", ScalarType::Int64)
+                .with_nonnull_column("key_group", ScalarType::Int64)
+                .with_key(vec![0, 1, 4]),
 
             LogVariant::Materialized(MaterializedLog::Catalog) => RelationDesc::empty()
-                .add_column("global_id", ScalarType::String)
-                .add_column("name", ScalarType::String)
-                .add_keys(vec![0]),
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("name", ScalarType::String)
+                .with_key(vec![0]),
 
             LogVariant::Materialized(MaterializedLog::KafkaSinks) => RelationDesc::empty()
-                .add_column("global_id", ScalarType::String)
-                .add_column("topic", ScalarType::String)
-                .add_keys(vec![0]),
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("topic", ScalarType::String)
+                .with_key(vec![0]),
 
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => RelationDesc::empty()
-                .add_column("global_id", ScalarType::String)
-                .add_column("path", ScalarType::Bytes)
-                .add_keys(vec![0]),
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("path", ScalarType::Bytes)
+                .with_key(vec![0]),
         }
     }
 

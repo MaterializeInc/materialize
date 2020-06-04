@@ -28,7 +28,7 @@ use avro::schema::{
 use avro::types::{DecimalValue, Value};
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
 
@@ -44,18 +44,16 @@ pub fn validate_key_schema(key_schema: &str, value_desc: &RelationDesc) -> Resul
     let key_desc = validate_schema_1(key_schema.top_node())?;
     let mut indices = Vec::new();
     for (name, key_type) in key_desc.iter() {
-        if let Some(name) = name {
-            match value_desc.get_by_name(name) {
-                Some((index, value_type)) if key_type == value_type => {
-                    indices.push(index);
-                }
-                Some((_, value_type)) => bail!(
-                    "key and value column types do not match: key {:?} vs. value {:?}",
-                    key_type,
-                    value_type,
-                ),
-                None => bail!("Value schema missing primary key column: {}", name),
+        match value_desc.get_by_name(name) {
+            Some((index, value_type)) if key_type == value_type => {
+                indices.push(index);
             }
+            Some((_, value_type)) => bail!(
+                "key and value column types do not match: key {:?} vs. value {:?}",
+                key_type,
+                value_type,
+            ),
+            None => bail!("Value schema missing primary key column: {}", name),
         }
     }
     Ok(indices)
@@ -67,8 +65,11 @@ pub enum EnvelopeType {
     Upsert,
 }
 
-/// Converts an Apache Avro schema into a [`repr::RelationDesc`].
-pub fn validate_value_schema(schema: &str, envelope: EnvelopeType) -> Result<RelationDesc> {
+/// Converts an Apache Avro schema into a list of column names and types.
+pub fn validate_value_schema(
+    schema: &str,
+    envelope: EnvelopeType,
+) -> Result<Vec<(ColumnName, ColumnType)>> {
     let schema = parse_schema(schema)?;
     let node = schema.top_node();
 
@@ -140,60 +141,51 @@ pub fn validate_value_schema(schema: &str, envelope: EnvelopeType) -> Result<Rel
     validate_schema_1(node.step(row_schema))
 }
 
-fn validate_schema_1(schema: SchemaNode) -> Result<RelationDesc> {
+fn validate_schema_1(schema: SchemaNode) -> Result<Vec<(ColumnName, ColumnType)>> {
     match schema.inner {
         SchemaPiece::Record { fields, .. } => {
-            let mut column_types = vec![];
+            let mut columns = vec![];
             for f in fields {
                 if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
-                    if us.variants().is_empty()
-                        || (us.variants().len() == 1 && is_null(&us.variants()[0]))
-                    {
+                    let vs = us.variants();
+                    if vs.is_empty() || (vs.len() == 1 && is_null(&vs[0])) {
                         bail!(format_err!("Empty or null-only unions are not supported"));
                     } else {
-                        let nullable = us.variants().len() > 1;
-                        for v in us.variants() {
-                            if !is_null(v) {
-                                let node = schema.step(v);
-                                if let SchemaPiece::Union(_) = node.inner {
-                                    unreachable!("Internal error: directly nested avro union!");
-                                }
-                                column_types.push(ColumnType {
-                                    nullable,
-                                    scalar_type: validate_schema_2(node)?,
-                                });
+                        for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
+                            let node = schema.step(v);
+                            if let SchemaPiece::Union(_) = node.inner {
+                                unreachable!("Internal error: directly nested avro union!");
                             }
+
+                            let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null))
+                            {
+                                // There is only one non-null variant in the
+                                // union, so we can use the field name directly.
+                                f.name.clone()
+                            } else {
+                                // There are multiple non-null variants in the
+                                // union, so we need to invent field names for
+                                // each variant.
+                                format!("{}{}", &f.name, i + 1)
+                            };
+
+                            // If there is more than one variant in the union,
+                            // the column's output type is nullable, as this
+                            // column will be null whenever it is uninhabited.
+                            let ty = validate_schema_2(node)?;
+                            let nullable = vs.len() > 1;
+                            columns.push((name.into(), ColumnType::new(ty).nullable(nullable)));
                         }
                     }
                 } else {
                     let scalar_type = validate_schema_2(schema.step(&f.schema))?;
-                    column_types.push(ColumnType {
-                        nullable: false,
-                        scalar_type,
-                    });
+                    columns.push((
+                        f.name.clone().into(),
+                        ColumnType::new(scalar_type).nullable(false),
+                    ));
                 }
             }
-            let mut column_names = vec![];
-            for f in fields {
-                if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
-                    let vs = us.variants();
-                    if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
-                        column_names.push(Some(f.name.clone()));
-                    } else {
-                        for (i, v) in vs.iter().enumerate() {
-                            if !is_null(v) {
-                                column_names.push(Some(format!("{}{}", &f.name, i + 1)));
-                            }
-                        }
-                    }
-                } else {
-                    column_names.push(Some(f.name.clone()));
-                }
-            }
-            Ok(RelationDesc::new(
-                RelationType::new(column_types),
-                column_names,
-            ))
+            Ok(columns)
         }
         _ => bail!("row schemas must be records, got: {:?}", schema.inner),
     }
@@ -815,7 +807,7 @@ fn build_schema(desc: &RelationDesc) -> Schema {
 
 /// Manages encoding of Avro-encoded bytes.
 pub struct Encoder {
-    desc: RelationDesc,
+    columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
 }
 
@@ -828,23 +820,19 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    pub fn new(mut desc: RelationDesc) -> Self {
+    pub fn new(desc: RelationDesc) -> Self {
+        let writer_schema = build_schema(&desc);
         // Invent names for columns that don't have a name.
-        let missing_names: Vec<_> = desc
-            .iter_names()
+        let columns = desc
+            .into_iter()
             .enumerate()
-            .filter_map(|(i, name)| match name {
-                Some(_) => None,
-                None => Some(i),
+            .map(|(i, (name, ty))| match name {
+                None => (ColumnName::from(format!("column{}", i)), ty),
+                Some(name) => (name, ty),
             })
             .collect();
-        for i in missing_names {
-            desc.set_name(i, Some(format!("column{}", i).into()));
-        }
-
-        let writer_schema = build_schema(&desc);
         Encoder {
-            desc,
+            columns,
             writer_schema,
         }
     }
@@ -905,11 +893,11 @@ impl Encoder {
 
     fn row_to_avro(&self, row: Vec<Datum>) -> Value {
         let fields = self
-            .desc
+            .columns
             .iter()
             .zip_eq(row)
             .map(|((name, typ), datum)| {
-                let name = name.expect("name known to exist").as_str().to_owned();
+                let name = name.as_str().to_owned();
                 if typ.nullable && datum.is_null() {
                     return (name, Value::Union(0, Box::new(Value::Null)));
                 }
@@ -1022,7 +1010,7 @@ mod tests {
     struct TestCase {
         name: String,
         input: serde_json::Value,
-        expected: RelationDesc,
+        expected: Vec<(ColumnName, ColumnType)>,
     }
 
     #[test]
@@ -1108,10 +1096,7 @@ mod tests {
             ),
         ];
         for (typ, datum, expected) in valid_pairings {
-            let desc = RelationDesc::new(
-                RelationType::new(vec![ColumnType::new(typ)]),
-                vec!["column1".into()],
-            );
+            let desc = RelationDesc::empty().with_nonnull_column("column1", typ);
             let avro_value = Encoder::new(desc).row_to_avro(vec![datum]);
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),

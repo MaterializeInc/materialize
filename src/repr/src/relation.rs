@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::iter;
+use std::vec;
 
 use failure::bail;
 use serde::{Deserialize, Serialize};
@@ -57,11 +59,6 @@ impl ColumnType {
         self.nullable = nullable;
         self
     }
-
-    /// Required outside of builder contexts.
-    pub fn set_nullable(&mut self, nullable: bool) {
-        self.nullable = nullable
-    }
 }
 
 impl fmt::Display for ColumnType {
@@ -75,30 +72,33 @@ impl fmt::Display for ColumnType {
     }
 }
 
-/// The type for a relation.
+/// The type of a relation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,
     /// Sets of indices that are "keys" for the collection.
     ///
-    /// Each element in this list is a set of column indices, each with the property
-    /// that the collection contains at most one record with each distinct set of values
-    /// for each column. Alternately, for a specific set of values assigned to the these
-    /// columns there is at most one record.
+    /// Each element in this list is a set of column indices, each with the
+    /// property that the collection contains at most one record with each
+    /// distinct set of values for each column. Alternately, for a specific set
+    /// of values assigned to the these columns there is at most one record.
     ///
-    /// A collection can contain multiple sets of keys, although it is common to have
-    /// either zero or one sets of key indices.
+    /// A collection can contain multiple sets of keys, although it is common to
+    /// have either zero or one sets of key indices.
     pub keys: Vec<Vec<usize>>,
 }
 
 impl RelationType {
-    /// Creates a relation type representing the relation with no columns.
+    /// Constructs a `RelationType` representing the relation with no columns and
+    /// no keys.
     pub fn empty() -> Self {
         RelationType::new(vec![])
     }
 
-    /// Creates a new instance from specified column types.
+    /// Constructs a new `RelationType` from specified column types.
+    ///
+    /// The `RelationType` will have no keys.
     pub fn new(column_types: Vec<ColumnType>) -> Self {
         RelationType {
             column_types,
@@ -106,8 +106,8 @@ impl RelationType {
         }
     }
 
-    /// Adds a set of indices as keys for the colleciton.
-    pub fn add_keys(mut self, mut indices: Vec<usize>) -> Self {
+    /// Adds a new key for the relation.
+    pub fn with_key(mut self, mut indices: Vec<usize>) -> Self {
         indices.sort();
         if !self.keys.contains(&indices) {
             self.keys.push(indices);
@@ -115,7 +115,7 @@ impl RelationType {
         self
     }
 
-    /// The number of columns in the relation type.
+    /// Computes the number of columns in the relation.
     pub fn arity(&self) -> usize {
         self.column_types.len()
     }
@@ -156,8 +156,40 @@ impl From<&ColumnName> for ColumnName {
     }
 }
 
-/// A complete relation description. Bundles together a `RelationType` with
-/// additional metadata, like the names of each column.
+/// A description of the shape of a relation.
+///
+/// It bundles a [`RelationType`] with the name of each column in the relation.
+/// Individual column names are optional.
+///
+/// # Examples
+///
+/// A `RelationDesc`s is typically constructed via its builder API:
+///
+/// ```
+/// use repr::{ColumnType, RelationDesc, ScalarType};
+///
+/// let desc = RelationDesc::empty()
+///     .with_nonnull_column("id", ScalarType::Int64)
+///     .with_column("price", ColumnType::new(ScalarType::Float64).nullable(true));
+/// ```
+///
+/// In more complicated cases, like when constructing a `RelationDesc` in
+/// response to user input, it may be more convenient to construct a relation
+/// type first, and imbue it with column names to form a `RelationDesc` later:
+///
+/// ```
+/// use repr::RelationDesc;
+///
+/// # fn plan_query(_: &str) -> repr::RelationType { repr::RelationType::new(vec![]) }
+/// let relation_type = plan_query("SELECT * FROM table");
+/// let names = (0..relation_type.arity()).map(|i| match i {
+///     0 => Some("first"),
+///     1 => Some("second"),
+///     // Leave the rest of the columns unnamed.
+///     _ => None,
+/// });
+/// let desc = RelationDesc::new(relation_type, names);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationDesc {
     typ: RelationType,
@@ -165,18 +197,23 @@ pub struct RelationDesc {
 }
 
 impl RelationDesc {
-    /// Constructs a new `RelationDesc` that represents a relation with no
-    /// columns and no keys.
-    pub fn empty() -> RelationDesc {
+    /// Constructs a new `RelationDesc` that represents the empty relation
+    /// with no columns and no keys.
+    pub fn empty() -> Self {
         RelationDesc {
             typ: RelationType::empty(),
             names: vec![],
         }
     }
 
-    /// Constructs a new `RelationDesc` from a `RelationType` and a list of
-    /// column names.
-    pub fn new<I, N>(typ: RelationType, names: I) -> RelationDesc
+    /// Constructs a new `RelationDesc` from a `RelationType` and an iterator
+    /// over column names.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the arity of the `RelationType` is not equal to the number of
+    /// items in `names`.
+    pub fn new<I, N>(typ: RelationType, names: I) -> Self
     where
         I: IntoIterator<Item = Option<N>>,
         N: Into<ColumnName>,
@@ -186,92 +223,122 @@ impl RelationDesc {
         RelationDesc { typ, names }
     }
 
-    pub fn from_cols(cols: Vec<(ColumnType, Option<String>)>) -> RelationDesc {
-        Self::new(
-            RelationType::new(cols.iter().map(|(typ, _)| typ.clone()).collect()),
-            cols.into_iter().map(|(_, name)| name),
-        )
-    }
-
+    /// Concatenates a `RelationDesc` onto the end of this `RelationDesc`.
     pub fn concat(mut self, other: Self) -> Self {
         let self_len = self.typ.column_types.len();
         self.names.extend(other.names);
         self.typ.column_types.extend(other.typ.column_types);
         for k in other.typ.keys {
             let k = k.into_iter().map(|idx| idx + self_len).collect();
-            self = self.add_keys(k);
+            self = self.with_key(k);
         }
         self
     }
 
-    pub fn add_cols<I, N>(&mut self, cols: I)
+    /// Appends a named, nonnullable column with the specified scalar type.
+    pub fn with_nonnull_column<N>(self, name: N, scalar_type: ScalarType) -> Self
     where
-        I: IntoIterator<Item = (Option<N>, ColumnType)>,
         N: Into<ColumnName>,
     {
-        for (name, typ) in cols.into_iter() {
-            self.typ.column_types.push(typ);
-            self.names.push(name.map(Into::into));
-        }
+        self.with_column(name, ColumnType::new(scalar_type))
     }
 
-    /// Adds a new named, nonnullable column with the specified type.
-    pub fn add_column(mut self, name: impl Into<ColumnName>, scalar_type: ScalarType) -> Self {
-        self.typ.column_types.push(ColumnType::new(scalar_type));
+    /// Appends a named column with the specified column type.
+    pub fn with_column<N>(mut self, name: N, column_type: ColumnType) -> Self
+    where
+        N: Into<ColumnName>,
+    {
+        self.typ.column_types.push(column_type);
         self.names.push(Some(name.into()));
         self
     }
 
-    /// Adds a set of indices as keys for the relation.
-    pub fn add_keys(mut self, mut indices: Vec<usize>) -> Self {
-        indices.sort();
-        if !self.typ.keys.contains(&indices) {
-            self.typ.keys.push(indices);
-        }
+    /// Adds a new key for the relation.
+    pub fn with_key(mut self, indices: Vec<usize>) -> Self {
+        self.typ = self.typ.with_key(indices);
         self
     }
 
-    /// Deletes all keys for the relation
-    pub fn clear_keys(&mut self) {
-        self.typ.keys.clear()
+    /// Drops all existing keys.
+    pub fn without_keys(mut self) -> Self {
+        self.typ.keys.clear();
+        self
     }
 
+    /// Builds a new relation description with the column names replaced with
+    /// new names.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the arity of the relation type does not match the number of
+    /// items in `names`.
+    pub fn with_names<I, N>(self, names: I) -> Self
+    where
+        I: IntoIterator<Item = Option<N>>,
+        N: Into<ColumnName>,
+    {
+        Self::new(self.typ, names)
+    }
+
+    /// Computes the number of columns in the relation.
+    pub fn arity(&self) -> usize {
+        self.typ.arity()
+    }
+
+    /// Returns the relation type underlying this relation description.
     pub fn typ(&self) -> &RelationType {
         &self.typ
     }
 
+    /// Returns an iterator over the columns in this relation.
     pub fn iter(&self) -> impl Iterator<Item = (Option<&ColumnName>, &ColumnType)> {
         self.iter_names().zip(self.iter_types())
     }
 
+    /// Returns an iterator over the types of the columns in this relation.
     pub fn iter_types(&self) -> impl Iterator<Item = &ColumnType> {
         self.typ.column_types.iter()
     }
 
+    /// Returns an iterator over the names of the columns in this relation.
     pub fn iter_names(&self) -> impl Iterator<Item = Option<&ColumnName>> {
         self.names.iter().map(|n| n.as_ref())
     }
 
+    /// Finds a column by name.
+    ///
+    /// Returns the index and type of the column named `name`. If no column with
+    /// the specified name exists, returns `None`. If multiple columns have the
+    /// specified name, the leftmost column is returned.
     pub fn get_by_name(&self, name: &ColumnName) -> Option<(usize, &ColumnType)> {
         self.iter_names()
             .position(|n| n == Some(name))
             .map(|i| (i, &self.typ.column_types[i]))
     }
 
+    /// Gets the name of the `i`th column if that column name is unambiguous.
+    ///
+    /// If at least one other column has the same name as the `i`th column,
+    /// returns `None`. If the `i`th column has no name, returns `None`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i` is not a valid column index.
     pub fn get_unambiguous_name(&self, i: usize) -> Option<&ColumnName> {
-        let name = self.get_name(i);
+        let name = self.names[i].as_ref();
         if self.iter_names().filter(|n| n == &name).count() == 1 {
             name
         } else {
             None
         }
     }
+}
 
-    pub fn get_name(&self, i: usize) -> Option<&ColumnName> {
-        self.names[i].as_ref()
-    }
+impl IntoIterator for RelationDesc {
+    type Item = (Option<ColumnName>, ColumnType);
+    type IntoIter = iter::Zip<vec::IntoIter<Option<ColumnName>>, vec::IntoIter<ColumnType>>;
 
-    pub fn set_name(&mut self, i: usize, name: Option<ColumnName>) {
-        self.names[i] = name
+    fn into_iter(self) -> Self::IntoIter {
+        self.names.into_iter().zip(self.typ.column_types)
     }
 }

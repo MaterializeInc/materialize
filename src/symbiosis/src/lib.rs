@@ -31,7 +31,7 @@ use std::env;
 use chrono::Utc;
 use failure::{bail, format_err};
 use sql_parser::ast::ColumnOption;
-use sql_parser::ast::{DataType, ObjectType, Statement};
+use sql_parser::ast::{DataType, ObjectType, Statement, TableConstraint};
 use tokio_postgres::types::FromSql;
 
 use pgrepr::Jsonb;
@@ -135,68 +135,70 @@ END $$;
                 if_not_exists,
                 ..
             } => {
-                self.client.execute(&*stmt.to_string(), &[]).await?;
-                let sql_types = columns
+                let sql_types: Vec<_> = columns
                     .iter()
                     .map(|column| column.data_type.clone())
-                    .collect::<Vec<_>>();
+                    .collect();
+
+                let names: Vec<_> = columns
+                    .iter()
+                    .map(|c| Some(sql::normalize::column_name(c.name.clone())))
+                    .collect();
+
+                // Build initial relation type that handles declared data types
+                // and NOT NULL constraints.
                 let mut typ = RelationType::new(
                     columns
                         .iter()
-                        .map(|column| {
-                            Ok(ColumnType {
-                                scalar_type: scalar_type_from_sql(&column.data_type)?,
-                                nullable: !column
-                                    .options
-                                    .iter()
-                                    .any(|o| o.option == ColumnOption::NotNull),
-                            })
+                        .map(|c| {
+                            let ty = scalar_type_from_sql(&c.data_type)?;
+                            let nullable =
+                                !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
+                            Ok(ColumnType::new(ty).nullable(nullable))
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
                 );
-                let names = columns
-                    .iter()
-                    .map(|c| Some(sql::normalize::column_name(c.name.clone())));
 
+                // Handle column-level UNIQUE and PRIMARY KEY constraints.
+                // PRIMARY KEY implies UNIQUE and NOT NULL.
                 for (index, column) in columns.iter().enumerate() {
                     for option in column.options.iter() {
                         if let ColumnOption::Unique { is_primary } = option.option {
-                            typ = typ.add_keys(vec![index]);
+                            typ = typ.with_key(vec![index]);
                             if is_primary {
-                                typ.column_types[index] =
-                                    typ.column_types[index].clone().nullable(false);
+                                typ.column_types[index].nullable = false;
                             }
                         }
                     }
                 }
 
+                // Handle table-level UNIQUE and PRIMARY KEY constraints.
+                // PRIMARY KEY implies UNIQUE and NOT NULL.
                 for constraint in constraints {
-                    use sql_parser::ast::TableConstraint;
                     if let TableConstraint::Unique {
                         name: _,
-                        columns: cols,
+                        columns,
                         is_primary,
                     } = constraint
                     {
-                        let keys = cols
-                            .iter()
-                            .map(|ident| {
-                                columns
-                                    .iter()
-                                    .position(|c| ident == &c.name)
-                                    .expect("Column named in UNIQUE constraint not found")
-                            })
-                            .collect::<Vec<_>>();
-
-                        if *is_primary {
-                            for key in keys.iter() {
-                                typ.column_types[*key].set_nullable(false);
+                        let mut key = vec![];
+                        for column in columns {
+                            let name = normalize::column_name(column.clone());
+                            match names.iter().position(|n| n.as_ref() == Some(&name)) {
+                                None => bail!("unknown column {} in unique constraint", name),
+                                Some(i) => key.push(i),
                             }
                         }
-                        typ = typ.add_keys(keys);
+                        if *is_primary {
+                            for i in key.iter() {
+                                typ.column_types[*i].nullable = false;
+                            }
+                        }
+                        typ = typ.with_key(key);
                     }
                 }
 
+                self.client.execute(&*stmt.to_string(), &[]).await?;
                 let name = scx.allocate_name(normalize::object_name(name.clone())?);
                 let desc = RelationDesc::new(typ, names);
                 self.table_types
