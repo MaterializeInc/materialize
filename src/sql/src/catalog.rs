@@ -18,7 +18,7 @@ use expr::{GlobalId, ScalarExpr};
 use repr::RelationDesc;
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
-use crate::PlanContext;
+use crate::plan::PlanContext;
 
 /// A catalog keeps track of SQL objects available to the planner.
 ///

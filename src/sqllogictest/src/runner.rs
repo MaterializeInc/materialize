@@ -52,7 +52,8 @@ use repr::strconv::{
     format_date, format_interval, format_time, format_timestamp, format_timestamptz,
 };
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
-use sql::{Session, Statement};
+use sql::ast::Statement;
+use sql::session::Session;
 use sql_parser::parser::ParserError as SqlParserError;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -772,7 +773,7 @@ impl State {
         &mut self,
         sql: &str,
     ) -> Result<(Option<RelationDesc>, ExecuteResponse), failure::Error> {
-        let stmts = sql::parse(sql.into())?;
+        let stmts = sql::parse::parse(sql.into())?;
         let stmt = if stmts.len() == 1 {
             stmts.into_iter().next().unwrap()
         } else {

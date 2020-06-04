@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! SQL `Statement`s are the imperative, side-effecting part of SQL.
-//!
-//! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
@@ -42,9 +38,10 @@ use sql_parser::ast::{
 use crate::catalog::{Catalog, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::plan::query::QueryLifetime;
+use crate::plan::{query, Index, Params, Plan, PlanContext, Sink, Source, View};
 use crate::pure::Schema;
-use crate::query::QueryLifetime;
-use crate::{normalize, query, unsupported, Index, Params, Plan, PlanContext, Sink, Source, View};
+use crate::{normalize, unsupported};
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
@@ -506,7 +503,7 @@ fn handle_show_indexes(
         })
         .flat_map(|entry| {
             let (keys, on) = entry.index_details().expect("known to be an index");
-            let key_sqls = match crate::parse(entry.create_sql().to_owned())
+            let key_sqls = match crate::parse::parse(entry.create_sql().to_owned())
                 .expect("create_sql cannot be invalid")
                 .into_element()
             {
@@ -1508,7 +1505,7 @@ fn handle_explain(
                     entry.item_type(),
                 );
             }
-            let parsed = crate::parse(entry.create_sql().to_owned())
+            let parsed = crate::parse::parse(entry.create_sql().to_owned())
                 .expect("Sql for existing view should be valid sql");
             let query = match parsed.into_last() {
                 Statement::CreateView { query, .. } => query,

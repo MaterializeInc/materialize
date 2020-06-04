@@ -14,7 +14,7 @@ use postgres::error::SqlState;
 
 use dataflow_types::Update;
 use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
-use sql::TransactionStatus as SqlTransactionStatus;
+use sql::session::TransactionStatus as SqlTransactionStatus;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the

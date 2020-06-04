@@ -39,8 +39,9 @@
 //! [eqf]: https://www.postgresql.org/docs/12/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 //! [m]: https://www.postgresql.org/docs/12/protocol-message-formats.html#Parse
 
-use crate::Params;
 use repr::{RelationDesc, Row};
+
+use crate::plan::Params;
 
 /// A prepared statement.
 #[derive(Debug)]
@@ -106,6 +107,7 @@ pub struct Portal {
 }
 
 impl Portal {
+    /// Sets the remaining rows for this portal.
     pub fn set_remaining_rows(&mut self, rows: Vec<Row>) {
         self.remaining_rows = Some(rows);
     }

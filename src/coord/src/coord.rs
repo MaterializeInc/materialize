@@ -45,11 +45,11 @@ use expr::{
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
+use sql::ast::{ExplainOptions, ObjectType, Statement};
 use sql::catalog::Catalog as _;
-use sql::{
-    DatabaseSpecifier, ExplainOptions, FullName, MutationKind, ObjectType, Params, Plan,
-    PlanContext, PreparedStatement, Session, Statement,
-};
+use sql::names::{DatabaseSpecifier, FullName};
+use sql::plan::{MutationKind, Params, Plan, PlanContext};
+use sql::session::{PreparedStatement, Session};
 use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
@@ -73,7 +73,7 @@ pub enum Message {
     StatementReady {
         session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
-        result: Result<sql::Statement, failure::Error>,
+        result: Result<sql::ast::Statement, failure::Error>,
         params: Params,
     },
     SinkConnectorReady {
@@ -364,7 +364,7 @@ where
                             let stmt = stmt.clone();
                             let params = portal.parameters.clone();
                             tokio::spawn(async move {
-                                let result = sql::purify(stmt).await;
+                                let result = sql::pure::purify(stmt).await;
                                 internal_cmd_tx
                                     .send(Message::StatementReady {
                                         session,
@@ -836,7 +836,7 @@ where
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        source: sql::Source,
+        source: sql::plan::Source,
         if_not_exists: bool,
         materialized: bool,
     ) -> Result<ExecuteResponse, failure::Error> {
@@ -895,7 +895,7 @@ where
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         name: FullName,
-        sink: sql::Sink,
+        sink: sql::plan::Sink,
         if_not_exists: bool,
     ) {
         // First try to allocate an ID. If that fails, we're done.
@@ -956,7 +956,7 @@ where
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        view: sql::View,
+        view: sql::plan::View,
         replace: Option<GlobalId>,
         conn_id: u32,
         materialize: bool,
@@ -1024,7 +1024,7 @@ where
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        index: sql::Index,
+        index: sql::plan::Index,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, failure::Error> {
         let index = catalog::Index {
@@ -1344,7 +1344,7 @@ where
     fn sequence_explain_plan(
         &mut self,
         sql: String,
-        raw_plan: sql::RelationExpr,
+        raw_plan: sql::plan::RelationExpr,
         decorrelated_plan: expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
@@ -2205,11 +2205,11 @@ where
     fn handle_statement(
         &mut self,
         session: &Session,
-        stmt: sql::Statement,
-        params: &sql::Params,
-    ) -> Result<(PlanContext, sql::Plan), failure::Error> {
+        stmt: sql::ast::Statement,
+        params: &sql::plan::Params,
+    ) -> Result<(PlanContext, sql::plan::Plan), failure::Error> {
         let pcx = PlanContext::default();
-        match sql::plan(
+        match sql::plan::plan(
             &pcx,
             &self.catalog.for_session(session),
             stmt.clone(),
@@ -2237,7 +2237,7 @@ where
         stmt: Option<Statement>,
     ) -> Result<(), failure::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
-            match sql::describe(&self.catalog.for_session(session), stmt.clone()) {
+            match sql::plan::describe(&self.catalog.for_session(session), stmt.clone()) {
                 Ok((desc, param_types)) => (desc, param_types),
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
@@ -2466,10 +2466,10 @@ fn open_catalog(
                     datums: Row::pack(&[]),
                     types: vec![],
                 };
-                let stmt = sql::parse(log_view.sql.to_owned())
+                let stmt = sql::parse::parse(log_view.sql.to_owned())
                     .expect("failed to parse bootstrap sql")
                     .into_element();
-                match sql::plan(&pcx, &catalog.for_system_session(), stmt, &params) {
+                match sql::plan::plan(&pcx, &catalog.for_system_session(), stmt, &params) {
                     Ok(Plan::CreateView {
                         name: _,
                         view,

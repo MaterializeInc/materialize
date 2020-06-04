@@ -18,7 +18,7 @@ use repr::ScalarType;
 
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
 use super::query::{CastContext, CoerceTo, ExprContext};
-use super::unsupported;
+use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Mirrored from [PostgreSQL's `typcategory`][typcategory].

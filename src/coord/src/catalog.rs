@@ -24,7 +24,9 @@ use serde::{Deserialize, Serialize};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
-use sql::{DatabaseSpecifier, FullName, Params, PartialName, Plan, PlanContext};
+use sql::names::{DatabaseSpecifier, FullName, PartialName};
+use sql::plan::{Params, Plan, PlanContext};
+use sql::session::Session;
 use transform::Optimizer;
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -344,7 +346,7 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn for_session(&self, session: &sql::Session) -> ConnCatalog {
+    pub fn for_session(&self, session: &Session) -> ConnCatalog {
         ConnCatalog {
             catalog: self,
             conn_id: session.conn_id(),
@@ -959,8 +961,8 @@ impl Catalog {
             None => PlanContext::default(),
             Some(eval_env) => eval_env.into(),
         };
-        let stmt = sql::parse(create_sql)?.into_element();
-        let plan = sql::plan(&pcx, &self.for_system_session(), stmt, &params)?;
+        let stmt = sql::parse::parse(create_sql)?.into_element();
+        let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &params)?;
         Ok(match plan {
             Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
