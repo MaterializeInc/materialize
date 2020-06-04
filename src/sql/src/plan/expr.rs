@@ -185,7 +185,7 @@ pub trait ScalarTypeable {
         &self,
         outers: &[RelationType],
         inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
+        params: &BTreeMap<usize, DatumType>,
     ) -> Self::Type;
 }
 
@@ -196,7 +196,7 @@ impl ScalarTypeable for CoercibleScalarExpr {
         &self,
         outers: &[RelationType],
         inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
+        params: &BTreeMap<usize, DatumType>,
     ) -> Self::Type {
         match self {
             CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
@@ -287,7 +287,7 @@ impl RelationExpr {
     pub fn typ(
         &self,
         outers: &[RelationType],
-        params: &BTreeMap<usize, ScalarType>,
+        params: &BTreeMap<usize, DatumType>,
     ) -> RelationType {
         match self {
             RelationExpr::Constant { typ, .. } => typ.clone(),
@@ -652,12 +652,12 @@ impl ScalarExpr {
             Datum::True,
             ColumnType {
                 nullable: false,
-                scalar_type: ScalarType::Bool,
+                scalar_type: DatumType::Bool,
             },
         )
     }
 
-    pub fn literal_null(scalar_type: ScalarType) -> ScalarExpr {
+    pub fn literal_null(scalar_type: DatumType) -> ScalarExpr {
         ScalarExpr::literal(
             Datum::Null,
             ColumnType {
@@ -724,7 +724,7 @@ impl ScalarTypeable for ScalarExpr {
         &self,
         outers: &[RelationType],
         inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
+        params: &BTreeMap<usize, DatumType>,
     ) -> Self::Type {
         match self {
             ScalarExpr::Column(ColumnRef { level, column }) => {
@@ -752,7 +752,7 @@ impl ScalarTypeable for ScalarExpr {
                 let else_type = els.typ(outers, inner, params);
                 then_type.union(&else_type).unwrap()
             }
-            ScalarExpr::Exists(_) => ColumnType::new(ScalarType::Bool).nullable(true),
+            ScalarExpr::Exists(_) => ColumnType::new(DatumType::Bool).nullable(true),
             ScalarExpr::Select(expr) => {
                 let mut outers = outers.to_vec();
                 outers.push(inner.clone());
@@ -776,7 +776,7 @@ impl AggregateExpr {
         &self,
         outers: &[RelationType],
         inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
+        params: &BTreeMap<usize, DatumType>,
     ) -> ColumnType {
         self.func.output_type(self.expr.typ(outers, inner, params))
     }
@@ -1323,10 +1323,10 @@ pub mod decorrelation {
                                 // optimizer.
                                 .product(expr::RelationExpr::constant(
                                     vec![vec![Datum::True]],
-                                    RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
+                                    RelationType::new(vec![ColumnType::new(DatumType::Bool)]),
                                 ));
                             // append False to anything that didn't return any rows
-                            let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
+                            let default = vec![(Datum::False, ColumnType::new(DatumType::Bool))];
                             get_inner.lookup(id_gen, exists, default)
                         },
                     );

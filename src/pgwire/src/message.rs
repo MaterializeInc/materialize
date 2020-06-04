@@ -13,7 +13,7 @@ use bytes::BytesMut;
 use postgres::error::SqlState;
 
 use dataflow_types::Update;
-use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, DatumType, RelationDesc, RelationType};
 use sql::session::TransactionStatus as SqlTransactionStatus;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -360,7 +360,7 @@ pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
                     // while the low order bits store the scale + 4 (!).
                     //
                     // https://github.com/postgres/postgres/blob/e435c1e7d/src/backend/utils/adt/numeric.c#L6364-L6367
-                    ScalarType::Decimal(precision, scale) => {
+                    DatumType::Decimal(precision, scale) => {
                         ((i32::from(*precision) << 16) | i32::from(*scale)) + 4
                     }
                     _ => -1,

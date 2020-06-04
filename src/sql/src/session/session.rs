@@ -21,7 +21,7 @@ use std::fmt;
 
 use failure::bail;
 
-use repr::{Datum, Row, ScalarType};
+use repr::{Datum, DatumType, Row};
 
 use crate::plan::Params;
 use crate::session::statement::{Portal, PreparedStatement};
@@ -386,7 +386,7 @@ impl Session {
         &mut self,
         portal_name: String,
         statement_name: String,
-        params: Vec<(Datum<'a>, ScalarType)>,
+        params: Vec<(Datum<'a>, DatumType)>,
         result_formats: Vec<pgrepr::Format>,
     ) -> Result<(), failure::Error> {
         if !self.prepared_statements.contains_key(&statement_name) {

@@ -14,7 +14,7 @@ use std::vec;
 use failure::bail;
 use serde::{Deserialize, Serialize};
 
-use crate::ScalarType;
+use crate::DatumType;
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -25,14 +25,14 @@ pub struct ColumnType {
     /// Whether this datum can be null.
     pub nullable: bool,
     /// The underlying scalar type (e.g., Int32 or String) of this column.
-    pub scalar_type: ScalarType,
+    pub scalar_type: DatumType,
 }
 
 impl ColumnType {
     /// Constructs a new `ColumnType` with the specified [`ScalarType`] as its
     /// underlying type. If desired, the `nullable` property can be set with the
     /// methods of the same name.
-    pub fn new(scalar_type: ScalarType) -> Self {
+    pub fn new(scalar_type: DatumType) -> Self {
         ColumnType {
             nullable: false,
             scalar_type,
@@ -166,11 +166,11 @@ impl From<&ColumnName> for ColumnName {
 /// A `RelationDesc`s is typically constructed via its builder API:
 ///
 /// ```
-/// use repr::{ColumnType, RelationDesc, ScalarType};
+/// use repr::{ColumnType, RelationDesc, DatumType};
 ///
 /// let desc = RelationDesc::empty()
-///     .with_nonnull_column("id", ScalarType::Int64)
-///     .with_column("price", ColumnType::new(ScalarType::Float64).nullable(true));
+///     .with_nonnull_column("id", DatumType::Int64)
+///     .with_column("price", ColumnType::new(DatumType::Float64).nullable(true));
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
@@ -236,7 +236,7 @@ impl RelationDesc {
     }
 
     /// Appends a named, nonnullable column with the specified scalar type.
-    pub fn with_nonnull_column<N>(self, name: N, scalar_type: ScalarType) -> Self
+    pub fn with_nonnull_column<N>(self, name: N, scalar_type: DatumType) -> Self
     where
         N: Into<ColumnName>,
     {

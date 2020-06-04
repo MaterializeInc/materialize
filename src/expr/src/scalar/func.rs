@@ -23,7 +23,7 @@ use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::regex::Regex;
-use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
+use repr::{strconv, ColumnType, Datum, DatumType, RowArena, RowPacker};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, ScalarExpr};
@@ -38,7 +38,7 @@ pub enum NullaryFunc {
 impl NullaryFunc {
     pub fn output_type(&self) -> ColumnType {
         match self {
-            NullaryFunc::MzLogicalTimestamp => ColumnType::new(ScalarType::Decimal(38, 0)),
+            NullaryFunc::MzLogicalTimestamp => ColumnType::new(DatumType::Decimal(38, 0)),
         }
     }
 }
@@ -1963,35 +1963,35 @@ impl BinaryFunc {
         };
         match self {
             And | Or | Eq | NotEq | Lt | Lte | Gt | Gte => {
-                ColumnType::new(ScalarType::Bool).nullable(in_nullable)
+                ColumnType::new(DatumType::Bool).nullable(in_nullable)
             }
 
             MatchLikePattern => {
                 // The output can be null if the pattern is invalid.
-                ColumnType::new(ScalarType::Bool).nullable(true)
+                ColumnType::new(DatumType::Bool).nullable(true)
             }
 
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Trim | TrimLeading
-            | TrimTrailing => ColumnType::new(ScalarType::String).nullable(false),
+            | TrimTrailing => ColumnType::new(DatumType::String).nullable(false),
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
-                ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
+                ColumnType::new(DatumType::Int32).nullable(in_nullable || is_div_mod)
             }
 
             AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 => {
-                ColumnType::new(ScalarType::Int64).nullable(in_nullable || is_div_mod)
+                ColumnType::new(DatumType::Int64).nullable(in_nullable || is_div_mod)
             }
 
             AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
-                ColumnType::new(ScalarType::Float32).nullable(in_nullable || is_div_mod)
+                ColumnType::new(DatumType::Float32).nullable(in_nullable || is_div_mod)
             }
 
             AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
+                ColumnType::new(DatumType::Float64).nullable(in_nullable || is_div_mod)
             }
 
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate => {
-                ColumnType::new(ScalarType::Interval).nullable(in_nullable)
+                ColumnType::new(DatumType::Interval).nullable(in_nullable)
             }
 
             // TODO(benesch): we correctly compute types for decimal scale, but
@@ -1999,40 +1999,40 @@ impl BinaryFunc {
             // decimal precision. Should either remove or fix.
             AddDecimal | SubDecimal | ModDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
+                    (DatumType::Decimal(_, s1), DatumType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
                 };
                 assert_eq!(s1, s2);
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, *s1))
+                ColumnType::new(DatumType::Decimal(MAX_DECIMAL_PRECISION, *s1))
                     .nullable(in_nullable || is_div_mod)
             }
             MulDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
+                    (DatumType::Decimal(_, s1), DatumType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
                 };
                 let s = s1 + s2;
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(in_nullable)
+                ColumnType::new(DatumType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(in_nullable)
             }
             DivDecimal => {
                 let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
+                    (DatumType::Decimal(_, s1), DatumType::Decimal(_, s2)) => (s1, s2),
                     _ => unreachable!(),
                 };
                 let s = s1 - s2;
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
+                ColumnType::new(DatumType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
             }
 
             CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
-                ScalarType::Decimal(_, s) => {
-                    ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
+                DatumType::Decimal(_, s) => {
+                    ColumnType::new(DatumType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
                 }
                 _ => unreachable!(),
             },
 
             RoundDecimal(scale) => {
                 match input1_type.scalar_type {
-                    ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
+                    DatumType::Decimal(_, s) => assert_eq!(*scale, s),
                     _ => unreachable!(),
                 }
                 ColumnType::new(input1_type.scalar_type).nullable(in_nullable)
@@ -2046,21 +2046,21 @@ impl BinaryFunc {
             | SubTimeInterval => input1_type,
 
             AddDateInterval | SubDateInterval | AddDateTime | DateTruncTimestamp => {
-                ColumnType::new(ScalarType::Timestamp).nullable(true)
+                ColumnType::new(DatumType::Timestamp).nullable(true)
             }
 
-            DateTruncTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
+            DateTruncTimestampTz => ColumnType::new(DatumType::TimestampTz).nullable(true),
 
-            SubTime => ColumnType::new(ScalarType::Interval).nullable(true),
+            SubTime => ColumnType::new(DatumType::Interval).nullable(true),
 
-            TextConcat => ColumnType::new(ScalarType::String).nullable(in_nullable),
+            TextConcat => ColumnType::new(DatumType::String).nullable(in_nullable),
 
             JsonbGetInt64 | JsonbGetString | JsonbConcat | JsonbDeleteInt64 | JsonbDeleteString => {
-                ColumnType::new(ScalarType::Jsonb).nullable(true)
+                ColumnType::new(DatumType::Jsonb).nullable(true)
             }
 
             JsonbContainsString | JsonbContainsJsonb => {
-                ColumnType::new(ScalarType::Bool).nullable(in_nullable)
+                ColumnType::new(DatumType::Bool).nullable(in_nullable)
             }
         }
     }
@@ -2522,27 +2522,27 @@ impl UnaryFunc {
         use UnaryFunc::*;
         let in_nullable = input_type.nullable;
         match self {
-            IsNull | CastInt32ToBool | CastInt64ToBool => ColumnType::new(ScalarType::Bool),
+            IsNull | CastInt32ToBool | CastInt64ToBool => ColumnType::new(DatumType::Bool),
 
-            Ascii | LengthBytes => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
+            Ascii | LengthBytes => ColumnType::new(DatumType::Int32).nullable(in_nullable),
 
-            MatchRegex(_) => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
+            MatchRegex(_) => ColumnType::new(DatumType::Bool).nullable(in_nullable),
 
-            CastStringToBool => ColumnType::new(ScalarType::Bool).nullable(true),
-            CastStringToBytes => ColumnType::new(ScalarType::Bytes).nullable(true),
-            CastStringToInt32 => ColumnType::new(ScalarType::Int32).nullable(true),
-            CastStringToInt64 => ColumnType::new(ScalarType::Int64).nullable(true),
-            CastStringToFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
-            CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
+            CastStringToBool => ColumnType::new(DatumType::Bool).nullable(true),
+            CastStringToBytes => ColumnType::new(DatumType::Bytes).nullable(true),
+            CastStringToInt32 => ColumnType::new(DatumType::Int32).nullable(true),
+            CastStringToInt64 => ColumnType::new(DatumType::Int64).nullable(true),
+            CastStringToFloat32 => ColumnType::new(DatumType::Float32).nullable(true),
+            CastStringToFloat64 => ColumnType::new(DatumType::Float64).nullable(true),
             CastStringToDecimal(scale) => {
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale)).nullable(true)
+                ColumnType::new(DatumType::Decimal(MAX_DECIMAL_PRECISION, *scale)).nullable(true)
             }
-            CastStringToDate => ColumnType::new(ScalarType::Date).nullable(true),
-            CastStringToTime => ColumnType::new(ScalarType::Time).nullable(true),
-            CastStringToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
-            CastStringToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
+            CastStringToDate => ColumnType::new(DatumType::Date).nullable(true),
+            CastStringToTime => ColumnType::new(DatumType::Time).nullable(true),
+            CastStringToTimestamp => ColumnType::new(DatumType::Timestamp).nullable(true),
+            CastStringToTimestampTz => ColumnType::new(DatumType::TimestampTz).nullable(true),
             CastStringToInterval | CastTimeToInterval => {
-                ColumnType::new(ScalarType::Interval).nullable(true)
+                ColumnType::new(DatumType::Interval).nullable(true)
             }
 
             CastBoolToStringExplicit
@@ -2560,78 +2560,76 @@ impl UnaryFunc {
             | CastBytesToString
             | TrimWhitespace
             | TrimLeadingWhitespace
-            | TrimTrailingWhitespace => ColumnType::new(ScalarType::String).nullable(in_nullable),
+            | TrimTrailingWhitespace => ColumnType::new(DatumType::String).nullable(in_nullable),
 
             CastInt32ToFloat32 | CastInt64ToFloat32 | CastSignificandToFloat32 => {
-                ColumnType::new(ScalarType::Float32).nullable(in_nullable)
+                ColumnType::new(DatumType::Float32).nullable(in_nullable)
             }
 
             CastInt32ToFloat64
             | CastInt64ToFloat64
             | CastFloat32ToFloat64
-            | CastSignificandToFloat64 => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
-            }
+            | CastSignificandToFloat64 => ColumnType::new(DatumType::Float64).nullable(in_nullable),
 
             CastInt64ToInt32 | CastDecimalToInt32 => {
-                ColumnType::new(ScalarType::Int32).nullable(in_nullable)
+                ColumnType::new(DatumType::Int32).nullable(in_nullable)
             }
 
-            CastFloat64ToInt32 => ColumnType::new(ScalarType::Int32).nullable(true),
+            CastFloat64ToInt32 => ColumnType::new(DatumType::Int32).nullable(true),
 
             CastInt32ToInt64 | CastDecimalToInt64 | CastFloat32ToInt64 | CastFloat64ToInt64 => {
-                ColumnType::new(ScalarType::Int64).nullable(in_nullable)
+                ColumnType::new(DatumType::Int64).nullable(in_nullable)
             }
 
-            CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
-            CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
+            CastInt32ToDecimal => ColumnType::new(DatumType::Decimal(10, 0)).nullable(in_nullable),
+            CastInt64ToDecimal => ColumnType::new(DatumType::Decimal(20, 0)).nullable(in_nullable),
 
             CastTimestampToDate | CastTimestampTzToDate => {
-                ColumnType::new(ScalarType::Date).nullable(in_nullable)
+                ColumnType::new(DatumType::Date).nullable(in_nullable)
             }
 
-            CastIntervalToTime => ColumnType::new(ScalarType::Time).nullable(in_nullable),
+            CastIntervalToTime => ColumnType::new(DatumType::Time).nullable(in_nullable),
 
             CastDateToTimestamp | CastTimestampTzToTimestamp => {
-                ColumnType::new(ScalarType::Timestamp).nullable(in_nullable)
+                ColumnType::new(DatumType::Timestamp).nullable(in_nullable)
             }
 
             CastDateToTimestampTz | CastTimestampToTimestampTz => {
-                ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
+                ColumnType::new(DatumType::TimestampTz).nullable(in_nullable)
             }
 
             // can return null for invalid json
-            CastStringToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
+            CastStringToJsonb => ColumnType::new(DatumType::Jsonb).nullable(true),
 
-            JsonbStringify => ColumnType::new(ScalarType::String).nullable(in_nullable),
+            JsonbStringify => ColumnType::new(DatumType::String).nullable(in_nullable),
 
             // converts jsonnull to null
-            JsonbStringifyUnlessString => ColumnType::new(ScalarType::String).nullable(true),
+            JsonbStringifyUnlessString => ColumnType::new(DatumType::String).nullable(true),
 
             // converts null to jsonnull
-            CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(false),
+            CastJsonbOrNullToJsonb => ColumnType::new(DatumType::Jsonb).nullable(false),
 
             // can return null for other jsonb types
-            CastJsonbToString => ColumnType::new(ScalarType::String).nullable(true),
-            CastJsonbToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
-            CastJsonbToBool => ColumnType::new(ScalarType::Bool).nullable(true),
+            CastJsonbToString => ColumnType::new(DatumType::String).nullable(true),
+            CastJsonbToFloat64 => ColumnType::new(DatumType::Float64).nullable(true),
+            CastJsonbToBool => ColumnType::new(DatumType::Bool).nullable(true),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => {
-                ColumnType::new(ScalarType::Float32).nullable(in_nullable)
+                ColumnType::new(DatumType::Float32).nullable(in_nullable)
             }
             CeilFloat64 | FloorFloat64 | RoundFloat64 => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
+                ColumnType::new(DatumType::Float64).nullable(in_nullable)
             }
             CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) => {
                 match input_type.scalar_type {
-                    ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
+                    DatumType::Decimal(_, s) => assert_eq!(*scale, s),
                     _ => unreachable!(),
                 }
                 ColumnType::new(input_type.scalar_type).nullable(in_nullable)
             }
 
-            SqrtFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
-            SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
+            SqrtFloat32 => ColumnType::new(DatumType::Float32).nullable(true),
+            SqrtFloat64 => ColumnType::new(DatumType::Float64).nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
             | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
@@ -2667,18 +2665,18 @@ impl UnaryFunc {
             | ExtractTimestampTzDayOfYear
             | ExtractTimestampTzDayOfWeek
             | ExtractTimestampTzIsoDayOfWeek => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
+                ColumnType::new(DatumType::Float64).nullable(in_nullable)
             }
 
-            DateTruncTimestamp(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
-            DateTruncTimestampTz(_) => ColumnType::new(ScalarType::TimestampTz).nullable(false),
+            DateTruncTimestamp(_) => ColumnType::new(DatumType::Timestamp).nullable(false),
+            DateTruncTimestampTz(_) => ColumnType::new(DatumType::TimestampTz).nullable(false),
 
-            ToTimestamp => ColumnType::new(ScalarType::TimestampTz).nullable(true),
+            ToTimestamp => ColumnType::new(DatumType::TimestampTz).nullable(true),
 
-            JsonbArrayLength => ColumnType::new(ScalarType::Int64).nullable(true),
-            JsonbTypeof => ColumnType::new(ScalarType::String).nullable(in_nullable),
-            JsonbStripNulls => ColumnType::new(ScalarType::Jsonb).nullable(true),
-            JsonbPretty => ColumnType::new(ScalarType::String).nullable(in_nullable),
+            JsonbArrayLength => ColumnType::new(DatumType::Int64).nullable(true),
+            JsonbTypeof => ColumnType::new(DatumType::String).nullable(in_nullable),
+            JsonbStripNulls => ColumnType::new(DatumType::Jsonb).nullable(true),
+            JsonbPretty => ColumnType::new(DatumType::String).nullable(in_nullable),
         }
     }
 
@@ -3065,7 +3063,7 @@ pub enum VariadicFunc {
     JsonbBuildObject,
     ListCreate {
         // we need to know this to type exprs with empty lists
-        elem_type: ScalarType,
+        elem_type: DatumType,
     },
 }
 
@@ -3115,18 +3113,18 @@ impl VariadicFunc {
                 );
                 input_types.into_first().nullable(true)
             }
-            Concat => ColumnType::new(ScalarType::String).nullable(true),
-            MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
-            Substr => ColumnType::new(ScalarType::String).nullable(true),
-            LengthString => ColumnType::new(ScalarType::Int32).nullable(true),
-            Replace => ColumnType::new(ScalarType::String).nullable(true),
-            JsonbBuildArray | JsonbBuildObject => ColumnType::new(ScalarType::Jsonb).nullable(true),
+            Concat => ColumnType::new(DatumType::String).nullable(true),
+            MakeTimestamp => ColumnType::new(DatumType::Timestamp).nullable(true),
+            Substr => ColumnType::new(DatumType::String).nullable(true),
+            LengthString => ColumnType::new(DatumType::Int32).nullable(true),
+            Replace => ColumnType::new(DatumType::String).nullable(true),
+            JsonbBuildArray | JsonbBuildObject => ColumnType::new(DatumType::Jsonb).nullable(true),
             ListCreate { elem_type } => {
                 debug_assert!(
                     input_types.iter().all(|t| t.scalar_type == *elem_type),
                     "Args to ListCreate should have types that are compatible with the elem_type"
                 );
-                ColumnType::new(ScalarType::List(Box::new(elem_type.clone())))
+                ColumnType::new(DatumType::List(Box::new(elem_type.clone())))
             }
         }
     }

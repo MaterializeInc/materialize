@@ -51,7 +51,7 @@ use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{
     format_date, format_interval, format_time, format_timestamp, format_timestamptz,
 };
-use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, DatumType, RelationDesc, Row};
 use sql::ast::Statement;
 use sql::session::Session;
 use sql_parser::parser::ParserError as SqlParserError;
@@ -319,9 +319,9 @@ fn format_row(
     let row = izip!(slt_types, col_types, row.iter()).map(|(slt_typ, col_typ, datum)| {
         if let Datum::Null = datum {
             "NULL".to_owned()
-        } else if let ScalarType::Jsonb = col_typ.scalar_type {
+        } else if let DatumType::Jsonb = col_typ.scalar_type {
             JsonbRef::from_datum(datum).to_string()
-        } else if let ScalarType::List(_) = col_typ.scalar_type {
+        } else if let DatumType::List(_) = col_typ.scalar_type {
             // produce the same output as we would for psql
             let mut buf = ::bytes::BytesMut::new();
             pgrepr::Value::from_datum(datum, &col_typ.scalar_type)

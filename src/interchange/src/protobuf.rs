@@ -21,7 +21,7 @@ use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
 use repr::adt::decimal::Significand;
-use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, DatumList, DatumType, RelationDesc, RelationType, Row, RowPacker};
 
 use crate::error::Result;
 
@@ -38,31 +38,31 @@ fn proto_message_name(message_name: &str) -> String {
     }
 }
 
-fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<ScalarType> {
+fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<DatumType> {
     Ok(match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated => {
             validate_proto_field_resolved(field, descriptors)?;
-            ScalarType::Jsonb
+            DatumType::Jsonb
         }
         FieldLabel::Optional => {
             match field.field_type(descriptors) {
-                FieldType::Bool => ScalarType::Bool,
-                FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => ScalarType::Int32,
-                FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => ScalarType::Int64,
-                FieldType::Enum(_) => ScalarType::String,
-                FieldType::Float => ScalarType::Float32,
-                FieldType::Double => ScalarType::Float64,
+                FieldType::Bool => DatumType::Bool,
+                FieldType::Int32 | FieldType::SInt32 | FieldType::SFixed32 => DatumType::Int32,
+                FieldType::Int64 | FieldType::SInt64 | FieldType::SFixed64 => DatumType::Int64,
+                FieldType::Enum(_) => DatumType::String,
+                FieldType::Float => DatumType::Float32,
+                FieldType::Double => DatumType::Float64,
                 FieldType::UInt32 | FieldType::UInt64 | FieldType::Fixed32 | FieldType::Fixed64 => {
-                    ScalarType::Decimal(38, 0)
+                    DatumType::Decimal(38, 0)
                 } // is that right
-                FieldType::String => ScalarType::String,
-                FieldType::Bytes => ScalarType::Bytes,
+                FieldType::String => DatumType::String,
+                FieldType::Bytes => DatumType::Bytes,
                 FieldType::Message(m) => {
                     for f in m.fields().iter() {
                         validate_proto_field_resolved(&f, descriptors)?;
                     }
-                    ScalarType::Jsonb
+                    DatumType::Jsonb
                 }
                 FieldType::Group => bail!("Unions are currently not supported"),
                 FieldType::UnresolvedMessage(m) => bail!("Unresolved message {} not supported", m),
@@ -461,7 +461,7 @@ mod tests {
 
     use ordered_float::OrderedFloat;
     use repr::adt::decimal::Significand;
-    use repr::{Datum, DatumList, RelationDesc, ScalarType};
+    use repr::{Datum, DatumList, DatumType, RelationDesc};
 
     fn sanity_check_relation(
         relation: &RelationDesc,
@@ -485,26 +485,26 @@ mod tests {
                 field_descriptor.field_label(),
                 &column_type.scalar_type,
             ) {
-                (FieldType::Bool, FieldLabel::Optional, ScalarType::Bool)
-                | (FieldType::Int32, FieldLabel::Optional, ScalarType::Int32)
-                | (FieldType::SInt32, FieldLabel::Optional, ScalarType::Int32)
-                | (FieldType::SFixed32, FieldLabel::Optional, ScalarType::Int32)
-                | (FieldType::Enum(_), FieldLabel::Optional, ScalarType::String)
-                | (FieldType::Int64, FieldLabel::Optional, ScalarType::Int64)
-                | (FieldType::SInt64, FieldLabel::Optional, ScalarType::Int64)
-                | (FieldType::SFixed64, FieldLabel::Optional, ScalarType::Int64)
-                | (FieldType::Float, FieldLabel::Optional, ScalarType::Float32)
-                | (FieldType::Double, FieldLabel::Optional, ScalarType::Float64)
-                | (FieldType::UInt32, FieldLabel::Optional, ScalarType::Decimal(38, 0))
-                | (FieldType::Fixed32, FieldLabel::Optional, ScalarType::Decimal(38,0))
-                | (FieldType::UInt64, FieldLabel::Optional, ScalarType::Decimal(38, 0))
-                | (FieldType::Fixed64, FieldLabel::Optional, ScalarType::Decimal(38,0))
-                | (FieldType::String, FieldLabel::Optional, &ScalarType::String)
-                | (FieldType::Bytes, FieldLabel::Optional, ScalarType::Bytes)
-                | (FieldType::Message(_), FieldLabel::Optional, ScalarType::Jsonb) => (),
+                (FieldType::Bool, FieldLabel::Optional, DatumType::Bool)
+                | (FieldType::Int32, FieldLabel::Optional, DatumType::Int32)
+                | (FieldType::SInt32, FieldLabel::Optional, DatumType::Int32)
+                | (FieldType::SFixed32, FieldLabel::Optional, DatumType::Int32)
+                | (FieldType::Enum(_), FieldLabel::Optional, DatumType::String)
+                | (FieldType::Int64, FieldLabel::Optional, DatumType::Int64)
+                | (FieldType::SInt64, FieldLabel::Optional, DatumType::Int64)
+                | (FieldType::SFixed64, FieldLabel::Optional, DatumType::Int64)
+                | (FieldType::Float, FieldLabel::Optional, DatumType::Float32)
+                | (FieldType::Double, FieldLabel::Optional, DatumType::Float64)
+                | (FieldType::UInt32, FieldLabel::Optional, DatumType::Decimal(38, 0))
+                | (FieldType::Fixed32, FieldLabel::Optional, DatumType::Decimal(38, 0))
+                | (FieldType::UInt64, FieldLabel::Optional, DatumType::Decimal(38, 0))
+                | (FieldType::Fixed64, FieldLabel::Optional, DatumType::Decimal(38, 0))
+                | (FieldType::String, FieldLabel::Optional, &DatumType::String)
+                | (FieldType::Bytes, FieldLabel::Optional, DatumType::Bytes)
+                | (FieldType::Message(_), FieldLabel::Optional, DatumType::Jsonb) => (),
 
                 (ft, FieldLabel::Optional, st) => bail!("Incorrect protobuf optional type {:?} mapping to Materialize type {:?}", ft, st),
-                (ft, FieldLabel::Repeated, ScalarType::Jsonb) => {
+                (ft, FieldLabel::Repeated, DatumType::Jsonb) => {
                     match ft {
                         FieldType::UnresolvedMessage(_) | FieldType::UnresolvedEnum(_) | FieldType::Group => {
                             bail!("Unsupported repeated type {:?}", ft)

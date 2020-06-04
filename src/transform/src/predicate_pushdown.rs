@@ -14,18 +14,18 @@
 //!
 //! ```rust
 //! use expr::{BinaryFunc, IdGen, RelationExpr, ScalarExpr};
-//! use repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use repr::{ColumnType, Datum, RelationType, DatumType};
 //!
 //! use transform::predicate_pushdown::PredicatePushdown;
 //!
 //! let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
+//!     ColumnType::new(DatumType::Bool),
 //! ]));
 //! let input2 = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
+//!     ColumnType::new(DatumType::Bool),
 //! ]));
 //! let input3 = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
+//!     ColumnType::new(DatumType::Bool),
 //! ]));
 //! let join = RelationExpr::join(
 //!     vec![input1.clone(), input2.clone(), input3.clone()],
@@ -35,7 +35,7 @@
 //! let predicate0 = ScalarExpr::column(0);
 //! let predicate1 = ScalarExpr::column(1);
 //! let predicate01 = ScalarExpr::column(0).call_binary(ScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool));
+//! let predicate012 = ScalarExpr::literal_ok(Datum::False, ColumnType::new(DatumType::Bool));
 //!
 //! let mut expr = join.filter(
 //!    vec![
@@ -54,7 +54,7 @@
 
 use crate::TransformArgs;
 use expr::{AggregateFunc, RelationExpr, ScalarExpr};
-use repr::{ColumnType, Datum, ScalarType};
+use repr::{ColumnType, Datum, DatumType};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -258,7 +258,7 @@ impl PredicatePushdown {
                                 push_down.push(aggregates[0].expr.clone());
                                 aggregates[0].expr = ScalarExpr::literal_ok(
                                     Datum::True,
-                                    ColumnType::new(ScalarType::Bool),
+                                    ColumnType::new(DatumType::Bool),
                                 );
                             } else {
                                 retain.push(predicate);

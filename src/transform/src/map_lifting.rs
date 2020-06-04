@@ -378,7 +378,7 @@ impl LiteralLifting {
                         .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
                     result.push(ScalarExpr::literal_ok(
                         eval,
-                        repr::ColumnType::new(repr::ScalarType::Bool),
+                        repr::ColumnType::new(repr::DatumType::Bool),
                     ));
                 }
                 result.reverse();

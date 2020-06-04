@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use failure::bail;
 use lazy_static::lazy_static;
-use repr::ScalarType;
+use repr::DatumType;
 
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
 use super::query::{CastContext, CoerceTo, ExprContext};
@@ -45,23 +45,20 @@ impl TypeCategory {
     /// GROUP BY typcategory
     /// ORDER BY typcategory;
     /// ```
-    fn from_type(typ: &ScalarType) -> TypeCategory {
+    fn from_type(typ: &DatumType) -> TypeCategory {
         match typ {
-            ScalarType::Bool => TypeCategory::Bool,
-            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::List(_) => {
-                TypeCategory::UserDefined
+            DatumType::Bool => TypeCategory::Bool,
+            DatumType::Bytes | DatumType::Jsonb | DatumType::List(_) => TypeCategory::UserDefined,
+            DatumType::Date | DatumType::Time | DatumType::Timestamp | DatumType::TimestampTz => {
+                TypeCategory::DateTime
             }
-            ScalarType::Date
-            | ScalarType::Time
-            | ScalarType::Timestamp
-            | ScalarType::TimestampTz => TypeCategory::DateTime,
-            ScalarType::Decimal(_, _)
-            | ScalarType::Float32
-            | ScalarType::Float64
-            | ScalarType::Int32
-            | ScalarType::Int64 => TypeCategory::Numeric,
-            ScalarType::Interval => TypeCategory::Timespan,
-            ScalarType::String => TypeCategory::String,
+            DatumType::Decimal(_, _)
+            | DatumType::Float32
+            | DatumType::Float64
+            | DatumType::Int32
+            | DatumType::Int64 => TypeCategory::Numeric,
+            DatumType::Interval => TypeCategory::Timespan,
+            DatumType::String => TypeCategory::String,
         }
     }
 
@@ -72,19 +69,19 @@ impl TypeCategory {
     /// WHERE typispreferred = true
     /// ORDER BY typcategory;
     /// ```
-    fn preferred_type(&self) -> Option<ScalarType> {
+    fn preferred_type(&self) -> Option<DatumType> {
         match self {
-            TypeCategory::Bool => Some(ScalarType::Bool),
-            TypeCategory::DateTime => Some(ScalarType::TimestampTz),
-            TypeCategory::Numeric => Some(ScalarType::Float64),
-            TypeCategory::String => Some(ScalarType::String),
-            TypeCategory::Timespan => Some(ScalarType::Interval),
+            TypeCategory::Bool => Some(DatumType::Bool),
+            TypeCategory::DateTime => Some(DatumType::TimestampTz),
+            TypeCategory::Numeric => Some(DatumType::Float64),
+            TypeCategory::String => Some(DatumType::String),
+            TypeCategory::Timespan => Some(DatumType::Interval),
             _ => None,
         }
     }
 }
 
-fn is_param_preferred_type_for_arg(param_type: &ScalarType, arg_type: &ScalarType) -> bool {
+fn is_param_preferred_type_for_arg(param_type: &DatumType, arg_type: &DatumType) -> bool {
     match TypeCategory::from_type(&arg_type).preferred_type() {
         Some(preferred_type) => &preferred_type == param_type,
         _ => false,
@@ -119,7 +116,7 @@ impl ParamList {
 
     /// Matches a `&[ScalarType]` derived from the user's function argument
     /// against this `ParamList`'s permitted arguments.
-    fn match_scalartypes(&self, types: &[ScalarType]) -> bool {
+    fn match_scalartypes(&self, types: &[DatumType]) -> bool {
         use ParamList::*;
         match self {
             Exact(p) => types.iter().zip(p.iter()).all(|(t, p)| t == p),
@@ -139,7 +136,7 @@ impl From<Vec<ParamType>> for ParamList {
 /// Describes parameter types; these are essentially just `ScalarType` with some
 /// added flexibility.
 pub enum ParamType {
-    Plain(ScalarType),
+    Plain(DatumType),
     /// Permits any type, but requires it to be cast to a `ScalarType::String`.
     StringAny,
     /// Like `StringAny`, but pretends the argument was explicitly cast to
@@ -149,9 +146,9 @@ pub enum ParamType {
     JsonbAny,
 }
 
-impl PartialEq<ScalarType> for ParamType {
-    fn eq(&self, other: &ScalarType) -> bool {
-        use ScalarType::*;
+impl PartialEq<DatumType> for ParamType {
+    fn eq(&self, other: &DatumType) -> bool {
+        use DatumType::*;
         match (self, other) {
             (ParamType::StringAny, _) | (ParamType::ExplicitStringAny, _) => true,
             (ParamType::JsonbAny, o) => match o {
@@ -166,18 +163,18 @@ impl PartialEq<ScalarType> for ParamType {
     }
 }
 
-impl PartialEq<ParamType> for ScalarType {
+impl PartialEq<ParamType> for DatumType {
     fn eq(&self, other: &ParamType) -> bool {
         other == self
     }
 }
 
-impl From<&ParamType> for ScalarType {
-    fn from(p: &ParamType) -> ScalarType {
+impl From<&ParamType> for DatumType {
+    fn from(p: &ParamType) -> DatumType {
         match p {
             ParamType::Plain(s) => s.clone(),
-            ParamType::StringAny | ParamType::ExplicitStringAny => ScalarType::String,
-            ParamType::JsonbAny => ScalarType::Jsonb,
+            ParamType::StringAny | ParamType::ExplicitStringAny => DatumType::String,
+            ParamType::JsonbAny => DatumType::Jsonb,
         }
     }
 }
@@ -188,7 +185,7 @@ pub trait Params {
 
 /// Provides a shorthand for converting a `Vec<ScalarType>` to `Vec<ParamType>`.
 /// Note that this moves the values out of `self` and into the resultant `Vec<ParamType>`.
-impl Params for Vec<ScalarType> {
+impl Params for Vec<DatumType> {
     fn into_params(self) -> Vec<ParamType> {
         self.into_iter().map(ParamType::Plain).collect()
     }
@@ -211,7 +208,7 @@ pub enum OperationType {
 struct Candidate {
     /// Represents the candidate's argument types; used to match some
     /// implementation's parameter types.
-    arg_types: Vec<ScalarType>,
+    arg_types: Vec<DatumType>,
     exact_matches: usize,
     preferred_types: usize,
 }
@@ -280,7 +277,7 @@ impl<'a> ArgImplementationMatcher<'a> {
     ///
     /// Note that `types` must be the caller's argument's types to preserve
     /// Decimal scale and precision, which are used in `Self::saturate_decimals`.
-    fn get_implementation(&self, types: &[ScalarType]) -> Option<FuncImpl> {
+    fn get_implementation(&self, types: &[DatumType]) -> Option<FuncImpl> {
         let matching_impls: Vec<&FuncImpl> = self
             .impls
             .iter()
@@ -354,7 +351,7 @@ impl<'a> ArgImplementationMatcher<'a> {
                         param_type.into()
                     }
                     None => {
-                        let s: ScalarType = param_type.into();
+                        let s: DatumType = param_type.into();
                         if TypeCategory::from_type(&s).preferred_type() == Some(s) {
                             preferred_types += 1;
                         }
@@ -418,7 +415,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         let mut found_unknown = false;
         let mut found_known = false;
         let mut types_match = true;
-        let mut common_type: Option<ScalarType> = None;
+        let mut common_type: Option<DatumType> = None;
 
         for (i, raw_arg_type) in types.iter().enumerate() {
             let mut selected_category: Option<TypeCategory> = None;
@@ -543,10 +540,10 @@ impl<'a> ArgImplementationMatcher<'a> {
 
     /// Rewrite any `Decimal` values in `FuncImpl` to use the users' arguments'
     /// scale, rather than the default value we use for matching implementations.
-    fn saturate_decimals(f: &FuncImpl, types: &[ScalarType]) -> FuncImpl {
+    fn saturate_decimals(f: &FuncImpl, types: &[DatumType]) -> FuncImpl {
+        use DatumType::*;
         use OperationType::*;
         use ParamType::*;
-        use ScalarType::*;
 
         let mut f = f.clone();
         // TODO(sploiselle): Add support for saturating decimals in other
@@ -561,19 +558,19 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         f.op = match f.op {
             Unary(UnaryFunc::CeilDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::CeilDecimal(s)),
+                DatumType::Decimal(_, s) => Unary(UnaryFunc::CeilDecimal(s)),
                 _ => unreachable!(),
             },
             Unary(UnaryFunc::FloorDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::FloorDecimal(s)),
+                DatumType::Decimal(_, s) => Unary(UnaryFunc::FloorDecimal(s)),
                 _ => unreachable!(),
             },
             Unary(UnaryFunc::RoundDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::RoundDecimal(s)),
+                DatumType::Decimal(_, s) => Unary(UnaryFunc::RoundDecimal(s)),
                 _ => unreachable!(),
             },
             Binary(BinaryFunc::RoundDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Binary(BinaryFunc::RoundDecimal(s)),
+                DatumType::Decimal(_, s) => Binary(BinaryFunc::RoundDecimal(s)),
                 _ => unreachable!(),
             },
             other => other,
@@ -618,7 +615,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
             ParamType::JsonbAny => CoerceTo::JsonbAny,
             ParamType::ExplicitStringAny | ParamType::StringAny => {
-                CoerceTo::Plain(ScalarType::String)
+                CoerceTo::Plain(DatumType::String)
             }
         };
         let arg = super::query::plan_coerce(self.ecx, arg, coerce_to)?;
@@ -626,11 +623,11 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::JsonbAny => super::query::plan_to_jsonb(self.ecx, self.ident, arg),
             ParamType::ExplicitStringAny => {
                 let ccx = CastContext::Explicit;
-                super::query::plan_cast_internal(self.ecx, ccx, arg, ScalarType::String)
+                super::query::plan_cast_internal(self.ecx, ccx, arg, DatumType::String)
             }
             ParamType::StringAny => {
                 let ccx = CastContext::Implicit(self.ident);
-                super::query::plan_cast_internal(self.ecx, ccx, arg, ScalarType::String)
+                super::query::plan_cast_internal(self.ecx, ccx, arg, DatumType::String)
             }
             ParamType::Plain(s) => {
                 let ccx = CastContext::Implicit(self.ident);
@@ -677,7 +674,7 @@ lazy_static! {
         use OperationType::*;
         use ParamList::*;
         use ParamType::*;
-        use ScalarType::*;
+        use DatumType::*;
         func_impls! {
             "abs" => {
                 params!(Int32) => Unary(UnaryFunc::AbsInt32),

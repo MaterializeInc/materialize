@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use repr::adt::regex::Regex;
 use repr::strconv::ParseError;
-use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
+use repr::{ColumnType, Datum, DatumType, RelationType, Row, RowArena};
 
 use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
 
@@ -202,7 +202,7 @@ impl ScalarExpr {
     pub fn take(&mut self) -> Self {
         mem::replace(
             self,
-            ScalarExpr::literal_null(ColumnType::new(ScalarType::String)),
+            ScalarExpr::literal_null(ColumnType::new(DatumType::String)),
         )
     }
 
@@ -263,11 +263,11 @@ impl ScalarExpr {
     ///
     /// ```rust
     /// use expr::{BinaryFunc, ScalarExpr};
-    /// use repr::{ColumnType, Datum, RelationType, ScalarType};
+    /// use repr::{ColumnType, Datum, RelationType, DatumType};
     ///
     /// let expr_0 = ScalarExpr::Column(0);
-    /// let expr_t = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
-    /// let expr_f = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool));
+    /// let expr_t = ScalarExpr::literal_ok(Datum::True, ColumnType::new(DatumType::Bool));
+    /// let expr_f = ScalarExpr::literal_ok(Datum::False, ColumnType::new(DatumType::Bool));
     ///
     /// let mut test =
     /// expr_t
@@ -275,7 +275,7 @@ impl ScalarExpr {
     ///     .call_binary(expr_f.clone(), BinaryFunc::And)
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// let input_type = RelationType::new(vec![ColumnType::new(ScalarType::Int32)]);
+    /// let input_type = RelationType::new(vec![ColumnType::new(DatumType::Int32)]);
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
@@ -552,14 +552,14 @@ mod tests {
     #[test]
     fn test_reduce() {
         let relation_type = RelationType::new(vec![
-            ColumnType::new(ScalarType::Int64).nullable(true),
-            ColumnType::new(ScalarType::Int64).nullable(true),
-            ColumnType::new(ScalarType::Int64).nullable(false),
+            ColumnType::new(DatumType::Int64).nullable(true),
+            ColumnType::new(DatumType::Int64).nullable(true),
+            ColumnType::new(DatumType::Int64).nullable(false),
         ]);
         let col = |i| ScalarExpr::Column(i);
-        let err = |e| ScalarExpr::literal(Err(e), ColumnType::new(ScalarType::Int64));
-        let lit = |i| ScalarExpr::literal_ok(Datum::Int64(i), ColumnType::new(ScalarType::Int64));
-        let null = || ScalarExpr::literal_null(ColumnType::new(ScalarType::Int64));
+        let err = |e| ScalarExpr::literal(Err(e), ColumnType::new(DatumType::Int64));
+        let lit = |i| ScalarExpr::literal_ok(Datum::Int64(i), ColumnType::new(DatumType::Int64));
+        let null = || ScalarExpr::literal_null(ColumnType::new(DatumType::Int64));
 
         struct TestCase {
             input: ScalarExpr,

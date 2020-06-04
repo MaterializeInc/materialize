@@ -29,7 +29,7 @@ use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::Encoder;
 use ore::collections::CollectionExt;
 use repr::strconv;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use repr::{ColumnType, Datum, DatumType, RelationDesc, RelationType, Row, RowArena};
 use sql_parser::ast::{
     AvroSchema, Connector, ExplainOptions, ExplainStage, Explainee, Format, Ident,
     IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
@@ -46,15 +46,15 @@ use crate::{normalize, unsupported};
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
-        { RelationDesc::empty().with_nonnull_column("Database", ScalarType::String) };
+        { RelationDesc::empty().with_nonnull_column("Database", DatumType::String) };
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::new(
         RelationType::new(vec![
-            ColumnType::new(ScalarType::String),
-            ColumnType::new(ScalarType::String),
-            ColumnType::new(ScalarType::String).nullable(true),
-            ColumnType::new(ScalarType::String).nullable(true),
-            ColumnType::new(ScalarType::Bool),
-            ColumnType::new(ScalarType::Int64),
+            ColumnType::new(DatumType::String),
+            ColumnType::new(DatumType::String),
+            ColumnType::new(DatumType::String).nullable(true),
+            ColumnType::new(DatumType::String).nullable(true),
+            ColumnType::new(DatumType::Bool),
+            ColumnType::new(DatumType::Int64),
         ]),
         vec![
             "Source_or_view",
@@ -68,9 +68,9 @@ lazy_static! {
         .map(Some),
     );
     static ref SHOW_COLUMNS_DESC: RelationDesc = RelationDesc::empty()
-        .with_nonnull_column("Field", ScalarType::String)
-        .with_nonnull_column("Nullable", ScalarType::String)
-        .with_nonnull_column("Type", ScalarType::String);
+        .with_nonnull_column("Field", DatumType::String)
+        .with_nonnull_column("Nullable", DatumType::String)
+        .with_nonnull_column("Type", DatumType::String);
 }
 
 pub fn make_show_objects_desc(
@@ -81,24 +81,24 @@ pub fn make_show_objects_desc(
     let col_name = object_type_as_plural_str(object_type);
     if full {
         let mut relation_desc = RelationDesc::empty()
-            .with_nonnull_column(col_name, ScalarType::String)
-            .with_nonnull_column("TYPE", ScalarType::String);
+            .with_nonnull_column(col_name, DatumType::String)
+            .with_nonnull_column("TYPE", DatumType::String);
         if ObjectType::View == object_type {
-            relation_desc = relation_desc.with_nonnull_column("QUERYABLE", ScalarType::Bool);
+            relation_desc = relation_desc.with_nonnull_column("QUERYABLE", DatumType::Bool);
         }
         if !materialized && (ObjectType::View == object_type || ObjectType::Source == object_type) {
-            relation_desc = relation_desc.with_nonnull_column("MATERIALIZED", ScalarType::Bool);
+            relation_desc = relation_desc.with_nonnull_column("MATERIALIZED", DatumType::Bool);
         }
         relation_desc
     } else {
-        RelationDesc::empty().with_nonnull_column(col_name, ScalarType::String)
+        RelationDesc::empty().with_nonnull_column(col_name, DatumType::String)
     }
 }
 
 pub fn describe_statement(
     catalog: &dyn Catalog,
     stmt: Statement,
-) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
+) -> Result<(Option<RelationDesc>, Vec<DatumType>), failure::Error> {
     let pcx = &PlanContext::default();
     let scx = &StatementContext { catalog, pcx };
     Ok(match stmt {
@@ -125,7 +125,7 @@ pub fn describe_statement(
                     ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
                     ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
                 },
-                ScalarType::String,
+                DatumType::String,
             )),
             match explainee {
                 Explainee::Query(q) => {
@@ -138,8 +138,8 @@ pub fn describe_statement(
         Statement::ShowCreateView { .. } => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("View", ScalarType::String)
-                    .with_nonnull_column("Create View", ScalarType::String),
+                    .with_nonnull_column("View", DatumType::String)
+                    .with_nonnull_column("Create View", DatumType::String),
             ),
             vec![],
         ),
@@ -147,8 +147,8 @@ pub fn describe_statement(
         Statement::ShowCreateSource { .. } => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("Source", ScalarType::String)
-                    .with_nonnull_column("Create Source", ScalarType::String),
+                    .with_nonnull_column("Source", DatumType::String)
+                    .with_nonnull_column("Create Source", DatumType::String),
             ),
             vec![],
         ),
@@ -156,8 +156,8 @@ pub fn describe_statement(
         Statement::ShowCreateSink { .. } => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("Sink", ScalarType::String)
-                    .with_nonnull_column("Create Sink", ScalarType::String),
+                    .with_nonnull_column("Sink", DatumType::String)
+                    .with_nonnull_column("Create Sink", DatumType::String),
             ),
             vec![],
         ),
@@ -182,9 +182,9 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .with_nonnull_column("name", ScalarType::String)
-                            .with_nonnull_column("setting", ScalarType::String)
-                            .with_nonnull_column("description", ScalarType::String),
+                            .with_nonnull_column("name", DatumType::String)
+                            .with_nonnull_column("setting", DatumType::String)
+                            .with_nonnull_column("description", DatumType::String),
                     ),
                     vec![],
                 )
@@ -192,7 +192,7 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .with_nonnull_column(variable.as_str(), ScalarType::String),
+                            .with_nonnull_column(variable.as_str(), DatumType::String),
                     ),
                     vec![],
                 )

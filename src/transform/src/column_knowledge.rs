@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::TransformArgs;
 use expr::{RelationExpr, ScalarExpr, UnaryFunc};
 use repr::Datum;
-use repr::{ColumnType, RelationType, ScalarType};
+use repr::{ColumnType, DatumType, RelationType};
 
 /// Harvest and act upon per-column information.
 #[derive(Debug)]
@@ -351,7 +351,7 @@ pub fn optimize(
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
                 *expr = ScalarExpr::literal_ok(
                     Datum::False,
-                    ColumnType::new(ScalarType::Bool).nullable(false),
+                    ColumnType::new(DatumType::Bool).nullable(false),
                 );
                 optimize(expr, input_type, column_knowledge)?
             } else {

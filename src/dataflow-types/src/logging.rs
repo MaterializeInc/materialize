@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use expr::GlobalId;
-use repr::{RelationDesc, ScalarType};
+use repr::{DatumType, RelationDesc};
 
 /// Logging configuration.
 #[derive(Debug, Clone)]
@@ -208,113 +208,113 @@ impl LogVariant {
     pub fn schema(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("name", ScalarType::String)
+                .with_nonnull_column("id", DatumType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("name", DatumType::String)
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("source_node", ScalarType::Int64)
-                .with_nonnull_column("source_port", ScalarType::Int64)
-                .with_nonnull_column("target_node", ScalarType::Int64)
-                .with_nonnull_column("target_port", ScalarType::Int64)
+                .with_nonnull_column("id", DatumType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("source_node", DatumType::Int64)
+                .with_nonnull_column("source_port", DatumType::Int64)
+                .with_nonnull_column("target_node", DatumType::Int64)
+                .with_nonnull_column("target_port", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("elapsed_ns", ScalarType::Int64)
+                .with_nonnull_column("id", DatumType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("elapsed_ns", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("duration_ns", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_nonnull_column("id", DatumType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("duration_ns", DatumType::Int64)
+                .with_nonnull_column("count", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
-                .with_nonnull_column("id", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("slot", ScalarType::Int64)
-                .with_nonnull_column("value", ScalarType::Int64)
+                .with_nonnull_column("id", DatumType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("slot", DatumType::Int64)
+                .with_nonnull_column("value", DatumType::Int64)
                 .with_key(vec![0, 1, 2]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("slept_for", ScalarType::Int64)
-                .with_nonnull_column("requested", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("slept_for", DatumType::Int64)
+                .with_nonnull_column("requested", DatumType::Int64)
+                .with_nonnull_column("count", DatumType::Int64)
                 .with_key(vec![0, 1, 2]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
-                .with_nonnull_column("operator", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("records", ScalarType::Int64)
-                .with_nonnull_column("batches", ScalarType::Int64)
+                .with_nonnull_column("operator", DatumType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("records", DatumType::Int64)
+                .with_nonnull_column("batches", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
-                .with_nonnull_column("operator", ScalarType::Int64)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_nonnull_column("operator", DatumType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("count", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationDesc::empty()
-                .with_nonnull_column("name", ScalarType::String)
-                .with_nonnull_column("worker", ScalarType::Int64)
+                .with_nonnull_column("name", DatumType::String)
+                .with_nonnull_column("worker", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
-                .with_nonnull_column("dataflow", ScalarType::String)
-                .with_nonnull_column("source", ScalarType::String)
-                .with_nonnull_column("worker", ScalarType::Int64),
+                .with_nonnull_column("dataflow", DatumType::String)
+                .with_nonnull_column("source", DatumType::String)
+                .with_nonnull_column("worker", DatumType::Int64),
 
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("time", ScalarType::Int64),
+                .with_nonnull_column("global_id", DatumType::String)
+                .with_nonnull_column("time", DatumType::Int64),
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
-                .with_nonnull_column("uuid", ScalarType::String)
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("id", ScalarType::String)
-                .with_nonnull_column("time", ScalarType::Int64)
+                .with_nonnull_column("uuid", DatumType::String)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("id", DatumType::String)
+                .with_nonnull_column("time", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationDesc::empty()
-                .with_nonnull_column("worker", ScalarType::Int64)
-                .with_nonnull_column("duration_ns", ScalarType::Int64)
-                .with_nonnull_column("count", ScalarType::Int64)
+                .with_nonnull_column("worker", DatumType::Int64)
+                .with_nonnull_column("duration_ns", DatumType::Int64)
+                .with_nonnull_column("count", DatumType::Int64)
                 .with_key(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("column", ScalarType::Int64)
-                .with_nonnull_column("key_group", ScalarType::Int64),
+                .with_nonnull_column("global_id", DatumType::String)
+                .with_nonnull_column("column", DatumType::Int64)
+                .with_nonnull_column("key_group", DatumType::Int64),
 
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => RelationDesc::empty()
-                .with_nonnull_column("child_id", ScalarType::String)
-                .with_nonnull_column("child_column", ScalarType::Int64)
-                .with_nonnull_column("parent_id", ScalarType::String)
-                .with_nonnull_column("parent_column", ScalarType::Int64)
-                .with_nonnull_column("key_group", ScalarType::Int64)
+                .with_nonnull_column("child_id", DatumType::String)
+                .with_nonnull_column("child_column", DatumType::Int64)
+                .with_nonnull_column("parent_id", DatumType::String)
+                .with_nonnull_column("parent_column", DatumType::Int64)
+                .with_nonnull_column("key_group", DatumType::Int64)
                 .with_key(vec![0, 1, 4]),
 
             LogVariant::Materialized(MaterializedLog::Catalog) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("name", ScalarType::String)
+                .with_nonnull_column("global_id", DatumType::String)
+                .with_nonnull_column("name", DatumType::String)
                 .with_key(vec![0]),
 
             LogVariant::Materialized(MaterializedLog::KafkaSinks) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("topic", ScalarType::String)
+                .with_nonnull_column("global_id", DatumType::String)
+                .with_nonnull_column("topic", DatumType::String)
                 .with_key(vec![0]),
 
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("path", ScalarType::Bytes)
+                .with_nonnull_column("global_id", DatumType::String)
+                .with_nonnull_column("path", DatumType::Bytes)
                 .with_key(vec![0]),
         }
     }

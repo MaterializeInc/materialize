@@ -36,7 +36,7 @@ use tokio_postgres::types::FromSql;
 
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, DatumType, RelationDesc, RelationType, Row, RowPacker};
 use sql::catalog::Catalog;
 use sql::names::FullName;
 use sql::normalize;
@@ -395,7 +395,7 @@ fn push_column(
         }
         DataType::Decimal(_, _) => {
             let desired_scale = match scalar_type_from_sql(sql_type).unwrap() {
-                ScalarType::Decimal(_precision, desired_scale) => desired_scale,
+                DatumType::Decimal(_precision, desired_scale) => desired_scale,
                 _ => unreachable!(),
             };
             match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {

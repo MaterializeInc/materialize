@@ -16,7 +16,7 @@
 
 use crate::TransformArgs;
 use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr, UnaryFunc};
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnType, Datum, DatumType, RelationType};
 
 /// Harvests information about non-nullability of columns from sources.
 #[derive(Debug)]
@@ -108,7 +108,7 @@ fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
         {
             if let ScalarExpr::Column(c) = &**expr {
                 if !metadata.column_types[*c].nullable {
-                    *e = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool));
+                    *e = ScalarExpr::literal_ok(Datum::False, ColumnType::new(DatumType::Bool));
                 }
             }
         }
@@ -121,7 +121,7 @@ fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
     if let (AggregateFunc::Count, ScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
         if !metadata.column_types[*c].nullable && !expr.distinct {
             expr.func = AggregateFunc::CountAll;
-            expr.expr = ScalarExpr::literal_null(ColumnType::new(ScalarType::Bool).nullable(true));
+            expr.expr = ScalarExpr::literal_null(ColumnType::new(DatumType::Bool).nullable(true));
         }
     }
 }

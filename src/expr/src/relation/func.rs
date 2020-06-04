@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
-use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
+use repr::{ColumnType, Datum, DatumType, RelationType, Row, RowArena};
 
 use std::iter;
 
@@ -475,11 +475,11 @@ impl AggregateFunc {
     /// counts.
     pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
         let scalar_type = match self {
-            AggregateFunc::Count => ScalarType::Int64,
-            AggregateFunc::CountAll => ScalarType::Int64,
-            AggregateFunc::Any => ScalarType::Bool,
-            AggregateFunc::All => ScalarType::Bool,
-            AggregateFunc::JsonbAgg => ScalarType::Jsonb,
+            AggregateFunc::Count => DatumType::Int64,
+            AggregateFunc::CountAll => DatumType::Int64,
+            AggregateFunc::Any => DatumType::Bool,
+            AggregateFunc::All => DatumType::Bool,
+            AggregateFunc::JsonbAgg => DatumType::Jsonb,
             _ => input_type.scalar_type,
         };
         let nullable = match self {
@@ -533,12 +533,12 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
     }
 }
 
-fn generate_series<'a>(typ: &ScalarType, start: Datum<'a>, stop: Datum<'a>) -> Vec<Row> {
+fn generate_series<'a>(typ: &DatumType, start: Datum<'a>, stop: Datum<'a>) -> Vec<Row> {
     match (typ, start, stop) {
-        (ScalarType::Int64, Datum::Int64(start), Datum::Int64(stop)) => (start..stop + 1)
+        (DatumType::Int64, Datum::Int64(start), Datum::Int64(stop)) => (start..stop + 1)
             .map(|i| Row::pack(&[Datum::Int64(i)]))
             .collect(),
-        (ScalarType::Int32, Datum::Int32(start), Datum::Int32(stop)) => (start..stop + 1)
+        (DatumType::Int32, Datum::Int32(start), Datum::Int32(stop)) => (start..stop + 1)
             .map(|i| Row::pack(&[Datum::Int32(i)]))
             .collect(),
         (_, Datum::Null, _) | (_, _, Datum::Null) => vec![],
@@ -656,7 +656,7 @@ pub enum TableFunc {
     CsvExtract(usize),
     // ScalarType is either Int32 or Int64.
     // TODO(justin): should also possibly be Timestamp{,Tz}.
-    GenerateSeries(ScalarType),
+    GenerateSeries(DatumType),
 }
 
 impl TableFunc {
@@ -674,16 +674,16 @@ impl TableFunc {
     pub fn output_type(&self) -> RelationType {
         RelationType::new(match self {
             TableFunc::JsonbEach => vec![
-                ColumnType::new(ScalarType::String),
-                ColumnType::new(ScalarType::Jsonb),
+                ColumnType::new(DatumType::String),
+                ColumnType::new(DatumType::Jsonb),
             ],
-            TableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
-            TableFunc::JsonbArrayElements => vec![ColumnType::new(ScalarType::Jsonb)],
+            TableFunc::JsonbObjectKeys => vec![ColumnType::new(DatumType::String)],
+            TableFunc::JsonbArrayElements => vec![ColumnType::new(DatumType::Jsonb)],
             TableFunc::RegexpExtract(a) => a
                 .capture_groups_iter()
-                .map(|cg| ColumnType::new(ScalarType::String).nullable(cg.nullable))
+                .map(|cg| ColumnType::new(DatumType::String).nullable(cg.nullable))
                 .collect(),
-            TableFunc::CsvExtract(n_cols) => iter::repeat(ColumnType::new(ScalarType::String))
+            TableFunc::CsvExtract(n_cols) => iter::repeat(ColumnType::new(DatumType::String))
                 .take(*n_cols)
                 .collect(),
             TableFunc::GenerateSeries(typ) => vec![ColumnType::new(typ.clone())],

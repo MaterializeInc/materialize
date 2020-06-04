@@ -28,7 +28,7 @@ use expr::{GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInst
 use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
-use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnName, ColumnType, DatumType, RelationDesc, RelationType, Row};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -312,7 +312,7 @@ impl DataEncoding {
 
         // Add columns for the data, based on the encoding format.
         Ok(match self {
-            DataEncoding::Bytes => key_desc.with_nonnull_column("data", ScalarType::Bytes),
+            DataEncoding::Bytes => key_desc.with_nonnull_column("data", DatumType::Bytes),
             DataEncoding::AvroOcf { reader_schema } => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .with_context(|e| format!("validating avro ocf reader schema: {}", e))?
@@ -357,14 +357,14 @@ impl DataEncoding {
                         None => format!("column{}", i),
                         Some(name) => name.to_owned(),
                     };
-                    let ty = ColumnType::new(ScalarType::String).nullable(true);
+                    let ty = ColumnType::new(DatumType::String).nullable(true);
                     desc.with_column(name, ty)
                 }),
             DataEncoding::Csv(CsvEncoding { n_cols, .. }) => (1..=*n_cols)
                 .fold(key_desc, |desc, i| {
-                    desc.with_nonnull_column(format!("column{}", i), ScalarType::String)
+                    desc.with_nonnull_column(format!("column{}", i), DatumType::String)
                 }),
-            DataEncoding::Text => key_desc.with_nonnull_column("text", ScalarType::String),
+            DataEncoding::Text => key_desc.with_nonnull_column("text", DatumType::String),
         })
     }
 
@@ -464,10 +464,10 @@ pub enum ExternalSourceConnector {
 impl ExternalSourceConnector {
     pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
         match self {
-            Self::Kafka(_) => vec![("mz_offset".into(), ColumnType::new(ScalarType::Int64))],
-            Self::File(_) => vec![("mz_line_no".into(), ColumnType::new(ScalarType::Int64))],
+            Self::Kafka(_) => vec![("mz_offset".into(), ColumnType::new(DatumType::Int64))],
+            Self::File(_) => vec![("mz_line_no".into(), ColumnType::new(DatumType::Int64))],
             Self::Kinesis(_) => vec![],
-            Self::AvroOcf(_) => vec![("mz_obj_no".into(), ColumnType::new(ScalarType::Int64))],
+            Self::AvroOcf(_) => vec![("mz_obj_no".into(), ColumnType::new(DatumType::Int64))],
         }
     }
 

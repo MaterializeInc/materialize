@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use lazy_static::lazy_static;
-use repr::ScalarType;
+use repr::DatumType;
 
 /// The type of a [`Value`](crate::Value).
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -111,24 +111,24 @@ impl Type {
     }
 }
 
-impl From<&ScalarType> for Type {
-    fn from(typ: &ScalarType) -> Type {
+impl From<&DatumType> for Type {
+    fn from(typ: &DatumType) -> Type {
         match typ {
-            ScalarType::Bool => Type::Bool,
-            ScalarType::Int32 => Type::Int4,
-            ScalarType::Int64 => Type::Int8,
-            ScalarType::Float32 => Type::Float4,
-            ScalarType::Float64 => Type::Float8,
-            ScalarType::Decimal(_, _) => Type::Numeric,
-            ScalarType::Date => Type::Date,
-            ScalarType::Time => Type::Time,
-            ScalarType::Timestamp => Type::Timestamp,
-            ScalarType::TimestampTz => Type::TimestampTz,
-            ScalarType::Interval => Type::Interval,
-            ScalarType::Bytes => Type::Bytea,
-            ScalarType::String => Type::Text,
-            ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
+            DatumType::Bool => Type::Bool,
+            DatumType::Int32 => Type::Int4,
+            DatumType::Int64 => Type::Int8,
+            DatumType::Float32 => Type::Float4,
+            DatumType::Float64 => Type::Float8,
+            DatumType::Decimal(_, _) => Type::Numeric,
+            DatumType::Date => Type::Date,
+            DatumType::Time => Type::Time,
+            DatumType::Timestamp => Type::Timestamp,
+            DatumType::TimestampTz => Type::TimestampTz,
+            DatumType::Interval => Type::Interval,
+            DatumType::Bytes => Type::Bytea,
+            DatumType::String => Type::Text,
+            DatumType::Jsonb => Type::Jsonb,
+            DatumType::List(t) => Type::List(Box::new(From::from(&**t))),
         }
     }
 }

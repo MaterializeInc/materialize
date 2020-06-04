@@ -11,12 +11,12 @@
 //!
 //! ```rust
 //! use expr::{RelationExpr, ScalarExpr};
-//! use repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use repr::{ColumnType, Datum, RelationType, DatumType};
 //!
 //! use transform::fusion::filter::Filter;
 //!
 //! let input = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
+//!     ColumnType::new(DatumType::Bool),
 //! ]));
 //!
 //! let predicate0 = ScalarExpr::Column(0);

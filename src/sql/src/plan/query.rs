@@ -41,7 +41,7 @@ use ::expr::{Id, RowSetFinishing};
 use dataflow_types::Timestamp;
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
-    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
+    strconv, ColumnName, ColumnType, Datum, DatumType, RelationDesc, RelationType, RowArena,
 };
 
 use crate::names::PartialName;
@@ -67,7 +67,7 @@ pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query,
     lifetime: QueryLifetime,
-) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
+) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<DatumType>), failure::Error> {
     transform::transform(&mut query);
     let qcx = QueryContext::root(scx, lifetime);
     let (expr, scope, finishing) = plan_query(&qcx, &query)?;
@@ -132,9 +132,9 @@ pub fn plan_show_where(
             allow_aggregates: false,
             allow_subqueries: true,
         };
-        let expr = plan_expr(&ecx, &predicate, Some(ScalarType::Bool))?;
+        let expr = plan_expr(&ecx, &predicate, Some(DatumType::Bool))?;
         let typ = ecx.column_type(&expr);
-        if typ.scalar_type != ScalarType::Bool {
+        if typ.scalar_type != DatumType::Bool {
             bail!(
                 "WHERE clause must have boolean type, not {:?}",
                 typ.scalar_type
@@ -182,14 +182,14 @@ pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp
     let evaled = ex.eval(&[], temp_storage)?;
 
     Ok(match ex.typ(desc.typ()).scalar_type {
-        ScalarType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
-        ScalarType::Decimal(_, _) => {
+        DatumType::Decimal(_, 0) => evaled.unwrap_decimal().as_i128().try_into()?,
+        DatumType::Decimal(_, _) => {
             bail!("decimal with fractional component is not a valid timestamp")
         }
-        ScalarType::Int32 => evaled.unwrap_int32().try_into()?,
-        ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-        ScalarType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
-        ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
+        DatumType::Int32 => evaled.unwrap_int32().try_into()?,
+        DatumType::Int64 => evaled.unwrap_int64().try_into()?,
+        DatumType::TimestampTz => evaled.unwrap_timestamptz().timestamp_millis().try_into()?,
+        DatumType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
         _ => bail!("can't use {} as a timestamp for AS OF", ex.typ(desc.typ())),
     })
 }
@@ -211,8 +211,7 @@ pub fn plan_index_exprs<'a>(
     };
     let mut out = vec![];
     for expr in exprs {
-        let (expr, _) =
-            plan_expr_or_col_index(ecx, expr, Some(ScalarType::String), "CREATE INDEX")?;
+        let (expr, _) = plan_expr_or_col_index(ecx, expr, Some(DatumType::String), "CREATE INDEX")?;
         out.push(expr.lower_uncorrelated());
     }
     Ok(out)
@@ -221,7 +220,7 @@ pub fn plan_index_exprs<'a>(
 fn plan_expr_or_col_index<'a>(
     ecx: &ExprContext,
     e: &'a Expr,
-    type_hint: Option<ScalarType>,
+    type_hint: Option<DatumType>,
     clause_name: &str,
 ) -> Result<(ScalarExpr, Option<ScopeItemName>), failure::Error> {
     match e {
@@ -287,7 +286,7 @@ fn plan_query(
             allow_subqueries: true,
         };
         let (expr, _maybe_name) =
-            plan_expr_or_col_index(ecx, &obe.expr, Some(ScalarType::String), "ORDER BY")?;
+            plan_expr_or_col_index(ecx, &obe.expr, Some(DatumType::String), "ORDER BY")?;
         // If the expression is a reference to an existing column,
         // do not introduce a new column to support it.
         if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
@@ -454,7 +453,7 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
             let mut col_iters = Vec::with_capacity(ncols);
             let mut col_types = Vec::with_capacity(ncols);
             for col in cols {
-                let col = plan_homogeneous_exprs("VALUES", ecx, &col, Some(ScalarType::String))?;
+                let col = plan_homogeneous_exprs("VALUES", ecx, &col, Some(DatumType::String))?;
                 col_types.push(ecx.column_type(&col[0]));
                 col_iters.push(col.into_iter());
             }
@@ -516,9 +515,9 @@ fn plan_view_select(
             allow_aggregates: false,
             allow_subqueries: true,
         };
-        let expr = plan_expr(ecx, &selection, Some(ScalarType::Bool))?;
+        let expr = plan_expr(ecx, &selection, Some(DatumType::Bool))?;
         let typ = ecx.column_type(&expr);
-        if typ.scalar_type != ScalarType::Bool {
+        if typ.scalar_type != DatumType::Bool {
             bail!(
                 "WHERE clause must have boolean type, not {:?}",
                 typ.scalar_type
@@ -544,7 +543,7 @@ fn plan_view_select(
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in &s.group_by {
             let (expr, maybe_name) =
-                plan_expr_or_col_index(ecx, group_expr, Some(ScalarType::String), "GROUP BY")?;
+                plan_expr_or_col_index(ecx, group_expr, Some(DatumType::String), "GROUP BY")?;
             let new_column = group_key.len();
             // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
             if group_exprs
@@ -627,9 +626,9 @@ fn plan_view_select(
             allow_aggregates: true,
             allow_subqueries: true,
         };
-        let expr = plan_expr(ecx, having, Some(ScalarType::Bool))?;
+        let expr = plan_expr(ecx, having, Some(DatumType::Bool))?;
         let typ = ecx.column_type(&expr);
-        if typ.scalar_type != ScalarType::Bool {
+        if typ.scalar_type != DatumType::Bool {
             bail!(
                 "HAVING clause must have boolean type, not {:?}",
                 typ.scalar_type
@@ -798,17 +797,17 @@ fn plan_table_function(
         ("generate_series", [start, stop]) => {
             // If both start and stop are Int32s, we use the Int32 version. Otherwise, promote both
             // arguments.
-            let mut start = plan_expr(ecx, start, Some(ScalarType::Int64))?;
-            let mut stop = plan_expr(ecx, stop, Some(ScalarType::Int64))?;
+            let mut start = plan_expr(ecx, start, Some(DatumType::Int64))?;
+            let mut stop = plan_expr(ecx, stop, Some(DatumType::Int64))?;
             let typ = match (
                 ecx.column_type(&start).scalar_type,
                 ecx.column_type(&stop).scalar_type,
             ) {
-                (ScalarType::Int32, ScalarType::Int32) => ScalarType::Int32,
+                (DatumType::Int32, DatumType::Int32) => DatumType::Int32,
                 _ => {
                     start = promote_int_int64(ecx, "first generate_series argument", start)?;
                     stop = promote_int_int64(ecx, "second generate_series argument", stop)?;
-                    ScalarType::Int64
+                    DatumType::Int64
                 }
             };
 
@@ -831,9 +830,9 @@ fn plan_table_function(
         | ("jsonb_array_elements", [expr])
         | ("jsonb_each_text", [expr])
         | ("jsonb_array_elements_text", [expr]) => {
-            let expr = plan_expr(ecx, expr, Some(ScalarType::Jsonb))?;
+            let expr = plan_expr(ecx, expr, Some(DatumType::Jsonb))?;
             match ecx.column_type(&expr).scalar_type {
-                ScalarType::Jsonb => {
+                DatumType::Jsonb => {
                     let func = match ident {
                         "jsonb_each" | "jsonb_each_text" => TableFunc::JsonbEach,
                         "jsonb_object_keys" => TableFunc::JsonbObjectKeys,
@@ -904,7 +903,7 @@ fn plan_table_function(
         | ("jsonb_array_elements_text", _) => bail!("{}() requires exactly one argument", ident),
         ("regexp_extract", [regex, haystack]) => {
             let expr = plan_expr(ecx, haystack, None)?;
-            if ecx.column_type(&expr).scalar_type != ScalarType::String {
+            if ecx.column_type(&expr).scalar_type != DatumType::String {
                 bail!("Datum to search must be a string");
             }
             let regex = match &regex {
@@ -944,7 +943,7 @@ fn plan_table_function(
             }
             let expr = plan_expr(ecx, expr, None)?;
             let st = ecx.column_type(&expr).scalar_type;
-            if st != ScalarType::Bytes && st != ScalarType::String {
+            if st != DatumType::Bytes && st != DatumType::String {
                 bail!("Datum to decode as CSV must be a string")
             }
             let colnames: Vec<_> = (1..=n_cols).map(|i| format!("column{}", i)).collect();
@@ -976,7 +975,7 @@ fn plan_select_item<'a>(
     match s {
         SelectItem::UnnamedExpr(sql_expr) => {
             let (expr, maybe_name) =
-                plan_expr_returning_name(ecx, sql_expr, Some(ScalarType::String))?;
+                plan_expr_returning_name(ecx, sql_expr, Some(DatumType::String))?;
             let scope_item = ScopeItem {
                 names: maybe_name.into_iter().collect(),
                 expr: Some(sql_expr.clone()),
@@ -989,7 +988,7 @@ fn plan_select_item<'a>(
             alias,
         } => {
             let (expr, maybe_name) =
-                plan_expr_returning_name(ecx, sql_expr, Some(ScalarType::String))?;
+                plan_expr_returning_name(ecx, sql_expr, Some(DatumType::String))?;
             let scope_item = ScopeItem {
                 names: iter::once(ScopeItemName {
                     table_name: None,
@@ -1132,7 +1131,7 @@ fn plan_join_constraint<'a>(
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
-            let on = plan_expr(ecx, expr, Some(ScalarType::Bool))?;
+            let on = plan_expr(ecx, expr, Some(DatumType::Bool))?;
             if kind == JoinKind::Inner {
                 for (l, r) in find_trivial_column_equivalences(&on) {
                     // When we can statically prove that two columns are
@@ -1328,7 +1327,7 @@ pub fn expr_has_unknown_type(ecx: &ExprContext, expr: &Expr) -> bool {
 pub fn plan_expr<'a>(
     ecx: &ExprContext,
     e: &'a Expr,
-    type_hint: Option<ScalarType>,
+    type_hint: Option<DatumType>,
 ) -> Result<ScalarExpr, failure::Error> {
     let (expr, _scope_item) = plan_expr_returning_name(ecx, e, type_hint)?;
     Ok(expr)
@@ -1337,7 +1336,7 @@ pub fn plan_expr<'a>(
 fn plan_expr_returning_name<'a>(
     ecx: &'a ExprContext,
     e: &Expr,
-    type_hint: Option<ScalarType>,
+    type_hint: Option<DatumType>,
 ) -> Result<(ScalarExpr, Option<ScopeItemName>), failure::Error> {
     let (expr, name) = plan_coercible_expr(ecx, e)?;
     let coerce_to = match type_hint {
@@ -1356,7 +1355,7 @@ pub enum CoerceTo {
     /// No coercion preference.
     Nothing,
     /// Coerce to the specified scalar type.
-    Plain(ScalarType),
+    Plain(DatumType),
     /// Coerce using special JSONB coercion rules. The following table
     /// summarizes the differences between the normal and special JSONB
     /// conversion rules.
@@ -1384,28 +1383,28 @@ pub fn plan_coerce<'a>(
         (LiteralNull, Nothing) => bail!("unable to infer type for NULL"),
         (LiteralNull, Plain(typ)) => ScalarExpr::literal_null(typ),
         (LiteralNull, JsonbAny) => {
-            ScalarExpr::literal(Datum::JsonNull, ColumnType::new(ScalarType::Jsonb))
+            ScalarExpr::literal(Datum::JsonNull, ColumnType::new(DatumType::Jsonb))
         }
 
         (LiteralString(s), Nothing) => {
-            ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String))
+            ScalarExpr::literal(Datum::String(&s), ColumnType::new(DatumType::String))
         }
         (LiteralString(s), Plain(typ)) => {
-            let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String));
+            let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(DatumType::String));
             plan_cast_internal(ecx, CastContext::Implicit("string literal"), lit, typ)?
         }
         (LiteralString(s), JsonbAny) => {
-            ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::Jsonb))
+            ScalarExpr::literal(Datum::String(&s), ColumnType::new(DatumType::Jsonb))
         }
 
         (LiteralList(exprs), coerce_to) => {
             let coerce_elem_to = match &coerce_to {
-                Plain(ScalarType::List(typ)) => Plain((**typ).clone()),
+                Plain(DatumType::List(typ)) => Plain((**typ).clone()),
                 Nothing | Plain(_) => {
                     let typ = exprs
                         .iter()
                         .find_map(|e| ecx.column_type(e).map(|t| t.scalar_type));
-                    CoerceTo::Plain(typ.unwrap_or(ScalarType::String))
+                    CoerceTo::Plain(typ.unwrap_or(DatumType::String))
                 }
                 JsonbAny => bail!("cannot coerce list literal to jsonb type"),
             };
@@ -1415,7 +1414,7 @@ pub fn plan_coerce<'a>(
             }
             let typ = if !out.is_empty() {
                 ecx.scalar_type(&out[0])
-            } else if let Plain(ScalarType::List(ty)) = coerce_to {
+            } else if let Plain(DatumType::List(ty)) = coerce_to {
                 *ty
             } else {
                 bail!("unable to infer type for empty list")
@@ -1442,7 +1441,7 @@ pub fn plan_coerce<'a>(
             let typ = match coerce_to {
                 CoerceTo::Nothing => bail!("unable to infer type for parameter ${}", n),
                 CoerceTo::Plain(typ) => typ,
-                CoerceTo::JsonbAny => ScalarType::Jsonb,
+                CoerceTo::JsonbAny => DatumType::Jsonb,
             };
             let prev = ecx.qcx.param_types.borrow_mut().insert(n, typ);
             assert!(prev.is_none());
@@ -1607,17 +1606,17 @@ pub fn plan_coercible_expr<'a>(
                 // types in this position.
                 let mut expr = plan_expr(ecx, expr, None)?;
                 let mut typ = ecx.scalar_type(&expr);
-                if let ScalarType::Date = typ {
+                if let DatumType::Date = typ {
                     expr = plan_cast_internal(
                         ecx,
                         CastContext::Implicit("EXTRACT"),
                         expr,
-                        ScalarType::Timestamp,
+                        DatumType::Timestamp,
                     )?;
                     typ = ecx.scalar_type(&expr);
                 }
                 let func = match &typ {
-                    ScalarType::Interval => match field {
+                    DatumType::Interval => match field {
                         ExtractField::Year => UnaryFunc::ExtractIntervalYear,
                         ExtractField::Month => UnaryFunc::ExtractIntervalMonth,
                         ExtractField::Day => UnaryFunc::ExtractIntervalDay,
@@ -1635,7 +1634,7 @@ pub fn plan_coercible_expr<'a>(
                             field
                         ),
                     },
-                    ScalarType::Timestamp => match field {
+                    DatumType::Timestamp => match field {
                         ExtractField::Year => UnaryFunc::ExtractTimestampYear,
                         ExtractField::Quarter => UnaryFunc::ExtractTimestampQuarter,
                         ExtractField::Month => UnaryFunc::ExtractTimestampMonth,
@@ -1653,7 +1652,7 @@ pub fn plan_coercible_expr<'a>(
                             field
                         ),
                     },
-                    ScalarType::TimestampTz => match field {
+                    DatumType::TimestampTz => match field {
                         ExtractField::Year => UnaryFunc::ExtractTimestampTzYear,
                         ExtractField::Quarter => UnaryFunc::ExtractTimestampTzQuarter,
                         ExtractField::Month => UnaryFunc::ExtractTimestampTzMonth,
@@ -1683,12 +1682,7 @@ pub fn plan_coercible_expr<'a>(
                 assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
                 let expr = ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
-                    exprs: plan_homogeneous_exprs(
-                        "coalesce",
-                        ecx,
-                        exprs,
-                        Some(ScalarType::String),
-                    )?,
+                    exprs: plan_homogeneous_exprs("coalesce", ecx, exprs, Some(DatumType::String))?,
                 };
                 let name = ScopeItemName {
                     table_name: None,
@@ -1727,7 +1721,7 @@ pub fn plan_homogeneous_exprs(
     name: &str,
     ecx: &ExprContext,
     exprs: &[impl std::borrow::Borrow<Expr>],
-    type_hint: Option<ScalarType>,
+    type_hint: Option<DatumType>,
 ) -> Result<Vec<ScalarExpr>, failure::Error> {
     assert!(!exprs.is_empty());
 
@@ -1909,7 +1903,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         ("count", FunctionArgs::Star) => (
             // The scalar type of the null doesn't matter because this
             // expression can't escape the surrounding reduce.
-            ScalarExpr::literal_null(ScalarType::String),
+            ScalarExpr::literal_null(DatumType::String),
             AggregateFunc::CountAll,
         ),
         (_, FunctionArgs::Args(args)) if args.len() == 1 => {
@@ -1917,7 +1911,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
             // TODO(benesch, sploiselle): hook up the generalized function
             // selection mechanism.
             let type_hint = match &*name {
-                "min" | "max" | "count" => Some(ScalarType::String),
+                "min" | "max" | "count" => Some(DatumType::String),
                 _ => None,
             };
             let expr = plan_expr(ecx, arg, type_hint)?;
@@ -1950,9 +1944,9 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         //     count(CASE WHEN <cond> THEN TRUE ELSE NULL)
         //
         // (Note the `TRUE` in in place of `<expr>`.)
-        let cond = plan_expr(&ecx.with_name("FILTER"), filter, Some(ScalarType::Bool))?;
+        let cond = plan_expr(&ecx.with_name("FILTER"), filter, Some(DatumType::Bool))?;
         let cond_typ = ecx.column_type(&cond);
-        if cond_typ.scalar_type != ScalarType::Bool {
+        if cond_typ.scalar_type != DatumType::Bool {
             bail!(
                 "WHERE expression in FILTER must have boolean type, not {:?}",
                 cond_typ
@@ -2022,7 +2016,7 @@ fn plan_function<'a>(
             match ecx.qcx.lifetime {
                 QueryLifetime::OneShot => Ok(ScalarExpr::literal(
                     Datum::from(ecx.qcx.scx.pcx.wall_time),
-                    ColumnType::new(ScalarType::TimestampTz),
+                    ColumnType::new(DatumType::TimestampTz),
                 )),
                 QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
             }
@@ -2039,10 +2033,10 @@ fn plan_function<'a>(
             let expr = plan_expr(ecx, &args[0], None)?;
             let typ = ecx.column_type(&expr);
             let output_type = match &typ.scalar_type {
-                ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
-                ScalarType::Decimal(p, s) => ScalarType::Decimal(*p, *s),
-                ScalarType::Int32 => ScalarType::Decimal(10, 0),
-                ScalarType::Int64 => ScalarType::Decimal(19, 0),
+                DatumType::Float32 | DatumType::Float64 => DatumType::Float64,
+                DatumType::Decimal(p, s) => DatumType::Decimal(*p, *s),
+                DatumType::Int32 => DatumType::Decimal(10, 0),
+                DatumType::Int64 => DatumType::Decimal(19, 0),
                 _ => bail!("internal.avg_promotion called with unexpected argument"),
             };
             plan_cast_internal(
@@ -2101,9 +2095,9 @@ fn plan_function<'a>(
             let expr = plan_expr(ecx, &args[0], None)?;
             let expr = promote_number_floatdec(ecx, "sqrt", expr)?;
             Ok(match ecx.column_type(&expr).scalar_type {
-                ScalarType::Float32 => expr.call_unary(UnaryFunc::SqrtFloat32),
-                ScalarType::Float64 => expr.call_unary(UnaryFunc::SqrtFloat64),
-                ScalarType::Decimal(p, s) => {
+                DatumType::Float32 => expr.call_unary(UnaryFunc::SqrtFloat32),
+                DatumType::Float64 => expr.call_unary(UnaryFunc::SqrtFloat64),
+                DatumType::Decimal(p, s) => {
                     // TODO(benesch): proper sqrt support for decimals. For
                     // now we cast to an f64 and back, which is semi-ok
                     // because sqrt is an inherently imprecise operation.
@@ -2111,12 +2105,12 @@ fn plan_function<'a>(
                         ecx,
                         CastContext::Implicit("sqrt"),
                         expr,
-                        ScalarType::Float64,
+                        DatumType::Float64,
                     )?;
                     let expr = expr.call_unary(UnaryFunc::SqrtFloat64);
                     // This is marked as explicit because PG doesn't support this cast implicitly, so
                     // neither should we. This can be resolved with an actual square root function for decimals.
-                    plan_cast_internal(ecx, CastContext::Explicit, expr, ScalarType::Decimal(p, s))?
+                    plan_cast_internal(ecx, CastContext::Explicit, expr, DatumType::Decimal(p, s))?
                 }
                 _ => unreachable!(),
             })
@@ -2142,14 +2136,14 @@ pub fn plan_to_jsonb(
 ) -> Result<ScalarExpr, failure::Error> {
     let typ = ecx.column_type(&arg).scalar_type;
     Ok(match typ {
-        ScalarType::Jsonb => arg,
-        ScalarType::String | ScalarType::Float64 | ScalarType::Bool => {
+        DatumType::Jsonb => arg,
+        DatumType::String | DatumType::Float64 | DatumType::Bool => {
             arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
         }
-        ScalarType::Int32 => arg
+        DatumType::Int32 => arg
             .call_unary(UnaryFunc::CastInt32ToFloat64)
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
+        DatumType::Int64 | DatumType::Float32 | DatumType::Decimal(..) => {
             // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
             bail!(
                 "{}() doesn't currently support {} arguments, try adding ::float to the argument for now",
@@ -2157,7 +2151,7 @@ pub fn plan_to_jsonb(
                 typ
             )
         }
-        _ => plan_cast_internal(ecx, CastContext::Implicit(name), arg, ScalarType::String)?
+        _ => plan_cast_internal(ecx, CastContext::Implicit(name), arg, DatumType::String)?
             .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
     })
 }
@@ -2171,7 +2165,7 @@ fn plan_is_null_expr<'a>(
     // with our type coercion rules, which treat `NULL` literals and
     // unconstrained parameters identically. Providing a type hint of string
     // means we wind up supporting both.
-    let expr = plan_expr(ecx, inner, Some(ScalarType::String))?;
+    let expr = plan_expr(ecx, inner, Some(DatumType::String))?;
     let mut expr = ScalarExpr::CallUnary {
         func: UnaryFunc::IsNull,
         expr: Box::new(expr),
@@ -2191,14 +2185,14 @@ fn plan_unary_op<'a>(
     expr: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
     let type_hint = match op {
-        UnaryOperator::Not => ScalarType::Bool,
-        UnaryOperator::Plus | UnaryOperator::Minus => ScalarType::Float64,
+        UnaryOperator::Not => DatumType::Bool,
+        UnaryOperator::Plus | UnaryOperator::Minus => DatumType::Float64,
     };
     let expr = plan_expr(ecx, expr, Some(type_hint))?;
     let typ = ecx.column_type(&expr);
     let func = match op {
         UnaryOperator::Not => match typ.scalar_type {
-            ScalarType::Bool => UnaryFunc::Not,
+            DatumType::Bool => UnaryFunc::Not,
             _ => bail!(
                 "Cannot apply operator Not to non-boolean type {:?}",
                 typ.scalar_type
@@ -2206,12 +2200,12 @@ fn plan_unary_op<'a>(
         },
         UnaryOperator::Plus => return Ok(expr), // no-op
         UnaryOperator::Minus => match typ.scalar_type {
-            ScalarType::Int32 => UnaryFunc::NegInt32,
-            ScalarType::Int64 => UnaryFunc::NegInt64,
-            ScalarType::Float32 => UnaryFunc::NegFloat32,
-            ScalarType::Float64 => UnaryFunc::NegFloat64,
-            ScalarType::Decimal(_, _) => UnaryFunc::NegDecimal,
-            ScalarType::Interval => UnaryFunc::NegInterval,
+            DatumType::Int32 => UnaryFunc::NegInt32,
+            DatumType::Int64 => UnaryFunc::NegInt64,
+            DatumType::Float32 => UnaryFunc::NegFloat32,
+            DatumType::Float64 => UnaryFunc::NegFloat64,
+            DatumType::Decimal(_, _) => UnaryFunc::NegDecimal,
+            DatumType::Interval => UnaryFunc::NegInterval,
             _ => bail!("cannot negate {:?}", typ.scalar_type),
         },
     };
@@ -2271,19 +2265,19 @@ fn plan_boolean_op<'a>(
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(ecx, left, Some(ScalarType::Bool))?;
-    let rexpr = plan_expr(ecx, right, Some(ScalarType::Bool))?;
+    let lexpr = plan_expr(ecx, left, Some(DatumType::Bool))?;
+    let rexpr = plan_expr(ecx, right, Some(DatumType::Bool))?;
     let ltype = ecx.column_type(&lexpr);
     let rtype = ecx.column_type(&rexpr);
 
-    if ltype.scalar_type != ScalarType::Bool {
+    if ltype.scalar_type != DatumType::Bool {
         bail!(
             "Cannot apply operator {:?} to non-boolean type {:?}",
             op,
             ltype.scalar_type
         )
     }
-    if rtype.scalar_type != ScalarType::Bool {
+    if rtype.scalar_type != DatumType::Bool {
         bail!(
             "Cannot apply operator {:?} to non-boolean type {:?}",
             op,
@@ -2306,7 +2300,7 @@ fn plan_arithmetic_op<'a>(
 ) -> Result<ScalarExpr, failure::Error> {
     use ArithmeticOp::*;
     use BinaryFunc::*;
-    use ScalarType::*;
+    use DatumType::*;
 
     // Step 1. Plan inner expressions.
     let left_unknown = expr_has_unknown_type(ecx, left);
@@ -2590,8 +2584,7 @@ fn plan_comparison_op<'a>(
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
     let op_name = op.to_string();
-    let mut exprs =
-        plan_homogeneous_exprs(&op_name, ecx, &[left, right], Some(ScalarType::String))?;
+    let mut exprs = plan_homogeneous_exprs(&op_name, ecx, &[left, right], Some(DatumType::String))?;
     assert_eq!(exprs.len(), 2);
     let rexpr = exprs.pop().unwrap();
     let lexpr = exprs.pop().unwrap();
@@ -2623,12 +2616,12 @@ fn plan_like<'a>(
     right: &'a Expr,
     negate: bool,
 ) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(ecx, left, Some(ScalarType::String))?;
+    let lexpr = plan_expr(ecx, left, Some(DatumType::String))?;
     let ltype = ecx.column_type(&lexpr);
-    let rexpr = plan_expr(ecx, right, Some(ScalarType::String))?;
+    let rexpr = plan_expr(ecx, right, Some(DatumType::String))?;
     let rtype = ecx.column_type(&rexpr);
 
-    if (ltype.scalar_type != ScalarType::String) || (rtype.scalar_type != ScalarType::String) {
+    if (ltype.scalar_type != DatumType::String) || (rtype.scalar_type != DatumType::String) {
         bail!(
             "LIKE operator requires two string operators, found: {:?} and {:?}",
             ltype,
@@ -2656,12 +2649,12 @@ fn plan_json_op(
     left: &Expr,
     right: &Expr,
 ) -> Result<ScalarExpr, failure::Error> {
+    use DatumType::*;
     use JsonOp::*;
-    use ScalarType::*;
 
-    let lexpr = plan_expr(ecx, left, Some(ScalarType::String))?;
+    let lexpr = plan_expr(ecx, left, Some(DatumType::String))?;
     let ltype = ecx.column_type(&lexpr);
-    let rexpr = plan_expr(ecx, right, Some(ScalarType::String))?;
+    let rexpr = plan_expr(ecx, right, Some(DatumType::String))?;
     let rtype = ecx.column_type(&rexpr);
 
     Ok(match (op, &ltype.scalar_type, &rtype.scalar_type) {
@@ -2816,9 +2809,9 @@ fn plan_case<'a>(
             },
             None => c.clone(),
         };
-        let cexpr = plan_expr(ecx, &c, Some(ScalarType::Bool))?;
+        let cexpr = plan_expr(ecx, &c, Some(DatumType::Bool))?;
         let ctype = ecx.column_type(&cexpr);
-        if ctype.scalar_type != ScalarType::Bool {
+        if ctype.scalar_type != DatumType::Bool {
             bail!(
                 "CASE expression has non-boolean type {:?}",
                 ctype.scalar_type
@@ -2832,7 +2825,7 @@ fn plan_case<'a>(
         None => &Expr::Value(Value::Null),
     });
     let mut result_exprs =
-        plan_homogeneous_exprs("CASE", ecx, &result_exprs, Some(ScalarType::String))?;
+        plan_homogeneous_exprs("CASE", ecx, &result_exprs, Some(DatumType::String))?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
     for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
@@ -2851,29 +2844,29 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error>
             let d: Decimal = s.parse()?;
             if d.scale() == 0 {
                 match d.significand().try_into() {
-                    Ok(n) => (Datum::Int32(n), ScalarType::Int32),
+                    Ok(n) => (Datum::Int32(n), DatumType::Int32),
                     Err(_) => (
                         Datum::from(d.significand()),
-                        ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
+                        DatumType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
                     ),
                 }
             } else {
                 (
                     Datum::from(d.significand()),
-                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
+                    DatumType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
                 )
             }
         }
         Value::HexStringLiteral(_) => unsupported!(3114, "hex string literals"),
         Value::Boolean(b) => match b {
-            false => (Datum::False, ScalarType::Bool),
-            true => (Datum::True, ScalarType::Bool),
+            false => (Datum::False, DatumType::Bool),
+            true => (Datum::True, DatumType::Bool),
         },
         Value::Interval(iv) => {
             let mut i = strconv::parse_interval_w_disambiguator(&iv.value, iv.precision_low)?;
             i.truncate_high_fields(iv.precision_high);
             i.truncate_low_fields(iv.precision_low, iv.fsec_max_precision)?;
-            (Datum::Interval(i), ScalarType::Interval)
+            (Datum::Interval(i), DatumType::Interval)
         }
         Value::SingleQuotedString(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
@@ -3018,17 +3011,17 @@ fn unnest(expr: &Expr) -> &Expr {
     }
 }
 
-pub fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<ScalarType> {
+pub fn best_target_type(iter: impl IntoIterator<Item = DatumType>) -> Option<DatumType> {
     iter.into_iter()
         .max_by_key(|scalar_type| match scalar_type {
-            ScalarType::Int32 => 0,
-            ScalarType::Int64 => 1,
-            ScalarType::Decimal(_, _) => 2,
-            ScalarType::Float32 => 3,
-            ScalarType::Float64 => 4,
-            ScalarType::Date => 5,
-            ScalarType::Timestamp => 6,
-            ScalarType::TimestampTz => 7,
+            DatumType::Int32 => 0,
+            DatumType::Int64 => 1,
+            DatumType::Decimal(_, _) => 2,
+            DatumType::Float32 => 3,
+            DatumType::Float64 => 4,
+            DatumType::Date => 5,
+            DatumType::Timestamp => 6,
+            DatumType::TimestampTz => 7,
             _ => 8,
         })
 }
@@ -3057,9 +3050,9 @@ pub fn plan_cast_internal<'a>(
     ecx: &ExprContext<'a>,
     ccx: CastContext<'a>,
     expr: ScalarExpr,
-    to_scalar_type: ScalarType,
+    to_scalar_type: DatumType,
 ) -> Result<ScalarExpr, failure::Error> {
-    use ScalarType::*;
+    use DatumType::*;
     use UnaryFunc::*;
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
 
@@ -3168,9 +3161,9 @@ pub fn plan_cast_implicit<'a>(
     ecx: &ExprContext<'a>,
     ccx: CastContext<'a>,
     expr: ScalarExpr,
-    to_scalar_type: ScalarType,
+    to_scalar_type: DatumType,
 ) -> Result<ScalarExpr, failure::Error> {
-    use ScalarType::*;
+    use DatumType::*;
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
 
     match (&from_scalar_type, &to_scalar_type) {
@@ -3201,9 +3194,9 @@ fn promote_number_floatdec<'a>(
     expr: ScalarExpr,
 ) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
-        ScalarType::Float32 | ScalarType::Float64 | ScalarType::Decimal(_, _) => expr,
-        ScalarType::Int32 | ScalarType::Int64 => {
-            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Float64)?
+        DatumType::Float32 | DatumType::Float64 | DatumType::Decimal(_, _) => expr,
+        DatumType::Int32 | DatumType::Int64 => {
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, DatumType::Float64)?
         }
         other => bail!("{} has non-numeric type {:?}", name, other),
     })
@@ -3215,9 +3208,9 @@ fn promote_int_int64<'a>(
     expr: ScalarExpr,
 ) -> Result<ScalarExpr, failure::Error> {
     Ok(match ecx.column_type(&expr).scalar_type {
-        ScalarType::Int64 => expr,
-        ScalarType::Int32 => {
-            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Int64)?
+        DatumType::Int64 => expr,
+        DatumType::Int32 => {
+            plan_cast_internal(ecx, CastContext::Implicit(name), expr, DatumType::Int64)?
         }
         other => bail!("{} has non-integer type {:?}", name, other,),
     })
@@ -3226,14 +3219,14 @@ fn promote_int_int64<'a>(
 fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     match s1.cmp(&s2) {
         Ordering::Less => {
-            let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
+            let typ = ColumnType::new(DatumType::Decimal(38, s2 - s1));
             let factor = 10_i128.pow(u32::from(s2 - s1));
             let factor = ScalarExpr::literal(Datum::from(factor), typ);
             expr.call_binary(factor, BinaryFunc::MulDecimal)
         }
         Ordering::Equal => expr,
         Ordering::Greater => {
-            let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
+            let typ = ColumnType::new(DatumType::Decimal(38, s1 - s2));
             let factor = 10_i128.pow(u32::from(s1 - s2));
             let factor = ScalarExpr::literal(Datum::from(factor), typ);
             expr.call_binary(factor, BinaryFunc::DivDecimal)
@@ -3241,14 +3234,14 @@ fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     }
 }
 
-pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
+pub fn scalar_type_from_sql(data_type: &DataType) -> Result<DatumType, failure::Error> {
     // NOTE this needs to stay in sync with symbiosis::push_column
     Ok(match data_type {
-        DataType::Boolean => ScalarType::Bool,
-        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::SmallInt | DataType::Int => ScalarType::Int32,
-        DataType::BigInt => ScalarType::Int64,
-        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+        DataType::Boolean => DatumType::Bool,
+        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => DatumType::String,
+        DataType::SmallInt | DataType::Int => DatumType::Int32,
+        DataType::BigInt => DatumType::Int64,
+        DataType::Float(_) | DataType::Real | DataType::Double => DatumType::Float64,
         DataType::Decimal(precision, scale) => {
             let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
             let scale = scale.unwrap_or(0);
@@ -3262,16 +3255,16 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
             if scale > precision {
                 bail!("decimal scale {} exceeds precision {}", scale, precision);
             }
-            ScalarType::Decimal(precision as u8, scale as u8)
+            DatumType::Decimal(precision as u8, scale as u8)
         }
-        DataType::Date => ScalarType::Date,
-        DataType::Time => ScalarType::Time,
-        DataType::Timestamp => ScalarType::Timestamp,
-        DataType::TimestampTz => ScalarType::TimestampTz,
-        DataType::Interval => ScalarType::Interval,
-        DataType::Bytea => ScalarType::Bytes,
-        DataType::Jsonb => ScalarType::Jsonb,
-        DataType::List(elem_type) => ScalarType::List(Box::new(scalar_type_from_sql(elem_type)?)),
+        DataType::Date => DatumType::Date,
+        DataType::Time => DatumType::Time,
+        DataType::Timestamp => DatumType::Timestamp,
+        DataType::TimestampTz => DatumType::TimestampTz,
+        DataType::Interval => DatumType::Interval,
+        DataType::Bytea => DatumType::Bytes,
+        DataType::Jsonb => DatumType::Jsonb,
+        DataType::List(elem_type) => DatumType::List(Box::new(scalar_type_from_sql(elem_type)?)),
         other @ DataType::Binary(..)
         | other @ DataType::Blob(_)
         | other @ DataType::Clob(_)
@@ -3362,7 +3355,7 @@ struct QueryContext<'a> {
     outer_relation_types: Vec<RelationType>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
-    param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+    param_types: Rc<RefCell<BTreeMap<usize, DatumType>>>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -3376,7 +3369,7 @@ impl<'a> QueryContext<'a> {
         }
     }
 
-    fn unwrap_param_types(self) -> BTreeMap<usize, ScalarType> {
+    fn unwrap_param_types(self) -> BTreeMap<usize, DatumType> {
         Rc::try_unwrap(self.param_types).unwrap().into_inner()
     }
 
@@ -3421,7 +3414,7 @@ impl<'a> ExprContext<'a> {
         )
     }
 
-    pub fn scalar_type(&self, expr: &ScalarExpr) -> ScalarType {
+    pub fn scalar_type(&self, expr: &ScalarExpr) -> DatumType {
         self.column_type(expr).scalar_type
     }
 
@@ -3464,33 +3457,33 @@ fn is_aggregate_func(name: &str) -> bool {
     }
 }
 
-fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, failure::Error> {
+fn find_agg_func(name: &str, scalar_type: DatumType) -> Result<AggregateFunc, failure::Error> {
     Ok(match (name, scalar_type) {
-        ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
-        ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
-        ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
-        ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
-        ("max", ScalarType::Decimal(_, _)) => AggregateFunc::MaxDecimal,
-        ("max", ScalarType::Bool) => AggregateFunc::MaxBool,
-        ("max", ScalarType::String) => AggregateFunc::MaxString,
-        ("max", ScalarType::Date) => AggregateFunc::MaxDate,
-        ("max", ScalarType::Timestamp) => AggregateFunc::MaxTimestamp,
-        ("max", ScalarType::TimestampTz) => AggregateFunc::MaxTimestampTz,
-        ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
-        ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
-        ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
-        ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
-        ("min", ScalarType::Decimal(_, _)) => AggregateFunc::MinDecimal,
-        ("min", ScalarType::Bool) => AggregateFunc::MinBool,
-        ("min", ScalarType::String) => AggregateFunc::MinString,
-        ("min", ScalarType::Date) => AggregateFunc::MinDate,
-        ("min", ScalarType::Timestamp) => AggregateFunc::MinTimestamp,
-        ("min", ScalarType::TimestampTz) => AggregateFunc::MinTimestampTz,
-        ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
-        ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
-        ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
-        ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
-        ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
+        ("max", DatumType::Int32) => AggregateFunc::MaxInt32,
+        ("max", DatumType::Int64) => AggregateFunc::MaxInt64,
+        ("max", DatumType::Float32) => AggregateFunc::MaxFloat32,
+        ("max", DatumType::Float64) => AggregateFunc::MaxFloat64,
+        ("max", DatumType::Decimal(_, _)) => AggregateFunc::MaxDecimal,
+        ("max", DatumType::Bool) => AggregateFunc::MaxBool,
+        ("max", DatumType::String) => AggregateFunc::MaxString,
+        ("max", DatumType::Date) => AggregateFunc::MaxDate,
+        ("max", DatumType::Timestamp) => AggregateFunc::MaxTimestamp,
+        ("max", DatumType::TimestampTz) => AggregateFunc::MaxTimestampTz,
+        ("min", DatumType::Int32) => AggregateFunc::MinInt32,
+        ("min", DatumType::Int64) => AggregateFunc::MinInt64,
+        ("min", DatumType::Float32) => AggregateFunc::MinFloat32,
+        ("min", DatumType::Float64) => AggregateFunc::MinFloat64,
+        ("min", DatumType::Decimal(_, _)) => AggregateFunc::MinDecimal,
+        ("min", DatumType::Bool) => AggregateFunc::MinBool,
+        ("min", DatumType::String) => AggregateFunc::MinString,
+        ("min", DatumType::Date) => AggregateFunc::MinDate,
+        ("min", DatumType::Timestamp) => AggregateFunc::MinTimestamp,
+        ("min", DatumType::TimestampTz) => AggregateFunc::MinTimestampTz,
+        ("sum", DatumType::Int32) => AggregateFunc::SumInt32,
+        ("sum", DatumType::Int64) => AggregateFunc::SumInt64,
+        ("sum", DatumType::Float32) => AggregateFunc::SumFloat32,
+        ("sum", DatumType::Float64) => AggregateFunc::SumFloat64,
+        ("sum", DatumType::Decimal(_, _)) => AggregateFunc::SumDecimal,
         ("count", _) => AggregateFunc::Count,
         ("jsonb_agg", _) => AggregateFunc::JsonbAgg,
         other => bail!("Unimplemented function/type combo: {:?}", other),

@@ -18,7 +18,7 @@ use ore::fmt::FormatBuffer;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{self, Nestable};
-use repr::{Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{Datum, DatumType, RelationType, Row, RowArena, RowPacker};
 
 use crate::{Format, Interval, Jsonb, Numeric, Type};
 
@@ -66,29 +66,29 @@ impl Value {
     ///
     /// The conversion happens in the obvious manner, except that `Datum::Null`
     /// is converted to `None` to align with how PostgreSQL handles NULL.
-    pub fn from_datum(datum: Datum, typ: &ScalarType) -> Option<Value> {
+    pub fn from_datum(datum: Datum, typ: &DatumType) -> Option<Value> {
         match (datum, typ) {
             (Datum::Null, _) => None,
-            (Datum::True, ScalarType::Bool) => Some(Value::Bool(true)),
-            (Datum::False, ScalarType::Bool) => Some(Value::Bool(false)),
-            (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
-            (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
-            (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
-            (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
-            (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
-            (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
-            (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
-            (Datum::TimestampTz(ts), ScalarType::TimestampTz) => Some(Value::TimestampTz(ts)),
-            (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
-            (Datum::Decimal(d), ScalarType::Decimal(_, scale)) => {
+            (Datum::True, DatumType::Bool) => Some(Value::Bool(true)),
+            (Datum::False, DatumType::Bool) => Some(Value::Bool(false)),
+            (Datum::Int32(i), DatumType::Int32) => Some(Value::Int4(i)),
+            (Datum::Int64(i), DatumType::Int64) => Some(Value::Int8(i)),
+            (Datum::Float32(f), DatumType::Float32) => Some(Value::Float4(*f)),
+            (Datum::Float64(f), DatumType::Float64) => Some(Value::Float8(*f)),
+            (Datum::Date(d), DatumType::Date) => Some(Value::Date(d)),
+            (Datum::Time(t), DatumType::Time) => Some(Value::Time(t)),
+            (Datum::Timestamp(ts), DatumType::Timestamp) => Some(Value::Timestamp(ts)),
+            (Datum::TimestampTz(ts), DatumType::TimestampTz) => Some(Value::TimestampTz(ts)),
+            (Datum::Interval(iv), DatumType::Interval) => Some(Value::Interval(Interval(iv))),
+            (Datum::Decimal(d), DatumType::Decimal(_, scale)) => {
                 Some(Value::Numeric(Numeric(d.with_scale(*scale))))
             }
-            (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
-            (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
-            (_, ScalarType::Jsonb) => {
+            (Datum::Bytes(b), DatumType::Bytes) => Some(Value::Bytea(b.to_vec())),
+            (Datum::String(s), DatumType::String) => Some(Value::Text(s.to_owned())),
+            (_, DatumType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
-            (Datum::List(list), ScalarType::List(elem_type)) => Some(Value::List(
+            (Datum::List(list), DatumType::List(elem_type)) => Some(Value::List(
                 list.iter()
                     .map(|elem| Value::from_datum(elem, elem_type))
                     .collect(),
@@ -104,28 +104,28 @@ impl Value {
     /// not the datum.
     ///
     /// To construct a null datum, see the [`null_datum`] function.
-    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, ScalarType) {
+    pub fn into_datum<'a>(self, buf: &'a RowArena, typ: &Type) -> (Datum<'a>, DatumType) {
         match self {
-            Value::Bool(true) => (Datum::True, ScalarType::Bool),
-            Value::Bool(false) => (Datum::False, ScalarType::Bool),
-            Value::Int4(i) => (Datum::Int32(i), ScalarType::Int32),
-            Value::Int8(i) => (Datum::Int64(i), ScalarType::Int64),
-            Value::Float4(f) => (Datum::Float32(f.into()), ScalarType::Float32),
-            Value::Float8(f) => (Datum::Float64(f.into()), ScalarType::Float64),
-            Value::Date(d) => (Datum::Date(d), ScalarType::Date),
-            Value::Time(t) => (Datum::Time(t), ScalarType::Time),
-            Value::Timestamp(ts) => (Datum::Timestamp(ts), ScalarType::Timestamp),
-            Value::TimestampTz(ts) => (Datum::TimestampTz(ts), ScalarType::TimestampTz),
-            Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
+            Value::Bool(true) => (Datum::True, DatumType::Bool),
+            Value::Bool(false) => (Datum::False, DatumType::Bool),
+            Value::Int4(i) => (Datum::Int32(i), DatumType::Int32),
+            Value::Int8(i) => (Datum::Int64(i), DatumType::Int64),
+            Value::Float4(f) => (Datum::Float32(f.into()), DatumType::Float32),
+            Value::Float8(f) => (Datum::Float64(f.into()), DatumType::Float64),
+            Value::Date(d) => (Datum::Date(d), DatumType::Date),
+            Value::Time(t) => (Datum::Time(t), DatumType::Time),
+            Value::Timestamp(ts) => (Datum::Timestamp(ts), DatumType::Timestamp),
+            Value::TimestampTz(ts) => (Datum::TimestampTz(ts), DatumType::TimestampTz),
+            Value::Interval(iv) => (Datum::Interval(iv.0), DatumType::Interval),
             Value::Numeric(d) => (
                 Datum::from(d.0.significand()),
-                ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.0.scale()),
+                DatumType::Decimal(MAX_DECIMAL_PRECISION, d.0.scale()),
             ),
-            Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), ScalarType::Bytes),
-            Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
+            Value::Bytea(b) => (Datum::Bytes(buf.push_bytes(b)), DatumType::Bytes),
+            Value::Text(s) => (Datum::String(buf.push_string(s)), DatumType::String),
             Value::Jsonb(js) => (
                 buf.push_row(js.0.into_row()).unpack_first(),
-                ScalarType::Jsonb,
+                DatumType::Jsonb,
             ),
             Value::List(elems) => {
                 let elem_pg_type = match typ {
@@ -140,7 +140,7 @@ impl Value {
                 }));
                 (
                     buf.push_row(packer.finish()).unpack_first(),
-                    ScalarType::List(Box::new(elem_type)),
+                    DatumType::List(Box::new(elem_type)),
                 )
             }
         }
@@ -274,25 +274,25 @@ impl Value {
 }
 
 /// Constructs a null datum of the specified type.
-pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
+pub fn null_datum(ty: &Type) -> (Datum<'static>, DatumType) {
     let ty = match ty {
-        Type::Bool => ScalarType::Bool,
-        Type::Bytea => ScalarType::Bytes,
-        Type::Date => ScalarType::Date,
-        Type::Float4 => ScalarType::Float32,
-        Type::Float8 => ScalarType::Float64,
-        Type::Int4 => ScalarType::Int32,
-        Type::Int8 => ScalarType::Int64,
-        Type::Interval => ScalarType::Interval,
-        Type::Jsonb => ScalarType::Jsonb,
-        Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
-        Type::Text => ScalarType::String,
-        Type::Time => ScalarType::Time,
-        Type::Timestamp => ScalarType::Timestamp,
-        Type::TimestampTz => ScalarType::TimestampTz,
+        Type::Bool => DatumType::Bool,
+        Type::Bytea => DatumType::Bytes,
+        Type::Date => DatumType::Date,
+        Type::Float4 => DatumType::Float32,
+        Type::Float8 => DatumType::Float64,
+        Type::Int4 => DatumType::Int32,
+        Type::Int8 => DatumType::Int64,
+        Type::Interval => DatumType::Interval,
+        Type::Jsonb => DatumType::Jsonb,
+        Type::Numeric => DatumType::Decimal(MAX_DECIMAL_PRECISION, 0),
+        Type::Text => DatumType::String,
+        Type::Time => DatumType::Time,
+        Type::Timestamp => DatumType::Timestamp,
+        Type::TimestampTz => DatumType::TimestampTz,
         Type::List(t) => {
             let (_, elem_type) = null_datum(t);
-            ScalarType::List(Box::new(elem_type))
+            DatumType::List(Box::new(elem_type))
         }
     };
     (Datum::Null, ty)

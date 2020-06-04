@@ -269,8 +269,8 @@ impl<'a> Datum<'a> {
 
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
-        fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
-            if let ScalarType::Jsonb = scalar_type {
+        fn is_instance_of_scalar(datum: Datum, scalar_type: &DatumType) -> bool {
+            if let DatumType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
                     Datum::JsonNull
@@ -290,35 +290,35 @@ impl<'a> Datum<'a> {
                 // sql type checking
                 match (datum, scalar_type) {
                     (Datum::Null, _) => false,
-                    (Datum::False, ScalarType::Bool) => true,
+                    (Datum::False, DatumType::Bool) => true,
                     (Datum::False, _) => false,
-                    (Datum::True, ScalarType::Bool) => true,
+                    (Datum::True, DatumType::Bool) => true,
                     (Datum::True, _) => false,
-                    (Datum::Int32(_), ScalarType::Int32) => true,
+                    (Datum::Int32(_), DatumType::Int32) => true,
                     (Datum::Int32(_), _) => false,
-                    (Datum::Int64(_), ScalarType::Int64) => true,
+                    (Datum::Int64(_), DatumType::Int64) => true,
                     (Datum::Int64(_), _) => false,
-                    (Datum::Float32(_), ScalarType::Float32) => true,
+                    (Datum::Float32(_), DatumType::Float32) => true,
                     (Datum::Float32(_), _) => false,
-                    (Datum::Float64(_), ScalarType::Float64) => true,
+                    (Datum::Float64(_), DatumType::Float64) => true,
                     (Datum::Float64(_), _) => false,
-                    (Datum::Date(_), ScalarType::Date) => true,
+                    (Datum::Date(_), DatumType::Date) => true,
                     (Datum::Date(_), _) => false,
-                    (Datum::Time(_), ScalarType::Time) => true,
+                    (Datum::Time(_), DatumType::Time) => true,
                     (Datum::Time(_), _) => false,
-                    (Datum::Timestamp(_), ScalarType::Timestamp) => true,
+                    (Datum::Timestamp(_), DatumType::Timestamp) => true,
                     (Datum::Timestamp(_), _) => false,
-                    (Datum::TimestampTz(_), ScalarType::TimestampTz) => true,
+                    (Datum::TimestampTz(_), DatumType::TimestampTz) => true,
                     (Datum::TimestampTz(_), _) => false,
-                    (Datum::Interval(_), ScalarType::Interval) => true,
+                    (Datum::Interval(_), DatumType::Interval) => true,
                     (Datum::Interval(_), _) => false,
-                    (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
+                    (Datum::Decimal(_), DatumType::Decimal(_, _)) => true,
                     (Datum::Decimal(_), _) => false,
-                    (Datum::Bytes(_), ScalarType::Bytes) => true,
+                    (Datum::Bytes(_), DatumType::Bytes) => true,
                     (Datum::Bytes(_), _) => false,
-                    (Datum::String(_), ScalarType::String) => true,
+                    (Datum::String(_), DatumType::String) => true,
                     (Datum::String(_), _) => false,
-                    (Datum::List(list), ScalarType::List(t)) => list
+                    (Datum::List(list), DatumType::List(t)) => list
                         .iter()
                         .all(|e| e.is_null() || is_instance_of_scalar(e, t)),
                     (Datum::List(_), _) => false,
@@ -530,7 +530,7 @@ impl fmt::Display for Datum<'_> {
 /// There is a direct correspondence between `Datum` variants and `ScalarType`
 /// variants.
 #[derive(Clone, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
-pub enum ScalarType {
+pub enum DatumType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
     /// The type of [`Datum::Int32`].
@@ -581,10 +581,10 @@ pub enum ScalarType {
     ///
     /// Elements within the list are of the specified type. List elements may
     /// always be [`Datum::Null`].
-    List(Box<ScalarType>),
+    List(Box<DatumType>),
 }
 
-impl<'a> ScalarType {
+impl<'a> DatumType {
     /// Returns the contained decimal precision and scale.
     ///
     /// # Panics
@@ -592,7 +592,7 @@ impl<'a> ScalarType {
     /// Panics if the scalar type is not [`ScalarType::Decimal`].
     pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
         match self {
-            ScalarType::Decimal(p, s) => (*p, *s),
+            DatumType::Decimal(p, s) => (*p, *s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
         }
     }
@@ -600,23 +600,23 @@ impl<'a> ScalarType {
     /// Constructs a dummy datum for this type.
     pub fn dummy_datum(&self) -> Datum<'a> {
         match self {
-            ScalarType::Bool => Datum::False,
-            ScalarType::Int32 => Datum::Int32(0),
-            ScalarType::Int64 => Datum::Int64(0),
-            ScalarType::Float32 => Datum::Float32(OrderedFloat(0.0)),
-            ScalarType::Float64 => Datum::Float64(OrderedFloat(0.0)),
-            ScalarType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
-            ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
-            ScalarType::Time => Datum::Time(NaiveTime::from_hms(0, 0, 0)),
-            ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
-            ScalarType::TimestampTz => {
+            DatumType::Bool => Datum::False,
+            DatumType::Int32 => Datum::Int32(0),
+            DatumType::Int64 => Datum::Int64(0),
+            DatumType::Float32 => Datum::Float32(OrderedFloat(0.0)),
+            DatumType::Float64 => Datum::Float64(OrderedFloat(0.0)),
+            DatumType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
+            DatumType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
+            DatumType::Time => Datum::Time(NaiveTime::from_hms(0, 0, 0)),
+            DatumType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
+            DatumType::TimestampTz => {
                 Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
             }
-            ScalarType::Interval => Datum::Interval(Interval::default()),
-            ScalarType::Bytes => Datum::Bytes(&[]),
-            ScalarType::String => Datum::String(""),
-            ScalarType::Jsonb => Datum::JsonNull,
-            ScalarType::List(_) => Datum::List(DatumList::empty()),
+            DatumType::Interval => Datum::Interval(Interval::default()),
+            DatumType::Bytes => Datum::Bytes(&[]),
+            DatumType::String => Datum::String(""),
+            DatumType::Jsonb => Datum::JsonNull,
+            DatumType::List(_) => Datum::List(DatumList::empty()),
         }
     }
 }
@@ -624,9 +624,9 @@ impl<'a> ScalarType {
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can
 // be removed when decimal precision is either fixed or removed.
 
-impl PartialEq for ScalarType {
+impl PartialEq for DatumType {
     fn eq(&self, other: &Self) -> bool {
-        use ScalarType::*;
+        use DatumType::*;
         match (self, other) {
             (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
 
@@ -665,9 +665,9 @@ impl PartialEq for ScalarType {
     }
 }
 
-impl Hash for ScalarType {
+impl Hash for DatumType {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        use ScalarType::*;
+        use DatumType::*;
         match self {
             Bool => state.write_u8(0),
             Int32 => state.write_u8(1),
@@ -696,14 +696,14 @@ impl Hash for ScalarType {
     }
 }
 
-impl fmt::Display for ScalarType {
+impl fmt::Display for DatumType {
     /// Arbitrary display name for scalars
     ///
     /// Right now the names correspond most closely to Rust names (e.g. i32).
     /// There are other functions in other packages that construct a mapping
     /// between `ScalarType`s and type names in other systems, like PostgreSQL.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use ScalarType::*;
+        use DatumType::*;
         match self {
             Bool => f.write_str("bool"),
             Int32 => f.write_str("i32"),

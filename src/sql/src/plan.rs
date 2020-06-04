@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
-use repr::{RelationDesc, Row, ScalarType};
+use repr::{DatumType, RelationDesc, Row};
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
@@ -187,7 +187,7 @@ pub enum MutationKind {
 #[derive(Debug, Clone)]
 pub struct Params {
     pub datums: Row,
-    pub types: Vec<ScalarType>,
+    pub types: Vec<DatumType>,
 }
 
 /// Controls planning of a SQL query.

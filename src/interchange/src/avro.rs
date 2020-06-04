@@ -28,7 +28,7 @@ use avro::schema::{
 use avro::types::{DecimalValue, Value};
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
-use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, DatumType, RelationDesc, Row, RowPacker};
 
 use crate::error::Result;
 
@@ -191,17 +191,17 @@ fn validate_schema_1(schema: SchemaNode) -> Result<Vec<(ColumnName, ColumnType)>
     }
 }
 
-fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
+fn validate_schema_2(schema: SchemaNode) -> Result<DatumType> {
     Ok(match schema.inner {
         SchemaPiece::Null => bail!("null outside of union types is not supported"),
-        SchemaPiece::Boolean => ScalarType::Bool,
-        SchemaPiece::Int => ScalarType::Int32,
-        SchemaPiece::Long => ScalarType::Int64,
-        SchemaPiece::Float => ScalarType::Float32,
-        SchemaPiece::Double => ScalarType::Float64,
-        SchemaPiece::Date => ScalarType::Date,
-        SchemaPiece::TimestampMilli => ScalarType::Timestamp,
-        SchemaPiece::TimestampMicro => ScalarType::Timestamp,
+        SchemaPiece::Boolean => DatumType::Bool,
+        SchemaPiece::Int => DatumType::Int32,
+        SchemaPiece::Long => DatumType::Int64,
+        SchemaPiece::Float => DatumType::Float32,
+        SchemaPiece::Double => DatumType::Float64,
+        SchemaPiece::Date => DatumType::Date,
+        SchemaPiece::TimestampMilli => DatumType::Timestamp,
+        SchemaPiece::TimestampMicro => DatumType::Timestamp,
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {
@@ -211,12 +211,12 @@ fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
                     MAX_DECIMAL_PRECISION
                 )
             }
-            ScalarType::Decimal(*precision as u8, *scale as u8)
+            DatumType::Decimal(*precision as u8, *scale as u8)
         }
-        SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
-        SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,
+        SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => DatumType::Bytes,
+        SchemaPiece::String | SchemaPiece::Enum { .. } => DatumType::String,
 
-        SchemaPiece::Json => ScalarType::Jsonb,
+        SchemaPiece::Json => DatumType::Jsonb,
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })
@@ -736,42 +736,42 @@ fn build_schema(desc: &RelationDesc) -> Schema {
     let mut fields = Vec::new();
     for (name, typ) in desc.iter() {
         let mut field_type = match &typ.scalar_type {
-            ScalarType::Bool => json!("boolean"),
-            ScalarType::Int32 => json!("int"),
-            ScalarType::Int64 => json!("long"),
-            ScalarType::Float32 => json!("float"),
-            ScalarType::Float64 => json!("double"),
-            ScalarType::Decimal(p, s) => json!({
+            DatumType::Bool => json!("boolean"),
+            DatumType::Int32 => json!("int"),
+            DatumType::Int64 => json!("long"),
+            DatumType::Float32 => json!("float"),
+            DatumType::Float64 => json!("double"),
+            DatumType::Decimal(p, s) => json!({
                 "type": "bytes",
                 "logicalType": "decimal",
                 "precision": p,
                 "scale": s,
             }),
-            ScalarType::Date => json!({
+            DatumType::Date => json!({
                 "type": "int",
                 "logicalType": "date",
             }),
-            ScalarType::Time => json!({
+            DatumType::Time => json!({
                 "type": "long",
                 "logicalType": "time-micros",
             }),
-            ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+            DatumType::Timestamp | DatumType::TimestampTz => json!({
                 "type": "long",
                 "connect.name": "io.debezium.time.MicroTimestamp",
                 "logicalType": "timestamp-micros"
             }),
-            ScalarType::Interval => json!({
+            DatumType::Interval => json!({
                 "type": "fixed",
                 "size": 12,
                 "logicalType": "duration"
             }),
-            ScalarType::Bytes => json!("bytes"),
-            ScalarType::String => json!("string"),
-            ScalarType::Jsonb => json!({
+            DatumType::Bytes => json!("bytes"),
+            DatumType::String => json!("string"),
+            DatumType::Jsonb => json!({
                 "type": "string",
                 "connect.name": "io.debezium.data.Json",
             }),
-            ScalarType::List(_t) => unimplemented!("jamii/list"),
+            DatumType::List(_t) => unimplemented!("jamii/list"),
         };
         if typ.nullable {
             field_type = json!(["null", field_type]);
@@ -902,31 +902,31 @@ impl Encoder {
                     return (name, Value::Union(0, Box::new(Value::Null)));
                 }
                 let mut val = match &typ.scalar_type {
-                    ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
-                    ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
-                    ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
-                    ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
-                    ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
-                    ScalarType::Decimal(p, s) => Value::Decimal(DecimalValue {
+                    DatumType::Bool => Value::Boolean(datum.unwrap_bool()),
+                    DatumType::Int32 => Value::Int(datum.unwrap_int32()),
+                    DatumType::Int64 => Value::Long(datum.unwrap_int64()),
+                    DatumType::Float32 => Value::Float(datum.unwrap_float32()),
+                    DatumType::Float64 => Value::Double(datum.unwrap_float64()),
+                    DatumType::Decimal(p, s) => Value::Decimal(DecimalValue {
                         unscaled: datum.unwrap_decimal().as_i128().to_be_bytes().to_vec(),
                         precision: (*p).into(),
                         scale: (*s).into(),
                     }),
-                    ScalarType::Date => Value::Date(datum.unwrap_date()),
-                    ScalarType::Time => Value::Long({
+                    DatumType::Date => Value::Date(datum.unwrap_date()),
+                    DatumType::Time => Value::Long({
                         let time = datum.unwrap_time();
                         (time.num_seconds_from_midnight() * 1_000_000) as i64
                             + (time.nanosecond() as i64) / 1_000
                     }),
-                    ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
-                    ScalarType::TimestampTz => {
+                    DatumType::Timestamp => Value::Timestamp(datum.unwrap_timestamp()),
+                    DatumType::TimestampTz => {
                         Value::Timestamp(datum.unwrap_timestamptz().naive_utc())
                     }
                     // This feature isn't actually supported by the Avro Java
                     // client (https://issues.apache.org/jira/browse/AVRO-2123),
                     // so no one is likely to be using it, so we're just using
                     // our own very convenient format.
-                    ScalarType::Interval => Value::Fixed(20, {
+                    DatumType::Interval => Value::Fixed(20, {
                         let iv = datum.unwrap_interval();
                         let mut buf = Vec::with_capacity(24);
                         buf.extend(&iv.months.to_le_bytes());
@@ -934,10 +934,10 @@ impl Encoder {
                         debug_assert_eq!(buf.len(), 20);
                         buf
                     }),
-                    ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                    ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
-                    ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
-                    ScalarType::List(_t) => unimplemented!("jamii/list"),
+                    DatumType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
+                    DatumType::String => Value::String(datum.unwrap_str().to_owned()),
+                    DatumType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
+                    DatumType::List(_t) => unimplemented!("jamii/list"),
                 };
                 if typ.nullable {
                     val = Value::Union(1, Box::new(val));
@@ -1050,33 +1050,33 @@ mod tests {
         // Simple transformations from primitive Avro Schema types
         // to Avro Values.
         let valid_pairings = vec![
-            (ScalarType::Bool, Datum::True, Value::Boolean(true)),
-            (ScalarType::Bool, Datum::False, Value::Boolean(false)),
-            (ScalarType::Int32, Datum::Int32(1), Value::Int(1)),
-            (ScalarType::Int64, Datum::Int64(1), Value::Long(1)),
+            (DatumType::Bool, Datum::True, Value::Boolean(true)),
+            (DatumType::Bool, Datum::False, Value::Boolean(false)),
+            (DatumType::Int32, Datum::Int32(1), Value::Int(1)),
+            (DatumType::Int64, Datum::Int64(1), Value::Long(1)),
             (
-                ScalarType::Float32,
+                DatumType::Float32,
                 Datum::Float32(OrderedFloat::from(1f32)),
                 Value::Float(1f32),
             ),
             (
-                ScalarType::Float64,
+                DatumType::Float64,
                 Datum::Float64(OrderedFloat::from(1f64)),
                 Value::Double(1f64),
             ),
-            (ScalarType::Date, Datum::Date(date), Value::Date(date)),
+            (DatumType::Date, Datum::Date(date), Value::Date(date)),
             (
-                ScalarType::Timestamp,
+                DatumType::Timestamp,
                 Datum::Timestamp(date_time),
                 Value::Timestamp(date_time),
             ),
             (
-                ScalarType::TimestampTz,
+                DatumType::TimestampTz,
                 Datum::TimestampTz(DateTime::from_utc(date_time, Utc)),
                 Value::Timestamp(date_time),
             ),
             (
-                ScalarType::Decimal(1, 1),
+                DatumType::Decimal(1, 1),
                 Datum::Decimal(Significand::new(1i128)),
                 Value::Decimal(DecimalValue {
                     unscaled: bytes.clone(),
@@ -1085,12 +1085,12 @@ mod tests {
                 }),
             ),
             (
-                ScalarType::Bytes,
+                DatumType::Bytes,
                 Datum::Bytes(&bytes),
                 Value::Bytes(bytes.clone()),
             ),
             (
-                ScalarType::String,
+                DatumType::String,
                 Datum::String(&string),
                 Value::String(string.clone()),
             ),

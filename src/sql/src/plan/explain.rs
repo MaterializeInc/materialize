@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use expr::explain::{Bracketed, Indices, Separated};
 use expr::{Id, IdHumanizer, RowSetFinishing};
-use repr::{RelationType, ScalarType};
+use repr::{DatumType, RelationType};
 
 use crate::plan::expr::{AggregateExpr, JoinKind, RelationExpr, ScalarExpr};
 
@@ -344,7 +344,7 @@ impl RelationExpr {
 }
 
 impl<'a> Explanation<'a> {
-    pub fn explain_types(&mut self, params: &BTreeMap<usize, ScalarType>) {
+    pub fn explain_types(&mut self, params: &BTreeMap<usize, DatumType>) {
         for node in &mut self.nodes {
             // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
             let RelationType { column_types, keys } = node.expr.typ(&[], params);

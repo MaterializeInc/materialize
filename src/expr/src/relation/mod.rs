@@ -541,13 +541,13 @@ impl RelationExpr {
     /// # Example
     ///
     /// ```rust
-    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use repr::{Datum, ColumnType, RelationType, DatumType};
     /// use expr::RelationExpr;
     ///
     /// // A common schema for each input.
     /// let schema = RelationType::new(vec![
-    ///     ColumnType::new(ScalarType::Int32),
-    ///     ColumnType::new(ScalarType::Int32),
+    ///     ColumnType::new(DatumType::Int32),
+    ///     ColumnType::new(DatumType::Int32),
     /// ]);
     ///
     /// // the specific data are not important here.

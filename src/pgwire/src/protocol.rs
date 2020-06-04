@@ -462,7 +462,7 @@ where
             Err(msg) => return self.error(session, SqlState::PROTOCOL_VIOLATION, msg).await,
         };
         let buf = RowArena::new();
-        let mut params: Vec<(Datum, repr::ScalarType)> = Vec::new();
+        let mut params: Vec<(Datum, repr::DatumType)> = Vec::new();
         for (raw_param, typ, format) in izip!(raw_params, param_types, param_formats) {
             match raw_param {
                 None => params.push(pgrepr::null_datum(typ)),
