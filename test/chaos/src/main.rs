@@ -42,30 +42,83 @@ async fn run() -> Result<(), anyhow::Error> {
 
     // Create Kafka topic.
     log::info!("creating Kafka topic=> {}", topic);
-    let mut kafka_client =
+    let kafka_client =
         kafka::kafka_client::KafkaClient::new(&args.kafka_url, "materialize.chaos", &topic)?;
     retry::retry_for(Duration::from_secs(10), |_| {
         kafka_client.create_topic(args.kafka_partitions)
     })
     .await?;
 
-    // Generate messages and md5 hash.
-    log::info!("creating {} records", args.message_count);
+    let kafka_task = tokio::spawn({
+        let message_count = args.message_count;
+        async move { generate_and_push_records(kafka_client, message_count).await }
+    });
+    let materialize_task = tokio::spawn({
+        let materialized_host = args.materialized_host.clone();
+        let materialized_port = args.materialized_port;
+        let kafka_url = args.kafka_url.clone();
+        let message_count = args.message_count;
+        async move {
+            query_materialize(
+                &materialized_host,
+                materialized_port,
+                &kafka_url,
+                &topic,
+                message_count,
+            )
+            .await
+        }
+    });
+
+    let (kafka_result, materialize_result) = futures::join!(kafka_task, materialize_task);
+    let kafka_hash = kafka_result??;
+    let materialize_hash = materialize_result??;
+
+    if kafka_hash == materialize_hash {
+        log::info!("row hashes matched!");
+    } else {
+        return Err(anyhow::anyhow!(
+            "mismatched row hashes: kafka: {:?}, materialize: {:?}",
+            kafka_hash,
+            materialize_hash
+        ));
+    }
+
+    log::info!(
+        "Completed chaos testing in {} milliseconds",
+        timer.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+async fn generate_and_push_records(
+    mut kafka_client: kafka::kafka_client::KafkaClient,
+    message_count: usize,
+) -> Result<String, anyhow::Error> {
+    // Generate messages and return md5 hash.
+    log::info!("pushing {} records to Kafka", message_count);
     let mut hasher = Md5::new();
-    for _ in 0..args.message_count {
+    for _ in 0..message_count {
         let record = generator::bytes::generate_bytes(30);
         hasher.input(&record);
         kafka_client.send(&record).await?;
     }
-    let expected_hashed = format!("{:x}", hasher.result());
+    Ok(format!("{:x}", hasher.result()))
+}
 
-    // Set up Materialize.
-    let mz_client = mz_client::client(&args.materialized_host, args.materialized_port).await?;
+async fn query_materialize(
+    materialized_host: &str,
+    materialized_port: u16,
+    kafka_url: &str,
+    topic: &str,
+    message_count: usize,
+) -> Result<String, anyhow::Error> {
+    let mz_client = mz_client::client(materialized_host, materialized_port).await?;
 
-    // Create views and query thread.
+    // Create Kafka source.
     let query = format!(
-        "CREATE SOURCE src FROM KAFKA BROKER 'kafka:9092' TOPIC '{}' FORMAT BYTES",
-        topic
+        "CREATE SOURCE src FROM KAFKA BROKER '{}' TOPIC '{}' FORMAT BYTES",
+        kafka_url, topic
     );
     log::info!("creating source=> {}", query);
     mz_client.execute(&*query, &[]).await?;
@@ -85,40 +138,23 @@ async fn run() -> Result<(), anyhow::Error> {
     loop {
         let row = mz_client::try_query_one(&mz_client, &*query, Duration::from_secs(1)).await?;
         let count: i64 = row.get("count");
-        if count == args.message_count as i64 {
+        if count == message_count as i64 {
             log::info!(
-                "found all {} records, comparing hashes...",
-                args.message_count
+                "found all {} records, generating md5 hash...",
+                message_count
             );
 
             let query = "SELECT data, mz_offset FROM all ORDER BY mz_offset;";
             let rows = mz_client::try_query(&mz_client, query, Duration::from_secs(1)).await?;
-            assert_eq!(args.message_count, rows.len());
+            assert_eq!(message_count, rows.len());
             let mut hasher = Md5::new();
             for row in rows {
                 let val: &[u8] = row.get("data");
                 hasher.input(&val);
             }
-
-            let actual_hashed = format!("{:x}", hasher.result());
-            if actual_hashed == expected_hashed {
-                log::info!("input and output matched!!");
-            } else {
-                return Err(anyhow::anyhow!(
-                    "wrong hash value: expected:{:?} got:{:?}",
-                    expected_hashed,
-                    actual_hashed
-                ));
-            }
-            break;
+            return Ok(format!("{:x}", hasher.result()));
         }
     }
-
-    log::info!(
-        "Completed chaos testing in {} milliseconds",
-        timer.elapsed().as_millis()
-    );
-    Ok(())
 }
 
 #[derive(Clone, Debug, StructOpt)]

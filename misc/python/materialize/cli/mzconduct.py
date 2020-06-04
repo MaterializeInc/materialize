@@ -765,8 +765,6 @@ class PauseContainerStep(WorkflowStep):
             raise Failed(f"Unable to unpause container {self._container}: {e}")
         time.sleep(self._running_time)
 
-        print(time.monotonic())
-
 
 @Steps.register("workflow")
 class WorkflowWorkflowStep(WorkflowStep):
