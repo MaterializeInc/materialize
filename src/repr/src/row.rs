@@ -376,10 +376,11 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
     }
 }
 
-/// Number of bytes required by the datum.
+/// Estimates the number of bytes required by the datum when packed into
+/// a row.
 ///
 /// This is used to optimistically pre-allocate buffers for packing rows.
-pub fn datum_size(datum: &Datum) -> usize {
+fn estimate_packed_datum_size(datum: &Datum) -> usize {
     match datum {
         Datum::Null => 1,
         Datum::False => 1,
@@ -444,7 +445,7 @@ impl Row {
     /// very careful to avoid using it when iterators are either expensive or have
     /// side effects.
     pub fn pack_slice<'a, I, D>(slice: &[Datum<'a>]) -> Row {
-        let needed = slice.iter().map(|d| datum_size(d)).sum();
+        let needed = slice.iter().map(|d| estimate_packed_datum_size(d)).sum();
         let mut packer = RowPacker::with_capacity(needed);
         packer.extend(slice.iter());
         packer.finish()
@@ -1111,9 +1112,9 @@ mod tests {
         Ok(())
     }
 
+    /// Tests the claims about various datum sizes.
     #[test]
     fn test_datum_sizes() {
-        // Test the claims about various datum sizes.
         let values_of_interest = vec![
             Datum::Null,
             Datum::False,
@@ -1129,9 +1130,11 @@ mod tests {
             Datum::Bytes(&[]),
             Datum::String(""),
             Datum::JsonNull,
+            Datum::List(DatumList::empty()),
+            Datum::Dict(DatumDict::empty()),
         ];
         for value in values_of_interest {
-            if !datum_size(&value) == Row::pack(Some(value)).data.len() {
+            if !estimate_packed_datum_size(&value) == Row::pack(Some(value)).data.len() {
                 panic!("Disparity in claimed size for {:?}", value);
             }
         }

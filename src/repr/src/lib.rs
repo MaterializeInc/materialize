@@ -30,5 +30,5 @@ pub mod adt;
 pub mod strconv;
 
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
-pub use row::{datum_size, DatumDict, DatumList, Row, RowArena, RowPacker};
+pub use row::{DatumDict, DatumList, Row, RowArena, RowPacker};
 pub use scalar::{Datum, ScalarType};
