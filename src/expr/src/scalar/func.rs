@@ -1779,6 +1779,9 @@ pub enum BinaryFunc {
     JsonbDeleteInt64,
     JsonbDeleteString,
     ConvertFrom,
+    Trim,
+    TrimLeading,
+    TrimTrailing,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1944,6 +1947,9 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
+            BinaryFunc::Trim => Ok(eager!(trim)),
+            BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
+            BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
         }
     }
 
@@ -1965,9 +1971,8 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
 
-            ToCharTimestamp | ToCharTimestampTz | ConvertFrom => {
-                ColumnType::new(ScalarType::String).nullable(false)
-            }
+            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Trim | TrimLeading
+            | TrimTrailing => ColumnType::new(ScalarType::String).nullable(false),
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
@@ -2129,7 +2134,7 @@ impl BinaryFunc {
             | TextConcat => true,
             MatchLikePattern | ToCharTimestamp | ToCharTimestampTz | DateTruncTimestamp
             | DateTruncTimestampTz | CastFloat32ToDecimal | CastFloat64ToDecimal
-            | RoundDecimal(_) | ConvertFrom => false,
+            | RoundDecimal(_) | ConvertFrom | Trim | TrimLeading | TrimTrailing => false,
         }
     }
 }
@@ -2202,6 +2207,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
+            BinaryFunc::Trim => f.write_str("btrim"),
+            BinaryFunc::TrimLeading => f.write_str("ltrim"),
+            BinaryFunc::TrimTrailing => f.write_str("rtrim"),
         }
     }
 }
@@ -2335,6 +2343,9 @@ pub enum UnaryFunc {
     RoundFloat32,
     RoundFloat64,
     RoundDecimal(u8),
+    TrimWhitespace,
+    TrimLeadingWhitespace,
+    TrimTrailingWhitespace,
 }
 
 impl UnaryFunc {
@@ -2501,6 +2512,9 @@ impl UnaryFunc {
             UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
             UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
             UnaryFunc::RoundDecimal(scale) => Ok(round_decimal_unary(a, *scale)),
+            UnaryFunc::TrimWhitespace => Ok(trim_whitespace(a)),
+            UnaryFunc::TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
+            UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
         }
     }
 
@@ -2543,7 +2557,10 @@ impl UnaryFunc {
             | CastTimestampToString
             | CastTimestampTzToString
             | CastIntervalToString
-            | CastBytesToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
+            | CastBytesToString
+            | TrimWhitespace
+            | TrimLeadingWhitespace
+            | TrimTrailingWhitespace => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             CastInt32ToFloat32 | CastInt64ToFloat32 | CastSignificandToFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
@@ -2829,6 +2846,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
             UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
             UnaryFunc::RoundDecimal(_) => f.write_str("roundunary"),
+            UnaryFunc::TrimWhitespace => f.write_str("btrim"),
+            UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
+            UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
         }
     }
 }
@@ -2998,6 +3018,39 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
         None => return Datum::Null,
     };
     Datum::Timestamp(timestamp)
+}
+
+fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_str().trim_matches(' '))
+}
+
+fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let trim_chars = b.unwrap_str();
+
+    Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
+}
+
+fn trim_leading_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_str().trim_start_matches(' '))
+}
+
+fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let trim_chars = b.unwrap_str();
+
+    Datum::from(
+        a.unwrap_str()
+            .trim_start_matches(|c| trim_chars.contains(c)),
+    )
+}
+
+fn trim_trailing_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_str().trim_end_matches(' '))
+}
+
+fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let trim_chars = b.unwrap_str();
+
+    Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
