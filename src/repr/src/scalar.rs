@@ -10,8 +10,7 @@
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-use failure::format_err;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
@@ -71,93 +70,6 @@ impl<'a> Datum<'a> {
             Datum::Null => true,
             _ => false,
         }
-    }
-
-    /// Create a Datum representing a Date
-    ///
-    /// Errors if the the combination of year/month/day is invalid
-    pub fn from_ymd(year: i32, month: u8, day: u8) -> Result<Datum<'static>, failure::Error> {
-        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
-            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?;
-        Ok(Datum::Date(d))
-    }
-
-    pub fn from_hms_nano(
-        hour: u8,
-        minute: u8,
-        second: u8,
-        nano: u32,
-    ) -> Result<Datum<'static>, failure::Error> {
-        let t = NaiveTime::from_hms_nano(hour.into(), minute.into(), second.into(), nano);
-        Ok(Datum::Time(t))
-    }
-
-    /// Create a Datum representing a Timestamp
-    ///
-    /// Errors if the the combination of year/month/day is invalid
-    pub fn from_ymd_hms_nano(
-        year: i32,
-        month: u8,
-        day: u8,
-        hour: u8,
-        minute: u8,
-        second: u8,
-        nano: u32,
-    ) -> Result<Datum<'static>, failure::Error> {
-        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
-            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?
-            .and_hms_nano_opt(hour.into(), minute.into(), second.into(), nano)
-            .ok_or_else(|| {
-                format_err!(
-                    "Invalid time: {:02}:{:02}:{:02}.{} (in date {}-{:02}-{:02})",
-                    hour,
-                    minute,
-                    second,
-                    nano,
-                    year,
-                    month,
-                    day
-                )
-            })?;
-        Ok(Datum::Timestamp(d))
-    }
-
-    /// Create a Datum representing a TimestampTz
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_ymd_hms_nano_tz_offset(
-        year: i32,
-        month: u8,
-        day: u8,
-        hour: u8,
-        minute: u8,
-        second: u8,
-        nano: u32,
-        timezone_offset_second: i64,
-    ) -> Result<Datum<'static>, failure::Error> {
-        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
-            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?
-            .and_hms_nano_opt(hour.into(), minute.into(), second.into(), nano)
-            .ok_or_else(|| {
-                format_err!(
-                    "Invalid time: {:02}:{:02}:{:02}.{} (in date {}-{:02}-{:02})",
-                    hour,
-                    minute,
-                    second,
-                    nano,
-                    year,
-                    month,
-                    day
-                )
-            })?;
-        let offset = FixedOffset::east(timezone_offset_second as i32);
-        let dt_fixed_offset = offset
-            .from_local_datetime(&d)
-            .earliest()
-            .ok_or_else(|| format_err!("Invalid tz conversion"))?;
-        Ok(Datum::TimestampTz(DateTime::<Utc>::from_utc(
-            dt_fixed_offset.naive_utc(),
-            Utc,
-        )))
     }
 
     /// Unwraps the boolean value within this datum.
@@ -353,10 +265,6 @@ impl<'a> Datum<'a> {
             Datum::Dict(dict) => *dict,
             _ => panic!("Datum::unwrap_dict called on {:?}", self),
         }
-    }
-
-    pub fn timestamptz(ndt: NaiveDateTime) -> Datum<'static> {
-        Datum::TimestampTz(DateTime::<Utc>::from_utc(ndt, Utc))
     }
 
     /// Reports whether this datum is an instance of the specified column type.
