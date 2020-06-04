@@ -98,6 +98,10 @@ pub fn kafka<G>(
         Exchange::new(move |_| sink_hash),
         &name.clone(),
         move |input| {
+            // Grab all of the available Rows and put them in a queue before we
+            // send it over to Kafka. We Even though we want to do bounded work
+            // per sink invocation, we still need to remember all inputs as we
+            // receive them
             input.for_each(|_, rows| {
                 rows.swap(&mut vector);
 
@@ -106,14 +110,16 @@ pub fn kafka<G>(
                 }
             });
 
+            // Send a bounded number of records to Kafka from the queue. This
+            // loop has explicitly been designed so that each iteration sends
+            // at most one record to Kafka
             for _ in 0..KAFKA_SINK_FUEL {
                 let (encoded, count) = if let Some((encoded, count)) = encoded_buffer.take() {
+                    // We still need to send more copies of this record.
                     (encoded, count)
-                } else if queue.is_empty() {
-                    return;
-                } else {
-                    let (row, diff) = queue.pop_front().expect("queue known to be nonempty");
-
+                } else if let Some((row, diff)) = queue.pop_front() {
+                    // Convert a previously queued (Row, Diff) to a Avro diff
+                    // envelope record
                     if diff == 0 {
                         // Explicitly refuse to send no-op records
                         continue;
@@ -132,7 +138,13 @@ pub fn kafka<G>(
                     };
 
                     let buf = encoder.encode_unchecked(connector.schema_id, diff_pair);
+                    // For diffs other than +/- 1, we send repeated copies of the
+                    // Avro record [diff] times. Since the format and envelope
+                    // capture the "polarity" of the update, we need to remember
+                    // how many times to send the data.
                     (buf, diff.abs())
+                } else {
+                    return;
                 };
 
                 let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
@@ -144,6 +156,8 @@ pub fn kafka<G>(
                     }
                 }
 
+                // Cache the Avro encoded data if we need to send again and
+                // remember how many more times we need to send it
                 if count > 1 {
                     encoded_buffer = Some((encoded, count - 1));
                 }
