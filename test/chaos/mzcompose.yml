@@ -67,7 +67,7 @@ services:
 
 mzconduct:
   workflows:
-    kafka:
+    pause-kafka:
       steps:
         - step: workflow
           workflow: start-everything
@@ -80,11 +80,30 @@ mzconduct:
             --kafka-url kafka:9092
             --kafka-partitions 1
             --message-count 10000
-        - step: pause-container
+        - step: chaos-pause-container
           container: chaos_kafka_1
-          loop_time: 300
-          running_time: 10
-          paused_time: 10
+          loop: true
+          running_time: 60
+          paused_time: 30
+
+    stop-kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 1
+            --message-count 10000
+        - step: chaos-stop-container
+          container: chaos_kafka_1
+          loop: true
+          running_time: 60
+          stopped_time: 30
 
     # Helper workflows
 

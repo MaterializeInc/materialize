@@ -723,33 +723,33 @@ class DropKafkaTopicsStep(WorkflowStep):
             say(f"INFO: error purging topics: {e}")
 
 
-@Steps.register("pause-container")
-class PauseContainerStep(WorkflowStep):
+@Steps.register("chaos-pause-container")
+class ChaosPauseContainerStep(WorkflowStep):
     """Pauses and unpauses the designated Docker container.
 
     Params:
         container: Docker container to pause
-        loop_time: seconds to spend pausing and unpausing (default: 600)
-        running_time: seconds to spend running each loop (default: 30)
-        paused_time: seconds to spend paused each loop (default: 30)
+        loop: True to pause, unpause in a continuous loop, False to run once
+        running_time: seconds to spend running each loop (default: 60)
+        paused_time: seconds to spend paused each loop (default: 10)
     """
 
     def __init__(
-        self,
-        container: str,
-        loop_time: int,
-        running_time: int = 30,
-        paused_time: int = 30,
+        self, container: str, loop: bool, running_time: int = 60, paused_time: int = 10,
     ) -> None:
         self._container = container
-        self._loop_time = loop_time
+        self._loop = loop
         self._running_time = running_time
         self._paused_time = paused_time
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        print(f"pausing and unpausing {self._container} for {self._loop_time} seconds")
-        end = time.monotonic() + self._loop_time
-        while time.monotonic() < end:
+        print(
+            f"pausing and unpausing {self._container}: running for {self._running_time} seconds, pausing for {self._paused_time} seconds"
+        )
+        if self._loop:
+            while True:
+                self.pause_and_unpause()
+        else:
             self.pause_and_unpause()
 
     def pause_and_unpause(self) -> None:
@@ -763,6 +763,53 @@ class PauseContainerStep(WorkflowStep):
             spawn.runv(["docker", "unpause", self._container])
         except subprocess.CalledProcessError as e:
             raise Failed(f"Unable to unpause container {self._container}: {e}")
+        time.sleep(self._running_time)
+
+
+@Steps.register("chaos-stop-container")
+class ChaosStopContainerStep(WorkflowStep):
+    """Stops and restarts the designated Docker container.
+
+    Params:
+        container: Docker container to pause
+        loop: True to pause, unpause in a continuous loop, False to run once
+        running_time: seconds to spend running each loop (default: 60)
+        stopped_time: seconds to spend stopped each loop (default: 10)
+    """
+
+    def __init__(
+        self,
+        container: str,
+        loop: bool,
+        running_time: int = 60,
+        stopped_time: int = 10,
+    ) -> None:
+        self._container = container
+        self._loop = loop
+        self._running_time = running_time
+        self._stopped_time = stopped_time
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        print(
+            f"stopping and starting {self._container}: running for {self._running_time} seconds, stopping for {self._stopped_time} seconds"
+        )
+        if self._loop:
+            while True:
+                self.stop_and_start()
+        else:
+            self.stop_and_start()
+
+    def stop_and_start(self) -> None:
+        try:
+            spawn.runv(["docker", "stop", self._container])
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"Unable to stop container {self._container}: {e}")
+        time.sleep(self._stopped_time)
+
+        try:
+            spawn.runv(["docker", "start", self._container])
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"Unable to start container {self._container}: {e}")
         time.sleep(self._running_time)
 
 
