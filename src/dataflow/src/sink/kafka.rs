@@ -26,8 +26,6 @@ use expr::GlobalId;
 use interchange::avro::{DiffPair, Encoder};
 use repr::{RelationDesc, Row};
 
-static KAFKA_SINK_FUEL: usize = 10000;
-
 #[derive(Clone)]
 pub struct SinkProducerContext;
 
@@ -113,7 +111,7 @@ pub fn kafka<G>(
             // Send a bounded number of records to Kafka from the queue. This
             // loop has explicitly been designed so that each iteration sends
             // at most one record to Kafka
-            for _ in 0..KAFKA_SINK_FUEL {
+            for _ in 0..connector.fuel {
                 let (encoded, count) = if let Some((encoded, count)) = encoded_buffer.take() {
                     // We still need to send more copies of this record.
                     (encoded, count)

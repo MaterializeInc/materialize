@@ -669,6 +669,7 @@ fn kafka_sink_builder(
         topic_prefix,
         topic_suffix,
         replication_factor,
+        fuel: 10000,
     }))
 }
 

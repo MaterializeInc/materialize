@@ -580,6 +580,9 @@ pub struct KafkaSinkConnector {
     pub url: Url,
     pub topic: String,
     pub schema_id: i32,
+    // Maximum number of records the sink will attempt to send each time it is
+    // invoked
+    pub fuel: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -614,6 +617,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub topic_prefix: String,
     pub topic_suffix: String,
     pub replication_factor: u32,
+    pub fuel: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
