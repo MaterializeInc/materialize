@@ -35,7 +35,7 @@ use sql_parser::ast::{DataType, ObjectType, Statement};
 use tokio_postgres::types::FromSql;
 
 use pgrepr::Jsonb;
-use repr::decimal::Significand;
+use repr::adt::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 use sql::catalog::Catalog;
 use sql::{

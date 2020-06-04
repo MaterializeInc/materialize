@@ -32,10 +32,10 @@ use serde::{Deserialize, Serialize};
 
 use ore::fmt::FormatBuffer;
 
-use crate::datetime::{self, DateTimeField, ParsedDateTime};
-use crate::decimal::Decimal;
-use crate::jsonb::{Jsonb, JsonbRef};
-use crate::Interval;
+use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
+use crate::adt::decimal::Decimal;
+use crate::adt::interval::Interval;
+use crate::adt::jsonb::{Jsonb, JsonbRef};
 
 #[derive(Debug)]
 pub enum Nestable {

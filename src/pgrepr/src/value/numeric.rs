@@ -15,7 +15,7 @@ use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-use repr::decimal::{Decimal, Significand};
+use repr::adt::decimal::{Decimal, Significand};
 
 /// A wrapper for [`repr::decimal::Decimal`] that can be serialized and
 /// deserialized to the PostgreSQL binary format.

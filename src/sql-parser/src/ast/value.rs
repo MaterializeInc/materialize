@@ -20,7 +20,7 @@
 
 use std::fmt;
 
-use repr::datetime::DateTimeField;
+use repr::adt::datetime::DateTimeField;
 
 mod datetime;
 use crate::ast::display::{AstDisplay, AstFormatter};

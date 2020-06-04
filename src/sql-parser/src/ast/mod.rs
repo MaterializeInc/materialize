@@ -51,7 +51,7 @@ pub mod visit_mut {
 use std::fmt;
 use std::str::FromStr;
 
-use repr::datetime::DateTimeField;
+use repr::adt::datetime::DateTimeField;
 
 pub use self::data_type::DataType;
 pub use self::ddl::{

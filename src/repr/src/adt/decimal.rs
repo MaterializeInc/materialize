@@ -47,15 +47,15 @@
 //! [bigdecimal]: https://crates.io/crates/bigdecimal
 //! [fixed-point arithmetic]: https://en.wikipedia.org/wiki/Fixed-point_arithmetic
 
-use failure::{bail, format_err};
-use serde::{Deserialize, Serialize};
-
 use std::cmp::PartialEq;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub};
 use std::str::FromStr;
+
+use failure::{bail, format_err};
+use serde::{Deserialize, Serialize};
 
 /// The significand of a decimal number with up to 38 digits of precision.
 ///

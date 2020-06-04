@@ -26,7 +26,9 @@ mod relation;
 mod row;
 mod scalar;
 
+pub mod adt;
+pub mod strconv;
+
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{datum_size, DatumDict, DatumList, Row, RowArena, RowPacker};
-pub use scalar::{datetime, decimal, jsonb, regex, strconv};
-pub use scalar::{Datum, Interval, ScalarType};
+pub use scalar::{Datum, ScalarType};

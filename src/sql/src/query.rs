@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 use ::expr::{Id, RowSetFinishing};
 use dataflow_types::Timestamp;
-use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
+use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
 };

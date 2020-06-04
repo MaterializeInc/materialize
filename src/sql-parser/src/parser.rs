@@ -27,7 +27,7 @@ use std::str::FromStr;
 
 use log::debug;
 
-use repr::datetime::DateTimeField;
+use repr::adt::datetime::DateTimeField;
 
 use crate::ast::*;
 use crate::keywords;

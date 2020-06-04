@@ -19,9 +19,10 @@ use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
 use ore::result::ResultExt;
-use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::jsonb::JsonbRef;
-use repr::regex::Regex;
+use repr::adt::decimal::MAX_DECIMAL_PRECISION;
+use repr::adt::interval::Interval;
+use repr::adt::jsonb::JsonbRef;
+use repr::adt::regex::Regex;
 use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -380,7 +381,7 @@ fn cast_time_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
 
 fn cast_time_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let t = a.unwrap_time();
-    match repr::Interval::new(
+    match Interval::new(
         0,
         t.num_seconds_from_midnight() as i64,
         t.nanosecond() as i64,
@@ -429,10 +430,10 @@ fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
 
     // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
     if i.duration < 0 {
-        i = repr::Interval::new(0, 86400, 0)
+        i = Interval::new(0, 86400, 0)
             .unwrap()
             .checked_add(
-                &repr::Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64)
+                &Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64)
                     .unwrap(),
             )
             .unwrap();

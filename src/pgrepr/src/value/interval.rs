@@ -14,10 +14,12 @@ use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-/// A wrapper for [`repr::Interval`] that can be serialized and deserialized
+use repr::adt::interval::Interval as ReprInterval;
+
+/// A wrapper for [`ReprInterval`] that can be serialized and deserialized
 /// to the PostgreSQL binary format.
 #[derive(Debug, Clone)]
-pub struct Interval(pub repr::Interval);
+pub struct Interval(pub ReprInterval);
 
 impl fmt::Display for Interval {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -65,7 +67,7 @@ impl<'a> FromSql<'a> for Interval {
         let days = raw.read_i32::<NetworkEndian>()?;
         let months = raw.read_i32::<NetworkEndian>()?;
         Ok(Interval(
-            repr::Interval::new(months, days as i64 * 24 * 60 * 60, micros * 1000).unwrap(),
+            ReprInterval::new(months, days as i64 * 24 * 60 * 60, micros * 1000).unwrap(),
         ))
     }
 

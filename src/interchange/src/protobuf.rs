@@ -20,7 +20,7 @@ use serde_protobuf::descriptor::{
 use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
-use repr::decimal::Significand;
+use repr::adt::decimal::Significand;
 use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
@@ -460,7 +460,7 @@ mod tests {
     };
 
     use ordered_float::OrderedFloat;
-    use repr::decimal::Significand;
+    use repr::adt::decimal::Significand;
     use repr::{Datum, DatumList, RelationDesc, ScalarType};
 
     fn sanity_check_relation(

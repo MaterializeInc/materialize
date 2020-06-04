@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Date and time utilities.
+
+#![allow(missing_docs)]
+
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::fmt;
@@ -14,7 +18,7 @@ use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveTime};
 
-use super::Interval;
+use crate::adt::interval::Interval;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -83,6 +87,31 @@ impl DateTimeField {
             .next_back()
             .unwrap_or_else(|| panic!("Cannot get larger DateTimeField than {}", self))
     }
+
+    /// Returns the number of seconds in a single unit of `field`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-duration field.
+    pub fn seconds_multiplier(self) -> i64 {
+        use DateTimeField::*;
+        match self {
+            Day => 60 * 60 * 24,
+            Hour => 60 * 60,
+            Minute => 60,
+            Second => 1,
+            _other => unreachable!("Do not call with a non-duration field"),
+        }
+    }
+
+    /// Returns the number of nanoseconds in a single unit of `field`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-duration field.
+    pub fn nanos_multiplier(self) -> i64 {
+        self.seconds_multiplier() * 1_000_000_000
+    }
 }
 
 /// An iterator over DateTimeFields
@@ -90,7 +119,7 @@ impl DateTimeField {
 /// Always starts with the value smaller than the current one.
 ///
 /// ```
-/// use repr::datetime::DateTimeField::*;
+/// use repr::adt::datetime::DateTimeField::*;
 /// let mut itr = Hour.into_iter();
 /// assert_eq!(itr.next(), Some(Minute));
 /// assert_eq!(itr.next(), Some(Second));
@@ -281,7 +310,7 @@ impl ParsedDateTime {
                 })?;
 
                 let m_f_ns = m_f
-                    .checked_mul(30 * super::seconds_multiplier(Day))
+                    .checked_mul(30 * Day.seconds_multiplier())
                     .ok_or_else(|| "Intermediate overflow in MONTH fraction".to_owned())?;
 
                 // seconds += m_f * 30 * seconds_multiplier(Day) / 1_000_000_000
@@ -303,7 +332,7 @@ impl ParsedDateTime {
                 };
 
                 *seconds = t
-                    .checked_mul(super::seconds_multiplier(d))
+                    .checked_mul(d.seconds_multiplier())
                     .and_then(|t_s| seconds.checked_add(t_s))
                     .ok_or_else(|| {
                         format!(
@@ -314,7 +343,7 @@ impl ParsedDateTime {
                     })?;
 
                 let t_f_ns = t_f
-                    .checked_mul(super::seconds_multiplier(dhms))
+                    .checked_mul(dhms.seconds_multiplier())
                     .ok_or_else(|| format!("Intermediate overflow in {} fraction", dhms))?;
 
                 // seconds += t_f * seconds_multiplier(dhms) / 1_000_000_000

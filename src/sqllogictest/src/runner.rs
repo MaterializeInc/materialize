@@ -47,7 +47,7 @@ use coord::{ExecuteResponse, TimestampConfig};
 use dataflow_types::PeekResponse;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::jsonb::JsonbRef;
+use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{
     format_date, format_interval, format_time, format_timestamp, format_timestamptz,
 };
