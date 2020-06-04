@@ -762,7 +762,7 @@ class ChaosContainerBaseWorkflowStep(WorkflowStep):
         else:
             self.stop_and_start()
 
-    def stop_and_start(self):
+    def stop_and_start(self) -> None:
         try:
             spawn.runv(["docker", self._stop_cmd, self._container])
         except subprocess.CalledProcessError as e:
