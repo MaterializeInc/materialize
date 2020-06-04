@@ -151,34 +151,39 @@ async fn query_materialize(
     loop {
         let row = mz_client::try_query_one(&mz_client, &*query, Duration::from_secs(1)).await?;
         let count: i64 = row.get("count");
-        if count == message_count as i64 {
-            log::info!(
-                "found all {} records, generating md5 hash...",
-                message_count
-            );
-
-            let query = "SELECT data, mz_offset FROM all ORDER BY mz_offset;";
-            let rows = mz_client::try_query(&mz_client, query, Duration::from_secs(1)).await?;
-            if message_count != rows.len() {
+        match count {
+            c if c < message_count as i64 => continue,
+            c if c > message_count as i64 => {
                 return Err(anyhow::Error::msg(format!(
                     "Expected {} rows, found {}",
-                    message_count,
-                    rows.len()
+                    message_count, c,
                 )));
             }
+            c if c == message_count as i64 => {
+                log::info!(
+                    "found all {} records, generating md5 hash...",
+                    message_count
+                );
 
-            assert_eq!(message_count, rows.len());
-            let mut hasher = Md5::new();
-            for row in rows {
-                let val: &[u8] = row.get("data");
-                hasher.input(&val);
+                let query = "SELECT data, mz_offset FROM all ORDER BY mz_offset;";
+                let rows = mz_client::try_query(&mz_client, query, Duration::from_secs(1)).await?;
+                if message_count != rows.len() {
+                    return Err(anyhow::Error::msg(format!(
+                        "Expected {} rows, found {}",
+                        message_count,
+                        rows.len()
+                    )));
+                }
+
+                assert_eq!(message_count, rows.len());
+                let mut hasher = Md5::new();
+                for row in rows {
+                    let val: &[u8] = row.get("data");
+                    hasher.input(&val);
+                }
+                return Ok(format!("{:x}", hasher.result()));
             }
-            return Ok(format!("{:x}", hasher.result()));
-        } else if count > message_count as i64 {
-            return Err(anyhow::Error::msg(format!(
-                "Expected {} rows, found {}",
-                message_count, count,
-            )));
+            _ => unreachable!(),
         }
     }
 }
