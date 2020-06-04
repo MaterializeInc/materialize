@@ -693,10 +693,17 @@ lazy_static! {
                 params!(String) => Unary(UnaryFunc::TrimWhitespace),
                 params!(String, String) => Binary(BinaryFunc::Trim)
             },
+            "bit_length" => {
+                params!(Bytes) => Unary(UnaryFunc::BitLengthBytes),
+                params!(String) => Unary(UnaryFunc::BitLengthString)
+            },
             "ceil" => {
                 params!(Float32) => Unary(UnaryFunc::CeilFloat32),
                 params!(Float64) => Unary(UnaryFunc::CeilFloat64),
                 params!(Decimal(0, 0)) => Unary(UnaryFunc::CeilDecimal(0))
+            },
+            "char_length" => {
+                params!(String) => Unary(UnaryFunc::CharLength)
             },
             "concat" => {
                 Repeat(vec![StringAny]) => Variadic(VariadicFunc::Concat)
@@ -735,9 +742,13 @@ lazy_static! {
                 params!(Jsonb) => Unary(UnaryFunc::JsonbTypeof)
             },
             "length" => {
-                params!(Bytes) => Unary(UnaryFunc::LengthBytes),
-                params!(String) => Variadic(VariadicFunc::LengthString),
-                params!(String, String) => Variadic(VariadicFunc::LengthString)
+                params!(Bytes) => Unary(UnaryFunc::ByteLengthBytes),
+                params!(String) => Unary(UnaryFunc::CharLength),
+                params!(Bytes, String) => Binary(BinaryFunc::EncodedBytesCharLength)
+            },
+            "octet_length" => {
+                params!(Bytes) => Unary(UnaryFunc::ByteLengthBytes),
+                params!(String) => Unary(UnaryFunc::ByteLengthString)
             },
             "ltrim" => {
                 params!(String) => Unary(UnaryFunc::TrimLeadingWhitespace),

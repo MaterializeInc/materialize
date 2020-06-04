@@ -53,6 +53,7 @@
 
   - signature: 'sum(x: T) -> T'
     description: Sum of `T`'s values
+
   - signature: 'variance(x: T) -> U'
     description: Historical alias for `variance_samp`. *(imprecise)*
       <br><br>
@@ -103,19 +104,38 @@
   - signature: 'btrim(s: str, c: str) -> str'
     description: Trim any character in `c` from both sides of `s`.
 
+  - signature: 'bit_length(s: str) -> int'
+    description: Number of bits in `s`
+
+  - signature: 'bit_length(b: bytea) -> int'
+    description: Number of bits in `b`
+
+  - signature: 'char_length(s: str) -> int'
+    description: Number of graphemes in `s`
+
   - signature: 'length(s: str) -> int'
     description: Number of graphemes in `s`
     url: length
 
-  - signature: 'length(s: str, encoding_name: str) -> int'
-    description: Number of graphemes in `s` using `encoding_name`
+  - signature: 'length(b: bytea) -> int'
+    description: Number of bytes in `s`
+    url: length
+
+  - signature: 'length(s: bytea, encoding_name: str) -> int'
+    description: Number of graphemes in `s` after encoding
     url: length
 
   - signature: 'ltrim(s: str) -> str'
     description: Trim all spaces from the left side of `s`.
 
-  - signature: 'btrim(s: str, c: str) -> str'
-    description: Trim any character in `c` from the left sides of `s`.
+  - signature: 'ltrim(s: str, c: str) -> str'
+    description: Trim any character in `c` from the left side of `s`.
+
+  - signature: 'octet_length(s: str) -> int'
+    description: Number of bytes in `s`
+
+  - signature: 'octet_length(b: bytea) -> int'
+    description: Number of bytes in `b`
 
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
     description: Values of the capture groups of `regex` as matched in `haystack`
