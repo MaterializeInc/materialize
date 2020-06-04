@@ -115,10 +115,8 @@ SELECT count(NULL)
 statement error supported
 SELECT json_agg(NULL)
 
-query T
+query error unable to infer type for NULL
 SELECT jsonb_agg(NULL)
-----
-[null]
 
 # This should ideally return {NULL}, but this is a pathological case, and
 # Postgres has the same behavior, so it's sufficient for now.

@@ -440,7 +440,6 @@ where
                         Datum::Float64(((agg1 as f64) / float_scale).into())
                     }
                     (AggregateFunc::SumDecimal, _) => Datum::from(agg1),
-                    (AggregateFunc::SumNull, _) => Datum::Null,
                     x => panic!("Unexpected accumulable aggregation: {:?}", x),
                 };
 
@@ -538,7 +537,6 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
         | AggregateFunc::SumDecimal
-        | AggregateFunc::SumNull
         | AggregateFunc::Count
         | AggregateFunc::CountAll
         | AggregateFunc::Any
@@ -553,7 +551,6 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::MaxDate
         | AggregateFunc::MaxTimestamp
         | AggregateFunc::MaxTimestampTz
-        | AggregateFunc::MaxNull
         | AggregateFunc::MinInt32
         | AggregateFunc::MinInt64
         | AggregateFunc::MinFloat32
@@ -563,8 +560,7 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::MinString
         | AggregateFunc::MinDate
         | AggregateFunc::MinTimestamp
-        | AggregateFunc::MinTimestampTz
-        | AggregateFunc::MinNull => (false, true),
+        | AggregateFunc::MinTimestampTz => (false, true),
         AggregateFunc::JsonbAgg => (false, false),
     }
 }

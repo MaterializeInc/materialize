@@ -15,10 +15,9 @@ use std::collections::HashMap;
 use failure::bail;
 use lazy_static::lazy_static;
 use repr::ScalarType;
-use sql_parser::ast::Expr;
 
-use super::expr::{BinaryFunc, ScalarExpr, UnaryFunc, VariadicFunc};
-use super::query::ExprContext;
+use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
+use super::query::{CastContext, CoerceTo, ExprContext};
 use super::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,7 +31,6 @@ enum TypeCategory {
     String,
     Timespan,
     UserDefined,
-    Unknown,
 }
 
 impl TypeCategory {
@@ -64,7 +62,6 @@ impl TypeCategory {
             | ScalarType::Int64 => TypeCategory::Numeric,
             ScalarType::Interval => TypeCategory::Timespan,
             ScalarType::String => TypeCategory::String,
-            ScalarType::Unknown => TypeCategory::Unknown,
         }
     }
 
@@ -254,22 +251,15 @@ impl<'a> ArgImplementationMatcher<'a> {
             .collect();
         let mut m = Self { ident, ecx, impls };
 
-        let mut raw_arg_types = Vec::new();
+        let mut exprs = Vec::new();
         for arg in args {
-            let expr = super::query::plan_expr(ecx, &arg, Some(ScalarType::Unknown))?;
-            raw_arg_types.push(ecx.scalar_type(&expr));
-            Self::clear_expr_param_data(ecx, &arg);
+            let expr = super::query::plan_coercible_expr(ecx, arg)?.0;
+            exprs.push(expr);
         }
 
-        // Exact match
-        let f = if let Some(func) = m.get_implementation(&raw_arg_types) {
-            func
-        } else {
-            // Best match
-            m.best_match(args, &raw_arg_types)?
-        };
+        let f = m.find_match(&exprs)?;
 
-        let mut exprs = m.generate_param_exprs(args, f.params)?;
+        let mut exprs = m.generate_param_exprs(exprs, f.params)?;
 
         Ok(match f.op {
             OperationType::ExprOnly => exprs.remove(0),
@@ -305,18 +295,31 @@ impl<'a> ArgImplementationMatcher<'a> {
         }
     }
 
-    /// If no exact match, finds the best match available. Patterned after
-    /// [PostgreSQL's type conversion matching algorithm][pgparser].
+    /// Finds an exact match based on the arguments, or, if no exact match,
+    /// finds the best match available. Patterned after [PostgreSQL's type
+    /// conversion matching algorithm][pgparser].
     ///
     /// Inline prefixed with number are taken from the "Function Type
     /// Resolution" section of the aforelinked page.
     ///
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
-    fn best_match(
-        &mut self,
-        args: &[sql_parser::ast::Expr],
-        raw_arg_types: &[ScalarType],
-    ) -> Result<FuncImpl, failure::Error> {
+    fn find_match(&mut self, exprs: &[CoercibleScalarExpr]) -> Result<FuncImpl, failure::Error> {
+        let types: Vec<_> = exprs
+            .iter()
+            .map(|e| self.ecx.column_type(e).map(|t| t.scalar_type))
+            .collect();
+        let all_types_known = types.iter().all(|t| t.is_some());
+
+        // Check for exact match.
+        if all_types_known {
+            let types: Vec<_> = types.iter().map(|t| t.clone().unwrap()).collect();
+            if let Some(func) = self.get_implementation(&types) {
+                return Ok(func);
+            }
+        }
+
+        // No exact match. Apply PostgreSQL's best match algorithm.
+
         let mut candidates = Vec::new();
         let mut max_exact_matches = 0;
         let mut max_preferred_types = 0;
@@ -329,41 +332,37 @@ impl<'a> ArgImplementationMatcher<'a> {
             let mut exact_matches = 0;
             let mut preferred_types = 0;
 
-            for (i, (arg, raw_arg_type)) in args.iter().zip(raw_arg_types.iter()).enumerate() {
+            for (i, (arg, raw_arg_type)) in exprs.iter().zip(&types).enumerate() {
                 let param_type = match &fimpl.params {
                     ParamList::Exact(p) => &p[i],
                     ParamList::Repeat(p) => &p[i % p.len()],
                 };
 
-                let arg_type = if param_type == raw_arg_type {
-                    exact_matches += 1;
-                    raw_arg_type.clone()
-                } else {
-                    if self.coerce_arg_to_type(arg, &param_type).is_err() {
-                        valid_candidate = false;
-                        break;
+                let arg_type = match raw_arg_type {
+                    Some(raw_arg_type) if param_type == raw_arg_type => {
+                        exact_matches += 1;
+                        raw_arg_type.clone()
                     }
-
-                    // Increment `preferred_type` if:
-                    // - This param is the preferred type for this argument's
-                    //   type category
-                    // - This argument is a string literal and this param is the
-                    //   preferred type in its type category.
-                    if is_param_preferred_type_for_arg(&param_type.into(), raw_arg_type)
-                        || (arg.is_string_literal()
-                            && is_param_preferred_type_for_arg(
-                                &param_type.into(),
-                                &param_type.into(),
-                            ))
-                    {
-                        preferred_types += 1;
+                    Some(raw_arg_type) => {
+                        if self.coerce_arg_to_type(arg.clone(), &param_type).is_err() {
+                            valid_candidate = false;
+                            break;
+                        }
+                        if is_param_preferred_type_for_arg(&param_type.into(), raw_arg_type) {
+                            preferred_types += 1;
+                        }
+                        param_type.into()
                     }
-
-                    param_type.into()
+                    None => {
+                        let s: ScalarType = param_type.into();
+                        if TypeCategory::from_type(&s).preferred_type() == Some(s) {
+                            preferred_types += 1;
+                        }
+                        param_type.into()
+                    }
                 };
 
                 arg_types.push(arg_type);
-                Self::clear_expr_param_data(self.ecx, &arg);
             }
 
             // 4.a. Discard candidate functions for which the input types do not match
@@ -384,7 +383,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         if candidates.is_empty() {
             bail!(
                 "arguments cannot be implicitly cast to any implementation's parameters; \
-            try providing explicit casts"
+                 try providing explicit casts"
             )
         }
 
@@ -409,14 +408,19 @@ impl<'a> ArgImplementationMatcher<'a> {
             return Ok(func);
         }
 
-        // The rest of this function could be elided if we know we don't have
-        // any Unknown types.
+        if all_types_known {
+            bail!(
+                "unable to determine which implementation to use; try providing \
+                 explicit casts to match parameter types"
+            )
+        }
+
         let mut found_unknown = false;
         let mut found_known = false;
         let mut types_match = true;
         let mut common_type: Option<ScalarType> = None;
 
-        for (i, raw_arg_type) in raw_arg_types.iter().enumerate() {
+        for (i, raw_arg_type) in types.iter().enumerate() {
             let mut selected_category: Option<TypeCategory> = None;
             let mut found_string_candidate = false;
             let mut categories_match = true;
@@ -424,7 +428,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             match raw_arg_type {
                 // 4.e. If any input arguments are unknown, check the type categories accepted
                 // at those argument positions by the remaining candidates.
-                ScalarType::Unknown => {
+                None => {
                     found_unknown = true;
 
                     for c in candidates.iter() {
@@ -481,7 +485,7 @@ impl<'a> ArgImplementationMatcher<'a> {
                         candidates.retain(|c| c.arg_types[i] == preferred_type);
                     }
                 }
-                typ => {
+                Some(typ) => {
                     found_known = true;
                     // Track if all known types are of the same type; use this info in 4.f.
                     if let Some(common_type) = &common_type {
@@ -503,8 +507,8 @@ impl<'a> ArgImplementationMatcher<'a> {
         // accept that type at the unknown-argument positions.
         if found_known && found_unknown && types_match {
             let common_type = common_type.unwrap();
-            for (i, raw_arg_type) in raw_arg_types.iter().enumerate() {
-                if *raw_arg_type == ScalarType::Unknown {
+            for (i, raw_arg_type) in types.iter().enumerate() {
+                if raw_arg_type.is_none() {
                     candidates.retain(|c| common_type == c.arg_types[i]);
                 }
             }
@@ -516,7 +520,7 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         bail!(
             "unable to determine which implementation to use; try providing \
-            explicit casts to match parameter types"
+             explicit casts to match parameter types"
         )
     }
 
@@ -534,15 +538,6 @@ impl<'a> ArgImplementationMatcher<'a> {
             }
         } else {
             Ok(None)
-        }
-    }
-
-    /// Because we use the same `ExprContext` throughout `Self::best_match`, we
-    /// have to clean up any param types we provisionally inserted. This data
-    /// gets re-inserted during `Self::generate_param_exprs`.
-    fn clear_expr_param_data(ecx: &ExprContext, expr: &sql_parser::ast::Expr) {
-        if let sql_parser::ast::Expr::Parameter(n) = expr {
-            ecx.remove_param(*n);
         }
     }
 
@@ -590,20 +585,20 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// Plans `args` as `ScalarExprs` of that match the `ParamList`'s specified types.
     fn generate_param_exprs(
         &self,
-        args: &[sql_parser::ast::Expr],
+        args: Vec<CoercibleScalarExpr>,
         params: ParamList,
     ) -> Result<Vec<ScalarExpr>, failure::Error> {
         match params {
             ParamList::Exact(p) => {
                 let mut exprs = Vec::new();
-                for (arg, param) in args.iter().zip(p.iter()) {
+                for (arg, param) in args.into_iter().zip(p.iter()) {
                     exprs.push(self.coerce_arg_to_type(arg, param)?);
                 }
                 Ok(exprs)
             }
             ParamList::Repeat(p) => {
                 let mut exprs = Vec::new();
-                for (i, arg) in args.iter().enumerate() {
+                for (i, arg) in args.into_iter().enumerate() {
                     exprs.push(self.coerce_arg_to_type(arg, &p[i % p.len()])?);
                 }
                 Ok(exprs)
@@ -616,23 +611,31 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// work within the `func` module because it relies on `ParameterType`.
     fn coerce_arg_to_type(
         &self,
-        arg: &Expr,
+        arg: CoercibleScalarExpr,
         typ: &ParamType,
     ) -> Result<ScalarExpr, failure::Error> {
-        use super::query::CastContext::*;
-        let s: ScalarType = typ.into();
-        let hinted_expr = super::query::plan_expr(self.ecx, &arg, Some(s.clone()))?;
-
-        if self.ecx.scalar_type(&hinted_expr) == s {
-            Ok(hinted_expr)
-        } else if ParamType::JsonbAny == *typ {
-            super::query::plan_to_jsonb(self.ecx, self.ident, hinted_expr)
-        } else if ParamType::ExplicitStringAny == *typ {
-            super::query::plan_cast_internal(self.ecx, Explicit, hinted_expr, s)
-        } else if ParamType::StringAny == *typ || arg.is_string_literal() {
-            super::query::plan_cast_internal(self.ecx, Implicit(self.ident), hinted_expr, s)
-        } else {
-            super::query::plan_cast_implicit(self.ecx, Implicit(self.ident), hinted_expr, s)
+        let coerce_to = match typ {
+            ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
+            ParamType::JsonbAny => CoerceTo::JsonbAny,
+            ParamType::ExplicitStringAny | ParamType::StringAny => {
+                CoerceTo::Plain(ScalarType::String)
+            }
+        };
+        let arg = super::query::plan_coerce(self.ecx, arg, coerce_to)?;
+        match typ {
+            ParamType::JsonbAny => super::query::plan_to_jsonb(self.ecx, self.ident, arg),
+            ParamType::ExplicitStringAny => {
+                let ccx = CastContext::Explicit;
+                super::query::plan_cast_internal(self.ecx, ccx, arg, ScalarType::String)
+            }
+            ParamType::StringAny => {
+                let ccx = CastContext::Implicit(self.ident);
+                super::query::plan_cast_internal(self.ecx, ccx, arg, ScalarType::String)
+            }
+            ParamType::Plain(s) => {
+                let ccx = CastContext::Implicit(self.ident);
+                super::query::plan_cast_implicit(self.ecx, ccx, arg, s.clone())
+            }
         }
     }
 }
@@ -722,9 +725,7 @@ lazy_static! {
                 params!(Jsonb) => Unary(UnaryFunc::JsonbPretty)
             },
             "jsonb_strip_nulls" => {
-                params!(Jsonb) => Unary(UnaryFunc::JsonbStripNulls),
-                // jsonb_strip_nulls does not want to cast NULLs to JSONB.
-                params!(Unknown) => Unary(UnaryFunc::JsonbStripNulls)
+                params!(Jsonb) => Unary(UnaryFunc::JsonbStripNulls)
             },
             "jsonb_typeof" => {
                 params!(Jsonb) => Unary(UnaryFunc::JsonbTypeof)

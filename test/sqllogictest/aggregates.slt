@@ -64,12 +64,10 @@ SELECT avg(a) FROM t2
 ----
 1.75
 
-# avg of an explicit NULL should return NULL.
+# avg of an explicit NULL should return an error.
 
-query R
+query error unable to infer type for NULL
 SELECT avg(NULL)
-----
-NULL
 
 statement error
 SELECT * ORDER BY SUM(fake_column)
