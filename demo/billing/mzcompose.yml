@@ -73,6 +73,10 @@ services:
       # ensure that data doesn't get lost across restarts
       - ./data/prometheus:/prometheus
       - ./data/grafana:/var/lib/grafana
+  prometheus_sql_exporter_mz:
+    mzbuild: ci-mz-sql-exporter
+    ports:
+      - ${MZ_SQL_EXPORTER_PORT:-9399}
 
 volumes:
   db-data:
@@ -98,9 +102,13 @@ mzconduct:
         destroy_volumes: true
 
     load-test:
+      env:
+        MZ_SQL_EXPORTER_PORT: "9400:9399"
       steps:
       - step: workflow
         workflow: start-everything
+      - step: start-services
+        services: [prometheus_sql_exporter_mz]
       - step: run
         service: billing-demo
         daemon: true
