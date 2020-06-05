@@ -15,6 +15,7 @@ use std::mem::{size_of, transmute};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
@@ -35,7 +36,7 @@ use crate::Datum;
 /// We avoid the need for the first set of padding by only providing access to the `Datum`s via calls to `ptr::read_unaligned`, which on modern x86 is barely penalized.
 /// We avoid the need for the second set of padding by not providing mutable access to the `Datum`. Instead, `Row` is append-only.
 ///
-/// A `Row` can be built from a collection of `Datum`s using `Row::pack`
+/// A `Row` can be built from a collection of `Datum`s using `Row::pack`, but it often more efficient to use and re-use a `RowPacker` which can avoid unneccesary allocations.
 ///
 /// ```
 /// # use repr::{Row, Datum};
@@ -58,9 +59,15 @@ use crate::Datum;
 /// let datums = row.unpack();
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
+///
+/// # Performance
+///
+/// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
+/// It is best to re-use a `RowPacker` across multiple `Row` creation calls, as this
+/// avoids the allocations involved in `RowPacker::new()`.
 #[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: Box<[u8]>,
+    data: SmallVec<[u8; 16]>,
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -98,7 +105,7 @@ pub struct DatumDictIter<'a> {
     prev_key: Option<&'a str>,
 }
 
-/// `RowPacker` is used to build a `Row`. It is usually simpler to use `Row::pack` instead, but sometimes awkward control flow might require using `RowPacker` directly.
+/// `RowPacker` is used to build a `Row`.
 ///
 /// ```
 /// # use repr::{Row, Datum, RowPacker};
@@ -613,7 +620,7 @@ impl RowPacker {
     /// Allocates an empty row packer.
     pub fn new() -> Self {
         // TODO: Determine if this is the best default choice.
-        Self::with_capacity(1024 * 16)
+        Self::with_capacity(0)
     }
     /// Allocates an empty row packer with a supplied capacity.
     pub fn with_capacity(capacity: usize) -> Self {
@@ -639,6 +646,22 @@ impl RowPacker {
         }
     }
 
+    /// Creates a new `Row` from an iterator.
+    ///
+    /// Unlike `Row::pack`, this re-uses the `RowPacker` to avoid
+    /// unneccesary allocations.
+    pub fn pack<'a, I, D>(&mut self, iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.data.clear();
+        for datum in iter {
+            self.push(*datum.borrow());
+        }
+        self.finish_and_reuse()
+    }
+
     /// Like [`RowPacker::extend`], but the provided iterator is allowed to
     /// produce an error.
     ///
@@ -662,10 +685,12 @@ impl RowPacker {
     }
 
     /// Finish packing and return a `Row`.
+    ///
+    /// This does not re-use the allocation of `RowPacker`, which means this
+    /// method has relatively few advantages over `finish_and_reuse()`.
     pub fn finish(self) -> Row {
         Row {
-            // drop excess capacity
-            data: self.data.into_boxed_slice(),
+            data: SmallVec::from(&self.data[..]),
         }
     }
 
@@ -677,7 +702,7 @@ impl RowPacker {
     /// In principle this can reduce the amount of interaction with the
     /// allocator, as opposed to creating new row packers for each row.
     pub fn finish_and_reuse(&mut self) -> Row {
-        let data = Box::<[u8]>::from(&self.data[..]);
+        let data = SmallVec::from(&self.data[..]);
         self.data.clear();
         Row { data }
     }

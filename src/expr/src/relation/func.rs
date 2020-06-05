@@ -492,33 +492,37 @@ impl AggregateFunc {
 }
 
 fn jsonb_each<'a>(a: Datum<'a>) -> Vec<Row> {
+    let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::Dict(dict) => dict
             .iter()
-            .map(|(k, v)| Row::pack(&[Datum::String(k), v]))
+            .map(move |(k, v)| row_packer.pack(&[Datum::String(k), v]))
             .collect(),
         _ => vec![],
     }
 }
 
 fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<Row> {
+    let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::Dict(dict) => dict
             .iter()
-            .map(|(k, _)| Row::pack(&[Datum::String(k)]))
+            .map(move |(k, _)| row_packer.pack(&[Datum::String(k)]))
             .collect(),
         _ => vec![],
     }
 }
 
 fn jsonb_array_elements<'a>(a: Datum<'a>) -> Vec<Row> {
+    let mut row_packer = repr::RowPacker::new();
     match a {
-        Datum::List(list) => list.iter().map(|e| Row::pack(&[e])).collect(),
+        Datum::List(list) => list.iter().map(move |e| row_packer.pack(&[e])).collect(),
         _ => vec![],
     }
 }
 
 fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
+    let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::String(s) => {
             let r = r.inner();
@@ -527,19 +531,20 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
                 .iter()
                 .skip(1)
                 .map(|m| Datum::from(m.map(|m| m.as_str())));
-            Some(Row::pack(datums_iter))
+            Some(row_packer.pack(datums_iter))
         }
         _ => None,
     }
 }
 
 fn generate_series<'a>(typ: &ScalarType, start: Datum<'a>, stop: Datum<'a>) -> Vec<Row> {
+    let mut row_packer = repr::RowPacker::new();
     match (typ, start, stop) {
         (ScalarType::Int64, Datum::Int64(start), Datum::Int64(stop)) => (start..stop + 1)
-            .map(|i| Row::pack(&[Datum::Int64(i)]))
+            .map(move |i| row_packer.pack(&[Datum::Int64(i)]))
             .collect(),
         (ScalarType::Int32, Datum::Int32(start), Datum::Int32(stop)) => (start..stop + 1)
-            .map(|i| Row::pack(&[Datum::Int32(i)]))
+            .map(|i| row_packer.pack(&[Datum::Int32(i)]))
             .collect(),
         (_, Datum::Null, _) | (_, _, Datum::Null) => vec![],
         _ => panic!("expected int64"),
@@ -635,14 +640,17 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
         .from_reader(bytes);
     csv_reader
         .records()
-        .filter_map(|res| {
-            res.ok().and_then(|sr| {
-                if sr.len() == n_cols {
-                    Some(Row::pack(sr.iter().map(|s| Datum::String(s))))
-                } else {
-                    None
-                }
-            })
+        .filter_map({
+            let mut row_packer = repr::RowPacker::new();
+            move |res| {
+                res.ok().and_then(|sr| {
+                    if sr.len() == n_cols {
+                        Some(row_packer.pack(sr.iter().map(|s| Datum::String(s))))
+                    } else {
+                        None
+                    }
+                })
+            }
         })
         .collect()
 }

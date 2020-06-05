@@ -96,8 +96,9 @@ impl LiteralLifting {
                         typ.keys.sort();
                         typ.keys.dedup();
 
+                        let mut row_packer = repr::RowPacker::new();
                         for (row, _cnt) in rows.iter_mut() {
-                            *row = repr::Row::pack(row.unpack().into_iter().take(typ.arity()));
+                            *row = row_packer.pack(row.unpack().into_iter().take(typ.arity()));
                         }
                     }
                     literals

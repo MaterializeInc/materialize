@@ -149,6 +149,16 @@ fn text_to_datum(bytes: &[u8]) -> Datum {
 
 struct OffsetDecoderState<F: Fn(&[u8]) -> Datum> {
     datum_func: F,
+    row_packer: RowPacker,
+}
+
+impl<F: Fn(&[u8]) -> Datum> From<F> for OffsetDecoderState<F> {
+    fn from(datum_func: F) -> Self {
+        Self {
+            datum_func,
+            row_packer: RowPacker::new(),
+        }
+    }
 }
 
 #[async_trait(?Send)]
@@ -159,9 +169,7 @@ where
     fn reset_event_count(&mut self) {}
 
     async fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        let mut result = RowPacker::new();
-        result.push((self.datum_func)(bytes));
-        Ok(result.finish())
+        Ok(self.row_packer.pack(&[(self.datum_func)(bytes)]))
     }
 
     /// give a session a key-value pair
@@ -272,9 +280,7 @@ where
     let decoded_stream = match (key_encoding, value_encoding) {
         (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: bytes_to_datum,
-            },
+            OffsetDecoderState::from(bytes_to_datum),
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_config,
@@ -288,9 +294,7 @@ where
         ),
         (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: text_to_datum,
-            },
+            OffsetDecoderState::from(text_to_datum),
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_config,
@@ -326,54 +330,40 @@ where
         ),
         (DataEncoding::Text, DataEncoding::Bytes) => decode_upsert_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: text_to_datum,
-            },
-            OffsetDecoderState {
-                datum_func: bytes_to_datum,
-            },
+            OffsetDecoderState::from(text_to_datum),
+            OffsetDecoderState::from(bytes_to_datum),
             &op_name,
         ),
         (DataEncoding::Bytes, DataEncoding::Text) => decode_upsert_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: bytes_to_datum,
-            },
-            OffsetDecoderState {
-                datum_func: text_to_datum,
-            },
+            OffsetDecoderState::from(bytes_to_datum),
+            OffsetDecoderState::from(text_to_datum),
             &op_name,
         ),
         (DataEncoding::Bytes, DataEncoding::Bytes) => decode_upsert_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: bytes_to_datum,
-            },
-            OffsetDecoderState {
-                datum_func: bytes_to_datum,
-            },
+            OffsetDecoderState::from(bytes_to_datum),
+            OffsetDecoderState::from(bytes_to_datum),
             &op_name,
         ),
         (DataEncoding::Text, DataEncoding::Text) => decode_upsert_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: text_to_datum,
-            },
-            OffsetDecoderState {
-                datum_func: text_to_datum,
-            },
+            OffsetDecoderState::from(text_to_datum),
+            OffsetDecoderState::from(text_to_datum),
             &op_name,
         ),
         _ => unreachable!("Unsupported encoding combination"),
     };
-    decoded_stream.map(|(key, value, timestamp)| {
-        if let Some(value) = value {
-            let mut value_with_key = RowPacker::new();
-            value_with_key.extend_by_row(&key);
-            value_with_key.extend_by_row(&value);
-            (key, Some(value_with_key.finish()), timestamp)
-        } else {
-            (key, None, timestamp)
+    decoded_stream.map({
+        let mut row_packer = RowPacker::new();
+        move |(key, value, timestamp)| {
+            if let Some(value) = value {
+                row_packer.extend_by_row(&key);
+                row_packer.extend_by_row(&value);
+                (key, Some(row_packer.finish_and_reuse()), timestamp)
+            } else {
+                (key, None, timestamp)
+            }
         }
     })
 }
@@ -482,17 +472,13 @@ where
         ),
         (DataEncoding::Bytes, Envelope::None) => decode_values_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: bytes_to_datum,
-            },
+            OffsetDecoderState::from(bytes_to_datum),
             &op_name,
             SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         ),
         (DataEncoding::Text, Envelope::None) => decode_values_inner(
             stream,
-            OffsetDecoderState {
-                datum_func: text_to_datum,
-            },
+            OffsetDecoderState::from(text_to_datum),
             &op_name,
             SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         ),

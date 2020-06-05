@@ -192,6 +192,7 @@ where
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
                     let aggregates_clone = aggregates.clone();
                     let aggregates_len = aggregates.len();
+                    let mut row_packer = RowPacker::new();
                     move |key, input, output| {
                         // The intent, unless things are terribly wrong, is that `input`
                         // contains, in order, the values to drop into `output`. If this
@@ -211,13 +212,12 @@ where
                                 relation_expr_clone.pretty(),
                             );
                         }
-                        let mut result = RowPacker::new();
-                        result.extend(key.iter());
+                        row_packer.extend(key.iter());
                         for ((_pos, val), cnt) in input.iter() {
                             assert_eq!(*cnt, 1);
-                            result.push(val.unpack_first());
+                            row_packer.push(val.unpack_first());
                         }
-                        output.push((result.finish(), 1));
+                        output.push((row_packer.finish_and_reuse(), 1));
                     }
                 });
                 (oks, err_input)
@@ -281,6 +281,7 @@ where
         // Perform a final aggregation, on potentially hierarchically reduced data.
         // The same code should work on data that can not be hierarchically reduced.
         partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
+            let mut row_packer = RowPacker::new();
             move |key, source, target| {
                 // Negative counts would be surprising, but until we are 100% certain we wont
                 // see them, we should report when we do. We may want to bake even more info
@@ -299,12 +300,11 @@ where
                     let iter = source.iter().flat_map(|(v, w)| {
                         std::iter::repeat(v.iter().next().unwrap()).take(*w as usize)
                     });
-                    let mut packer = RowPacker::new();
                     if prepend_key {
-                        packer.extend(key.iter());
+                        row_packer.extend(key.iter());
                     }
-                    packer.push(func.eval(iter, &RowArena::new()));
-                    target.push((packer.finish(), 1));
+                    row_packer.push(func.eval(iter, &RowArena::new()));
+                    target.push((row_packer.finish_and_reuse(), 1));
                 }
             }
         })
@@ -385,7 +385,8 @@ where
         })
         .consolidate_stream()
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-            "ReduceAccumulable",
+            "ReduceAccumulable", {
+            let mut row_packer = RowPacker::new();
             move |key, input, output| {
                 let accum = &input[0].1;
                 let tot = accum.element1;
@@ -448,14 +449,13 @@ where
                 // panic in ReduceCollation.
                 if tot != 0 {
                     // Pack the value with the key as the result.
-                    let mut packer = RowPacker::new();
                     if prepend_key {
-                        packer.extend(key.iter());
+                        row_packer.extend(key.iter());
                     }
-                    packer.push(value);
-                    output.push((packer.finish(), 1));
+                    row_packer.push(value);
+                    output.push((row_packer.finish_and_reuse(), 1));
                 }
-            },
+            }},
         )
 }
 
@@ -493,6 +493,7 @@ where
     collection
         .map(move |((key, hash), row)| ((key, hash % modulus), row))
         .reduce_named("ReduceHierarchical", {
+            let mut row_packer = repr::RowPacker::new();
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
@@ -507,7 +508,7 @@ where
                     // hierarchical aggregations; should that belief be incorrect, we
                     // should certainly revise this implementation.
                     let iter = source.iter().map(|(val, _cnt)| val.iter().next().unwrap());
-                    target.push((Row::pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
+                    target.push((row_packer.pack(Some(aggr.eval(iter, &RowArena::new()))), 1));
                 }
             }
         })

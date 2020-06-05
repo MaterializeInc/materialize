@@ -603,7 +603,11 @@ impl RelationExpr {
 
     /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        let rows = rows.into_iter().map(Row::pack).collect();
+        let mut row_packer = repr::RowPacker::new();
+        let rows = rows
+            .into_iter()
+            .map(move |datums| row_packer.pack(datums))
+            .collect();
         RelationExpr::Constant { rows, typ }
     }
 }

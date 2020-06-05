@@ -44,7 +44,7 @@ use expr::{
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row};
+use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
 use sql::ast::{ExplainOptions, ObjectType, Statement};
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
@@ -1086,12 +1086,13 @@ where
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, failure::Error> {
+        let mut row_packer = RowPacker::new();
         Ok(send_immediate_rows(
             session
                 .vars()
                 .iter()
                 .map(|v| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::String(v.name()),
                         Datum::String(&v.value()),
                         Datum::String(v.description()),
@@ -1459,18 +1460,21 @@ where
 
         let mut rows = view_information
             .into_iter()
-            .map(|(name, class, queryable, materialized)| {
-                let mut datums = vec![Datum::from(name.as_str())];
-                if full {
-                    datums.push(Datum::from(class));
-                    if show_queryable {
-                        datums.push(Datum::from(queryable));
+            .map({
+                let mut row_packer = RowPacker::new();
+                move |(name, class, queryable, materialized)| {
+                    let mut datums = vec![Datum::from(name.as_str())];
+                    if full {
+                        datums.push(Datum::from(class));
+                        if show_queryable {
+                            datums.push(Datum::from(queryable));
+                        }
+                        if !limit_materialized {
+                            datums.push(Datum::from(materialized));
+                        }
                     }
-                    if !limit_materialized {
-                        datums.push(Datum::from(materialized));
-                    }
+                    row_packer.pack(&datums)
                 }
-                Row::pack(&datums)
             })
             .collect::<Vec<_>>();
         rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));

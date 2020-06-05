@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use expr::RelationExpr;
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, RowArena};
 
 use crate::{TransformArgs, TransformError};
 
@@ -56,6 +56,7 @@ impl FoldConstants {
                     // `aggregates`.
                     let mut groups = BTreeMap::new();
                     let temp_storage2 = RowArena::new();
+                    let mut row_packer = repr::RowPacker::new();
                     for (row, diff) in rows {
                         // We currently maintain the invariant that any negative
                         // multiplicities will be consolidated away before they
@@ -74,9 +75,9 @@ impl FoldConstants {
                         let val = aggregates
                             .iter()
                             .map(|agg| {
-                                Ok::<_, TransformError>(Row::pack(&[agg
-                                    .expr
-                                    .eval(&datums, &temp_storage)?]))
+                                Ok::<_, TransformError>(
+                                    row_packer.pack(&[agg.expr.eval(&datums, &temp_storage)?]),
+                                )
                             })
                             .collect::<Result<Vec<_>, _>>()?;
                         let entry = groups.entry(key).or_insert_with(Vec::new);
@@ -92,27 +93,30 @@ impl FoldConstants {
                     // result of the nth aggregate function for that group.
                     let new_rows = groups
                         .into_iter()
-                        .map(|(key, vals)| {
-                            let temp_storage = RowArena::new();
-                            let row = Row::pack(key.into_iter().chain(
-                                aggregates.iter().enumerate().map(|(i, agg)| {
-                                    if agg.distinct {
-                                        agg.func.eval(
-                                            vals.iter()
-                                                .map(|val| val[i].unpack_first())
-                                                .collect::<HashSet<_>>()
-                                                .into_iter(),
-                                            &temp_storage,
-                                        )
-                                    } else {
-                                        agg.func.eval(
-                                            vals.iter().map(|val| val[i].unpack_first()),
-                                            &temp_storage,
-                                        )
-                                    }
-                                }),
-                            ));
-                            (row, 1)
+                        .map({
+                            let mut row_packer = repr::RowPacker::new();
+                            move |(key, vals)| {
+                                let temp_storage = RowArena::new();
+                                let row = row_packer.pack(key.into_iter().chain(
+                                    aggregates.iter().enumerate().map(|(i, agg)| {
+                                        if agg.distinct {
+                                            agg.func.eval(
+                                                vals.iter()
+                                                    .map(|val| val[i].unpack_first())
+                                                    .collect::<HashSet<_>>()
+                                                    .into_iter(),
+                                                &temp_storage,
+                                            )
+                                        } else {
+                                            agg.func.eval(
+                                                vals.iter().map(|val| val[i].unpack_first()),
+                                                &temp_storage,
+                                            )
+                                        }
+                                    }),
+                                ));
+                                (row, 1)
+                            }
                         })
                         .collect();
 
@@ -157,6 +161,7 @@ impl FoldConstants {
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
+                    let mut row_packer = repr::RowPacker::new();
                     let new_rows = rows
                         .iter()
                         .cloned()
@@ -166,7 +171,7 @@ impl FoldConstants {
                             for scalar in scalars.iter() {
                                 unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
                             }
-                            Ok::<_, TransformError>((Row::pack(unpacked), diff))
+                            Ok::<_, TransformError>((row_packer.pack(unpacked), diff))
                         })
                         .collect::<Result<_, _>>()?;
                     *relation = RelationExpr::Constant {
@@ -187,6 +192,7 @@ impl FoldConstants {
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     let mut new_rows = Vec::new();
+                    let mut row_packer = repr::RowPacker::new();
                     for (input_row, diff) in rows {
                         let datums = input_row.unpack();
                         let temp_storage = RowArena::new();
@@ -198,9 +204,8 @@ impl FoldConstants {
                             &temp_storage,
                         );
                         for output_row in output_rows {
-                            let row = Row::pack(
-                                input_row.clone().into_iter().chain(output_row.into_iter()),
-                            );
+                            let row = row_packer
+                                .pack(input_row.clone().into_iter().chain(output_row.into_iter()));
                             new_rows.push((row, *diff))
                         }
                     }
@@ -242,11 +247,12 @@ impl FoldConstants {
             }
             RelationExpr::Project { input, outputs } => {
                 if let RelationExpr::Constant { rows, .. } = &**input {
+                    let mut row_packer = repr::RowPacker::new();
                     let new_rows = rows
                         .iter()
                         .map(|(input_row, diff)| {
                             let datums = input_row.unpack();
-                            (Row::pack(outputs.iter().map(|i| &datums[*i])), *diff)
+                            (row_packer.pack(outputs.iter().map(|i| &datums[*i])), *diff)
                         })
                         .collect();
                     *relation = RelationExpr::Constant {
@@ -271,7 +277,8 @@ impl FoldConstants {
                 }) {
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
-                    let mut old_rows = vec![(Row::pack::<_, Datum>(None), 1)];
+                    let mut old_rows = vec![(repr::Row::pack::<_, Datum>(None), 1)];
+                    let mut row_packer = repr::RowPacker::new();
                     for input in inputs.iter() {
                         if let RelationExpr::Constant { rows, .. } = input {
                             let mut next_rows = Vec::new();
@@ -280,7 +287,7 @@ impl FoldConstants {
                                     let old_datums = old_row.unpack();
                                     let new_datums = new_row.unpack();
                                     next_rows.push((
-                                        Row::pack(old_datums.iter().chain(new_datums.iter())),
+                                        row_packer.pack(old_datums.iter().chain(new_datums.iter())),
                                         old_count * *new_count,
                                     ));
                                 }

@@ -33,6 +33,7 @@ where
         SourceOutput::<Vec<u8>, Vec<u8>>::value_contract(),
         "RegexDecode",
         |_, _| {
+            let mut row_packer = repr::RowPacker::new();
             move |input, output| {
                 input.for_each(|cap, lines| {
                     let mut session = output.session(&cap);
@@ -55,7 +56,7 @@ where
                             None => continue,
                         };
                         session.give((
-                            Row::pack(captures.iter().skip(1).map(
+                            row_packer.pack(captures.iter().skip(1).map(
                                 |m| Datum::from( m.map(
                                     |m| m.as_str())
                                 )
