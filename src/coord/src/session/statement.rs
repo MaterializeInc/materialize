@@ -40,8 +40,7 @@
 //! [m]: https://www.postgresql.org/docs/12/protocol-message-formats.html#Parse
 
 use repr::{RelationDesc, Row};
-
-use crate::plan::Params;
+use sql::plan::Params;
 
 /// A prepared statement.
 #[derive(Debug)]

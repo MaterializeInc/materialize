@@ -26,10 +26,10 @@ use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
 use sql::names::{DatabaseSpecifier, FullName, PartialName};
 use sql::plan::{Params, Plan, PlanContext};
-use sql::session::Session;
 use transform::Optimizer;
 
 use crate::catalog::error::{Error, ErrorKind};
+use crate::session::Session;
 
 mod error;
 pub mod storage;

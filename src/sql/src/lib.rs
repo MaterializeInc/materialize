@@ -20,7 +20,6 @@ pub mod normalize;
 pub mod parse;
 pub mod plan;
 pub mod pure;
-pub mod session;
 
 #[macro_export]
 macro_rules! unsupported {

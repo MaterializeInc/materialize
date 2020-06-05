@@ -27,6 +27,8 @@ mod sink_connector;
 mod timestamp;
 mod util;
 
+pub mod session;
+
 pub use self::coord::{dump_catalog, Config, Coordinator};
 pub use self::timestamp::TimestampConfig;
 pub use command::{Command, ExecuteResponse, Response, RowsFuture, StartupMessage};

@@ -12,9 +12,9 @@ use std::sync::Arc;
 use bytes::BytesMut;
 use postgres::error::SqlState;
 
+use coord::session::TransactionStatus as CoordTransactionStatus;
 use dataflow_types::Update;
 use repr::{ColumnName, RelationDesc, RelationType, ScalarType};
-use sql::session::TransactionStatus as SqlTransactionStatus;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -277,7 +277,7 @@ pub enum BackendMessage {
     CopyDone,
 }
 
-/// A local representation of [`SqlTransactionStatus`]
+/// A local representation of [`CoordTransactionStatus`]
 #[derive(Debug, Clone, Copy)]
 pub enum TransactionStatus {
     /// Not currently in a transaction
@@ -288,20 +288,20 @@ pub enum TransactionStatus {
     Failed,
 }
 
-impl From<SqlTransactionStatus> for TransactionStatus {
+impl From<CoordTransactionStatus> for TransactionStatus {
     /// Convert from the Session's version
-    fn from(status: SqlTransactionStatus) -> TransactionStatus {
+    fn from(status: CoordTransactionStatus) -> TransactionStatus {
         match status {
-            SqlTransactionStatus::Idle => TransactionStatus::Idle,
-            SqlTransactionStatus::InTransaction => TransactionStatus::InTransaction,
-            SqlTransactionStatus::Failed => TransactionStatus::Failed,
+            CoordTransactionStatus::Idle => TransactionStatus::Idle,
+            CoordTransactionStatus::InTransaction => TransactionStatus::InTransaction,
+            CoordTransactionStatus::Failed => TransactionStatus::Failed,
         }
     }
 }
 
-impl From<&SqlTransactionStatus> for TransactionStatus {
+impl From<&CoordTransactionStatus> for TransactionStatus {
     /// Convert from the Session's version
-    fn from(status: &SqlTransactionStatus) -> TransactionStatus {
+    fn from(status: &CoordTransactionStatus) -> TransactionStatus {
         TransactionStatus::from(*status)
     }
 }
