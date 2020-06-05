@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! SQL configuration parameters and connection state.
+//! Per-connection configuration parameters and state.
 //!
 //! Materialize roughly follows the PostgreSQL configuration model, which works
 //! as follows. There is a global set of named configuration parameters, like

@@ -24,12 +24,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 use tokio_util::codec::Framed;
 
+use coord::session::Session;
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::ast::Statement;
-use sql::session::Session;
 
 use crate::codec::Codec;
 use crate::message::{

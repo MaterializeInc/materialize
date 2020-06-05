@@ -43,6 +43,7 @@ use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use regex::Regex;
 
+use coord::session::Session;
 use coord::{ExecuteResponse, TimestampConfig};
 use dataflow_types::PeekResponse;
 use ore::option::OptionExt;
@@ -53,7 +54,6 @@ use repr::strconv::{
 };
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use sql::ast::Statement;
-use sql::session::Session;
 use sql_parser::parser::ParserError as SqlParserError;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};

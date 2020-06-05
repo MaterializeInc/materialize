@@ -49,11 +49,11 @@ use sql::ast::{ExplainOptions, ObjectType, Statement};
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, Plan, PlanContext};
-use sql::session::{PreparedStatement, Session};
 use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
+use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 use crate::{sink_connector, Command, ExecuteResponse, Response, StartupMessage};

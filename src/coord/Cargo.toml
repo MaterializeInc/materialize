@@ -41,4 +41,5 @@ symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.2"
 transform = { path = "../transform" }
+unicase = "2.6.0"
 url = "2"

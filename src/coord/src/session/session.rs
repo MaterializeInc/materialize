@@ -22,8 +22,8 @@ use std::fmt;
 use failure::bail;
 
 use repr::{Datum, Row, ScalarType};
+use sql::plan::Params;
 
-use crate::plan::Params;
 use crate::session::statement::{Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};

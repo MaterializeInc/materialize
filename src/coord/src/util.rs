@@ -7,9 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use sql::session::Session;
-
 use crate::command::Response;
+use crate::session::Session;
 
 /// Handles responding to clients.
 pub struct ClientTransmitter<T> {
