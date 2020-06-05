@@ -21,13 +21,14 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 use std::iter;
 use std::rc::Rc;
 
 use failure::{bail, ensure, format_err, ResultExt};
+use lazy_static::lazy_static;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, ExtractField, Function, FunctionArgs, Ident, JoinConstraint,
@@ -1391,7 +1392,7 @@ pub fn plan_coerce<'a>(
         }
         (LiteralString(s), Plain(typ)) => {
             let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String));
-            plan_cast_internal(ecx, CastContext::Implicit("string literal"), lit, typ)?
+            plan_cast_internal(ecx, CastContext::Internal("string literal"), lit, typ)?
         }
         (LiteralString(s), JsonbAny) => {
             ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::Jsonb))
@@ -1609,7 +1610,7 @@ pub fn plan_coercible_expr<'a>(
                 if let ScalarType::Date = typ {
                     expr = plan_cast_internal(
                         ecx,
-                        CastContext::Implicit("EXTRACT"),
+                        CastContext::Internal("EXTRACT"),
                         expr,
                         ScalarType::Timestamp,
                     )?;
@@ -1766,7 +1767,7 @@ pub fn plan_homogeneous_exprs(
     for (expr, typ) in pending.into_iter().map(Option::unwrap) {
         match plan_cast_internal(
             ecx,
-            CastContext::Implicit(name),
+            CastContext::Internal(name),
             expr,
             best_target_type.clone().unwrap(),
         ) {
@@ -1925,7 +1926,12 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
                 AggregateFunc::JsonbAgg => {
                     // We need to transform input into jsonb in order to
                     // match Postgres' behavior here.
-                    let expr = plan_to_jsonb(ecx, "jsonb_agg", expr)?;
+                    let expr = plan_cast_internal(
+                        ecx,
+                        CastContext::Internal("jsonb_agg"),
+                        expr,
+                        ScalarType::Jsonb,
+                    )?;
                     (expr, AggregateFunc::JsonbAgg)
                 }
                 func => (expr, func),
@@ -2046,7 +2052,7 @@ fn plan_function<'a>(
             };
             plan_cast_internal(
                 ecx,
-                CastContext::Implicit("internal.avg_promotion"),
+                CastContext::Internal("internal.avg_promotion"),
                 expr,
                 output_type,
             )
@@ -2108,7 +2114,7 @@ fn plan_function<'a>(
                     // because sqrt is an inherently imprecise operation.
                     let expr = plan_cast_internal(
                         ecx,
-                        CastContext::Implicit("sqrt"),
+                        CastContext::Internal("sqrt"),
                         expr,
                         ScalarType::Float64,
                     )?;
@@ -2132,33 +2138,6 @@ fn plan_function<'a>(
             }
         }
     }
-}
-
-pub fn plan_to_jsonb(
-    ecx: &ExprContext,
-    name: &str,
-    arg: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error> {
-    let typ = ecx.column_type(&arg).scalar_type;
-    Ok(match typ {
-        ScalarType::Jsonb => arg,
-        ScalarType::String | ScalarType::Float64 | ScalarType::Bool => {
-            arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
-        }
-        ScalarType::Int32 => arg
-            .call_unary(UnaryFunc::CastInt32ToFloat64)
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
-            // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
-            bail!(
-                "{}() doesn't currently support {} arguments, try adding ::float to the argument for now",
-                name,
-                typ
-            )
-        }
-        _ => plan_cast_internal(ecx, CastContext::Implicit(name), arg, ScalarType::String)?
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-    })
 }
 
 fn plan_is_null_expr<'a>(
@@ -2726,168 +2705,425 @@ pub fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<Sc
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CastContext<'a> {
+    /// Casts requested by users, or in need of that style of behavior.
     Explicit,
+    /// Casts during function/operator selection; limited to
+    /// `CastAllowedInContext::Implict` casts.
     Implicit(&'a str),
+    /// Casts that require implicit behavior, but need might perform
+    /// `CastAllowedInContext::Explicit` casts.
+    Internal(&'a str),
+    /// Casts from most types to Jsonb, even those without explcit casts.
+    JsonbAny(&'a str),
 }
 
 impl<'a> fmt::Display for CastContext<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CastContext::Explicit => f.write_str("CAST"),
-            CastContext::Implicit(s) => write!(f, "{}", s),
+            CastContext::Implicit(s) | CastContext::Internal(s) | CastContext::JsonbAny(s) => {
+                write!(f, "{}", s)
+            }
         }
     }
 }
 
-/// Plans a cast between two `RelationExpr`s of different types. If it is
-/// impossible to cast between the two types, an error is returned.
+/// Describes different methods of implementing functions that cast between
+/// types.
+pub enum CastOp {
+    /// Provides `UnaryFunc` for `ScalarExpr` to call via `call_unary.
+    U(UnaryFunc),
+    /// Provides different `UnaryFunc`s based on the `CastContext`.
+    UFomContext(fn(CastContext) -> UnaryFunc),
+    /// Contains logic to perform cast with no additional context.
+    OneToOne(fn(ScalarExpr) -> ScalarExpr),
+    /// Requires the scale of the decimals being converted to or from.
+    WithDecScales(fn(ScalarExpr, Option<&u8>, Option<&u8>) -> ScalarExpr),
+    /// Relies on casting the `ScalarExpr` to an intermediary type.
+    Recast(
+        fn(
+            &ExprContext,
+            CastContext,
+            ScalarExpr,
+            Option<&u8>,
+        ) -> Result<ScalarExpr, failure::Error>,
+    ),
+    /// Casts the `ScalarExpr` to `ScalarType::String` before casting to
+    /// `ScalarType::Jsonb`.
+    JsonbAny,
+}
+
+impl CastOp {
+    fn gen_expr(
+        &self,
+        ecx: &ExprContext,
+        ccx: CastContext,
+        expr: ScalarExpr,
+        from_dec_scale: Option<&u8>,
+        to_dec_scale: Option<&u8>,
+    ) -> Result<ScalarExpr, failure::Error> {
+        use CastOp::*;
+        let e = match self {
+            U(f) => expr.call_unary(f.clone()),
+            UFomContext(f) => {
+                let f = f(ccx);
+                expr.call_unary(f)
+            }
+            WithDecScales(f) => f(expr, from_dec_scale, to_dec_scale),
+            OneToOne(f) => f(expr),
+            Recast(f) => f(ecx, ccx, expr, to_dec_scale)?,
+            JsonbAny => {
+                if let CastContext::JsonbAny(s) = ccx {
+                    plan_cast_internal(ecx, CastContext::Internal(s), expr, ScalarType::String)?
+                        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
+                } else {
+                    // We should have already ensured that the `ccx` is
+                    // `JsonbAny` before calling `gen_expr`.
+                    unreachable!("JsonbAny casts are only valid with CastContext::JsonbAny")
+                }
+            }
+        };
+
+        Ok(e)
+    }
+}
+
+/// Provides shorthand in `casts!` macro for `CastOp::U`.
+impl From<UnaryFunc> for CastOp {
+    fn from(u: UnaryFunc) -> CastOp {
+        CastOp::U(u)
+    }
+}
+
+/// Correlates a [`CastOp`] with the [`CastContext`]s in which it's permitted.
+pub enum CastAllowedInContext {
+    /// Allowed in all contexts.
+    Implicit(CastOp),
+    /// Allowed in `Internal`, `Explicit`, and `JsonbAny` [`CastContext`]s.
+    Explicit(CastOp),
+    /// Only allowed in `JsonbAny` [`CastContext`]s.
+    JsobAny(CastOp),
+}
+
+macro_rules! casts {
+    {
+        implicit => {
+            $($implicit_types:expr => $implicit_cast:expr),+
+        }
+
+        explicit => {
+            $($explicit_types:expr => $explicit_cast:expr),+
+        }
+
+        jsonbany => {
+            $($jsonb_from_type:expr),+
+        }
+
+    } => {
+        use CastAllowedInContext::*;
+        let mut v: HashMap<(ScalarType, ScalarType), CastAllowedInContext> = HashMap::new();
+        $(v.insert($implicit_types, Implicit($implicit_cast.into()));)+
+        $(v.insert($explicit_types, Explicit($explicit_cast.into()));)+
+        $(v.insert(($jsonb_from_type, ScalarType::Jsonb), JsobAny(CastOp::JsonbAny));)+
+        v
+    };
+}
+
+lazy_static! {
+    pub static ref VALID_CASTS: HashMap<(ScalarType, ScalarType), CastAllowedInContext> = {
+        use CastOp::*;
+        use ScalarType::*;
+        use UnaryFunc::*;
+
+        casts! {
+            implicit => {
+                (Int32, Float32) => CastInt32ToFloat32,
+                (Int32, Float64) => CastInt32ToFloat64,
+                (Int32, Int64) => CastInt32ToInt64,
+                (Int32, Decimal(0, 0)) => WithDecScales(|e, _f, t|{
+                    rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, *t.unwrap())
+                }),
+                (Int64, Decimal(0, 0)) => WithDecScales(|e, _f, t|{
+                    rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, *t.unwrap())
+                }),
+                (Int64, Float32) => CastInt64ToFloat32,
+                (Int64, Float64) => CastInt64ToFloat64,
+                (Float32, Float64) => CastFloat32ToFloat64,
+                (Decimal(0, 0), Float32) => WithDecScales(|e, f, _t| {
+                    let factor = 10_f32.powi(i32::from(*f.unwrap()));
+                    let factor =
+                        ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float32));
+                    e.call_unary(CastSignificandToFloat32)
+                        .call_binary(factor, BinaryFunc::DivFloat32)
+                }),
+                (Decimal(0, 0), Float64) => WithDecScales(|e, f, _t| {
+                    let factor = 10_f64.powi(i32::from(*f.unwrap()));
+                    let factor =
+                        ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float64));
+                    e.call_unary(CastSignificandToFloat64)
+                        .call_binary(factor, BinaryFunc::DivFloat64)
+                }),
+                (Decimal(0, 0), Decimal(0, 0)) => WithDecScales(|e, f, t| {
+                    rescale_decimal(e, *f.unwrap(), *t.unwrap())
+                }),
+                (Date, Timestamp) => CastDateToTimestamp,
+                (Date, TimestampTz) => CastDateToTimestampTz,
+                (Time, Interval) => CastTimeToInterval,
+                (Timestamp, TimestampTz) => CastTimestampToTimestampTz
+            }
+
+            explicit => {
+                (Bool, String) => UFomContext(|ccx|  {
+                    match ccx {
+                        CastContext::Explicit => CastBoolToStringExplicit,
+                        CastContext::Internal(_)
+                        | CastContext::JsonbAny(_)
+                        | CastContext::Implicit(_) => {
+                            CastBoolToStringImplicit
+                        }
+                    }
+                }),
+                (Bool, Jsonb) => CastJsonbOrNullToJsonb,
+                (Int32, Bool) => CastInt32ToBool,
+                (Int32, String) => CastInt32ToString,
+                (Int32, Jsonb) => OneToOne(|e: ScalarExpr|{
+                    e
+                    .call_unary(UnaryFunc::CastInt32ToFloat64)
+                    .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
+                }),
+                (Int64, Bool) => CastInt64ToBool,
+                (Int64, Int32) => CastInt64ToInt32,
+                (Int64, String) => CastInt64ToString,
+                (Float32, Int64) => CastFloat32ToInt64,
+                (Float32, Decimal(0, 0)) => WithDecScales(|e, _f, t| {
+                    let s = ScalarExpr::literal(
+                        Datum::from(i32::from(*t.unwrap())), ColumnType::new(Decimal(38, *t.unwrap()))
+                    );
+                    e.call_binary(s, BinaryFunc::CastFloat32ToDecimal)
+                }),
+                (Float32, String) => CastFloat32ToString,
+                (Float64, Int32) => CastFloat64ToInt32,
+                (Float64, Int64) => CastFloat64ToInt64,
+                (Float64, Decimal(0, 0)) => WithDecScales(|e, _f, t| {
+                    let s = ScalarExpr::literal(Datum::from(
+                        i32::from(*t.unwrap())), ColumnType::new(Decimal(38, *t.unwrap()))
+                    );
+                    e.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
+                }),
+                (Float64, String) => CastFloat64ToString,
+                (Float64, Jsonb) => CastJsonbOrNullToJsonb,
+                (Decimal(0, 0), Int32) => WithDecScales(|e, f, _t| {
+                    rescale_decimal(e, *f.unwrap(), 0).call_unary(CastDecimalToInt32)
+                }),
+                (Decimal(0, 0), Int64) => WithDecScales(|e, f, _t| {
+                    rescale_decimal(e, *f.unwrap(), 0).call_unary(CastDecimalToInt64)
+                }),
+                (Decimal(0, 0), String) => WithDecScales(|e, f, _t| {
+                    e.call_unary(CastDecimalToString(*f.unwrap()))
+                }),
+                (Date, String) => CastDateToString,
+                (Time, String) => CastTimeToString,
+                (Timestamp, Date) => CastTimestampToDate,
+                (Timestamp, String) => CastTimestampToString,
+                (TimestampTz, Date) => CastTimestampTzToDate,
+                (TimestampTz, Timestamp) => CastTimestampTzToTimestamp,
+                (TimestampTz, String) => CastTimestampTzToString,
+                (Interval, String) => CastIntervalToString,
+                (Interval, Time) => CastIntervalToTime,
+                (Bytes, String) => CastBytesToString,
+                (Jsonb, String) => JsonbStringify,
+                (Jsonb, Float64) => CastJsonbToFloat64,
+                (Jsonb, Bool) => CastJsonbToBool,
+                (Jsonb, Int32) => {
+                    Recast(|ecx, ccx, e, _s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToFloat64),
+                            Int32,
+                        )
+                    })
+                },
+                (Jsonb, Int64) => {
+                    Recast(|ecx, ccx, e, _s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToFloat64),
+                            Int64,
+                        )
+                    })
+                },
+                (Jsonb, Float32) => {
+                    Recast(|ecx, ccx, e, _s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToFloat64),
+                            Float32,
+                        )
+                    })
+                },
+                (Jsonb, Decimal(0,0)) => {
+                    Recast(|ecx, ccx, e, s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToFloat64),
+                            Decimal(38, *s.unwrap()),
+                        )
+                    })
+                },
+                (Jsonb, Date) => {
+                    Recast(|ecx, ccx, e, _s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToString),
+                            Date,
+                        )
+                    })
+                },
+                (Jsonb, Timestamp) => {
+                    Recast(|ecx, ccx, e, _s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToString),
+                            Timestamp,
+                        )
+                    })
+                },
+                (Jsonb, TimestampTz) => {
+                    Recast(|ecx, ccx, e, _s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToString),
+                            TimestampTz,
+                        )
+                    })
+                },
+                (Jsonb, Interval) => {
+                    Recast(|ecx, ccx, e, _s| {
+                        plan_cast_internal(
+                            ecx,
+                            ccx,
+                            e.call_unary(CastJsonbToString),
+                            Interval,
+                        )
+                    })
+                },
+                (String, Bool) => CastStringToBool,
+                (String, Int32) => CastStringToInt32,
+                (String, Int64) => CastStringToInt64,
+                (String, Float32) => CastStringToFloat32,
+                (String, Float64) => CastStringToFloat64,
+                (String, Decimal(0,0)) => WithDecScales(|e, _f, t| {
+                    e.call_unary(CastStringToDecimal(*t.unwrap()))
+                }),
+                (String, Date) => CastStringToDate,
+                (String, Time) => CastStringToTime,
+                (String, Timestamp) => CastStringToTimestamp,
+                (String, TimestampTz) => CastStringToTimestampTz,
+                (String, Interval) => CastStringToInterval,
+                (String, Bytes) => CastStringToBytes,
+                (String, Jsonb) => {
+                    UFomContext(|ccx| match ccx {
+                        CastContext::JsonbAny(_) => CastJsonbOrNullToJsonb,
+                        _ => CastStringToJsonb,
+                    })
+                }
+            }
+
+            jsonbany => {
+                Date,
+                Time,
+                Timestamp,
+                TimestampTz,
+                Interval,
+                Bytes
+            }
+        }
+    };
+}
+
+/// Plans a cast from a `ScalarExpr` to the specified `ScalarType`.
 ///
 /// Note that `plan_cast_internal` only understands [`ScalarType`]s. If you need
 /// to cast between SQL [`DataType`]s, see [`Planner::plan_cast`].
+///
+/// # Errors
+///
+/// - If a cast between the `ScalarExpr`'s base type and the specified type is
+///   not possible
+/// - If the cast is not allowed by the `CastContext`.
 pub fn plan_cast_internal<'a>(
     ecx: &ExprContext<'a>,
     ccx: CastContext<'a>,
     expr: ScalarExpr,
     to_scalar_type: ScalarType,
 ) -> Result<ScalarExpr, failure::Error> {
+    use CastAllowedInContext::*;
     use ScalarType::*;
-    use UnaryFunc::*;
-    let from_scalar_type = ecx.column_type(&expr).scalar_type;
 
-    let expr = match (from_scalar_type, to_scalar_type.clone()) {
-        (Bool, String) => expr.call_unary(match ccx {
-            CastContext::Explicit => CastBoolToStringExplicit,
-            CastContext::Implicit(_) => CastBoolToStringImplicit,
-        }),
-        (Int32, Bool) => expr.call_unary(CastInt32ToBool),
-        (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
-        (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
-        (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
-        (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, s),
-        (Int32, String) => expr.call_unary(CastInt32ToString),
-        (Int64, Bool) => expr.call_unary(CastInt64ToBool),
-        (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, s),
-        (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
-        (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
-        (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
-        (Int64, String) => expr.call_unary(CastInt64ToString),
-        (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
-        (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
-        (Float32, Decimal(_, s)) => {
-            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
-            expr.call_binary(s, BinaryFunc::CastFloat32ToDecimal)
-        }
-        (Float32, String) => expr.call_unary(CastFloat32ToString),
-        (Float64, Int32) => expr.call_unary(CastFloat64ToInt32),
-        (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
-        (Float64, Decimal(_, s)) => {
-            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
-            expr.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
-        }
-        (Float64, String) => expr.call_unary(CastFloat64ToString),
-        (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
-        (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
-        (Decimal(_, s), Float32) => {
-            let factor = 10_f32.powi(i32::from(s));
-            let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastSignificandToFloat32)
-                .call_binary(factor, BinaryFunc::DivFloat32)
-        }
-        (Decimal(_, s), Float64) => {
-            let factor = 10_f64.powi(i32::from(s));
-            let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastSignificandToFloat64)
-                .call_binary(factor, BinaryFunc::DivFloat64)
-        }
-        (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),
-        (Decimal(_, s), String) => expr.call_unary(UnaryFunc::CastDecimalToString(s)),
-        (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
-        (Date, TimestampTz) => expr.call_unary(CastDateToTimestampTz),
-        (Date, String) => expr.call_unary(CastDateToString),
-        (Time, String) => expr.call_unary(CastTimeToString),
-        (Time, Interval) => expr.call_unary(CastTimeToInterval),
-        (Timestamp, Date) => expr.call_unary(CastTimestampToDate),
-        (Timestamp, TimestampTz) => expr.call_unary(CastTimestampToTimestampTz),
-        (Timestamp, String) => expr.call_unary(CastTimestampToString),
-        (TimestampTz, Date) => expr.call_unary(CastTimestampTzToDate),
-        (TimestampTz, Timestamp) => expr.call_unary(CastTimestampTzToTimestamp),
-        (TimestampTz, String) => expr.call_unary(CastTimestampTzToString),
-        (Interval, String) => expr.call_unary(CastIntervalToString),
-        (Interval, Time) => expr.call_unary(CastIntervalToTime),
-        (Bytes, String) => expr.call_unary(CastBytesToString),
-        (Jsonb, String) => expr.call_unary(JsonbStringify),
-        (Jsonb, Float64) => expr.call_unary(CastJsonbToFloat64),
-        (Jsonb, Bool) => expr.call_unary(CastJsonbToBool),
-        (Jsonb, Int32) | (Jsonb, Int64) | (Jsonb, Float32) | (Jsonb, Decimal(..)) => {
-            plan_cast_internal(
-                ecx,
-                ccx,
-                expr.call_unary(CastJsonbToFloat64),
-                to_scalar_type,
-            )?
-        }
-        (Jsonb, Date) | (Jsonb, Timestamp) | (Jsonb, TimestampTz) | (Jsonb, Interval) => {
-            plan_cast_internal(ecx, ccx, expr.call_unary(CastJsonbToString), to_scalar_type)?
-        }
-        (String, Bool) => expr.call_unary(CastStringToBool),
-        (String, Int32) => expr.call_unary(CastStringToInt32),
-        (String, Int64) => expr.call_unary(CastStringToInt64),
-        (String, Float32) => expr.call_unary(CastStringToFloat32),
-        (String, Float64) => expr.call_unary(CastStringToFloat64),
-        (String, Decimal(_, s)) => expr.call_unary(CastStringToDecimal(s)),
-        (String, Date) => expr.call_unary(CastStringToDate),
-        (String, Time) => expr.call_unary(CastStringToTime),
-        (String, Timestamp) => expr.call_unary(CastStringToTimestamp),
-        (String, TimestampTz) => expr.call_unary(CastStringToTimestampTz),
-        (String, Interval) => expr.call_unary(CastStringToInterval),
-        (String, Bytes) => expr.call_unary(CastStringToBytes),
-        (String, Jsonb) => expr.call_unary(CastStringToJsonb),
-        (from, to) if from == to => expr,
-        (from, to) => {
-            bail!(
-                "{} does not support casting from {:?} to {:?}",
-                ccx,
-                from,
-                to
-            );
-        }
-    };
-    Ok(expr)
-}
-
-pub fn plan_cast_implicit<'a>(
-    ecx: &ExprContext<'a>,
-    ccx: CastContext<'a>,
-    expr: ScalarExpr,
-    to_scalar_type: ScalarType,
-) -> Result<ScalarExpr, failure::Error> {
-    use ScalarType::*;
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
 
     match (&from_scalar_type, &to_scalar_type) {
-        (String, String) | (Jsonb, Jsonb) => (),
-        (String, _)
-        | (_, String)
-        | (Jsonb, _)
-        | (Int64, Int32)
-        | (Float32, Int64)
-        | (Float32, Decimal(_, _))
-        | (Float64, Int32)
-        | (Float64, Int64)
-        | (Float64, Float32)
-        | (Float64, Decimal(_, _))
-        | (Decimal(_, _), Int32)
-        | (Decimal(_, _), Int64)
-        | (TimestampTz, Timestamp) => bail!(
-            "{} does not support implicitly casting from {:?} to {:?}; request an explicit cast",
+        // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
+        (Int64, Jsonb) | (Float32, Jsonb) | (Decimal(..), Jsonb) => bail!(
+            "{} doesn't currently support {} arguments, try casting the argument to \
+                float (::float) for now",
+            ccx,
+            from_scalar_type
+        ),
+        (f, t) => {
+            if f == t {
+                return Ok(expr);
+            }
+        }
+    }
+
+    let (matchable_from, from_dec_scale) = match &from_scalar_type {
+        Decimal(_, s) => (Decimal(0, 0), Some(s)),
+        other => (other.clone(), None),
+    };
+
+    let (matchable_to, to_dec_scale) = match &to_scalar_type {
+        Decimal(_, s) => (Decimal(0, 0), Some(s)),
+        other => (other.clone(), None),
+    };
+
+    let cast = VALID_CASTS.get(&(matchable_from, matchable_to));
+
+    let cast_op = match (cast, ccx) {
+        (Some(Implicit(f)), _)
+        | (Some(Explicit(f)), CastContext::Internal(_))
+        | (Some(Explicit(f)), CastContext::Explicit)
+        | (Some(Explicit(f)), CastContext::JsonbAny(_))
+        | (Some(JsobAny(f)), CastContext::JsonbAny(_)) => f,
+        (_, _) => bail!(
+            "{} does not support {}casting from {:?} to {:?}",
+            ccx,
+            if let CastContext::Implicit(_) = ccx {
+                "implicitly "
+            } else {
+                ""
+            },
+            from_scalar_type,
+            to_scalar_type
+        ),
+    };
+
+    match cast_op.gen_expr(ecx, ccx, expr, from_dec_scale, to_dec_scale) {
+        Ok(e) => Ok(e),
+        Err(_) => bail!(
+            "{} does not support casting from {:?} to {:?}",
             ccx,
             from_scalar_type,
             to_scalar_type
         ),
-        _ => {}
     }
-
-    plan_cast_internal(ecx, ccx, expr, to_scalar_type)
 }
 
 fn promote_number_floatdec<'a>(
@@ -2898,7 +3134,7 @@ fn promote_number_floatdec<'a>(
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Float32 | ScalarType::Float64 | ScalarType::Decimal(_, _) => expr,
         ScalarType::Int32 | ScalarType::Int64 => {
-            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Float64)?
+            plan_cast_internal(ecx, CastContext::Internal(name), expr, ScalarType::Float64)?
         }
         other => bail!("{} has non-numeric type {:?}", name, other),
     })
@@ -2912,7 +3148,7 @@ fn promote_int_int64<'a>(
     Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Int64 => expr,
         ScalarType::Int32 => {
-            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Int64)?
+            plan_cast_internal(ecx, CastContext::Internal(name), expr, ScalarType::Int64)?
         }
         other => bail!("{} has non-integer type {:?}", name, other,),
     })
