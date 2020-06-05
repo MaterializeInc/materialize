@@ -17,7 +17,7 @@ use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::{bail, format_err};
 use itertools::Itertools;
-use log::warn;
+use log::{trace, warn};
 use serde_json::json;
 use sha2::Sha256;
 
@@ -620,6 +620,7 @@ pub struct Decoder {
     writer_schemas: Option<SchemaCache>,
     envelope: EnvelopeType,
     debezium: Option<DebeziumDecodeState>,
+    debug_name: String,
 }
 
 impl fmt::Debug for Decoder {
@@ -660,7 +661,7 @@ impl Decoder {
 
         let debezium = if envelope == EnvelopeType::Debezium {
             Some(
-                DebeziumDecodeState::new(&reader_schema, debug_name, worker_index)
+                DebeziumDecodeState::new(&reader_schema, debug_name.clone(), worker_index)
                     .ok_or_else(|| format_err!("Failed to extract Debezium schema information!"))?,
             )
         } else {
@@ -671,6 +672,7 @@ impl Decoder {
             writer_schemas,
             envelope,
             debezium,
+            debug_name,
         })
     }
 
@@ -720,6 +722,16 @@ impl Decoder {
                 after: row,
             }
         };
+        trace!(
+            "[customer-data] Decoded diff pair {:?}{} in {}",
+            result,
+            if let Some(coord) = coord {
+                format!(" at offset {}", coord)
+            } else {
+                format!("")
+            },
+            self.debug_name
+        );
         Ok(result)
     }
 }
