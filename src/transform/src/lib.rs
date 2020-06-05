@@ -51,6 +51,9 @@ pub mod topk_elision;
 pub mod update_let;
 // pub mod use_indexes;
 
+pub mod dataflow;
+pub use dataflow::optimize_dataflow;
+
 /// Arguments that get threaded through all transforms.
 #[derive(Debug)]
 pub struct TransformArgs<'a> {
@@ -285,65 +288,5 @@ impl Optimizer {
             Box::new(crate::empty_map::EmptyMap),
         ];
         Self { transforms }
-    }
-}
-
-use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::Id;
-use std::collections::HashSet;
-
-/// Optimizes the implementation of each dataflow.
-pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
-    // This method is currently limited in scope to propagating filtering and
-    // projection information, though it could certainly generalize beyond.
-
-    // 1. Propagate demand information from outputs back to sources.
-    let mut demand = HashMap::new();
-
-    // Demand all columns of inputs to sinks.
-    for (_id, sink) in dataflow.sink_exports.iter() {
-        let input_id = sink.from.0;
-        demand
-            .entry(Id::Global(input_id))
-            .or_insert_with(HashSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
-    }
-
-    // Demand all columns of inputs to exported indexes.
-    for (_id, desc, _typ) in dataflow.index_exports.iter() {
-        let input_id = desc.on_id;
-        demand
-            .entry(Id::Global(input_id))
-            .or_insert_with(HashSet::new)
-            .extend(0..dataflow.arity_of(&input_id));
-    }
-
-    // Propagate demand information from outputs to inputs.
-    for build_desc in dataflow.objects_to_build.iter_mut().rev() {
-        let transform = crate::demand::Demand;
-        if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-            transform.action(
-                build_desc.relation_expr.as_mut(),
-                columns.clone(),
-                &mut demand,
-            );
-        }
-    }
-
-    // Push demand information into the SourceDesc.
-    for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
-        if let Some(columns) = demand.get(&Id::Global(source_id.sid)).clone() {
-            // Install no-op demand information if none exists.
-            if source_desc.operators.is_none() {
-                source_desc.operators = Some(LinearOperator {
-                    predicates: Vec::new(),
-                    projection: (0..source_desc.desc.typ().arity()).collect(),
-                })
-            }
-            // Restrict required columns by those identified as demanded.
-            if let Some(operator) = &mut source_desc.operators {
-                operator.projection.retain(|col| columns.contains(col));
-            }
-        }
     }
 }
