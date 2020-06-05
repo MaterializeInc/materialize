@@ -503,26 +503,6 @@ fn cast_jsonb_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::Float64(_) => a,
-        Datum::String(s) => match s {
-            "NaN" => std::f64::NAN.into(),
-            "Infinity" => std::f64::INFINITY.into(),
-            "-Infinity" => std::f64::NEG_INFINITY.into(),
-            _ => Datum::Null,
-        },
-        _ => Datum::Null,
-    }
-}
-
-fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::True | Datum::False => a,
-        _ => Datum::Null,
-    }
-}
-
 fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_int32()
         .checked_add(b.unwrap_int32())
@@ -2360,8 +2340,6 @@ pub enum UnaryFunc {
     JsonbStringifyUnlessString,
     CastJsonbOrNullToJsonb,
     CastJsonbToString,
-    CastJsonbToFloat64,
-    CastJsonbToBool,
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2507,8 +2485,6 @@ impl UnaryFunc {
             }
             UnaryFunc::CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a)),
-            UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
-            UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
             UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
@@ -2692,8 +2668,6 @@ impl UnaryFunc {
 
             // can return null for other jsonb types
             CastJsonbToString => ColumnType::new(ScalarType::String).nullable(true),
-            CastJsonbToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
-            CastJsonbToBool => ColumnType::new(ScalarType::Bool).nullable(true),
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
@@ -2871,8 +2845,6 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::JsonbStringifyUnlessString => f.write_str("jsonbtostr?"),
             UnaryFunc::CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
-            UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
-            UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),

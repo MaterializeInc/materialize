@@ -37,6 +37,7 @@ use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
 use crate::names::{DatabaseSpecifier, FullName};
 
+pub(crate) mod cast;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod func;

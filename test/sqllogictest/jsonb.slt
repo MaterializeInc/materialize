@@ -1753,74 +1753,26 @@ SELECT jsonb_array_length('[]')
 
 # Casts
 
-query T
+query error CAST does not support casting from jsonb to f64
 SELECT ('1'::jsonb)::float;
-----
-1.000
 
-query T
-SELECT ('"Infinity"'::jsonb)::float;
-----
-inf
-
-query T
-SELECT ('"-Infinity"'::jsonb)::float;
-----
--inf
-
-query T
-SELECT ('"NaN"'::jsonb)::float;
-----
-NaN
-
-# not a number
-query T
-SELECT ('[1]'::jsonb)::float;
-----
-NULL
-
-# not a number
-query T
-SELECT ('"1"'::jsonb)::float;
-----
-NULL
-
-query T
-SELECT ('1'::jsonb)::int;
-----
-1
-
-# too big to fit in an int32
-query T
+query error CAST does not support casting from jsonb to i32
 SELECT ('9999999999999999999'::jsonb)::int;
-----
-NULL
 
-# not a number
-query T
+query error CAST does not support casting from jsonb to i32
 SELECT ('[1]'::jsonb)::int;
-----
-NULL
 
-query T
+query error CAST does not support casting from jsonb to date
 SELECT ('"2019-12-31"'::jsonb)::date;
-----
-2019-12-31
 
-query T
-SELECT ('"1969-06-01 10:10:10.410"'::jsonb)::timestamp;
-----
-1969-06-01 10:10:10.41
+query error CAST does not support casting from jsonb to timestamp
+SELECT ('"1969-06-01 10:10:10.410"'::jsonb)::timestamp
 
-query T
-SELECT ('"1-2 3 4:5:6.7"'::jsonb)::interval;
-----
-1 year 2 months 3 days 04:05:06.7
+query error CAST does not support casting from jsonb to interval
+SELECT ('"1-2 3 4:5:6.7"'::jsonb)::interval
 
-query T
-SELECT ('["2019-12-31"]'::jsonb)::date;
-----
-NULL
+query error CAST does not support casting from jsonb to date
+SELECT ('["2019-12-31"]'::jsonb)::date
 
 query T
 SELECT (null::jsonb)::text;
@@ -1836,6 +1788,11 @@ query T
 SELECT ('null'::jsonb)::text;
 ----
 null
+
+query T
+SELECT ('[1, 2.0, 3]'::jsonb)::text;
+----
+[1.0,2.0,3.0]
 
 query T
 SELECT ('null'::jsonb)->>0;

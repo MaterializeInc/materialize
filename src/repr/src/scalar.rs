@@ -619,6 +619,16 @@ impl<'a> ScalarType {
             ScalarType::List(_) => Datum::List(DatumList::empty()),
         }
     }
+
+    /// Returns a copy of `Self` with any embedded fields "zeroed" out. Meant to
+    /// make comparisons easier, allowing you to mimic `std::mem::discriminant`
+    /// equality.
+    pub fn desaturate(&self) -> ScalarType {
+        match self {
+            ScalarType::Decimal(..) => ScalarType::Decimal(0, 0),
+            _ => self.clone(),
+        }
+    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can
