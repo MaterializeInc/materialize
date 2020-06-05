@@ -48,6 +48,16 @@ pub struct MapFilterProject {
 }
 
 impl MapFilterProject {
+    /// Create a no-op operator for an input of a supplied arity.
+    pub fn new(input_arity: usize) -> Self {
+        Self {
+            expressions: Vec::new(),
+            predicates: Vec::new(),
+            projection: (0..input_arity).collect(),
+            input_arity,
+        }
+    }
+
     /// Evaluates the linear operator on a supplied list of datums.
     ///
     /// The arguments are the initial datums associated with the row,
@@ -76,9 +86,8 @@ impl MapFilterProject {
                 return Ok(None);
             }
         }
-        Ok(Some(
-            row_packer.pack(self.projection.iter().map(|i| datums[*i])),
-        ))
+        row_packer.extend(self.projection.iter().map(|i| datums[*i]));
+        Ok(Some(row_packer.finish_and_reuse()))
     }
 
     /// Retain only the indicated columns in the presented order.
@@ -136,7 +145,11 @@ impl MapFilterProject {
     /// more elemental operators, likely less efficiently.
     pub fn as_map_filter_project(&self) -> (Vec<ScalarExpr>, Vec<ScalarExpr>, Vec<usize>) {
         let map = self.expressions.clone();
-        let filter = self.predicates.iter().map(|(_pos, predicate)| predicate.clone()).collect::<Vec<_>>();
+        let filter = self
+            .predicates
+            .iter()
+            .map(|(_pos, predicate)| predicate.clone())
+            .collect::<Vec<_>>();
         let project = self.projection.clone();
         (map, filter, project)
     }
