@@ -15,6 +15,7 @@ use std::ops::Deref;
 use std::panic;
 use std::path::PathBuf;
 use std::str;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -25,7 +26,7 @@ use avro::types::Value;
 use failure::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
-use log::{error, info, log_enabled, warn};
+use log::{debug, error, info, log_enabled, warn};
 use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
@@ -297,9 +298,16 @@ enum ConsistencyFormatting {
 }
 
 /// Data consumer for Kafka source with RT consistency
+#[derive(Clone)]
 struct RtKafkaConnector {
-    consumer: BaseConsumer,
+    state: Arc<RtKafkaState>,
+    id: SourceInstanceId,
     topic: String,
+}
+
+struct RtKafkaState {
+    stop: AtomicBool,
+    high_watermarks: Mutex<Vec<i64>>,
 }
 
 use std::{fmt::Display, time::Instant};
@@ -327,13 +335,17 @@ impl ByoKafkaConnector {
         if self.last_watermark_update.elapsed().as_secs()
             >= WATERMARK_METRIC_MAX_UPDATE_INTERVAL_SECS
         {
-            let partitions = match get_kafka_partitions(&self.consumer, topic) {
-                Ok(partitions) => partitions,
-                Err(e) => {
-                    error!("while fetching kafka partitions for topic {}: {}", topic, e);
-                    return;
-                }
-            };
+            // TODO(benesch): 1s is too small a timeout for some Kafka clusters,
+            // but we don't want to just up the timeout here because this
+            // presently blocks the main Kafka thread.
+            let partitions =
+                match get_kafka_partitions(&self.consumer, topic, Duration::from_secs(1)) {
+                    Ok(partitions) => partitions,
+                    Err(e) => {
+                        error!("while fetching kafka partitions for topic {}: {}", topic, e);
+                        return;
+                    }
+                };
             for p in partitions {
                 match self
                     .consumer
@@ -528,8 +540,12 @@ fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Option<Vec<u8>> {
 }
 
 /// Return the list of partition ids associated with a specific topic
-fn get_kafka_partitions(consumer: &BaseConsumer, topic: &str) -> Result<Vec<i32>, failure::Error> {
-    let meta = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1))?;
+fn get_kafka_partitions(
+    consumer: &BaseConsumer,
+    topic: &str,
+    timeout: Duration,
+) -> Result<Vec<i32>, failure::Error> {
+    let meta = consumer.fetch_metadata(Some(&topic), timeout)?;
     if meta.topics().len() == 0 {
         bail!("topic {} does not exist", topic);
     } else if meta.topics().len() > 1 {
@@ -954,7 +970,13 @@ impl Timestamper {
                         .expect("Failed to prepare delete statement")
                         .execute(params![SqlVal(&id.sid), SqlVal(&id.vid)])
                         .expect("Failed to execute delete statement");
-                    self.rt_sources.remove(&id);
+                    if let Some(RtTimestampConsumer {
+                        connector: RtTimestampConnector::Kafka(RtKafkaConnector { state, .. }),
+                        ..
+                    }) = self.rt_sources.remove(&id)
+                    {
+                        state.stop.store(true, Ordering::SeqCst);
+                    }
                     self.byo_sources.remove(&id);
                 }
                 TimestampMessage::Shutdown => return true,
@@ -1235,7 +1257,7 @@ impl Timestamper {
     ) -> Option<RtTimestampConsumer> {
         match sc {
             ExternalSourceConnector::Kafka(kc) => {
-                self.create_rt_kafka_connector(kc)
+                self.create_rt_kafka_connector(id, kc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
                         last_partition_offset,
@@ -1349,7 +1371,11 @@ impl Timestamper {
         })
     }
 
-    fn create_rt_kafka_connector(&self, kc: KafkaSourceConnector) -> Option<RtKafkaConnector> {
+    fn create_rt_kafka_connector(
+        &self,
+        id: SourceInstanceId,
+        kc: KafkaSourceConnector,
+    ) -> Option<RtKafkaConnector> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &kc.url.to_string());
 
@@ -1361,16 +1387,33 @@ impl Timestamper {
             config.set(k, v);
         }
 
-        match config.create() {
-            Ok(consumer) => Some(RtKafkaConnector {
-                consumer,
-                topic: kc.topic,
-            }),
+        let consumer = match config.create::<BaseConsumer>() {
+            Ok(consumer) => consumer,
             Err(e) => {
                 error!("Failed to create Kafka Consumer {}", e);
-                None
+                return None;
             }
-        }
+        };
+
+        let connector = RtKafkaConnector {
+            state: Arc::new(RtKafkaState {
+                stop: AtomicBool::new(false),
+                high_watermarks: Mutex::new(vec![]),
+            }),
+            id,
+            topic: kc.topic,
+        };
+
+        // Metadata fetch requests on production Kafka clusters can take
+        // more than 1s to complete. This makes it far too expensive to run on
+        // the main timestamping thread.
+        thread::spawn({
+            let connector = connector.clone();
+            let timestamp_frequency = self.timestamp_frequency;
+            move || rt_kafka_metadata_fetch_loop(connector, consumer, timestamp_frequency)
+        });
+
+        Some(connector)
     }
 
     fn create_rt_ocf_connector(
@@ -1569,9 +1612,13 @@ impl Timestamper {
                 let consumer = ByoKafkaConnector::new(consumer);
                 consumer.consumer.subscribe(&[&timestamp_topic]).unwrap();
 
-                match get_kafka_partitions(&consumer.consumer, &timestamp_topic)
-                    .as_ref()
-                    .map(Deref::deref)
+                match get_kafka_partitions(
+                    &consumer.consumer,
+                    &timestamp_topic,
+                    Duration::from_secs(1),
+                )
+                .as_ref()
+                .map(Deref::deref)
                 {
                     Ok([]) => {
                         warn!(
@@ -1665,60 +1712,40 @@ impl Timestamper {
         for (id, cons) in self.rt_sources.iter_mut() {
             match &mut cons.connector {
                 RtTimestampConnector::Kafka(kc) => {
-                    let partitions = match get_kafka_partitions(&kc.consumer, &kc.topic) {
-                        Ok(partitions) => partitions,
-                        Err(e) => {
-                            error!(
-                                "while fetching kafka partitions for topic {}: {}",
-                                kc.topic, e
-                            );
-                            continue;
-                        }
-                    };
-                    let partition_count = i32::try_from(partitions.len()).unwrap();
-                    for p in partitions {
+                    let high_watermarks = kc.state.high_watermarks.lock().expect("lock poisoned");
+                    let partition_count: i32 = high_watermarks
+                        .len()
+                        .try_into()
+                        .expect("invalid partition count");
+                    for (p, high_watermark) in high_watermarks.iter().enumerate() {
+                        let p: i32 = p.try_into().expect("invalid partition id");
                         let current_p_offset = cons
                             .last_partition_offset
                             .entry(PartitionId::Kafka(p))
                             .or_insert(cons.start_offset);
                         let old_offset = *current_p_offset;
-                        let watermark =
-                            kc.consumer
-                                .fetch_watermarks(&kc.topic, p, Duration::from_secs(1));
-                        match watermark {
-                            Ok((_low, high)) => {
-                                // high here corresponds to the next available Kafka offset.
-                                // Ex: a stream with 0 records will return a high of 0
-                                // a stream with one record (written at offset 0) will return a high of 1
-                                // high - 1 corresponds the Kafka Offset of the last *currently* available
-                                // message
-                                let current_max_kafka_offset = KafkaOffset { offset: high - 1 };
-                                *current_p_offset = determine_next_offset(
-                                    *current_p_offset,
-                                    current_max_kafka_offset.into(),
-                                    cons.max_ts_batch,
-                                );
-                                result.push((
-                                    *id,
-                                    partition_count,
-                                    PartitionId::Kafka(p),
-                                    *current_p_offset,
-                                ));
-                                KAFKA_PARTITION_OFFSET_MAX
-                                    .with_label_values(&[
-                                        &kc.topic,
-                                        &id.to_string(),
-                                        &p.to_string(),
-                                    ])
-                                    .set(high);
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to obtain Kafka Watermark Information: {} {}",
-                                    id, e
-                                );
-                            }
-                        }
+                        // high here corresponds to the next available Kafka offset.
+                        // Ex: a stream with 0 records will return a high of 0
+                        // a stream with one record (written at offset 0) will return a high of 1
+                        // high - 1 corresponds the Kafka Offset of the last *currently* available
+                        // message
+                        let current_max_kafka_offset = KafkaOffset {
+                            offset: high_watermark - 1,
+                        };
+                        *current_p_offset = determine_next_offset(
+                            *current_p_offset,
+                            current_max_kafka_offset.into(),
+                            cons.max_ts_batch,
+                        );
+                        result.push((
+                            *id,
+                            partition_count,
+                            PartitionId::Kafka(p),
+                            *current_p_offset,
+                        ));
+                        KAFKA_PARTITION_OFFSET_MAX
+                            .with_label_values(&[&kc.topic, &id.to_string(), &p.to_string()])
+                            .set(*high_watermark);
                         assert!(*current_p_offset >= old_offset);
                     }
                 }
@@ -1865,4 +1892,73 @@ impl Timestamper {
         assert!(new_ts > self.current_timestamp);
         self.current_timestamp = new_ts;
     }
+}
+
+fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wait: Duration) {
+    debug!(
+        "Starting realtime Kafka thread for {} (source {})",
+        &c.topic, &c.id
+    );
+
+    let mut high_watermarks = vec![]; // high watermarks for each partition, in order
+    let mut i: usize = 0;
+    while !c.state.stop.load(Ordering::SeqCst) {
+        // Fetch metadata to check for new partitions. We do this less
+        // frequently than every tick because partitions are added very
+        // infrequently in production. We do this a bit more frequently than is
+        // ideal in order to speed up tests that dynamically add partitions.
+        if high_watermarks.len() == 0 || i % 10 == 0 {
+            match get_kafka_partitions(&consumer, &c.topic, Duration::from_secs(15)) {
+                Ok(partitions) => {
+                    if partitions.len() != high_watermarks.len() {
+                        let diff = partitions.len() - high_watermarks.len();
+                        info!(
+                            "Discovered {} new ({} total) kafka partitions for topic {} (source {})",
+                            diff,
+                            partitions.len(),
+                            c.topic,
+                            c.id,
+                        );
+                    }
+                    high_watermarks.resize(partitions.len(), 0)
+                }
+                Err(e) => {
+                    error!(
+                        "Unable to fetch kafka metadata for topic {} (source {}): {}",
+                        c.topic, e, c.id
+                    );
+                }
+            }
+        }
+
+        // Fetch the latest offset for each partition.
+        //
+        // TODO(benesch): Kafka supports fetching these in bulk, but
+        // rust-rdkafka does not. That would save us a lot of requests on
+        // large topics.
+        for i in 0..high_watermarks.len() {
+            let pid: i32 = i.try_into().expect("invalid partition id");
+            match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(15)) {
+                Ok((_low, high)) => high_watermarks[i] = high,
+                Err(e) => {
+                    error!(
+                        "Unable to fetch Kafka watermarks for topic {} [{}] ({}): {}",
+                        c.topic, pid, c.id, e
+                    );
+                }
+            }
+        }
+
+        // Export the offsets to the shared state.
+        c.state
+            .high_watermarks
+            .lock()
+            .expect("lock poisoned")
+            .clone_from(&high_watermarks);
+
+        i += 1;
+        thread::sleep(wait);
+    }
+
+    debug!("Terminating realtime Kafka thread for {}", &c.topic);
 }
