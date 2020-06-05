@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -199,6 +199,10 @@ fn create_kafka_config(
         ),
     );
 
+    // Ensures that, when processing transactional topics, the consumer does not read data that
+    // is not yet committed (and could later abort)
+    kafka_config.set("isolation.level", "read_committed");
+
     // Patch the librdkafka debug log system into the Rust `log` ecosystem.
     // This is a very simple integration at the moment; enabling `debug`-level
     // logs for the `librdkafka` target enables the full firehouse of librdkafka
@@ -285,6 +289,9 @@ struct DataPlaneInfo {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
+    /// Metadata to keep track of whether a message is buffered at
+    /// that partition
+    buffered_metadata: HashSet<i32>,
     /// The number of known partitions.
     known_partitions: i32,
     /// Per-source metrics.
@@ -314,6 +321,7 @@ impl DataPlaneInfo {
         DataPlaneInfo {
             source_metrics: SourceMetrics::new(&topic_name, &source_id, &worker_id.to_string()),
             partition_metrics: HashMap::new(),
+            buffered_metadata: HashSet::new(),
             topic_name,
             source_name,
             source_id,
@@ -372,6 +380,11 @@ impl DataPlaneInfo {
             self.known_partitions as usize,
             cp_info.partition_metadata.len()
         );
+    }
+
+    /// Returns true if a message has been buffered for this partition
+    fn is_buffered(&self, pid: i32) -> bool {
+        self.buffered_metadata.contains(&pid)
     }
 
     /// Creates a new partition queue for `partition_id`.
@@ -461,6 +474,8 @@ impl DataPlaneInfo {
             let message = partition_queue.get_next_message();
             if let Some(message) = message {
                 let partition = message.partition;
+                // There are no more messages buffered on this pid
+                self.buffered_metadata.remove(&partition);
                 let offset = MzOffset::from(message.offset);
                 // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
                 // a network issue or a new partition added, at which point the consumer may
@@ -507,7 +522,10 @@ impl DataPlaneInfo {
                 attempts += 1;
             }
         }
-        assert!(self.get_partition_consumers_count() == self.get_worker_partition_count());
+        assert_eq!(
+            self.get_partition_consumers_count(),
+            self.get_worker_partition_count()
+        );
         next_message
     }
 
@@ -519,6 +537,8 @@ impl DataPlaneInfo {
         let mut consumer = self.partition_consumers.back_mut().unwrap();
         assert_eq!(msg.partition, consumer.pid);
         consumer.buffer = Some(msg);
+        // Mark the partition has buffered
+        self.buffered_metadata.insert(consumer.pid);
     }
 
     /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
@@ -805,6 +825,52 @@ fn find_matching_timestamp(
     }
 }
 
+/// This function determines whether it is safe to close the current timestamp.
+/// It is safe to close the current timestamp if
+/// 1) this worker does not own the current partition
+/// 2) we will never receive a message with a lower or equal timestamp than offset.
+/// This is true if
+///     a) we have already timestamped a message >= offset
+///     b) the consumer's position is passed ever returning message <= offset. This is the case if
+///     the consumer's position is at an offset that is strictly greater than
+fn can_close_timestamp(
+    cp_info: &ControlPlaneInfo,
+    dp_info: &DataPlaneInfo,
+    pid: i32,
+    offset: MzOffset,
+) -> bool {
+    let last_offset = cp_info.partition_metadata.get(&pid).unwrap().offset;
+
+    // For transactional or compacted topics, the "last_offset" may not correspond to
+    // the last record in the topic (either because it has been GCed or because
+    // it corresponds to an abort/commit marker).
+    // topic and partition entries are not guaranteed to exist if the poll request to metadata has not succeeded:
+    // In Kafka, the position of the consumer is set to the offset *after* the last offset that the consumer has
+    // processed, so we have to decrement it by one to get the last processed offset
+
+    let mut current_consumer_position: MzOffset = KafkaOffset {
+        offset: match dp_info.consumer.position() {
+            Ok(topic_list) => topic_list
+                .elements_for_topic(&dp_info.topic_name)
+                .get(pid as usize)
+                .map(|el| el.offset().to_raw() - 1),
+            Err(_) => Some(-1),
+        }
+        .unwrap_or(-1),
+    }
+    .into();
+
+    // If a message has been buffered (but not timestamped), the consumer will already have
+    // moved ahead.
+    if dp_info.is_buffered(pid) {
+        current_consumer_position.offset -= 1;
+    }
+
+    !dp_info.has_partition(pid) // Case 1
+        || last_offset >= offset // Case 2.a
+        || current_consumer_position >= offset
+}
+
 /// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
 /// For a given partition pid, messages in interval [0,offset1] get assigned ts1, all messages in interval [offset1+1,offset2]
 /// get assigned ts2, etc.
@@ -848,8 +914,6 @@ fn downgrade_capability(
 
             dp_info.ensure_partition(cp_info, pid);
 
-            let last_offset = cp_info.partition_metadata.get(&pid).unwrap().offset;
-
             // Check whether timestamps can be closed on this partition
             while let Some((partition_count, ts, offset)) = entries.front() {
                 assert!(
@@ -875,9 +939,11 @@ fn downgrade_capability(
                         .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
                 }
 
-                if !dp_info.has_partition(pid) || last_offset >= *offset {
+                if can_close_timestamp(cp_info, dp_info, pid, *offset) {
                     // We have either 1) seen all messages corresponding to this timestamp for this
-                    // partition 2) do not own this partition.
+                    // partition 2) do not own this partition 3) the consumer has forwarded past the
+                    // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
+                    // again
                     // We can close the timestamp (on this partition) and remove the associated metadata
                     cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
                     entries.pop_front();
@@ -888,23 +954,23 @@ fn downgrade_capability(
                 }
             }
         }
+    }
 
-        //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
-        //  timestamp
-        // across partitions.
-        let min = cp_info
-            .partition_metadata
-            .iter()
-            .map(|(_, cons_info)| cons_info.ts)
-            .min()
-            .unwrap_or(0);
+    //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
+    //  timestamp
+    // across partitions.
+    let min = cp_info
+        .partition_metadata
+        .iter()
+        .map(|(_, cons_info)| cons_info.ts)
+        .min()
+        .unwrap_or(0);
 
-        // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-        if changed && min > 0 {
-            dp_info.source_metrics.capability.set(min);
-            cap.downgrade(&(&min + 1));
-            cp_info.last_closed_ts = min;
-        }
+    // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
+    if changed && min > 0 {
+        dp_info.source_metrics.capability.set(min);
+        cap.downgrade(&(&min + 1));
+        cp_info.last_closed_ts = min;
     }
 }
 
