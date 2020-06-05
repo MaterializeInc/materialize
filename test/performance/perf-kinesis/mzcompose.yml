@@ -75,9 +75,13 @@ mzconduct:
           daemon: true
 
     nightly:
+      env:
+        MZ_SQL_EXPORTER_PORT: "9400:9399"
       steps:
         - step: start-services
           services: [materialized]
+        - step: start-services
+          services: [prometheus_sql_exporter_mz]
         - step: wait-for-mz
         - step: run
           service: perf-kinesis
