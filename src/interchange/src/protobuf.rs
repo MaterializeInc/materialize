@@ -208,7 +208,7 @@ fn extract_row(
         let value = deserialized_message.get(&key);
 
         if let Some(value) = value {
-            row = json_from_serde_value(&value, row, f, descriptors)?;
+            json_from_serde_value(&value, &mut row, f, descriptors)?;
         } else {
             row.push(default_datum_from_field(f, descriptors)?);
         }
@@ -335,10 +335,10 @@ fn default_datum_from_field_nested<'a>(
 /// type, all numeric types will be converted to f64s (issue #1476)
 fn json_from_serde_value(
     val: &SerdeValue,
-    mut packer: RowPacker,
+    packer: &mut RowPacker,
     f: &FieldDescriptor,
     descriptors: &Descriptors,
-) -> Result<RowPacker> {
+) -> Result<()> {
     packer.push(match val {
         SerdeValue::Bool(true) => Datum::True,
         SerdeValue::Bool(false) => Datum::False,
@@ -369,15 +369,15 @@ fn json_from_serde_value(
             val
         ),
     });
-    Ok(packer)
+    Ok(())
 }
 
 fn json_nested_from_serde_value(
     val: &SerdeValue,
-    mut packer: RowPacker,
+    packer: &mut RowPacker,
     f: &FieldDescriptor,
     descriptors: &Descriptors,
-) -> Result<RowPacker> {
+) -> Result<()> {
     packer.push(match val {
         SerdeValue::Bool(true) => Datum::True,
         SerdeValue::Bool(false) => Datum::False,
@@ -396,11 +396,11 @@ fn json_nested_from_serde_value(
             bail!("We don't currently support arrays or nested messages with bytes")
         }
         SerdeValue::Seq(s) => {
-            return packer.try_push_list_with(|mut packer| {
+            return packer.push_list_with(|packer| {
                 for value in s {
-                    packer = json_nested_from_serde_value(&value, packer, f, descriptors)?;
+                    json_nested_from_serde_value(&value, packer, f, descriptors)?;
                 }
-                Ok(packer)
+                Ok(())
             });
         }
         SerdeValue::Option(v) => {
@@ -414,7 +414,7 @@ fn json_nested_from_serde_value(
             let mut kvs = m.iter().collect::<Vec<_>>();
             kvs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
             kvs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-            return packer.try_push_dict_with(|mut packer| {
+            return packer.push_dict_with(|packer| {
                 let nested_message_descriptor = f.field_type(descriptors);
                 for (k, v) in kvs {
                     match k {
@@ -426,7 +426,7 @@ fn json_nested_from_serde_value(
                                 _ => bail!("Nested message is the wrong type"),
                             };
 
-                            packer = json_nested_from_serde_value(
+                            json_nested_from_serde_value(
                                 &v,
                                 packer,
                                 nested_message_descriptor
@@ -438,12 +438,12 @@ fn json_nested_from_serde_value(
                         _ => bail!("Unrecognized value while trying to parse a nested message"),
                     }
                 }
-                Ok(packer)
+                Ok(())
             });
         }
         _ => bail!("Unsupported types from serde_value"),
     });
-    Ok(packer)
+    Ok(())
 }
 
 #[cfg(test)]
