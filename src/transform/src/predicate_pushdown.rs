@@ -52,8 +52,10 @@
 //! });
 //! ```
 
+use std::collections::{HashMap, HashSet};
+
 use crate::TransformArgs;
-use expr::{AggregateFunc, RelationExpr, ScalarExpr};
+use expr::{AggregateFunc, Id, RelationExpr, ScalarExpr};
 use repr::{ColumnType, Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
@@ -66,8 +68,9 @@ impl crate::Transform for PredicatePushdown {
         relation: &mut RelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
+        let mut empty = HashMap::new();
         relation.visit_mut_pre(&mut |e| {
-            self.action(e);
+            self.action(e, &mut empty);
         });
         Ok(())
     }
@@ -75,9 +78,49 @@ impl crate::Transform for PredicatePushdown {
 
 impl PredicatePushdown {
     /// Pushes predicates down through other operators.
-    pub fn action(&self, relation: &mut RelationExpr) {
+    pub fn action(
+        &self,
+        relation: &mut RelationExpr,
+        get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
+    ) {
         if let RelationExpr::Filter { input, predicates } = relation {
             match &mut **input {
+                RelationExpr::Let { id, value, body } => {
+                    // Push all predicates to the body.
+                    **body = body
+                        .take_dangerous()
+                        .filter(std::mem::replace(predicates, Vec::new()));
+
+                    // A `Let` binding wants to push all predicates down in
+                    // `body`, and collect the intersection of those pushed
+                    // at `Get` statements. The intersection can be pushed
+                    // down to `value`.
+                    self.action(body, get_predicates);
+                    if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
+                        // `list` contains the intersection of predicates.
+                        body.visit_mut(&mut |e| {
+                            if let RelationExpr::Filter { input, predicates } = e {
+                                if let RelationExpr::Get { id: id2, .. } = **input {
+                                    if id2 == Id::Local(*id) {
+                                        predicates.retain(|p| !list.contains(p));
+                                    }
+                                }
+                            }
+                        });
+
+                        **value = value.take_dangerous().filter(list);
+                    }
+                    // The pre-order optimization will process `value` and
+                    // then (unneccesarily, I think) reconsider `body`.
+                }
+                RelationExpr::Get { id, .. } => {
+                    // We can report the predicates upward in `get_predicates`,
+                    // but we are not yet able to delete them from the `Filter`.
+                    get_predicates
+                        .entry(*id)
+                        .or_insert_with(|| predicates.iter().cloned().collect())
+                        .retain(|p| predicates.contains(p));
+                }
                 RelationExpr::Join {
                     inputs,
                     equivalences,
@@ -278,17 +321,14 @@ impl PredicatePushdown {
                     }
                 }
                 RelationExpr::Project { input, outputs } => {
-                    let predicates = predicates
-                        .drain(..)
-                        .map(|mut predicate| {
-                            predicate.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(i) = e {
-                                    *i = outputs[*i];
-                                }
-                            });
-                            predicate
-                        })
-                        .collect();
+                    let predicates = predicates.drain(..).map(|mut predicate| {
+                        predicate.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(i) = e {
+                                *i = outputs[*i];
+                            }
+                        });
+                        predicate
+                    });
                     *relation = input
                         .take_dangerous()
                         .filter(predicates)
@@ -302,8 +342,7 @@ impl PredicatePushdown {
                         predicates
                             .clone()
                             .into_iter()
-                            .chain(predicates2.clone().into_iter())
-                            .collect(),
+                            .chain(predicates2.clone().into_iter()),
                     );
                 }
                 RelationExpr::Map { input, scalars } => {

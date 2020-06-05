@@ -32,7 +32,6 @@ pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
 pub mod empty_map;
-pub mod filter_lets;
 pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
@@ -222,7 +221,6 @@ impl Default for Optimizer {
                     Box::new(crate::projection_extraction::ProjectionExtraction),
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::map_lifting::LiteralLifting),
-                    Box::new(crate::filter_lets::FilterLets),
                     Box::new(crate::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),

@@ -518,10 +518,13 @@ impl RelationExpr {
     }
 
     /// Retain only the rows satisifying each of several predicates.
-    pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
+    pub fn filter<I>(self, predicates: I) -> Self
+    where
+        I: IntoIterator<Item = ScalarExpr>,
+    {
         RelationExpr::Filter {
             input: Box::new(self),
-            predicates,
+            predicates: predicates.into_iter().collect(),
         }
     }
 
