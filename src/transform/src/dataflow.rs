@@ -82,14 +82,14 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
 }
 
 
-/// Pushes demand information from published outputs to dataflow inputs.
+/// Pushes predicate to dataflow inputs.
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
     let mut predicates = HashMap::<Id, HashSet<expr::ScalarExpr>>::new();
 
-    // Propagate demand information from outputs to inputs.
+    // Propagate predicate information from outputs to inputs.
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         let transform = crate::predicate_pushdown::PredicatePushdown;
         if let Some(list) = predicates.get(&Id::Global(build_desc.id)).clone() {
@@ -101,10 +101,10 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
         )
     }
 
-    // Push demand information into the SourceDesc.
+    // Push predicate information into the SourceDesc.
     for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.get(&Id::Global(source_id.sid)).clone() {
-            // Install no-op demand information if none exists.
+            // Install no-op predicate information if none exists.
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
                     predicates: Vec::new(),
