@@ -201,7 +201,7 @@ services:
     init: true
     # run correctness using 'dc.sh run correctness' to adjust which queries are peeked,
     # and see /src/correctness/checks.toml for a list of queries
-    command: ${CORRECTNESS_CMD}
+    command: ${CORRECTNESS_CMD:-}
     volumes:
       - ./test-correctness-config:/etc/test-correctness
 
