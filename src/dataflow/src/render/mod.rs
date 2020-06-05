@@ -436,10 +436,13 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             Envelope::None => stream.as_collection(),
                             Envelope::Debezium => {
                                 // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
-                                stream.as_collection().explode(|row| {
-                                    let mut datums = row.unpack();
-                                    let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                                    Some((Row::pack(datums.into_iter()), diff))
+                                stream.as_collection().explode({
+                                    let mut row_packer = repr::RowPacker::new();
+                                    move |row| {
+                                        let mut datums = row.unpack();
+                                        let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                                        Some((row_packer.pack(datums.into_iter()), diff))
+                                    }
                                 })
                             }
                             Envelope::Upsert(_) => unreachable!(),
@@ -474,8 +477,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 .collect::<Vec<_>>();
 
                             // Evaluate the predicate on each record, noting potential errors that might result.
-                            let (collection2, errors) =
-                                collection.flat_map_fallible(move |input_row| {
+                            let (collection2, errors) = collection.flat_map_fallible({
+                                let mut row_packer = repr::RowPacker::new();
+                                move |input_row| {
                                     let temp_storage = RowArena::new();
                                     let datums = input_row.unpack();
                                     let pred_eval = operators
@@ -484,14 +488,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         .map(|predicate| predicate.eval(&datums, &temp_storage))
                                         .find(|result| result != &Ok(Datum::True));
                                     match pred_eval {
-                                        None => {
-                                            Some(Ok(Row::pack(position_or.iter().map(|pos_or| {
-                                                match pos_or {
-                                                    Result::Ok(index) => datums[*index],
-                                                    Result::Err(datum) => *datum,
-                                                }
-                                            }))))
-                                        }
+                                        None => Some(Ok(row_packer.pack(position_or.iter().map(
+                                            |pos_or| match pos_or {
+                                                Result::Ok(index) => datums[*index],
+                                                Result::Err(datum) => *datum,
+                                            },
+                                        )))),
                                         Some(Ok(Datum::False)) => None,
                                         Some(Ok(Datum::Null)) => None,
                                         Some(Ok(x)) => {
@@ -499,7 +501,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         }
                                         Some(Err(x)) => Some(Err(x.into())),
                                     }
-                                });
+                                }
+                            });
 
                             collection = collection2;
                             err_collection = err_collection.concat(&errors);
@@ -844,9 +847,12 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let outputs = outputs.clone();
                     let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let ok_collection = ok_collection.map(move |row| {
-                        let datums = row.unpack();
-                        Row::pack(outputs.iter().map(|i| datums[*i]))
+                    let ok_collection = ok_collection.map({
+                        let mut row_packer = repr::RowPacker::new();
+                        move |row| {
+                            let datums = row.unpack();
+                            row_packer.pack(outputs.iter().map(|i| datums[*i]))
+                        }
                     });
 
                     self.collections
@@ -857,8 +863,9 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let scalars = scalars.clone();
                     let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let (ok_collection, new_err_collection) =
-                        ok_collection.map_fallible(move |input_row| {
+                    let (ok_collection, new_err_collection) = ok_collection.map_fallible({
+                        let mut row_packer = repr::RowPacker::new();
+                        move |input_row| {
                             let mut datums = input_row.unpack();
                             let temp_storage = RowArena::new();
                             for scalar in &scalars {
@@ -868,8 +875,9 @@ where
                                 // Note that this doesn't mutate input_row.
                                 datums.push(datum);
                             }
-                            Ok::<_, DataflowError>(Row::pack(&*datums))
-                        });
+                            Ok::<_, DataflowError>(row_packer.pack(&*datums))
+                        }
+                    });
                     let err_collection = err_collection.concat(&new_err_collection);
                     self.collections
                         .insert(relation_expr.clone(), (ok_collection, err_collection));
@@ -925,21 +933,26 @@ where
                             let output_rows = func.eval(exprs, &temp_storage);
                             output_rows
                                 .into_iter()
-                                .map(move |output_row| {
-                                    Ok::<_, DataflowError>(Row::pack(
-                                        datums
-                                            .iter()
-                                            .cloned()
-                                            .chain(output_row.iter())
-                                            .zip(replace.iter())
-                                            .map(|(datum, demand)| {
-                                                if let Some(bogus) = demand {
-                                                    bogus.clone()
-                                                } else {
-                                                    datum
-                                                }
-                                            }),
-                                    ))
+                                .map({
+                                    let mut row_packer = repr::RowPacker::new();
+                                    move |output_row| {
+                                        Ok::<_, DataflowError>(
+                                            row_packer.pack(
+                                                datums
+                                                    .iter()
+                                                    .cloned()
+                                                    .chain(output_row.iter())
+                                                    .zip(replace.iter())
+                                                    .map(|(datum, demand)| {
+                                                        if let Some(bogus) = demand {
+                                                            bogus.clone()
+                                                        } else {
+                                                            datum
+                                                        }
+                                                    }),
+                                            ),
+                                        )
+                                    }
                                 })
                                 // The collection avoids the lifetime issues of the `datums` borrow,
                                 // which allows us to avoid multiple unpackings of `input_row`. We

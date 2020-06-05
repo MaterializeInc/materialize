@@ -29,7 +29,7 @@ use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::Encoder;
 use ore::collections::CollectionExt;
 use repr::strconv;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, RowArena, RowPacker, ScalarType};
 use sql_parser::ast::{
     AvroSchema, Connector, ExplainOptions, ExplainStage, Explainee, Format, Ident,
     IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
@@ -586,7 +586,7 @@ fn handle_show_create_view(
     let name = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::View = entry.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![RowPacker::with_capacity(0).pack(&[
             Datum::String(&name.to_string()),
             Datum::String(entry.create_sql()),
         ])]))
@@ -602,7 +602,7 @@ fn handle_show_create_source(
     let name = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::Source = entry.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![RowPacker::with_capacity(0).pack(&[
             Datum::String(&name.to_string()),
             Datum::String(entry.create_sql()),
         ])]))
@@ -618,7 +618,7 @@ fn handle_show_create_sink(
     let name = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::Sink = entry.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack(&[
+        Ok(Plan::SendRows(vec![RowPacker::with_capacity(0).pack(&[
             Datum::String(&name.to_string()),
             Datum::String(entry.create_sql()),
         ])]))

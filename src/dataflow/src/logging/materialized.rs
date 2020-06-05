@@ -22,7 +22,7 @@ use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use expr::GlobalId;
-use repr::{Datum, Row};
+use repr::Datum;
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -134,7 +134,7 @@ pub fn construct<A: Allocate>(
             // Map from string name to pair of primary, and foreign key relationships.
             let mut view_keys =
                 std::collections::HashMap::<GlobalId, (Vec<_>, Vec<(GlobalId, _, _)>)>::new();
-
+            let mut row_packer = repr::RowPacker::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
@@ -168,7 +168,7 @@ pub fn construct<A: Allocate>(
                         match datum {
                             MaterializedEvent::AvroOcfSink { id, path, insert } => {
                                 avro_ocf_sinks_session.give((
-                                    Row::pack(&[
+                                    row_packer.pack(&[
                                         Datum::String(&id.to_string()),
                                         Datum::Bytes(&path),
                                     ]),
@@ -216,7 +216,7 @@ pub fn construct<A: Allocate>(
                                         for (key, index) in primary.into_iter() {
                                             for k in key {
                                                 primary_session.give((
-                                                    Row::pack(&[
+                                                    row_packer.pack(&[
                                                         Datum::String(&id.to_string()),
                                                         Datum::Int64(k as i64),
                                                         Datum::Int64(index as i64),
@@ -229,7 +229,7 @@ pub fn construct<A: Allocate>(
                                         for (parent, key, number) in foreign.into_iter() {
                                             for (c, p) in key {
                                                 foreign_session.give((
-                                                    Row::pack(&[
+                                                    row_packer.pack(&[
                                                         Datum::String(&id.to_string()),
                                                         Datum::Int64(c as i64),
                                                         Datum::String(&parent.to_string()),
@@ -260,7 +260,7 @@ pub fn construct<A: Allocate>(
                             }
                             MaterializedEvent::KafkaSink { id, topic, insert } => {
                                 kafka_sinks_session.give((
-                                    Row::pack(&[
+                                    row_packer.pack(&[
                                         Datum::String(&id.to_string()),
                                         Datum::String(&topic),
                                     ]),
@@ -273,7 +273,7 @@ pub fn construct<A: Allocate>(
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
                                 frontier_session.give((
-                                    Row::pack(&[
+                                    row_packer.pack(&[
                                         Datum::String(&name.to_string()),
                                         Datum::Int64(logical as i64),
                                     ]),
@@ -284,7 +284,7 @@ pub fn construct<A: Allocate>(
                             MaterializedEvent::PrimaryKey(dataflow_id, key, index) => {
                                 for k in key.iter() {
                                     primary_session.give((
-                                        Row::pack(&[
+                                        row_packer.pack(&[
                                             Datum::String(&dataflow_id.to_string()),
                                             Datum::Int64(*k as i64),
                                             Datum::Int64(index as i64),
@@ -302,7 +302,7 @@ pub fn construct<A: Allocate>(
                             MaterializedEvent::ForeignKey(child_id, parent_id, keys, number) => {
                                 for (c, p) in keys.iter() {
                                     foreign_session.give((
-                                        Row::pack(&[
+                                        row_packer.pack(&[
                                             Datum::String(&child_id.to_string()),
                                             Datum::Int64(*c as i64),
                                             Datum::String(&parent_id.to_string()),
@@ -333,8 +333,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
+                let mut row_packer = repr::RowPacker::new();
                 move |(name, worker)| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::String(&name.to_string()),
                         Datum::Int64(worker as i64),
                     ])
@@ -350,8 +351,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
+                let mut row_packer = repr::RowPacker::new();
                 move |(dataflow, source, worker)| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::String(&dataflow.to_string()),
                         Datum::String(&source.to_string()),
                         Datum::Int64(worker as i64),
@@ -368,8 +370,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
+                let mut row_packer = repr::RowPacker::new();
                 move |(peek, worker)| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::String(&format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
                         Datum::String(&peek.id.to_string()),
@@ -382,7 +385,10 @@ pub fn construct<A: Allocate>(
         let primary_key = primary.as_collection();
         let foreign_key = foreign.as_collection();
         let catalog = catalog.as_collection().map({
-            move |(id, name)| Row::pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
+            let mut row_packer = repr::RowPacker::new();
+            move |(id, name)| {
+                row_packer.pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
+            }
         });
         let kafka_sinks = kafka_sinks.as_collection();
         let avro_ocf_sinks = avro_ocf_sinks.as_collection();
@@ -441,8 +447,9 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total()
             .map({
+                let mut row_packer = repr::RowPacker::new();
                 move |((worker, pow), count)| {
-                    Row::pack(&[
+                    row_packer.pack(&[
                         Datum::Int64(worker as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(count as i64),
@@ -498,9 +505,10 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
+                        let mut row_packer = repr::RowPacker::new();
                         move |row| {
                             let datums = row.unpack();
-                            let key_row = Row::pack(key.iter().map(|k| datums[*k]));
+                            let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
                             (key_row, row)
                         }
                     })

@@ -37,10 +37,13 @@ where
                 let (ok_built, err_built) = self.collection(input).unwrap();
                 let keys2 = keys.clone();
                 let ok_keyed = ok_built
-                    .map(move |row| {
-                        let datums = row.unpack();
-                        let key_row = Row::pack(keys2.iter().map(|i| datums[*i]));
-                        (key_row, row)
+                    .map({
+                        let mut row_packer = repr::RowPacker::new();
+                        move |row| {
+                            let datums = row.unpack();
+                            let key_row = row_packer.pack(keys2.iter().map(|i| datums[*i]));
+                            (key_row, row)
+                        }
                     })
                     .arrange_by_key();
                 self.set_local_columns(&input, &keys[..], (ok_keyed, err_built.arrange()));

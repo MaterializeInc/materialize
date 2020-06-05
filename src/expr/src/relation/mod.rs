@@ -475,9 +475,10 @@ impl RelationExpr {
                 );
             }
         }
+        let mut row_packer = repr::RowPacker::new();
         let rows = rows
             .into_iter()
-            .map(|(row, diff)| (Row::pack(row), diff))
+            .map(move |(row, diff)| (row_packer.pack(row), diff))
             .collect();
         RelationExpr::Constant { rows, typ }
     }
@@ -1200,9 +1201,10 @@ impl RowSetFinishing {
                 rows.drain(..offset);
             }
             rows.sort_by(&mut sort_by);
+            let mut row_packer = repr::RowPacker::new();
             for row in rows {
                 let datums = row.unpack();
-                let new_row = Row::pack(self.project.iter().map(|i| &datums[*i]));
+                let new_row = row_packer.pack(self.project.iter().map(|i| &datums[*i]));
                 *row = new_row;
             }
         }

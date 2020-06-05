@@ -98,6 +98,7 @@ impl Demand {
                 }
 
                 // Replace un-read expressions with literals to prevent evaluation.
+                let mut row_packer = repr::RowPacker::new();
                 for (index, scalar) in scalars.iter_mut().enumerate() {
                     if !columns.contains(&(arity + index)) {
                         // Leave literals as they are, to benefit explain.
@@ -108,7 +109,7 @@ impl Demand {
                             } else {
                                 typ.scalar_type.dummy_datum()
                             };
-                            *scalar = ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ);
+                            *scalar = ScalarExpr::Literal(Ok(row_packer.pack(Some(datum))), typ);
                         }
                     }
                 }
@@ -236,6 +237,7 @@ impl Demand {
                 }
 
                 // Replace un-demanded aggregations with literals.
+                let mut row_packer = repr::RowPacker::new();
                 let input_type = input.typ();
                 for index in (0..aggregates.len()).rev() {
                     if !columns.contains(&(group_key.len() + index)) {
@@ -247,7 +249,7 @@ impl Demand {
                                 typ.scalar_type.dummy_datum()
                             };
                             aggregates[index].expr =
-                                ScalarExpr::Literal(Ok(repr::Row::pack(Some(datum))), typ);
+                                ScalarExpr::Literal(Ok(row_packer.pack(Some(datum))), typ);
                         }
                     }
                 }

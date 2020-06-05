@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::{RelationDesc, Row};
+use repr::{RelationDesc, RowPacker};
 use sql::names::{DatabaseSpecifier, FullName, PartialName};
 use sql::plan::{Params, Plan, PlanContext};
 use sql::session::Session;
@@ -951,7 +951,7 @@ impl Catalog {
             eval_env,
         } = serde_json::from_slice(&bytes)?;
         let params = Params {
-            datums: Row::pack(&[]),
+            datums: RowPacker::with_capacity(0).pack(&[]),
             types: vec![],
         };
         let pcx = match eval_env {

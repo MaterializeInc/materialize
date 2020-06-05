@@ -52,7 +52,7 @@ where
             let mut buffer = vec![0u8];
             let mut bounds = vec![0usize];
             let mut csv_reader = csv_core::ReaderBuilder::new().delimiter(delimiter).build();
-
+            let mut row_packer = repr::RowPacker::new();
             move |input, output| {
                 let mut events_success = 0;
                 let mut events_error = 0;
@@ -117,7 +117,7 @@ where
                                         } else {
                                             events_success += 1;
                                             session.give((
-                                                Row::pack(
+                                                row_packer.pack(
                                                     (0..n_cols)
                                                         .map(|i| {
                                                             // Unsafety rationalized as 1. the input text is determined to be

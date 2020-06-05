@@ -125,11 +125,14 @@ where
             }
 
             let group_clone = group_key.to_vec();
-            let mut collection = ok_input.map(move |row| {
-                let row_hash = row.hashed();
-                let datums = row.unpack();
-                let group_row = Row::pack(group_clone.iter().map(|i| datums[*i]));
-                ((group_row, row_hash), row)
+            let mut collection = ok_input.map({
+                let mut row_packer = repr::RowPacker::new();
+                move |row| {
+                    let row_hash = row.hashed();
+                    let datums = row.unpack();
+                    let group_row = row_packer.pack(group_clone.iter().map(|i| datums[*i]));
+                    ((group_row, row_hash), row)
+                }
             });
             // This sequence of numbers defines the shifts that happen to the 64 bit hash
             // of the record, and has the properties that 1. there are not too many of them,
