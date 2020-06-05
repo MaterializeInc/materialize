@@ -32,7 +32,7 @@ async fn run() -> Result<(), anyhow::Error> {
     let seed: u32 = rand::thread_rng().gen();
     let topic = format!("chaos-{}", seed);
     log::info!(
-        "Starting chaos test with mzd={}:{} kafka={} topic={} message_count={}",
+        "starting chaos test with mzd={}:{} kafka={} topic={} message_count={}",
         args.materialized_host,
         args.materialized_port,
         args.kafka_url,
@@ -91,17 +91,30 @@ async fn run() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+/// Generate byte records, push them to Kafka, and return their md5 hash.
 async fn generate_and_push_records(
     mut kafka_client: kafka::kafka_client::KafkaClient,
     message_count: usize,
 ) -> Result<String, anyhow::Error> {
-    // Generate messages and return md5 hash.
     log::info!("pushing {} records to Kafka", message_count);
     let mut hasher = Md5::new();
-    for _ in 0..message_count {
+    let ten_percent = message_count / 10;
+    let mut sent = 0;
+    while sent < message_count {
+        if sent % ten_percent == 0 {
+            log::info!("have sent {} records...", sent);
+        }
+
         let record = generator::bytes::generate_bytes(30);
-        hasher.input(&record);
-        kafka_client.send(&record).await?;
+        match kafka_client.send(&record).await {
+            Ok(()) => {
+                sent += 1;
+                hasher.input(&record);
+            }
+            Err(e) => {
+                log::error!("failed to send bytes to Kafka: {}", e);
+            }
+        }
     }
     Ok(format!("{:x}", hasher.result()))
 }
@@ -128,7 +141,7 @@ async fn query_materialize(
     log::info!("materializing view=> {}", query);
     mz_client.query(&*query, &[]).await?;
 
-    let query = "CREATE MATERIALIZED VIEW count AS SELECT COUNT(*) AS count FROM src";
+    let query = "CREATE MATERIALIZED VIEW count AS SELECT COUNT(*) AS count FROM all";
     log::info!("materializing view=> {}", query);
     mz_client.query(&*query, &[]).await?;
 
@@ -138,21 +151,39 @@ async fn query_materialize(
     loop {
         let row = mz_client::try_query_one(&mz_client, &*query, Duration::from_secs(1)).await?;
         let count: i64 = row.get("count");
-        if count == message_count as i64 {
-            log::info!(
-                "found all {} records, generating md5 hash...",
-                message_count
-            );
-
-            let query = "SELECT data, mz_offset FROM all ORDER BY mz_offset;";
-            let rows = mz_client::try_query(&mz_client, query, Duration::from_secs(1)).await?;
-            assert_eq!(message_count, rows.len());
-            let mut hasher = Md5::new();
-            for row in rows {
-                let val: &[u8] = row.get("data");
-                hasher.input(&val);
+        match count {
+            c if c < message_count as i64 => continue,
+            c if c > message_count as i64 => {
+                return Err(anyhow::Error::msg(format!(
+                    "Expected {} rows, found {}",
+                    message_count, c,
+                )));
             }
-            return Ok(format!("{:x}", hasher.result()));
+            c if c == message_count as i64 => {
+                log::info!(
+                    "found all {} records, generating md5 hash...",
+                    message_count
+                );
+
+                let query = "SELECT data, mz_offset FROM all ORDER BY mz_offset;";
+                let rows = mz_client::try_query(&mz_client, query, Duration::from_secs(1)).await?;
+                if message_count != rows.len() {
+                    return Err(anyhow::Error::msg(format!(
+                        "Expected {} rows, found {}",
+                        message_count,
+                        rows.len()
+                    )));
+                }
+
+                assert_eq!(message_count, rows.len());
+                let mut hasher = Md5::new();
+                for row in rows {
+                    let val: &[u8] = row.get("data");
+                    hasher.input(&val);
+                }
+                return Ok(format!("{:x}", hasher.result()));
+            }
+            _ => unreachable!(),
         }
     }
 }
@@ -176,6 +207,6 @@ pub struct Args {
     pub kafka_partitions: i32,
 
     /// The total number of records to create
-    #[structopt(long, default_value = "1_000")]
+    #[structopt(long, default_value = "10_000")]
     pub message_count: usize,
 }
