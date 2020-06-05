@@ -153,6 +153,7 @@ pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Re
 pub struct Decoder {
     descriptors: Descriptors,
     message_name: String,
+    packer: RowPacker,
 }
 
 impl Decoder {
@@ -165,6 +166,7 @@ impl Decoder {
         Decoder {
             descriptors,
             message_name: proto_message_name(message_name),
+            packer: RowPacker::new(),
         }
     }
 
@@ -177,7 +179,7 @@ impl Decoder {
             .with_context(|e| format!("Deserializing into rust object: {}", e))?;
 
         let msg_name = &self.message_name;
-        extract_row(
+        extract_row_into(
             deserialized_message,
             &self.descriptors,
             self.descriptors.message_by_name(&msg_name).ok_or_else(|| {
@@ -186,21 +188,22 @@ impl Decoder {
                     msg_name
                 )
             })?,
-        )
+            &mut self.packer,
+        )?;
+        Ok(Some(self.packer.finish_and_reuse()))
     }
 }
 
-fn extract_row(
+fn extract_row_into(
     deserialized_message: SerdeValue,
     descriptors: &Descriptors,
     message_descriptors: &MessageDescriptor,
-) -> Result<Option<Row>> {
+    packer: &mut RowPacker,
+) -> Result<()> {
     let deserialized_message = match deserialized_message {
         SerdeValue::Map(deserialized_message) => deserialized_message,
         _ => bail!("Deserialization failed with an unsupported top level object type"),
     };
-
-    let mut row = RowPacker::new();
 
     // TODO: This is actually unpacking a row, it should always return json
     for f in message_descriptors.fields().iter() {
@@ -208,13 +211,13 @@ fn extract_row(
         let value = deserialized_message.get(&key);
 
         if let Some(value) = value {
-            json_from_serde_value(&value, &mut row, f, descriptors)?;
+            json_from_serde_value(&value, packer, f, descriptors)?;
         } else {
-            row.push(default_datum_from_field(f, descriptors)?);
+            packer.push(default_datum_from_field(f, descriptors)?);
         }
     }
 
-    Ok(Some(row.finish()))
+    Ok(())
 }
 
 fn datum_from_serde_proto<'a>(val: &'a ProtoValue) -> Result<Datum<'a>> {
