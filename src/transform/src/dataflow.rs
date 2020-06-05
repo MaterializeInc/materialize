@@ -29,62 +29,58 @@ pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
 
 /// Pushes demand information from published outputs to dataflow inputs.
 fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
+    let mut demand = HashMap::new();
 
-        let mut demand = HashMap::new();
+    // Demand all columns of inputs to sinks.
+    for (_id, sink) in dataflow.sink_exports.iter() {
+        let input_id = sink.from.0;
+        demand
+            .entry(Id::Global(input_id))
+            .or_insert_with(HashSet::new)
+            .extend(0..dataflow.arity_of(&input_id));
+    }
 
-        // Demand all columns of inputs to sinks.
-        for (_id, sink) in dataflow.sink_exports.iter() {
-            let input_id = sink.from.0;
-            demand
-                .entry(Id::Global(input_id))
-                .or_insert_with(HashSet::new)
-                .extend(0..dataflow.arity_of(&input_id));
+    // Demand all columns of inputs to exported indexes.
+    for (_id, desc, _typ) in dataflow.index_exports.iter() {
+        let input_id = desc.on_id;
+        demand
+            .entry(Id::Global(input_id))
+            .or_insert_with(HashSet::new)
+            .extend(0..dataflow.arity_of(&input_id));
+    }
+
+    // Propagate demand information from outputs to inputs.
+    for build_desc in dataflow.objects_to_build.iter_mut().rev() {
+        let transform = crate::demand::Demand;
+        if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
+            transform.action(
+                build_desc.relation_expr.as_mut(),
+                columns.clone(),
+                &mut demand,
+            );
         }
+    }
 
-        // Demand all columns of inputs to exported indexes.
-        for (_id, desc, _typ) in dataflow.index_exports.iter() {
-            let input_id = desc.on_id;
-            demand
-                .entry(Id::Global(input_id))
-                .or_insert_with(HashSet::new)
-                .extend(0..dataflow.arity_of(&input_id));
-        }
-
-        // Propagate demand information from outputs to inputs.
-        for build_desc in dataflow.objects_to_build.iter_mut().rev() {
-            let transform = crate::demand::Demand;
-            if let Some(columns) = demand.get(&Id::Global(build_desc.id)).clone() {
-                transform.action(
-                    build_desc.relation_expr.as_mut(),
-                    columns.clone(),
-                    &mut demand,
-                );
+    // Push demand information into the SourceDesc.
+    for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
+        if let Some(columns) = demand.get(&Id::Global(source_id.sid)).clone() {
+            // Install no-op demand information if none exists.
+            if source_desc.operators.is_none() {
+                source_desc.operators = Some(LinearOperator {
+                    predicates: Vec::new(),
+                    projection: (0..source_desc.desc.typ().arity()).collect(),
+                })
+            }
+            // Restrict required columns by those identified as demanded.
+            if let Some(operator) = &mut source_desc.operators {
+                operator.projection.retain(|col| columns.contains(col));
             }
         }
-
-        // Push demand information into the SourceDesc.
-        for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
-            if let Some(columns) = demand.get(&Id::Global(source_id.sid)).clone() {
-                // Install no-op demand information if none exists.
-                if source_desc.operators.is_none() {
-                    source_desc.operators = Some(LinearOperator {
-                        predicates: Vec::new(),
-                        projection: (0..source_desc.desc.typ().arity()).collect(),
-                    })
-                }
-                // Restrict required columns by those identified as demanded.
-                if let Some(operator) = &mut source_desc.operators {
-                    operator.projection.retain(|col| columns.contains(col));
-                }
-            }
-        }
-
+    }
 }
-
 
 /// Pushes predicate to dataflow inputs.
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
-
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
     let mut predicates = HashMap::<Id, HashSet<expr::ScalarExpr>>::new();
@@ -93,12 +89,13 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
         let transform = crate::predicate_pushdown::PredicatePushdown;
         if let Some(list) = predicates.get(&Id::Global(build_desc.id)).clone() {
-            *build_desc.relation_expr.as_mut() = build_desc.relation_expr.as_mut().take_dangerous().filter(list.iter().cloned());
+            *build_desc.relation_expr.as_mut() = build_desc
+                .relation_expr
+                .as_mut()
+                .take_dangerous()
+                .filter(list.iter().cloned());
         }
-        transform.action(
-            build_desc.relation_expr.as_mut(),
-            &mut predicates,
-        )
+        transform.action(build_desc.relation_expr.as_mut(), &mut predicates)
     }
 
     // Push predicate information into the SourceDesc.
@@ -117,5 +114,4 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             }
         }
     }
-
 }
