@@ -18,8 +18,9 @@ use lazy_static::lazy_static;
 use repr::ScalarType;
 use sql_parser::ast::{BinaryOperator, Expr};
 
+use super::cast::{rescale_decimal, CastTo};
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
-use super::query::{rescale_decimal, CastContext, CoerceTo, ExprContext};
+use super::query::{CoerceTo, ExprContext};
 use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,7 +58,7 @@ impl TypeCategory {
             | ScalarType::Time
             | ScalarType::Timestamp
             | ScalarType::TimestampTz => TypeCategory::DateTime,
-            ScalarType::Decimal(_, _)
+            ScalarType::Decimal(..)
             | ScalarType::Float32
             | ScalarType::Float64
             | ScalarType::Int32
@@ -160,10 +161,7 @@ impl PartialEq<ScalarType> for ParamType {
                 Bool | Float64 | Float32 | Jsonb | String => true,
                 _ => false,
             },
-            // Param `Decimal` values are still unsaturated when we compare them
-            // with user args.
-            (ParamType::Plain(Decimal(_, _)), Decimal(_, _)) => true,
-            (ParamType::Plain(s), o) => s == o,
+            (ParamType::Plain(s), o) => s.desaturate() == o.desaturate(),
         }
     }
 }
@@ -366,7 +364,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             let mut exact_matches = 0;
             let mut preferred_types = 0;
 
-            for (i, (arg, raw_arg_type)) in exprs.iter().zip(&types).enumerate() {
+            for (i, raw_arg_type) in types.iter().enumerate() {
                 let param_type = match &fimpl.params {
                     ParamList::Exact(p) => &p[i],
                     ParamList::Repeat(p) => &p[i % p.len()],
@@ -378,7 +376,7 @@ impl<'a> ArgImplementationMatcher<'a> {
                         raw_arg_type.clone()
                     }
                     Some(raw_arg_type) => {
-                        if self.coerce_arg_to_type(arg.clone(), &param_type).is_err() {
+                        if !self.is_coercion_possible(raw_arg_type, &param_type) {
                             valid_candidate = false;
                             break;
                         }
@@ -587,7 +585,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         // contexts.
         if let ParamList::Exact(ref mut param_list) = f.params {
             for (i, param) in param_list.iter_mut().enumerate() {
-                if let Plain(Decimal(_, _)) = param {
+                if let Plain(Decimal(..)) = param {
                     *param = Plain(types[i].clone());
                 }
             }
@@ -644,6 +642,20 @@ impl<'a> ArgImplementationMatcher<'a> {
         }
     }
 
+    /// Checks that `arg_type` is coercible to the parameter type without
+    /// actually planning the coercion.
+    fn is_coercion_possible(&self, arg_type: &ScalarType, to_typ: &ParamType) -> bool {
+        use CastTo::*;
+
+        let cast_to = match to_typ {
+            ParamType::Plain(s) => Implicit(s.clone()),
+            ParamType::JsonbAny => JsonbAny,
+            ParamType::ExplicitStringAny | ParamType::StringAny => Explicit(ScalarType::String),
+        };
+
+        super::cast::get_cast(arg_type, &cast_to).is_some()
+    }
+
     /// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
     /// corresponding to `ParameterType`; errors if not possible. This can only
     /// work within the `func` module because it relies on `ParameterType`.
@@ -652,6 +664,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         arg: CoercibleScalarExpr,
         typ: &ParamType,
     ) -> Result<ScalarExpr, failure::Error> {
+        use super::cast::CastTo::*;
         let coerce_to = match typ {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
             ParamType::JsonbAny => CoerceTo::JsonbAny,
@@ -659,22 +672,25 @@ impl<'a> ArgImplementationMatcher<'a> {
                 CoerceTo::Plain(ScalarType::String)
             }
         };
+
         let arg = super::query::plan_coerce(self.ecx, arg, coerce_to)?;
-        match typ {
-            ParamType::JsonbAny => super::query::plan_to_jsonb(self.ecx, self.ident, arg),
-            ParamType::ExplicitStringAny => {
-                let ccx = CastContext::Explicit;
-                super::query::plan_cast_internal(self.ecx, ccx, arg, ScalarType::String)
-            }
+        let to_typ = match typ {
+            ParamType::Plain(s) => Implicit(s.clone()),
+            ParamType::JsonbAny => JsonbAny,
+            ParamType::ExplicitStringAny => Explicit(ScalarType::String),
             ParamType::StringAny => {
-                let ccx = CastContext::Implicit(self.ident);
-                super::query::plan_cast_internal(self.ecx, ccx, arg, ScalarType::String)
+                // This is the raison d'être for the distinction between
+                // `ExplicitStringAny` and `StringAny`: getting either implicit
+                // or explicit cast behavior out of casting boolean values to
+                // strings.
+                if self.ecx.scalar_type(&arg) == ScalarType::Bool {
+                    Implicit(ScalarType::String)
+                } else {
+                    Explicit(ScalarType::String)
+                }
             }
-            ParamType::Plain(s) => {
-                let ccx = CastContext::Implicit(self.ident);
-                super::query::plan_cast_implicit(self.ecx, ccx, arg, s.clone())
-            }
-        }
+        };
+        super::query::plan_cast_internal(self.ident, self.ecx, arg, to_typ)
     }
 }
 

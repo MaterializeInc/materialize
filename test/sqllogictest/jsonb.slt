@@ -1802,25 +1802,14 @@ SELECT ('[1]'::jsonb)::int;
 ----
 NULL
 
-query T
-SELECT ('"2019-12-31"'::jsonb)::date;
-----
-2019-12-31
-
-query T
+query error CAST does not support casting from jsonb to timestamp
 SELECT ('"1969-06-01 10:10:10.410"'::jsonb)::timestamp;
-----
-1969-06-01 10:10:10.41
 
-query T
+query error CAST does not support casting from jsonb to interval
 SELECT ('"1-2 3 4:5:6.7"'::jsonb)::interval;
-----
-1 year 2 months 3 days 04:05:06.7
 
-query T
+query error CAST does not support casting from jsonb to date
 SELECT ('["2019-12-31"]'::jsonb)::date;
-----
-NULL
 
 query T
 SELECT (null::jsonb)::text;
