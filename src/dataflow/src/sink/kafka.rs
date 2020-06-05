@@ -18,13 +18,14 @@ use rdkafka::error::{KafkaError, RDKafkaError};
 use rdkafka::message::Message;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
 use interchange::avro::{DiffPair, Encoder};
 use repr::{RelationDesc, Row};
+
+use super::util::sink_reschedule;
 
 #[derive(Clone)]
 pub struct SinkProducerContext;
@@ -92,7 +93,8 @@ pub fn kafka<G>(
     let mut encoded_buffer = None;
 
     let name = format!("kafka-{}", id);
-    stream.sink(
+    sink_reschedule(
+        &stream,
         Exchange::new(move |_| sink_hash),
         &name.clone(),
         move |input| {
@@ -142,15 +144,18 @@ pub fn kafka<G>(
                     // how many times to send the data.
                     (buf, diff.abs())
                 } else {
-                    return;
+                    // Nothing left for us to do
+                    break;
                 };
 
                 let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
                 if let Err((e, _)) = producer.inner().send(record) {
                     error!("unable to produce in {}: {}", name, e);
                     if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
+                        // We are overloading Kafka by sending too many records
+                        // retry sending this record at a later time
                         encoded_buffer = Some((encoded, count));
-                        return;
+                        return true;
                     }
                 }
 
@@ -160,6 +165,14 @@ pub fn kafka<G>(
                     encoded_buffer = Some((encoded, count - 1));
                 }
             }
+
+            if encoded_buffer.is_some() || !queue.is_empty() {
+                // We need timely to reschedule this operator as we have pending
+                // items that we need to send to Kafka
+                return true;
+            }
+
+            return false;
         },
     )
 }
