@@ -54,6 +54,11 @@ mzconduct:
         - step: run
           service: perf-kinesis
           daemon: false
+          # run for a minute
+          command: >-
+            --total-records 6000
+            --records-per-second 100
+            --shard-count 2
         - step: down
           destroy_volumes: true
 

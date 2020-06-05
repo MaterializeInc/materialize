@@ -132,7 +132,7 @@ pub struct Args {
     pub shard_count: i64,
 
     /// The total number of records to create
-    #[structopt(long, default_value = "150000000")]
+    #[structopt(long, default_value = "150_000_000")]
     pub total_records: u64,
 
     /// The number of records to put to the Kinesis stream per second

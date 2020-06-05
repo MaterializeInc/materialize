@@ -118,12 +118,21 @@ steps:
           run: sqllogictest
 
   - id: streaming-demo
-    label: ":shower: streaming-demo"
+    label: ":shower: protobuf kafka streaming-demo"
     depends_on: build
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzconduct:
           test: billing
+          workflow: ci
+
+  - id: perf-kinesis
+    label: ":shower: kinesis streaming demo"
+    depends_on: build
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzconduct:
+          test: perf-kinesis
           workflow: ci
 
   - id: chbench-demo
