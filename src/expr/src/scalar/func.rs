@@ -991,6 +991,17 @@ fn sqrt_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(x.sqrt())
 }
 
+fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
+    let d = a.unwrap_decimal();
+    if d.as_i128() < 0 {
+        return Ok(Datum::Null);
+    }
+    let d_f64 = cast_significand_to_float64(a);
+    let d_scaled = d_f64.unwrap_float64() / 10_f64.powi(i32::from(scale));
+
+    cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), Datum::from(i32::from(scale)))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -2287,6 +2298,7 @@ pub enum UnaryFunc {
     NegInterval,
     SqrtFloat32,
     SqrtFloat64,
+    SqrtDec(u8),
     AbsInt32,
     AbsInt64,
     AbsFloat32,
@@ -2505,6 +2517,7 @@ impl UnaryFunc {
             UnaryFunc::FloorDecimal(scale) => Ok(floor_decimal(a, *scale)),
             UnaryFunc::SqrtFloat32 => Ok(sqrt_float32(a)),
             UnaryFunc::SqrtFloat64 => Ok(sqrt_float64(a)),
+            UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::BitLengthString => Ok(bit_length(a.unwrap_str())),
             UnaryFunc::BitLengthBytes => Ok(bit_length(a.unwrap_bytes())),
@@ -2688,7 +2701,7 @@ impl UnaryFunc {
             CeilFloat64 | FloorFloat64 | RoundFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
-            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) => {
+            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) | SqrtDec(scale) => {
                 match input_type.scalar_type {
                     ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
                     _ => unreachable!(),
@@ -2868,6 +2881,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::FloorDecimal(_) => f.write_str("floordec"),
             UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
+            UnaryFunc::SqrtDec(_) => f.write_str("sqrtdec"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::CharLength => f.write_str("char_length"),
             UnaryFunc::BitLengthBytes => f.write_str("bit_length"),
