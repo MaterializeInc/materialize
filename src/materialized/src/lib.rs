@@ -248,10 +248,25 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
 
     let logging_config = config.logging_granularity.map(LoggingConfig::new);
 
-    // Initialize command queue and sql planner, but only on the primary.
+    // Launch dataflow workers.
+    let dataflow_guard = dataflow::serve(
+        dataflow_conns,
+        config.threads,
+        config.process,
+        switchboard.clone(),
+        executor.clone(),
+        logging_config.clone(),
+    )
+    .map_err(|s| format_err!("{}", s))?;
+
+    // Initialize coordinator, but only on the primary.
+    //
+    // Note that the coordinator must be initialized *after* launching the
+    // dataflow workers, as booting the coordinator can involve sending enough
+    // data to workers to fill up a `comm` channel buffer (#3280).
     let coord_thread = if is_primary {
         let mut coord = coord::Coordinator::new(coord::Config {
-            switchboard: switchboard.clone(),
+            switchboard,
             num_timely_workers,
             symbiosis_url: config.symbiosis_url.as_deref(),
             logging: logging_config.as_ref(),
@@ -267,17 +282,6 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     } else {
         None
     };
-
-    // Construct timely dataflow instance.
-    let dataflow_guard = dataflow::serve(
-        dataflow_conns,
-        config.threads,
-        config.process,
-        switchboard,
-        executor,
-        logging_config,
-    )
-    .map_err(|s| format_err!("{}", s))?;
 
     Ok(Server {
         local_addr,

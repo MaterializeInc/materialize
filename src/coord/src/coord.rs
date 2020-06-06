@@ -135,149 +135,152 @@ where
     C: comm::Connection,
 {
     pub fn new(config: Config<C>) -> Result<Self, failure::Error> {
+        let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
         config.executor.enter(|| {
-            let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
-
-            let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
-                Some(block_on(symbiosis::Postgres::open_and_erase(
-                    symbiosis_url,
-                ))?)
-            } else {
-                None
-            };
-
-            let optimizer = Optimizer::default();
-            let catalog = open_catalog(config.data_directory, config.logging, optimizer)?;
-            let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
-                let millis = d.as_millis();
-                if millis > Timestamp::max_value() as u128 {
-                    Timestamp::max_value()
-                } else if millis < Timestamp::min_value() as u128 {
-                    Timestamp::min_value()
-                } else {
-                    millis as Timestamp
-                }
-            });
-            let logging = config.logging;
-            let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
-            broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
-            let mut coord = Self {
-                switchboard: config.switchboard,
-                broadcast_tx,
-                num_timely_workers: config.num_timely_workers,
-                optimizer: Default::default(),
-                catalog,
-                symbiosis,
-                views: HashMap::new(),
-                indexes: ArrangementFrontiers::default(),
-                since_updates: Vec::new(),
-                active_tails: HashMap::new(),
-                local_input_time: 1,
-                log: config.logging.is_some(),
-                executor: config.executor.clone(),
-                timestamp_config: config.timestamp,
-                logical_compaction_window_ms,
-                feedback_rx: Some(rx),
-            };
-
-            let catalog_entries: Vec<_> = coord
-                .catalog
-                .iter()
-                .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
-                .collect();
-            for (id, name, item) in catalog_entries {
-                // Mirror each recovered catalog entry.
-                broadcast(
-                    &mut coord.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::Catalog(
-                        id,
-                        name.to_string(),
-                        true,
-                    )),
-                );
-
-                match item {
-                    //currently catalog item rebuild assumes that sinks and
-                    //indexes are always built individually and does not store information
-                    //about how it was built. If we start building multiple sinks and/or indexes
-                    //using a single dataflow, we have to make sure the rebuild process re-runs
-                    //the same multiple-build dataflow.
-                    CatalogItem::Source(_) => {
-                        coord.views.insert(id, ViewState::new(false, vec![]));
-                    }
-                    CatalogItem::View(view) => {
-                        coord.insert_view(id, &view);
-                    }
-                    CatalogItem::Sink(sink) => {
-                        let builder = match sink.connector {
-                            SinkConnectorState::Pending(builder) => builder,
-                            SinkConnectorState::Ready(_) => {
-                                panic!("sink already initialized during catalog boot")
-                            }
-                        };
-                        let connector = block_on(sink_connector::build(builder, id))
-                            .with_context(|e| format!("recreating sink {}: {}", name, e))?;
-                        coord.handle_sink_connector_ready(id, connector);
-                    }
-                    CatalogItem::Index(index) => match id {
-                        GlobalId::User(_) => {
-                            coord.create_index_dataflow(name.to_string(), id, index)
-                        }
-                        GlobalId::System(_) => {
-                            // TODO(benesch): a smarter way to determine whether this system index
-                            // is on a logging source or a logging view. Probably logging sources
-                            // should not be catalog views.
-                            if logging
-                                .unwrap()
-                                .active_views()
-                                .iter()
-                                .any(|v| v.index_id == id)
-                            {
-                                coord.create_index_dataflow(name.to_string(), id, index)
-                            } else {
-                                coord.insert_index(id, &index, Some(1_000))
-                            }
-                        }
-                    },
-                }
+            let res = Self::new_core(config);
+            if res.is_err() {
+                broadcast(&mut broadcast_tx, SequencedCommand::Shutdown);
             }
-
-            // Announce primary and foreign key relationships.
-            if let Some(logging_config) = logging {
-                for log in logging_config.active_logs().iter() {
-                    coord.report_catalog_update(
-                        log.id(),
-                        coord
-                            .catalog
-                            .humanize_id(expr::Id::Global(log.id()))
-                            .unwrap(),
-                        true,
-                    );
-                    for (index, key) in log.schema().typ().keys.iter().enumerate() {
-                        broadcast(
-                            &mut coord.broadcast_tx,
-                            SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
-                                log.id(),
-                                key.clone(),
-                                index,
-                            )),
-                        );
-                    }
-                    for (index, (parent, pairs)) in log.foreign_keys().into_iter().enumerate() {
-                        broadcast(
-                            &mut coord.broadcast_tx,
-                            SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
-                                log.id(),
-                                parent,
-                                pairs,
-                                index,
-                            )),
-                        );
-                    }
-                }
-            }
-            Ok(coord)
+            res
         })
+    }
+
+    fn new_core(config: Config<C>) -> Result<Self, failure::Error> {
+        let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
+
+        let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
+            Some(block_on(symbiosis::Postgres::open_and_erase(
+                symbiosis_url,
+            ))?)
+        } else {
+            None
+        };
+
+        let optimizer = Optimizer::default();
+        let catalog = open_catalog(config.data_directory, config.logging, optimizer)?;
+        let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
+            let millis = d.as_millis();
+            if millis > Timestamp::max_value() as u128 {
+                Timestamp::max_value()
+            } else if millis < Timestamp::min_value() as u128 {
+                Timestamp::min_value()
+            } else {
+                millis as Timestamp
+            }
+        });
+        let logging = config.logging;
+        let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
+        broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
+        let mut coord = Self {
+            switchboard: config.switchboard,
+            broadcast_tx,
+            num_timely_workers: config.num_timely_workers,
+            optimizer: Default::default(),
+            catalog,
+            symbiosis,
+            views: HashMap::new(),
+            indexes: ArrangementFrontiers::default(),
+            since_updates: Vec::new(),
+            active_tails: HashMap::new(),
+            local_input_time: 1,
+            log: config.logging.is_some(),
+            executor: config.executor.clone(),
+            timestamp_config: config.timestamp,
+            logical_compaction_window_ms,
+            feedback_rx: Some(rx),
+        };
+
+        let catalog_entries: Vec<_> = coord
+            .catalog
+            .iter()
+            .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
+            .collect();
+        for (id, name, item) in catalog_entries {
+            // Mirror each recovered catalog entry.
+            broadcast(
+                &mut coord.broadcast_tx,
+                SequencedCommand::AppendLog(MaterializedEvent::Catalog(id, name.to_string(), true)),
+            );
+
+            match item {
+                //currently catalog item rebuild assumes that sinks and
+                //indexes are always built individually and does not store information
+                //about how it was built. If we start building multiple sinks and/or indexes
+                //using a single dataflow, we have to make sure the rebuild process re-runs
+                //the same multiple-build dataflow.
+                CatalogItem::Source(_) => {
+                    coord.views.insert(id, ViewState::new(false, vec![]));
+                }
+                CatalogItem::View(view) => {
+                    coord.insert_view(id, &view);
+                }
+                CatalogItem::Sink(sink) => {
+                    let builder = match sink.connector {
+                        SinkConnectorState::Pending(builder) => builder,
+                        SinkConnectorState::Ready(_) => {
+                            panic!("sink already initialized during catalog boot")
+                        }
+                    };
+                    let connector = block_on(sink_connector::build(builder, id))
+                        .with_context(|e| format!("recreating sink {}: {}", name, e))?;
+                    coord.handle_sink_connector_ready(id, connector);
+                }
+                CatalogItem::Index(index) => match id {
+                    GlobalId::User(_) => coord.create_index_dataflow(name.to_string(), id, index),
+                    GlobalId::System(_) => {
+                        // TODO(benesch): a smarter way to determine whether this system index
+                        // is on a logging source or a logging view. Probably logging sources
+                        // should not be catalog views.
+                        if logging
+                            .unwrap()
+                            .active_views()
+                            .iter()
+                            .any(|v| v.index_id == id)
+                        {
+                            coord.create_index_dataflow(name.to_string(), id, index)
+                        } else {
+                            coord.insert_index(id, &index, Some(1_000))
+                        }
+                    }
+                },
+            }
+        }
+
+        // Announce primary and foreign key relationships.
+        if let Some(logging_config) = logging {
+            for log in logging_config.active_logs().iter() {
+                coord.report_catalog_update(
+                    log.id(),
+                    coord
+                        .catalog
+                        .humanize_id(expr::Id::Global(log.id()))
+                        .unwrap(),
+                    true,
+                );
+                for (index, key) in log.schema().typ().keys.iter().enumerate() {
+                    broadcast(
+                        &mut coord.broadcast_tx,
+                        SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
+                            log.id(),
+                            key.clone(),
+                            index,
+                        )),
+                    );
+                }
+                for (index, (parent, pairs)) in log.foreign_keys().into_iter().enumerate() {
+                    broadcast(
+                        &mut coord.broadcast_tx,
+                        SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
+                            log.id(),
+                            parent,
+                            pairs,
+                            index,
+                        )),
+                    );
+                }
+            }
+        }
+        Ok(coord)
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
