@@ -2090,37 +2090,6 @@ fn plan_function<'a>(
             Ok(expr)
         }
 
-        // This function cannot be moved into `sql::func` until we implement
-        // `SqrtDecimal` due to the framework's type conversions (whose rules we
-        // currently bend).
-        "sqrt" => {
-            if args.len() != 1 {
-                bail!("sqrt expects 1 argument, got {}", args.len());
-            }
-            let expr = plan_expr(ecx, &args[0], None)?;
-            let expr = promote_number_floatdec(ecx, "sqrt", expr)?;
-            Ok(match ecx.column_type(&expr).scalar_type {
-                ScalarType::Float32 => expr.call_unary(UnaryFunc::SqrtFloat32),
-                ScalarType::Float64 => expr.call_unary(UnaryFunc::SqrtFloat64),
-                ScalarType::Decimal(p, s) => {
-                    // TODO(benesch): proper sqrt support for decimals. For
-                    // now we cast to an f64 and back, which is semi-ok
-                    // because sqrt is an inherently imprecise operation.
-                    let expr = plan_cast_internal(
-                        ecx,
-                        CastContext::Implicit("sqrt"),
-                        expr,
-                        ScalarType::Float64,
-                    )?;
-                    let expr = expr.call_unary(UnaryFunc::SqrtFloat64);
-                    // This is marked as explicit because PG doesn't support this cast implicitly, so
-                    // neither should we. This can be resolved with an actual square root function for decimals.
-                    plan_cast_internal(ecx, CastContext::Explicit, expr, ScalarType::Decimal(p, s))?
-                }
-                _ => unreachable!(),
-            })
-        }
-
         _ => {
             if is_table_func(&name) {
                 unsupported!(
@@ -2888,20 +2857,6 @@ pub fn plan_cast_implicit<'a>(
     }
 
     plan_cast_internal(ecx, ccx, expr, to_scalar_type)
-}
-
-fn promote_number_floatdec<'a>(
-    ecx: &ExprContext<'a>,
-    name: &str,
-    expr: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error> {
-    Ok(match ecx.column_type(&expr).scalar_type {
-        ScalarType::Float32 | ScalarType::Float64 | ScalarType::Decimal(_, _) => expr,
-        ScalarType::Int32 | ScalarType::Int64 => {
-            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Float64)?
-        }
-        other => bail!("{} has non-numeric type {:?}", name, other),
-    })
 }
 
 fn promote_int_int64<'a>(

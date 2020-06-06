@@ -610,6 +610,10 @@ impl<'a> ArgImplementationMatcher<'a> {
                 ScalarType::Decimal(_, s) => BFunc(BinaryFunc::RoundDecimal(s)),
                 _ => unreachable!(),
             },
+            Unary(UnaryFunc::SqrtDec(_)) => match types[0] {
+                ScalarType::Decimal(_, s) => Unary(UnaryFunc::SqrtDec(s)),
+                _ => unreachable!(),
+            },
             other => other,
         };
 
@@ -815,6 +819,11 @@ lazy_static! {
             "substring" => {
                 params!(String, Int64) => VariadicFunc::Substr,
                 params!(String, Int64, Int64) => VariadicFunc::Substr
+            },
+            "sqrt" => {
+                params!(Float32) => UnaryFunc::SqrtFloat32,
+                params!(Float64) => UnaryFunc::SqrtFloat64,
+                params!(Decimal(0,0)) => UnaryFunc::SqrtDec(0)
             },
             "to_char" => {
                 params!(Timestamp, String) => BinaryFunc::ToCharTimestamp,
