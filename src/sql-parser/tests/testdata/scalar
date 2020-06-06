@@ -88,6 +88,11 @@ parse-scalar roundtrip
 (id::timestamp with time zone::timestamp)::double::text
 
 parse-scalar roundtrip
+CAST(c::jsonb->>'f' AS timestamptz)
+----
+(c::jsonb ->> 'f')::timestamp with time zone
+
+parse-scalar roundtrip
 id::numeric FROM customer
 ----
 id::numeric
