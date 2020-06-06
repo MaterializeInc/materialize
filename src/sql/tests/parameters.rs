@@ -65,12 +65,10 @@ fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
         ("SELECT $1 < $2", vec![Type::Text, Type::Text]),
         ("SELECT $1 + 1", vec![Type::Int4]),
         ("SELECT $1 + 1.0", vec![Type::Numeric]),
-        ("SELECT DATE '1970-01-01' + $1", vec![Type::Interval]),
         (
             "SELECT TIMESTAMP '1970-01-01 00:00:00' + $1",
             vec![Type::Interval],
         ),
-        ("SELECT $1 + DATE '1970-01-01'", vec![Type::Interval]),
         (
             "SELECT $1 + TIMESTAMP '1970-01-01 00:00:00'",
             vec![Type::Interval],

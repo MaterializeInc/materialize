@@ -11,13 +11,15 @@
 //! built-in functions (for most built-in functions, at least).
 
 use std::collections::HashMap;
+use std::fmt;
 
 use failure::bail;
 use lazy_static::lazy_static;
 use repr::ScalarType;
+use sql_parser::ast::{BinaryOperator, Expr};
 
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
-use super::query::{CastContext, CoerceTo, ExprContext};
+use super::query::{rescale_decimal, CastContext, CoerceTo, ExprContext};
 use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,7 +93,7 @@ fn is_param_preferred_type_for_arg(param_type: &ScalarType, arg_type: &ScalarTyp
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone)]
 /// Describes a single function's implementation.
 pub struct FuncImpl {
     params: ParamList,
@@ -194,16 +196,30 @@ impl Params for Vec<ScalarType> {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-/// Represents generalizable operation types you can return from
-/// `ArgImplementationMatcher`.
+#[derive(Clone)]
+/// Represents generalizable operations that can return [`ScalarExpr`]s.
 pub enum OperationType {
     /// Returns the `ScalarExpr` that is output from
     /// `ArgImplementationMatcher::generate_param_exprs`.
     ExprOnly,
     Unary(UnaryFunc),
-    Binary(BinaryFunc),
+    /// Embeds a [`BinaryFunc`]
+    BFunc(BinaryFunc),
+    /// Embeds a binary-operator-like function pointer.
+    BClosure(fn(&ExprContext, ScalarExpr, ScalarExpr) -> ScalarExpr),
     Variadic(VariadicFunc),
+}
+
+impl fmt::Debug for OperationType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OperationType::ExprOnly => f.write_str("ExprOnly"),
+            OperationType::Unary(func) => write!(f, "Unary({:?})", func),
+            OperationType::BFunc(func) => write!(f, "BFunc({:?})", func),
+            OperationType::BClosure(_) => f.write_str("BClosure"),
+            OperationType::Variadic(func) => write!(f, "Variadic({:?}", func),
+        }
+    }
 }
 
 impl From<UnaryFunc> for OperationType {
@@ -214,7 +230,7 @@ impl From<UnaryFunc> for OperationType {
 
 impl From<BinaryFunc> for OperationType {
     fn from(b: BinaryFunc) -> OperationType {
-        OperationType::Binary(b)
+        OperationType::BFunc(b)
     }
 }
 
@@ -258,7 +274,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         ident: &'a str,
         ecx: &'a ExprContext<'a>,
         impls: &[FuncImpl],
-        args: &[sql_parser::ast::Expr],
+        args: &[Expr],
     ) -> Result<ScalarExpr, failure::Error> {
         // Immediately remove all `impls` we know are invalid.
         let l = args.len();
@@ -285,11 +301,12 @@ impl<'a> ArgImplementationMatcher<'a> {
                 func,
                 expr: Box::new(exprs.remove(0)),
             },
-            OperationType::Binary(func) => ScalarExpr::CallBinary {
+            OperationType::BFunc(func) => ScalarExpr::CallBinary {
                 func,
                 expr1: Box::new(exprs.remove(0)),
                 expr2: Box::new(exprs.remove(0)),
             },
+            OperationType::BClosure(f) => f(ecx, exprs.remove(0), exprs.remove(0)),
             OperationType::Variadic(func) => ScalarExpr::CallVariadic { func, exprs },
         })
     }
@@ -337,7 +354,6 @@ impl<'a> ArgImplementationMatcher<'a> {
         }
 
         // No exact match. Apply PostgreSQL's best match algorithm.
-
         let mut candidates = Vec::new();
         let mut max_exact_matches = 0;
         let mut max_preferred_types = 0;
@@ -590,8 +606,8 @@ impl<'a> ArgImplementationMatcher<'a> {
                 ScalarType::Decimal(_, s) => Unary(UnaryFunc::RoundDecimal(s)),
                 _ => unreachable!(),
             },
-            Binary(BinaryFunc::RoundDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Binary(BinaryFunc::RoundDecimal(s)),
+            BFunc(BinaryFunc::RoundDecimal(_)) => match types[0] {
+                ScalarType::Decimal(_, s) => BFunc(BinaryFunc::RoundDecimal(s)),
                 _ => unreachable!(),
             },
             other => other,
@@ -769,7 +785,7 @@ lazy_static! {
             "length" => {
                 params!(Bytes) => Unary(UnaryFunc::ByteLengthBytes),
                 params!(String) => Unary(UnaryFunc::CharLength),
-                params!(Bytes, String) => Binary(BinaryFunc::EncodedBytesCharLength)
+                params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength
             },
             "octet_length" => {
                 params!(Bytes) => Unary(UnaryFunc::ByteLengthBytes),
@@ -828,7 +844,7 @@ lazy_static! {
 pub fn select_scalar_func(
     ecx: &ExprContext,
     ident: &str,
-    args: &[sql_parser::ast::Expr],
+    args: &[Expr],
 ) -> Result<ScalarExpr, failure::Error> {
     let impls = match BUILTIN_IMPLS.get(ident) {
         Some(i) => i,
@@ -838,5 +854,192 @@ pub fn select_scalar_func(
     match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
         Ok(expr) => Ok(expr),
         Err(e) => bail!("Cannot call function '{}': {}", ident, e),
+    }
+}
+
+/// Provides a macro to write HashMap "literals" for matching `ArithmeticOp`s to
+/// `Vec<FuncImpl>`.
+macro_rules! arithmetic_impls(
+    {
+        $(
+            $arithmeticop:expr => {
+                $($params:expr => $op:expr),+
+            }
+        ),+
+    } => {{
+        let mut m: HashMap<BinaryOperator, Vec<FuncImpl>> = HashMap::new();
+        $(
+            insert_impl!{m, $arithmeticop, $($params => $op),+}
+        )+
+        m
+    }};
+);
+
+lazy_static! {
+    /// Correlates a built-in function name to its implementations.
+    static ref ARITHMETIC_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
+        use ScalarType::*;
+        use BinaryOperator::*;
+        use super::expr::BinaryFunc::*;
+        use OperationType::*;
+        arithmetic_impls! {
+            Plus => {
+                params!(Int32, Int32) => AddInt32,
+                params!(Int64, Int64) => AddInt64,
+                params!(Float32, Float32) => AddFloat32,
+                params!(Float64, Float64) => AddFloat64,
+                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                    BClosure(|ecx, lhs, rhs| {
+                        let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
+                        lexpr.call_binary(rexpr, AddDecimal)
+                    })
+                },
+                params!(Interval, Interval) => AddInterval,
+                params!(Timestamp, Interval) => AddTimestampInterval,
+                params!(Interval, Timestamp) => {
+                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddTimestampInterval))
+                },
+                params!(TimestampTz, Interval) => AddTimestampTzInterval,
+                params!(Interval, TimestampTz) => {
+                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddTimestampTzInterval))
+                },
+                params!(Date, Interval) => AddDateInterval,
+                params!(Interval, Date) => {
+                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddDateInterval))
+                },
+                params!(Date, Time) => AddDateTime,
+                params!(Time, Date) => {
+                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddDateTime))
+                },
+                params!(Time, Interval) => AddTimeInterval,
+                params!(Interval, Time) => {
+                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddTimeInterval))
+                }
+            },
+            Minus => {
+                params!(Int32, Int32) => SubInt32,
+                params!(Int64, Int64) => SubInt64,
+                params!(Float32, Float32) => SubFloat32,
+                params!(Float64, Float64) => SubFloat64,
+                params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
+                    let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
+                    lexpr.call_binary(rexpr, SubDecimal)
+                }),
+                params!(Interval, Interval) => SubInterval,
+                params!(Timestamp, Timestamp) => SubTimestamp,
+                params!(TimestampTz, TimestampTz) => SubTimestampTz,
+                params!(Timestamp, Interval) => SubTimestampInterval,
+                params!(TimestampTz, Interval) => SubTimestampTzInterval,
+                params!(Date, Date) => SubDate,
+                params!(Date, Interval) => SubDateInterval,
+                params!(Time, Time) => SubTime,
+                params!(Time, Interval) => SubTimeInterval,
+                params!(Jsonb, Int64) => JsonbDeleteInt64,
+                params!(Jsonb, String) => JsonbDeleteString
+                // TODO(jamii) there should be corresponding overloads for
+                // Array(Int64) and Array(String)
+            },
+            Multiply => {
+                params!(Int32, Int32) => MulInt32,
+                params!(Int64, Int64) => MulInt64,
+                params!(Float32, Float32) => MulFloat32,
+                params!(Float64, Float64) => MulFloat64,
+                params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
+                    use std::cmp::*;
+                    match (ecx.scalar_type(&lhs), ecx.scalar_type(&rhs)) {
+                        (Decimal(_, s1), Decimal(_,s2)) => {
+                            let so = max(max(min(s1 + s2, 12), s1), s2);
+                            let si = s1 + s2;
+                            let expr = lhs.call_binary(rhs, MulDecimal);
+                            rescale_decimal(expr, si, so)
+                        },
+                        (_, _) => unreachable!()
+                    }
+                })
+            },
+            Divide => {
+                params!(Int32, Int32) => DivInt32,
+                params!(Int64, Int64) => DivInt64,
+                params!(Float32, Float32) => DivFloat32,
+                params!(Float64, Float64) => DivFloat64,
+                params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
+                    use std::cmp::*;
+                    match (ecx.scalar_type(&lhs), ecx.scalar_type(&rhs)) {
+                        (Decimal(_, s1), Decimal(_,s2)) => {
+                            // Pretend all 0-scale numerators were of the same scale as
+                            // their denominators for improved accuracy.
+                            let s1_mod = if s1 == 0 { s2 } else { s1 };
+                            let s = max(min(12, s1_mod + 6), s1_mod);
+                            let si = max(s + 1, s2);
+                            let lhs = rescale_decimal(lhs, s1, si);
+                            let expr = lhs.call_binary(rhs, DivDecimal);
+                            rescale_decimal(expr, si - s2, s)
+                        },
+                        (_, _) => unreachable!()
+                    }
+                })
+            },
+            Modulus => {
+                params!(Int32, Int32) => ModInt32,
+                params!(Int64, Int64) => ModInt64,
+                params!(Float32, Float32) => ModFloat32,
+                params!(Float64, Float64) => ModFloat64,
+                params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
+                    let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
+                    lexpr.call_binary(rexpr, ModDecimal)
+                })
+            }
+        }
+    };
+}
+
+/// Collects the common rescaling procedure used by [`AddDecimal`],
+/// [`SubDecimal`], [`ModDecimal`] to prepare operands.
+fn rescale_decimals_add_sub_mod(
+    ecx: &ExprContext,
+    lhs: ScalarExpr,
+    rhs: ScalarExpr,
+) -> (ScalarExpr, ScalarExpr) {
+    match (ecx.scalar_type(&lhs), ecx.scalar_type(&rhs)) {
+        (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => {
+            let so = std::cmp::max(s1, s2);
+            let lexpr = rescale_decimal(lhs, s1, so);
+            let rexpr = rescale_decimal(rhs, s2, so);
+            (lexpr, rexpr)
+        }
+        (_, _) => unreachable!(),
+    }
+}
+
+/// Gets an arithmetic function and the `ScalarExpr`s required to invoke it.
+pub fn select_arithmetic_op<'a>(
+    ecx: &ExprContext,
+    op: &'a BinaryOperator,
+    left: &'a Expr,
+    right: &'a Expr,
+) -> Result<ScalarExpr, failure::Error> {
+    let impls = match ARITHMETIC_IMPLS.get(&op) {
+        Some(i) => i,
+        None => unreachable!(
+            "only call select_arithmetic_op with arithmetic BinaryOperators, not {:?}",
+            op
+        ),
+    };
+
+    let args = vec![left.clone(), right.clone()];
+
+    match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, &args) {
+        Ok(expr) => Ok(expr),
+        Err(e) => {
+            let lexpr = super::query::plan_expr(ecx, left, None)?;
+            let rexpr = super::query::plan_expr(ecx, right, None)?;
+            bail!(
+                "no overload for {} {} {}: {}",
+                ecx.scalar_type(&lexpr),
+                op,
+                ecx.scalar_type(&rexpr),
+                e
+            )
+        }
     }
 }

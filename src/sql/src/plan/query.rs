@@ -20,12 +20,11 @@
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
 use std::cell::RefCell;
-use std::cmp::{self, Ordering};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 use std::iter;
-use std::mem;
 use std::rc::Rc;
 
 use failure::{bail, ensure, format_err, ResultExt};
@@ -2233,11 +2232,9 @@ fn plan_binary_op<'a>(
         And => plan_boolean_op(ecx, BooleanOp::And, left, right),
         Or => plan_boolean_op(ecx, BooleanOp::Or, left, right),
 
-        Plus => plan_arithmetic_op(ecx, ArithmeticOp::Plus, left, right),
-        Minus => plan_arithmetic_op(ecx, ArithmeticOp::Minus, left, right),
-        Multiply => plan_arithmetic_op(ecx, ArithmeticOp::Multiply, left, right),
-        Divide => plan_arithmetic_op(ecx, ArithmeticOp::Divide, left, right),
-        Modulus => plan_arithmetic_op(ecx, ArithmeticOp::Modulo, left, right),
+        Plus | Minus | Multiply | Divide | Modulus => {
+            super::func::select_arithmetic_op(ecx, op, left, right)
+        }
 
         Lt => plan_comparison_op(ecx, ComparisonOp::Lt, left, right),
         LtEq => plan_comparison_op(ecx, ComparisonOp::LtEq, left, right),
@@ -2293,291 +2290,6 @@ fn plan_boolean_op<'a>(
     let func = match op {
         BooleanOp::And => BinaryFunc::And,
         BooleanOp::Or => BinaryFunc::Or,
-    };
-    let expr = lexpr.call_binary(rexpr, func);
-    Ok(expr)
-}
-
-fn plan_arithmetic_op<'a>(
-    ecx: &ExprContext,
-    op: ArithmeticOp,
-    left: &'a Expr,
-    right: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
-    use ArithmeticOp::*;
-    use BinaryFunc::*;
-    use ScalarType::*;
-
-    // Step 1. Plan inner expressions.
-    let left_unknown = expr_has_unknown_type(ecx, left);
-    let right_unknown = expr_has_unknown_type(ecx, right);
-    let (mut lexpr, mut ltype, mut rexpr, mut rtype) = match (left_unknown, right_unknown) {
-        // Both inputs are parameters of unknown types.
-        (true, true) => {
-            // We have no clues as to which operator to select, so bail. To
-            // avoid duplicating the logic for generating the correct error
-            // message, we just plan the left expression with no type hint,
-            // which we know will fail. (We could just as well plan the right
-            // expression.)
-            plan_expr(ecx, left, None)?;
-            unreachable!();
-        }
-
-        // Neither input is a parameter of an unknown type.
-        (false, false) => {
-            let mut lexpr = plan_expr(ecx, left, None)?;
-            let mut rexpr = plan_expr(ecx, right, None)?;
-            let mut ltype = ecx.column_type(&lexpr);
-            let mut rtype = ecx.column_type(&rexpr);
-
-            // When both inputs are already decimals, we skip coalescing, which
-            // could result in a rescale if the decimals have different
-            // precisions, because we tightly control the rescale when planning
-            // the arithmetic operation (below). E.g., decimal multiplication
-            // does not need to rescale its inputs, even when the inputs have
-            // different scales.
-            //
-            // Similarly, if either input is a timelike or JSON, we skip
-            // coalescing. Timelike values have well-defined operations with
-            // intervals, and JSON values have well-defined operations with
-            // strings and integers, so attempting to homogeneous the types will
-            // cause us to miss out on the overload.
-            let coalesce = match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Decimal(_, _), Decimal(_, _))
-                | (Date, _)
-                | (Time, _)
-                | (Timestamp, _)
-                | (TimestampTz, _)
-                | (_, Date)
-                | (_, Time)
-                | (_, Timestamp)
-                | (_, TimestampTz)
-                | (Jsonb, _)
-                | (_, Jsonb) => false,
-                _ => true,
-            };
-            if coalesce {
-                // Try to find a common type that can represent both inputs.
-                let op_string = op.to_string();
-                let best_target_type =
-                    best_target_type(vec![ltype.scalar_type.clone(), rtype.scalar_type.clone()])
-                        .unwrap();
-                lexpr = match plan_cast_internal(
-                    ecx,
-                    CastContext::Implicit(&op_string),
-                    lexpr,
-                    best_target_type.clone(),
-                ) {
-                    Ok(expr) => expr,
-                    Err(_) => bail!(
-                        "{} does not have uniform type: {:?} vs {:?}",
-                        &op_string,
-                        ltype.scalar_type,
-                        best_target_type,
-                    ),
-                };
-                rexpr = match plan_cast_internal(
-                    ecx,
-                    CastContext::Implicit(&op_string),
-                    rexpr,
-                    best_target_type.clone(),
-                ) {
-                    Ok(expr) => expr,
-                    Err(_) => bail!(
-                        "{} does not have uniform type: {:?} vs {:?}",
-                        &op_string,
-                        rtype.scalar_type,
-                        best_target_type,
-                    ),
-                };
-                rtype = ecx.column_type(&rexpr);
-                ltype = ecx.column_type(&lexpr);
-            }
-
-            (lexpr, ltype, rexpr, rtype)
-        }
-
-        // One of the inputs is a parameter of unknown type, but the other is
-        // not.
-        (swap @ false, true) | (swap @ true, false) => {
-            // Knowing the type of one input is often sufficiently constraining
-            // to allow us to infer the type of the unknown input.
-
-            // First, adjust so the known input is on the left.
-            let (left, right) = if swap { (right, left) } else { (left, right) };
-
-            // Determine the known type.
-            let lexpr = plan_expr(ecx, left, None)?;
-            let ltype = ecx.column_type(&lexpr);
-
-            // Infer the unknown type. Dates and timestamps want an interval for
-            // arithmetic. JSON wants an int *or* a string for the removal
-            // (minus) operator, but according to Postgres we can just pick
-            // string. Everything else wants its own type.
-            let type_hint = match ltype.scalar_type.clone() {
-                Date | Timestamp | TimestampTz => Interval,
-                Jsonb => String,
-                other => other,
-            };
-            let rexpr = plan_expr(ecx, right, Some(type_hint))?;
-            let rtype = ecx.column_type(&rexpr);
-
-            // Swap back, if necessary.
-            if swap {
-                (rexpr, rtype, lexpr, ltype)
-            } else {
-                (lexpr, ltype, rexpr, rtype)
-            }
-        }
-    };
-
-    // Step 2a. Plan the arithmetic operation for decimals.
-    //
-    // Decimal arithmetic requires special support from the planner, because
-    // the precision and scale of the decimal is erased in the dataflow
-    // layer. Operations follow Snowflake's rules for precision/scale
-    // conversions. [0]
-    //
-    // [0]: https://docs.snowflake.net/manuals/sql-reference/operators-arithmetic.html
-    match (&op, &ltype.scalar_type, &rtype.scalar_type) {
-        (Plus, Decimal(_, s1), Decimal(_, s2))
-        | (Minus, Decimal(_, s1), Decimal(_, s2))
-        | (Modulo, Decimal(_, s1), Decimal(_, s2)) => {
-            let so = cmp::max(s1, s2);
-            let lexpr = rescale_decimal(lexpr, *s1, *so);
-            let rexpr = rescale_decimal(rexpr, *s2, *so);
-            let func = match op {
-                Plus => AddDecimal,
-                Minus => SubDecimal,
-                Modulo => ModDecimal,
-                _ => unreachable!(),
-            };
-            let expr = lexpr.call_binary(rexpr, func);
-            return Ok(expr);
-        }
-        (Multiply, Decimal(_, s1), Decimal(_, s2)) => {
-            let so = cmp::max(cmp::max(cmp::min(s1 + s2, 12), *s1), *s2);
-            let si = s1 + s2;
-            let expr = lexpr.call_binary(rexpr, MulDecimal);
-            let expr = rescale_decimal(expr, si, so);
-            return Ok(expr);
-        }
-        (Divide, Decimal(_, s1), Decimal(_, s2)) => {
-            let s = cmp::max(cmp::min(12, s1 + 6), *s1);
-            let si = cmp::max(s + 1, *s2);
-            lexpr = rescale_decimal(lexpr, *s1, si);
-            let expr = lexpr.call_binary(rexpr, DivDecimal);
-            let expr = rescale_decimal(expr, si - s2, s);
-            return Ok(expr);
-        }
-        _ => (),
-    }
-
-    // Step 2b. Plan the arithmetic operation for all other types.
-    let func = match op {
-        Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
-            (Int32, Int32) => AddInt32,
-            (Int64, Int64) => AddInt64,
-            (Float32, Float32) => AddFloat32,
-            (Float64, Float64) => AddFloat64,
-            (Interval, Interval) => AddInterval,
-            (Timestamp, Interval) => AddTimestampInterval,
-            (Interval, Timestamp) => {
-                mem::swap(&mut lexpr, &mut rexpr);
-                mem::swap(&mut ltype, &mut rtype);
-                AddTimestampInterval
-            }
-            (TimestampTz, Interval) => AddTimestampTzInterval,
-            (Interval, TimestampTz) => {
-                mem::swap(&mut lexpr, &mut rexpr);
-                mem::swap(&mut ltype, &mut rtype);
-                AddTimestampTzInterval
-            }
-            (Date, Interval) => AddDateInterval,
-            (Interval, Date) => {
-                mem::swap(&mut lexpr, &mut rexpr);
-                mem::swap(&mut ltype, &mut rtype);
-                AddDateInterval
-            }
-            (Date, Time) => AddDateTime,
-            (Time, Date) => {
-                mem::swap(&mut lexpr, &mut rexpr);
-                mem::swap(&mut ltype, &mut rtype);
-                AddDateTime
-            }
-            (Time, Interval) => AddTimeInterval,
-            (Interval, Time) => {
-                mem::swap(&mut lexpr, &mut rexpr);
-                mem::swap(&mut ltype, &mut rtype);
-                AddTimeInterval
-            }
-            _ => bail!(
-                "no overload for {} + {}",
-                ltype.scalar_type,
-                rtype.scalar_type
-            ),
-        },
-        Minus => match (&ltype.scalar_type, &rtype.scalar_type) {
-            (Int32, Int32) => SubInt32,
-            (Int64, Int64) => SubInt64,
-            (Float32, Float32) => SubFloat32,
-            (Float64, Float64) => SubFloat64,
-            (Interval, Interval) => SubInterval,
-            (Timestamp, Timestamp) => SubTimestamp,
-            (TimestampTz, TimestampTz) => SubTimestampTz,
-            (Timestamp, Interval) => SubTimestampInterval,
-            (TimestampTz, Interval) => SubTimestampTzInterval,
-            (Date, Date) => SubDate,
-            (Date, Interval) => SubDateInterval,
-            (Time, Time) => SubTime,
-            (Time, Interval) => SubTimeInterval,
-            (Jsonb, Int32) => {
-                rexpr = rexpr.call_unary(UnaryFunc::CastInt32ToInt64);
-                JsonbDeleteInt64
-            }
-            (Jsonb, Int64) => JsonbDeleteInt64,
-            (Jsonb, String) => JsonbDeleteString,
-            // TODO(jamii) there should be corresponding overloads for
-            // Array(Int64) and Array(String)
-            _ => bail!(
-                "no overload for {} - {}",
-                ltype.scalar_type,
-                rtype.scalar_type
-            ),
-        },
-        Multiply => match (&ltype.scalar_type, &rtype.scalar_type) {
-            (Int32, Int32) => MulInt32,
-            (Int64, Int64) => MulInt64,
-            (Float32, Float32) => MulFloat32,
-            (Float64, Float64) => MulFloat64,
-            _ => bail!(
-                "no overload for {} * {}",
-                ltype.scalar_type,
-                rtype.scalar_type
-            ),
-        },
-        Divide => match (&ltype.scalar_type, &rtype.scalar_type) {
-            (Int32, Int32) => DivInt32,
-            (Int64, Int64) => DivInt64,
-            (Float32, Float32) => DivFloat32,
-            (Float64, Float64) => DivFloat64,
-            _ => bail!(
-                "no overload for {} / {}",
-                ltype.scalar_type,
-                rtype.scalar_type
-            ),
-        },
-        Modulo => match (&ltype.scalar_type, &rtype.scalar_type) {
-            (Int32, Int32) => ModInt32,
-            (Int64, Int64) => ModInt64,
-            (Float32, Float32) => ModFloat32,
-            (Float64, Float64) => ModFloat64,
-            _ => bail!(
-                "no overload for {} % {}",
-                ltype.scalar_type,
-                rtype.scalar_type
-            ),
-        },
     };
     let expr = lexpr.call_binary(rexpr, func);
     Ok(expr)
@@ -2913,27 +2625,6 @@ impl fmt::Display for ComparisonOp {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum ArithmeticOp {
-    Plus,
-    Minus,
-    Multiply,
-    Divide,
-    Modulo,
-}
-
-impl fmt::Display for ArithmeticOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ArithmeticOp::Plus => f.write_str("+"),
-            ArithmeticOp::Minus => f.write_str("-"),
-            ArithmeticOp::Multiply => f.write_str("*"),
-            ArithmeticOp::Divide => f.write_str("/"),
-            ArithmeticOp::Modulo => f.write_str("%"),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum JsonOp {
     Get,
     GetAsText,
@@ -3174,16 +2865,20 @@ pub fn plan_cast_implicit<'a>(
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
 
     match (&from_scalar_type, &to_scalar_type) {
-        (String, String) => (),
+        (String, String) | (Jsonb, Jsonb) => (),
         (String, _)
         | (_, String)
+        | (Jsonb, _)
+        | (Int64, Int32)
         | (Float32, Int64)
         | (Float32, Decimal(_, _))
         | (Float64, Int32)
         | (Float64, Int64)
+        | (Float64, Float32)
         | (Float64, Decimal(_, _))
         | (Decimal(_, _), Int32)
-        | (Decimal(_, _), Int64) => bail!(
+        | (Decimal(_, _), Int64)
+        | (TimestampTz, Timestamp) => bail!(
             "{} does not support implicitly casting from {:?} to {:?}; request an explicit cast",
             ccx,
             from_scalar_type,
@@ -3223,7 +2918,7 @@ fn promote_int_int64<'a>(
     })
 }
 
-fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
+pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     match s1.cmp(&s2) {
         Ordering::Less => {
             let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));

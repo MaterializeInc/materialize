@@ -95,7 +95,7 @@ SELECT a - 2 FROM basic
 query R
 SELECT a * 2 FROM basic
 ----
-0.20
+0.2
 
 query R
 SELECT a / 2 FROM basic
@@ -230,11 +230,15 @@ SELECT
 0  0.10  0.1
 
 # Ensure precision doesn't overflow with chained multiplications (#646).
-
 query R
 SELECT 1.0 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1
 ----
-1.000000000000
+1.0
+
+query R
+SELECT 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1.0
+----
+1.0
 
 ### e-notation ###
 query R
