@@ -707,126 +707,59 @@ impl RowPacker {
         Row { data }
     }
 
-    /// Start packing a `DatumList`.
+    /// Pushes a [`DatumList`] that is built from a closure.
     ///
-    /// Returns the starting offset, which needs to be passed to `finish_list`.
+    /// The supplied closure will be invoked once with a `RowPacker` that can
+    /// be used to populate the list. It is valid to call any method on the
+    /// [`RowPacker`] except for [`Row::finish_and_reuse`].
     ///
-    /// See also [`push_list`] and [`push_list_with`] for a more convenient api.
+    /// Returns the value returned by the closure, if any.
     ///
-    /// # Safety
-    /// You must finish the list (or throw away self).
-    /// Lists/dicts can be nested, but not overlapped.
-    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
-    pub unsafe fn start_list(&mut self) -> usize {
+    /// ```
+    /// # use repr::{Row, Datum, RowPacker};
+    /// let mut packer = RowPacker::new();
+    /// packer.push_list_with(|packer| {
+    ///     packer.push(Datum::String("age"));
+    ///     packer.push(Datum::Int64(42));
+    /// });
+    /// let row = packer.finish();
+    ///
+    /// assert_eq!(
+    ///     row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(),
+    ///     vec![Datum::String("age"), Datum::Int64(42)],
+    /// );
+    /// ```
+    pub fn push_list_with<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut RowPacker) -> R,
+    {
         self.data.push(Tag::List as u8);
         let start = self.data.len();
         // write a dummy len, will fix it up later
         push_copy!(&mut self.data, 0, usize);
-        start
-    }
 
-    /// Finish packing a [`DatumList`]
-    ///
-    /// # Safety
-    /// See `start_list`
-    pub unsafe fn finish_list(&mut self, start: usize) {
+        let out = f(self);
+
         let len = self.data.len() - start - size_of::<usize>();
         // fix up the len
         self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+
+        out
     }
 
-    /// Start packing a [`DatumDict`].
+    /// Pushes a [`DatumDict`] that is built from a closure.
     ///
-    /// Returns the starting offset, which needs to be passed to `finish_dict`.
+    /// The supplied closure will be invoked once with a `RowPacker` that can be
+    /// used to populate the dict.
     ///
-    /// See also [`push_dict`] and [`push_dict_with`] for a more convenient api.
+    /// The closure **must** alternate pushing string keys and arbitary values,
+    /// otherwise reading the dict will cause a panic.
     ///
-    /// # Safety
-    /// You must finish the dict (or throw away self).
-    /// Lists/dicts can be nested, but not overlapped.
-    #[allow(unused_unsafe)] // this is triggered by the unsafe in push_copy!
-    pub unsafe fn start_dict(&mut self) -> usize {
-        self.data.push(Tag::Dict as u8);
-        let start = self.data.len();
-        // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
-        start
-    }
-
-    /// Finish packing a `DatumDict`
+    /// The closure **must** push keys in ascending order, otherwise equality
+    /// checks on the resulting `Row` may be wrong and reading the dict IN DEBUG
+    /// MODE will cause a panic.
     ///
-    /// # Safety
-    /// See `start_dict`
-    pub unsafe fn finish_dict(&mut self, start: usize) {
-        let len = self.data.len() - start - size_of::<usize>();
-        // fix up the len
-        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
-    }
-
-    /// Pack a [`DatumList`] with an arbitrary closure
-    ///
-    /// See [`try_push_list_with`] for a version that can handle errors.
-    ///
-    /// ```
-    /// # use repr::{Row, Datum, RowPacker};
-    /// let mut packer = RowPacker::new();
-    /// packer.push_list_with(|packer| {
-    ///     packer.push(Datum::String("age"));
-    ///     packer.push(Datum::Int64(42));
-    /// });
-    /// let row = packer.finish();
-    ///
-    /// assert_eq!(row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("age"), Datum::Int64(42)])
-    /// ```
-    pub fn push_list_with<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut RowPacker),
-    {
-        let start = unsafe { self.start_list() };
-        f(self);
-        unsafe { self.finish_list(start) };
-    }
-
-    /// Pack a [`DatumList`] with an arbitrary closure
-    ///
-    /// Any error returned from the closure will be forwarded from this method. This owns
-    /// the rowpacker and has the same api as [`try_push_dict_with`] so that they can be
-    /// used recursively, unlike `try_push_dict_with` the ownership doesn't maintain any
-    /// safety properties.
-    ///
-    /// ```
-    /// # use repr::{Row, Datum, RowPacker};
-    /// let mut packer = RowPacker::new();
-    /// packer.push_list_with(|packer| {
-    ///     packer.push(Datum::String("age"));
-    ///     packer.push(Datum::Int64(42));
-    /// });
-    /// let row = packer.finish();
-    ///
-    /// assert_eq!(row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(), vec![Datum::String("age"), Datum::Int64(42)])
-    /// ```
-    pub fn try_push_list_with<F>(mut self, f: F) -> Result<RowPacker, failure::Error>
-    where
-        F: FnOnce(RowPacker) -> Result<RowPacker, failure::Error>,
-    {
-        let start = unsafe { self.start_list() };
-        f(self).map(|mut packer| {
-            unsafe { packer.finish_list(start) };
-            packer
-        })
-    }
-
-    /// Pack a [`DatumDict`].
-    ///
-    /// See also [`try_push_dict_with`] if you need to be able to handle errors.
-    ///
-    /// # Panics
-    ///
-    /// You *must* alternate pushing string keys and arbitary values, otherwise reading
-    /// the dict will cause a panic.
-    ///
-    /// You must push keys in ascending order, otherwise equality checks on the resulting
-    /// `Row` may be wrong and reading the dict IN DEBUG MODE will cause a panic.
+    /// The closure **must not** call [`RowPacker::finish_and_reuse`].
     ///
     /// # Example
     ///
@@ -852,50 +785,22 @@ impl RowPacker {
     ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
     /// );
     /// ```
-    pub fn push_dict_with<F>(&mut self, f: F)
+    pub fn push_dict_with<F, R>(&mut self, f: F) -> R
     where
-        F: FnOnce(&mut RowPacker),
+        F: FnOnce(&mut RowPacker) -> R,
     {
-        let start = unsafe { self.start_dict() };
-        f(self);
-        unsafe { self.finish_dict(start) };
-    }
+        self.data.push(Tag::Dict as u8);
+        let start = self.data.len();
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
 
-    /// Pack a [`DatumDict`] with a closure that may have errors.
-    ///
-    /// Any error in the closure will be forwarded from this method, and you will lose
-    /// access to the `RowPacker`, because it is no longer safe to use.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use repr::{Row, Datum, RowPacker};
-    /// let mut packer = RowPacker::new();
-    /// let packer = packer.try_push_dict_with(|mut packer| {
-    ///     // key
-    ///     packer.push(Datum::String("age"));
-    ///     // value
-    ///     packer.push(Datum::Int64(42));
-    ///     Ok(packer)
-    /// }).unwrap();
-    /// let row = packer.finish();
-    ///
-    /// assert_eq!(
-    ///     row.unpack_first().unwrap_dict().iter().collect::<Vec<_>>(),
-    ///     vec![("age", Datum::Int64(42))]
-    /// );
-    /// ```
-    pub fn try_push_dict_with<F>(mut self, f: F) -> Result<Self, failure::Error>
-    where
-        F: FnOnce(RowPacker) -> Result<RowPacker, failure::Error>,
-    {
-        let start = unsafe { self.start_dict() };
-        f(self).map(|mut packer| {
-            unsafe {
-                packer.finish_dict(start);
-            };
-            packer
-        })
+        let res = f(self);
+
+        let len = self.data.len() - start - size_of::<usize>();
+        // fix up the len
+        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+
+        res
     }
 
     /// Convenience function to push a `DatumList` from an iter of `Datum`s
@@ -1125,13 +1030,26 @@ mod tests {
 
     #[test]
     fn test_dict_errors() -> Result<(), Box<dyn std::error::Error>> {
-        let packer = RowPacker::new();
-        let packer = packer.try_push_dict_with(Ok)?;
-        let _ = packer.finish();
+        let pack = |ok| {
+            let mut packer = RowPacker::new();
+            packer.push_dict_with(|packer| {
+                if ok {
+                    packer.push(Datum::String("key"));
+                    packer.push(Datum::Int32(42));
+                    Ok(7)
+                } else {
+                    Err("fail")
+                }
+            })?;
+            Ok(packer.finish())
+        };
 
-        assert!(RowPacker::new()
-            .try_push_dict_with(|_| Err(failure::format_err!("oops")))
-            .is_err());
+        assert_eq!(pack(false), Err("fail"));
+
+        let row = pack(true)?;
+        let mut dict = row.unpack_first().unwrap_dict().iter();
+        assert_eq!(dict.next(), Some(("key", Datum::Int32(42))));
+        assert_eq!(dict.next(), None);
 
         Ok(())
     }

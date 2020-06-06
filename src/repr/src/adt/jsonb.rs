@@ -423,12 +423,12 @@ fn pack_list<'a, 'scratch>(
     mut scratch: VecStack<'scratch, DictEntry<'a>>,
     mut values: &'a [Command<'a>],
 ) {
-    let start = unsafe { packer.start_list() };
-    while !values.is_empty() {
-        let value = extract_value(&mut values);
-        pack_value(packer, scratch.fresh(), value);
-    }
-    unsafe { packer.finish_list(start) }
+    packer.push_list_with(|packer| {
+        while !values.is_empty() {
+            let value = extract_value(&mut values);
+            pack_value(packer, scratch.fresh(), value);
+        }
+    })
 }
 
 /// Packs a sequence of (key, val) pairs as an ordered dictionary.
@@ -457,15 +457,15 @@ fn pack_dict<'a, 'scratch>(
     // value for the key, as ordered by appearance in the source JSON, per
     // PostgreSQL's implementation.
     scratch.sort_by_key(|entry| entry.key);
-    let start = unsafe { packer.start_dict() };
-    for i in 0..scratch.len() {
-        if i == scratch.len() - 1 || scratch[i].key != scratch[i + 1].key {
-            let DictEntry { key, val } = scratch[i];
-            packer.push(Datum::String(key));
-            pack_value(packer, scratch.fresh(), val);
+    packer.push_dict_with(|packer| {
+        for i in 0..scratch.len() {
+            if i == scratch.len() - 1 || scratch[i].key != scratch[i + 1].key {
+                let DictEntry { key, val } = scratch[i];
+                packer.push(Datum::String(key));
+                pack_value(packer, scratch.fresh(), val);
+            }
         }
-    }
-    unsafe { packer.finish_dict(start) }
+    });
 }
 
 /// Extracts a self-contained slice of commands for the next parse node.
