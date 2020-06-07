@@ -507,6 +507,7 @@ pub enum EvalError {
         byte_sequence: String,
         encoding_name: String,
     },
+    NegSqrt,
     UnknownUnits(String),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
@@ -528,6 +529,7 @@ impl std::fmt::Display for EvalError {
                 "invalid byte sequence '{}' for encoding '{}'",
                 byte_sequence, encoding_name
             ),
+            EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
             EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
             EvalError::UnterminatedLikeEscapeSequence => {
                 f.write_str("unterminated escape sequence in LIKE")
