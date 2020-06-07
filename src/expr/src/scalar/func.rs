@@ -975,30 +975,30 @@ pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_interval())
 }
 
-fn sqrt_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+fn sqrt_float32<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     let x = a.unwrap_float32();
     if x < 0.0 {
-        return Datum::Null;
+        return Err(EvalError::NegSqrt);
     }
-    Datum::from(x.sqrt())
+    Ok(Datum::from(x.sqrt()))
 }
 
-fn sqrt_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+fn sqrt_float64<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     let x = a.unwrap_float64();
     if x < 0.0 {
-        return Datum::Null;
+        return Err(EvalError::NegSqrt);
     }
-    Datum::from(x.sqrt())
+
+    Ok(Datum::from(x.sqrt()))
 }
 
 fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
     let d = a.unwrap_decimal();
     if d.as_i128() < 0 {
-        return Ok(Datum::Null);
+        return Err(EvalError::NegSqrt);
     }
     let d_f64 = cast_significand_to_float64(a);
     let d_scaled = d_f64.unwrap_float64() / 10_f64.powi(i32::from(scale));
-
     cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), Datum::from(i32::from(scale)))
 }
 
@@ -2515,8 +2515,8 @@ impl UnaryFunc {
             UnaryFunc::FloorFloat32 => Ok(floor_float32(a)),
             UnaryFunc::FloorFloat64 => Ok(floor_float64(a)),
             UnaryFunc::FloorDecimal(scale) => Ok(floor_decimal(a, *scale)),
-            UnaryFunc::SqrtFloat32 => Ok(sqrt_float32(a)),
-            UnaryFunc::SqrtFloat64 => Ok(sqrt_float64(a)),
+            UnaryFunc::SqrtFloat32 => sqrt_float32(a),
+            UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::BitLengthString => Ok(bit_length(a.unwrap_str())),
