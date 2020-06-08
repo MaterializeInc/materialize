@@ -51,22 +51,22 @@ SELECT 'blah'::bool
 query error Cannot apply operator Not to non-boolean type Int32
 SELECT NOT 1
 
-query error Cannot apply operator And to non-boolean type Int32
+query error no overload for i32 AND i32
 SELECT 1 AND 1
 
-query error Cannot apply operator Or to non-boolean type Int32
+query error no overload for i32 OR i32
 SELECT 1 OR 1
 
-query error Cannot apply operator Or to non-boolean type Int32
+query error no overload for i32 OR bool
 SELECT 1 OR FALSE
 
-query error Cannot apply operator Or to non-boolean type Int32
+query error no overload for bool OR i32
 SELECT FALSE OR 1
 
-query error Cannot apply operator And to non-boolean type Int32
+query error no overload for i32 AND bool
 SELECT 1 AND FALSE
 
-query error Cannot apply operator And to non-boolean type Int32
+query error no overload for bool AND i32
 SELECT FALSE AND 1
 
 query B

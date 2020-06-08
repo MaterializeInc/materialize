@@ -1013,6 +1013,12 @@ lazy_static! {
                     let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
                     lexpr.call_binary(rexpr, ModDecimal)
                 })
+            },
+            BinaryOperator::And => {
+                params!(Bool, Bool) => BinaryFunc::And
+            },
+            BinaryOperator::Or => {
+                params!(Bool, Bool) => BinaryFunc::Or
             }
         }
     };

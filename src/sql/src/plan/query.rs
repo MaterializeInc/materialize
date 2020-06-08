@@ -2181,10 +2181,7 @@ fn plan_binary_op<'a>(
 ) -> Result<ScalarExpr, failure::Error> {
     use BinaryOperator::*;
     match op {
-        And => plan_boolean_op(ecx, BooleanOp::And, left, right),
-        Or => plan_boolean_op(ecx, BooleanOp::Or, left, right),
-
-        Plus | Minus | Multiply | Divide | Modulus => {
+        Plus | Minus | Multiply | Divide | Modulus | And | Or => {
             super::func::select_binary_op(ecx, op, left, right)
         }
 
@@ -2212,39 +2209,6 @@ fn plan_binary_op<'a>(
         JsonContainsPath => plan_json_op(ecx, JsonOp::ContainsPath, left, right),
         JsonApplyPathPredicate => plan_json_op(ecx, JsonOp::ApplyPathPredicate, left, right),
     }
-}
-
-fn plan_boolean_op<'a>(
-    ecx: &ExprContext,
-    op: BooleanOp,
-    left: &'a Expr,
-    right: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(ecx, left, Some(ScalarType::Bool))?;
-    let rexpr = plan_expr(ecx, right, Some(ScalarType::Bool))?;
-    let ltype = ecx.column_type(&lexpr);
-    let rtype = ecx.column_type(&rexpr);
-
-    if ltype.scalar_type != ScalarType::Bool {
-        bail!(
-            "Cannot apply operator {:?} to non-boolean type {:?}",
-            op,
-            ltype.scalar_type
-        )
-    }
-    if rtype.scalar_type != ScalarType::Bool {
-        bail!(
-            "Cannot apply operator {:?} to non-boolean type {:?}",
-            op,
-            rtype.scalar_type
-        )
-    }
-    let func = match op {
-        BooleanOp::And => BinaryFunc::And,
-        BooleanOp::Or => BinaryFunc::Or,
-    };
-    let expr = lexpr.call_binary(rexpr, func);
-    Ok(expr)
 }
 
 fn plan_comparison_op<'a>(
@@ -2546,12 +2510,6 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error>
     let typ = ColumnType::new(scalar_type).nullable(nullable);
     let expr = ScalarExpr::literal(datum, typ);
     Ok(expr.into())
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum BooleanOp {
-    And,
-    Or,
 }
 
 enum ComparisonOp {
