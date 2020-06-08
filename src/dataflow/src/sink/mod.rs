@@ -10,6 +10,7 @@
 mod avro_ocf;
 mod kafka;
 mod tail;
+mod util;
 
 pub use avro_ocf::avro_ocf;
 pub use kafka::kafka;

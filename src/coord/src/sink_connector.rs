@@ -79,6 +79,7 @@ async fn build_kafka(
         schema_id,
         topic,
         url: builder.broker_url,
+        fuel: builder.fuel,
     }))
 }
 

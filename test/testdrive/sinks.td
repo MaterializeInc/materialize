@@ -71,3 +71,16 @@ $ kafka-verify format=avro sink=materialize.public.snk4
 $ kafka-verify format=avro sink=materialize.public.snk5
 {"before": null, "after": {"c": "jackjill"}}
 {"before": null, "after": {"c": "goofusgallant"}}
+
+# Test the case where we have non +/- 1 multiplicities
+
+> CREATE MATERIALIZED VIEW v4 AS
+  SELECT true AS c FROM src
+
+> CREATE SINK snk6 FROM v4
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk6'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.snk6
+{"before": null, "after": {"c": true}}
+{"before": null, "after": {"c": true}}
