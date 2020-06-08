@@ -46,7 +46,7 @@ async fn run() -> Result<(), anyhow::Error> {
         &args.kafka_url,
         "materialize.chaos",
         &topic,
-        Some(&[("enable.idempotence", "true")]),
+        &[("enable.idempotence", "true")],
     )?;
     retry::retry_for(Duration::from_secs(10), |_| {
         kafka_client.create_topic(args.kafka_partitions)

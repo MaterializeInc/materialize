@@ -30,7 +30,7 @@ impl KafkaClient {
         kafka_url: &str,
         group_id: &str,
         topic: &str,
-        configs: Option<&[(&str, &str)]>,
+        configs: &[(&str, &str)],
     ) -> Result<KafkaClient, anyhow::Error> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", kafka_url);

@@ -99,7 +99,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     let mut recordstate = randomizer::RecordState::new(config.start_time);
 
     let mut k_client =
-        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, None)
+        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])
             .map_err(|e| error::Error::from(e.to_string()))?;
 
     if let Some(partitions) = config.partitions {
