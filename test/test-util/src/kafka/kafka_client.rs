@@ -30,6 +30,7 @@ impl KafkaClient {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", kafka_url);
         config.set("group.id", group_id);
+        config.set("enable.idempotence", "true");
 
         let producer: FutureProducer = config.create()?;
 
