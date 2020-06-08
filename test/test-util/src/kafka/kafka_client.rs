@@ -42,7 +42,11 @@ impl KafkaClient {
         })
     }
 
-    pub async fn create_topic(&self, partitions: i32, timeout: Option<Duration>) -> Result<(), anyhow::Error> {
+    pub async fn create_topic(
+        &self,
+        partitions: i32,
+        timeout: Option<Duration>,
+    ) -> Result<(), anyhow::Error> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
         let res = config
@@ -56,7 +60,8 @@ impl KafkaClient {
                 )],
                 &AdminOptions::new().request_timeout(timeout),
             )
-            .await.context(format!("creating Kafka topic: {}", &self.topic))?;
+            .await
+            .context(format!("creating Kafka topic: {}", &self.topic))?;
 
         if res.len() != 1 {
             return Err(anyhow::anyhow!(
