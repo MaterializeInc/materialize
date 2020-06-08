@@ -729,6 +729,7 @@ impl Parser {
             Token::Mult => Some(BinaryOperator::Multiply),
             Token::Mod => Some(BinaryOperator::Modulus),
             Token::Div => Some(BinaryOperator::Divide),
+            Token::Concat => Some(BinaryOperator::Concat),
             Token::JsonGet => Some(BinaryOperator::JsonGet),
             Token::JsonGetAsText => Some(BinaryOperator::JsonGetAsText),
             Token::JsonGetPath => Some(BinaryOperator::JsonGetPath),
@@ -738,7 +739,6 @@ impl Parser {
             Token::JsonContainsField => Some(BinaryOperator::JsonContainsField),
             Token::JsonContainsAnyFields => Some(BinaryOperator::JsonContainsAnyFields),
             Token::JsonContainsAllFields => Some(BinaryOperator::JsonContainsAllFields),
-            Token::JsonConcat => Some(BinaryOperator::JsonConcat),
             Token::JsonDeletePath => Some(BinaryOperator::JsonDeletePath),
             Token::JsonContainsPath => Some(BinaryOperator::JsonContainsPath),
             Token::JsonApplyPathPredicate => Some(BinaryOperator::JsonApplyPathPredicate),
@@ -918,8 +918,8 @@ impl Parser {
                 | Token::JsonGetAsText
                 | Token::JsonGetPath
                 | Token::JsonGetPathAsText
-                | Token::JsonConcat
-                | Token::JsonDeletePath => Precedence::JsonOp,
+                | Token::JsonDeletePath
+                | Token::Concat => Precedence::JsonOp,
                 Token::Plus | Token::Minus => Precedence::Plus,
                 Token::Mult | Token::Div | Token::Mod => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,

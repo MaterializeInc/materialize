@@ -73,6 +73,8 @@ pub enum Token {
     Div,
     /// Modulo Operator `%`
     Mod,
+    /// Concat operator '||'
+    Concat,
     // Json functions are documented at https://www.postgresql.org/docs/current/functions-json.html
     /// Get json field operator '->'
     JsonGet,
@@ -92,8 +94,6 @@ pub enum Token {
     JsonContainsAnyFields,
     /// Json contains any fields operator '?&'
     JsonContainsAllFields,
-    /// Json concat operator '||'
-    JsonConcat,
     /// Json delete path operator '#-'
     JsonDeletePath,
     /// Json contains path operator '@?'
@@ -148,6 +148,7 @@ impl fmt::Display for Token {
             Token::Mult => f.write_str("*"),
             Token::Div => f.write_str("/"),
             Token::Mod => f.write_str("%"),
+            Token::Concat => f.write_str("||"),
             Token::JsonGet => f.write_str("->"),
             Token::JsonGetAsText => f.write_str("->>"),
             Token::JsonGetPath => f.write_str("#>"),
@@ -157,7 +158,6 @@ impl fmt::Display for Token {
             Token::JsonContainsField => f.write_str("?"),
             Token::JsonContainsAnyFields => f.write_str("?|"),
             Token::JsonContainsAllFields => f.write_str("?&"),
-            Token::JsonConcat => f.write_str("||"),
             Token::JsonDeletePath => f.write_str("#-"),
             Token::JsonContainsPath => f.write_str("@?"),
             Token::JsonApplyPathPredicate => f.write_str("@@"),
@@ -459,7 +459,7 @@ impl Tokenizer {
                 '|' => {
                     chars.next(); // consume '|'
                     match chars.peek() {
-                        Some('|') => self.consume_and_return(chars, Token::JsonConcat),
+                        Some('|') => self.consume_and_return(chars, Token::Concat),
                         _ => Err("Unrecognized token".to_string()),
                     }
                 }

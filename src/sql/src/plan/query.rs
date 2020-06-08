@@ -2181,10 +2181,6 @@ fn plan_binary_op<'a>(
 ) -> Result<ScalarExpr, failure::Error> {
     use BinaryOperator::*;
     match op {
-        Plus | Minus | Multiply | Divide | Modulus | And | Or | Like | NotLike => {
-            super::func::select_binary_op(ecx, op, left, right)
-        }
-
         Lt => plan_comparison_op(ecx, ComparisonOp::Lt, left, right),
         LtEq => plan_comparison_op(ecx, ComparisonOp::LtEq, left, right),
         Gt => plan_comparison_op(ecx, ComparisonOp::Gt, left, right),
@@ -2192,19 +2188,7 @@ fn plan_binary_op<'a>(
         Eq => plan_comparison_op(ecx, ComparisonOp::Eq, left, right),
         NotEq => plan_comparison_op(ecx, ComparisonOp::NotEq, left, right),
 
-        JsonGet => plan_json_op(ecx, JsonOp::Get, left, right),
-        JsonGetAsText => plan_json_op(ecx, JsonOp::GetAsText, left, right),
-        JsonGetPath => plan_json_op(ecx, JsonOp::GetPath, left, right),
-        JsonGetPathAsText => plan_json_op(ecx, JsonOp::GetPathAsText, left, right),
-        JsonContainsJson => plan_json_op(ecx, JsonOp::ContainsJson, left, right),
-        JsonContainedInJson => plan_json_op(ecx, JsonOp::ContainedInJson, left, right),
-        JsonContainsField => plan_json_op(ecx, JsonOp::ContainsField, left, right),
-        JsonContainsAnyFields => plan_json_op(ecx, JsonOp::ContainsAnyFields, left, right),
-        JsonContainsAllFields => plan_json_op(ecx, JsonOp::ContainsAllFields, left, right),
-        JsonConcat => plan_json_op(ecx, JsonOp::Concat, left, right),
-        JsonDeletePath => plan_json_op(ecx, JsonOp::DeletePath, left, right),
-        JsonContainsPath => plan_json_op(ecx, JsonOp::ContainsPath, left, right),
-        JsonApplyPathPredicate => plan_json_op(ecx, JsonOp::ApplyPathPredicate, left, right),
+        _ => super::func::select_binary_op(ecx, op, left, right),
     }
 }
 
@@ -2240,90 +2224,6 @@ fn plan_comparison_op<'a>(
         ComparisonOp::NotEq => BinaryFunc::NotEq,
     };
     Ok(lexpr.call_binary(rexpr, func))
-}
-
-fn plan_json_op(
-    ecx: &ExprContext,
-    op: JsonOp,
-    left: &Expr,
-    right: &Expr,
-) -> Result<ScalarExpr, failure::Error> {
-    use JsonOp::*;
-    use ScalarType::*;
-
-    let lexpr = plan_expr(ecx, left, Some(ScalarType::String))?;
-    let ltype = ecx.column_type(&lexpr);
-    let rexpr = plan_expr(ecx, right, Some(ScalarType::String))?;
-    let rtype = ecx.column_type(&rexpr);
-
-    Ok(match (op, &ltype.scalar_type, &rtype.scalar_type) {
-        (Get, Jsonb, Int32) => lexpr.call_binary(
-            rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
-            BinaryFunc::JsonbGetInt64,
-        ),
-        (Get, Jsonb, Int64) => lexpr.call_binary(rexpr, BinaryFunc::JsonbGetInt64),
-        (Get, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbGetString),
-        (Get, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        (GetAsText, Jsonb, Int32) => lexpr
-            .call_binary(
-                rexpr.call_unary(UnaryFunc::CastInt32ToInt64),
-                BinaryFunc::JsonbGetInt64,
-            )
-            .call_unary(UnaryFunc::JsonbStringifyUnlessString),
-        (GetAsText, Jsonb, Int64) => lexpr
-            .call_binary(rexpr, BinaryFunc::JsonbGetInt64)
-            .call_unary(UnaryFunc::JsonbStringifyUnlessString),
-        (GetAsText, Jsonb, String) => lexpr
-            .call_binary(rexpr, BinaryFunc::JsonbGetString)
-            .call_unary(UnaryFunc::JsonbStringifyUnlessString),
-        (GetAsText, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        (ContainsField, Jsonb, String) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsString),
-        (ContainsField, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        (Concat, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat),
-        (Concat, String, _) | (Concat, _, String) => {
-            // These are philosophically internal casts, but PostgreSQL
-            // considers them to be explicit (perhaps for historical reasons),
-            // so we do too.
-            let lexpr = plan_cast_internal("||", ecx, lexpr, cast::CastTo::Explicit(String))?;
-            let rexpr = plan_cast_internal("||", ecx, rexpr, cast::CastTo::Explicit(String))?;
-            lexpr.call_binary(rexpr, BinaryFunc::TextConcat)
-        }
-        (Concat, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        (ContainsJson, Jsonb, Jsonb) => lexpr.call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),
-        (ContainsJson, Jsonb, String) => lexpr.call_binary(
-            rexpr.call_unary(UnaryFunc::CastStringToJsonb),
-            BinaryFunc::JsonbContainsJsonb,
-        ),
-        (ContainsJson, String, Jsonb) => lexpr
-            .call_unary(UnaryFunc::CastStringToJsonb)
-            .call_binary(rexpr, BinaryFunc::JsonbContainsJsonb),
-        (ContainsJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        (ContainedInJson, Jsonb, Jsonb) => rexpr.call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
-        (ContainedInJson, String, Jsonb) => rexpr.call_binary(
-            lexpr.call_unary(UnaryFunc::CastStringToJsonb),
-            BinaryFunc::JsonbContainsJsonb,
-        ),
-        (ContainedInJson, Jsonb, String) => rexpr
-            .call_unary(UnaryFunc::CastStringToJsonb)
-            .call_binary(lexpr, BinaryFunc::JsonbContainsJsonb),
-        (ContainedInJson, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
-
-        // TODO(jamii) these require sql arrays
-        (ContainsAnyFields, _, _) => unsupported!(op),
-        (ContainsAllFields, _, _) => unsupported!(op),
-
-        // TODO(jamii) these require json paths
-        (GetPath, _, _) => unsupported!(op),
-        (GetPathAsText, _, _) => unsupported!(op),
-        (DeletePath, _, _) => unsupported!(op),
-        (ContainsPath, _, _) => unsupported!(op),
-        (ApplyPathPredicate, _, _) => unsupported!(op),
-    })
 }
 
 fn plan_between<'a>(
@@ -2494,44 +2394,6 @@ impl fmt::Display for ComparisonOp {
             ComparisonOp::GtEq => f.write_str(">="),
             ComparisonOp::Eq => f.write_str("="),
             ComparisonOp::NotEq => f.write_str("<>"),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum JsonOp {
-    Get,
-    GetAsText,
-    GetPath,
-    GetPathAsText,
-    ContainsJson,
-    ContainedInJson,
-    ContainsField,
-    ContainsAnyFields,
-    ContainsAllFields,
-    Concat,
-    DeletePath,
-    ContainsPath,
-    ApplyPathPredicate,
-}
-
-impl fmt::Display for JsonOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use JsonOp::*;
-        match self {
-            Get => f.write_str("->"),
-            GetAsText => f.write_str("->>"),
-            GetPath => f.write_str("#>"),
-            GetPathAsText => f.write_str("#>>"),
-            ContainsJson => f.write_str("@>"),
-            ContainedInJson => f.write_str("<@"),
-            ContainsField => f.write_str("?"),
-            ContainsAnyFields => f.write_str("?|"),
-            ContainsAllFields => f.write_str("?&"),
-            Concat => f.write_str("||"),
-            DeletePath => f.write_str("#-"),
-            ContainsPath => f.write_str("@?"),
-            ApplyPathPredicate => f.write_str("@@"),
         }
     }
 }

@@ -267,7 +267,7 @@ List([Value(Number("1")), Value(SingleQuotedString("foo"))])
 parse-scalar
 LIST[LIST[1 + 1, 2], a || b]
 ----
-List([List([BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("1")) }, Value(Number("2"))]), BinaryOp { left: Identifier([Ident("a")]), op: JsonConcat, right: Identifier([Ident("b")]) }])
+List([List([BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("1")) }, Value(Number("2"))]), BinaryOp { left: Identifier([Ident("a")]), op: Concat, right: Identifier([Ident("b")]) }])
 
 parse-scalar
 a -> b
@@ -317,7 +317,7 @@ BinaryOp { left: Identifier([Ident("a")]), op: JsonContainsAllFields, right: Ide
 parse-scalar
 a || b
 ----
-BinaryOp { left: Identifier([Ident("a")]), op: JsonConcat, right: Identifier([Ident("b")]) }
+BinaryOp { left: Identifier([Ident("a")]), op: Concat, right: Identifier([Ident("b")]) }
 
 parse-scalar
 a #- b
