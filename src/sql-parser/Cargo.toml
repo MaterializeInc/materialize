@@ -4,6 +4,7 @@ description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.1.0"
 edition = "2018"
 publish = false
+build = "build/main.rs"
 
 [dependencies]
 failure = "0.1.8"
@@ -14,3 +15,9 @@ datadriven = "0.1.0"
 
 [dev-dependencies]
 matches = "0.1"
+
+[build-dependencies]
+anyhow = "1.0.31"
+proc-macro2 = "1.0.18"
+quote = "1.0.6"
+syn = "1.0.30"
