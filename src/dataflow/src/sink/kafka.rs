@@ -156,7 +156,12 @@ pub fn kafka<G>(
                         error!("unable to produce in {}: {}", name, e);
                         if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
                             // We are overloading Kafka by sending too many records
-                            // retry sending this record at a later time
+                            // retry sending this record at a later time.
+                            // Note that any other error will result in dropped
+                            // data as we will not attempt to resend it.
+                            // https://github.com/edenhill/librdkafka/blob/master/examples/producer.c#L188-L208
+                            // only retries on QueueFull so we will keep that
+                            // convention here.
                             encoded_buffer = Some((encoded, count));
                             activator.activate_after(Duration::from_secs(60));
                             return true;
