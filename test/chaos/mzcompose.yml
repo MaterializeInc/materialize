@@ -49,6 +49,8 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_JMX_PORT: 9991
+    cap_add:
+      - NET_ADMIN
   schema-registry:
     image: confluentinc/cp-schema-registry:5.2.1
     ports:
@@ -67,6 +69,22 @@ services:
 
 mzconduct:
   workflows:
+    delay-kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-delay-container
+          container: chaos_kafka_1
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 1
+            --message-count 10000
+
     pause-kafka:
       steps:
         - step: workflow

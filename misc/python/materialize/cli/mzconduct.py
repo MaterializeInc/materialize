@@ -862,6 +862,27 @@ class ChaosStopContainerStep(ChaosContainerBaseWorkflowStep):
         )
 
 
+@Steps.register("chaos-delay-container")
+class ChaosDelayContainerStep(WorkflowStep):
+    """Delay the incoming and outgoing network traffic for a Docker container.
+
+    Params:
+        container: Docker container to delay
+        delay: milliseconds to delay network traffic (default: 100ms)
+    """
+
+    def __init__(self, container: str, delay: int = 100) -> None:
+        self._container = container
+        self._delay = delay
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        try:
+            cmd = f"docker exec {self._container} tc qdisc add dev eth0 root netem delay {self._delay}ms".split()
+            spawn.runv(cmd)
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"Unable to delay container {self._container}: {e}")
+
+
 @Steps.register("workflow")
 class WorkflowWorkflowStep(WorkflowStep):
     def __init__(self, workflow: str) -> None:
