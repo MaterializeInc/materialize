@@ -676,22 +676,31 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     }
 }
 
-fn bit_length<'a, B>(bytes: B) -> Datum<'a>
+fn bit_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
 where
     B: AsRef<[u8]>,
 {
-    Datum::from((bytes.as_ref().len() * 8) as i32)
+    match i32::try_from(bytes.as_ref().len() * 8) {
+        Ok(l) => Ok(Datum::from(l)),
+        Err(_) => Err(EvalError::IntegerOutOfRange),
+    }
 }
 
-fn byte_length<'a, B>(bytes: B) -> Datum<'a>
+fn byte_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
 where
     B: AsRef<[u8]>,
 {
-    Datum::from(bytes.as_ref().len() as i32)
+    match i32::try_from(bytes.as_ref().len()) {
+        Ok(l) => Ok(Datum::from(l)),
+        Err(_) => Err(EvalError::IntegerOutOfRange),
+    }
 }
 
-fn char_length<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().chars().count() as i32)
+fn char_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    match i32::try_from(a.unwrap_str().chars().count()) {
+        Ok(l) => Ok(Datum::from(l)),
+        Err(_) => Err(EvalError::IntegerOutOfRange),
+    }
 }
 
 fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -717,7 +726,10 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
         }
     };
 
-    Ok(Datum::from(decoded_string.chars().count() as i32))
+    match i32::try_from(decoded_string.chars().count()) {
+        Ok(l) => Ok(Datum::from(l)),
+        Err(_) => Err(EvalError::IntegerOutOfRange),
+    }
 }
 
 fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -2519,11 +2531,11 @@ impl UnaryFunc {
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
             UnaryFunc::Ascii => Ok(ascii(a)),
-            UnaryFunc::BitLengthString => Ok(bit_length(a.unwrap_str())),
-            UnaryFunc::BitLengthBytes => Ok(bit_length(a.unwrap_bytes())),
-            UnaryFunc::ByteLengthString => Ok(byte_length(a.unwrap_str())),
-            UnaryFunc::ByteLengthBytes => Ok(byte_length(a.unwrap_bytes())),
-            UnaryFunc::CharLength => Ok(char_length(a)),
+            UnaryFunc::BitLengthString => bit_length(a.unwrap_str()),
+            UnaryFunc::BitLengthBytes => bit_length(a.unwrap_bytes()),
+            UnaryFunc::ByteLengthString => byte_length(a.unwrap_str()),
+            UnaryFunc::ByteLengthBytes => byte_length(a.unwrap_bytes()),
+            UnaryFunc::CharLength => char_length(a),
             UnaryFunc::MatchRegex(regex) => Ok(match_regex(a, &regex)),
             UnaryFunc::ExtractIntervalEpoch => Ok(extract_interval_epoch(a)),
             UnaryFunc::ExtractIntervalYear => Ok(extract_interval_year(a)),
