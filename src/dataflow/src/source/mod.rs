@@ -52,12 +52,11 @@ pub struct SourceConfig<'a, G> {
     /// The total count of workers
     pub worker_count: usize,
     // Timestamping fields.
-    // TODO: document these.
-    /// TODO(ncrooks)
+    /// Data-timestamping updates: information about (timestamp, source offset)
     pub timestamp_histories: TimestampHistories,
-    /// TODO(ncrooks)
+    /// Control-timestamping updates: information about when to start/stop timestamping a source
     pub timestamp_tx: TimestampChanges,
-    /// TODO(ncrooks)
+    /// A source can use Real-Time consistency timestamping or BYO consistency information.
     pub consistency: Consistency,
 }
 

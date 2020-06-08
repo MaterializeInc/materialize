@@ -7,18 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{cmp, thread};
 
 use dataflow_types::{
-    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
+    Consistency, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
 };
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
-use log::{error, info, log_enabled, warn};
+use log::{debug, error, info, log_enabled, warn};
 use prometheus::{
     register_int_counter, register_int_counter_vec, register_int_gauge_vec,
     register_uint_gauge_vec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, UIntGauge,
@@ -37,6 +37,8 @@ use url::Url;
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
 use crate::server::TimestampHistories;
+use ore::collections::CollectionExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Global Kafka metrics.
 lazy_static! {
@@ -294,6 +296,11 @@ struct DataPlaneInfo {
     buffered_metadata: HashSet<i32>,
     /// The number of known partitions.
     known_partitions: i32,
+    /// Metadata to coordinate timestamping information (source independent)
+    timestamp_coordination_state: Arc<TimestampingCoordinationState>,
+    /// Information about new partitions (obtained by the metadata thread)
+    refresh_metadata_info: Arc<Mutex<(bool, i32)>>,
+    /// (RT only: if true, the metadata thread has detected new partitions)
     /// Per-source metrics.
     source_metrics: SourceMetrics,
     /// Per-partition metrics.
@@ -313,23 +320,81 @@ impl DataPlaneInfo {
         consumer_activator: Arc<Mutex<SyncActivator>>,
         worker_id: usize,
         worker_count: usize,
+        source_type: Consistency,
     ) -> DataPlaneInfo {
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
-        DataPlaneInfo {
+        let data_plane = DataPlaneInfo {
             source_metrics: SourceMetrics::new(&topic_name, &source_id, &worker_id.to_string()),
             partition_metrics: HashMap::new(),
             buffered_metadata: HashSet::new(),
-            topic_name,
-            source_name,
-            source_id,
+            topic_name: topic_name.clone(),
+            source_name: source_name.clone(),
+            source_id: source_id.clone(),
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
+            timestamp_coordination_state: Arc::new(TimestampingCoordinationState {
+                stop: AtomicBool::new(false),
+            }),
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
             worker_count: worker_count.try_into().unwrap(),
+            refresh_metadata_info: Arc::new(Mutex::new((false, 0))),
+        };
+
+        let consumer = data_plane.consumer.clone();
+        let timestamp_coordination_state = data_plane.timestamp_coordination_state.clone();
+        let refresh = data_plane.refresh_metadata_info.clone();
+
+        // Metadata fetch requests on production Kafka clusters can take
+        // more than 1s to complete. This makes it far too expensive to run on
+        // the main Kafka threads. We only trigger metadata requests for Real time sources
+        if let Consistency::RealTime = source_type {
+            thread::spawn(move || {
+                metadata_fetch_thread(
+                    timestamp_coordination_state,
+                    consumer,
+                    refresh.clone(),
+                    &source_id,
+                    &topic_name,
+                    Duration::from_secs(1),
+                )
+            });
+        }
+
+        data_plane
+    }
+
+    /// Update metadata information as refreshed by the metadata thread
+    fn refresh_metadata(&mut self, cp_info: &mut ControlPlaneInfo) {
+        let mut refresh = false;
+        let mut new_partition_count = 0;
+        {
+            let mut refresh_data = self.refresh_metadata_info.lock().expect("lock poisoned");
+            refresh = refresh_data.0;
+            refresh_data.0 = false;
+            new_partition_count = refresh_data.1;
+        }
+        if refresh {
+            assert_eq!(cp_info.source_type, Consistency::RealTime);
+            match self.known_partitions.cmp(&new_partition_count) {
+                cmp::Ordering::Greater => {
+                    error!(
+                        "Topic {} (Source ID: {}) has fewer partitions (from {} to {}). This
+                    is unexpected. Has the topic been deleted?",
+                        self.topic_name, self.source_id, self.known_partitions, new_partition_count
+                    );
+                }
+                cmp::Ordering::Less => {
+                    info!("New partitions (from {} to {}) have been detected for topic {} (Source Id: {})", self.known_partitions, new_partition_count, self.topic_name, self.source_id);
+                    // Kafka partitions are assigned contiguous ID (starting from 0). If a topic has x partitions,
+                    // the partition with max id will be x-1
+                    self.ensure_partition(cp_info, new_partition_count - 1);
+                }
+                cmp::Ordering::Equal => {}
+            }
         }
     }
 
@@ -578,20 +643,29 @@ impl DataPlaneInfo {
 
 /// Contains all necessary consistency metadata information
 struct ControlPlaneInfo {
+    /// Last closed timestamp
     last_closed_ts: u64,
     /// Per partition (a partition ID in Kafka is an i32), keep track of the last closed offset
     /// and the last closed timestamp
     partition_metadata: HashMap<i32, ConsInfo>,
     /// Optional: Materialize Offset from which source should start reading (default is 0)
     start_offset: MzOffset,
+    /// Source Type (Real-time or BYO)
+    source_type: Consistency,
+}
+
+struct TimestampingCoordinationState {
+    // TODO(natacha): threads never currently stop
+    stop: AtomicBool,
 }
 
 impl ControlPlaneInfo {
-    fn new(start_offset: MzOffset) -> ControlPlaneInfo {
+    fn new(start_offset: MzOffset, consistency: Consistency) -> ControlPlaneInfo {
         ControlPlaneInfo {
             last_closed_ts: 0,
             partition_metadata: HashMap::new(),
             start_offset,
+            source_type: consistency,
         }
     }
 
@@ -614,27 +688,101 @@ impl ControlPlaneInfo {
             },
         );
     }
+
+    /// Generates a timestamp that is guaranteed to be monotonically increasing.
+    /// This may require multiple calls to the underlying now() system method, which is not
+    /// guaranteed to increase monotonically
+    fn generate_next_timestamp(&mut self) -> u64 {
+        // TODO(ncrooks) - If someone does something silly like sets their
+        // system clock backward by an hour while mz is running,
+        // we will hang here for an hour.
+        let mut new_ts = 0;
+        while new_ts <= self.last_closed_ts {
+            let start = SystemTime::now();
+            new_ts = start
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_millis() as u64;
+        }
+        assert!(new_ts > self.last_closed_ts);
+        self.last_closed_ts = new_ts;
+        new_ts
+    }
 }
 
 /// This function activates the necessary timestamping information when a source is first created
-/// These steps are only taken if a source actively reads data
-/// 1) it inserts an entry in the timestamp_history datastructure
-/// 2) it notifies the coordinator that timestamping should begin by inserting an entry in the
-/// timestamp_tx channel
+/// 1) for BYO sources, we notify the timestamping thread that a source has been created.
+/// 2) for a RT source, must create These steps are only taken for BYO sources..
+//
 fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSourceConnector) {
-    let prev = config
-        .timestamp_histories
-        .borrow_mut()
-        .insert(config.id.clone(), HashMap::new());
-    // Check that this is the first time this source id is registered
-    assert!(prev.is_none());
-    config.timestamp_tx.as_ref().borrow_mut().push((
-        config.id,
-        Some((
-            ExternalSourceConnector::Kafka(connector),
-            config.consistency.clone(),
-        )),
-    ));
+    if let Consistency::BringYourOwn(_) = config.consistency {
+        let prev = config
+            .timestamp_histories
+            .borrow_mut()
+            .insert(config.id.clone(), HashMap::new());
+        // Check that this is the first time this source id is registered
+        assert!(prev.is_none());
+        config.timestamp_tx.as_ref().borrow_mut().push((
+            config.id,
+            Some((
+                ExternalSourceConnector::Kafka(connector),
+                config.consistency.clone(),
+            )),
+        ));
+    }
+}
+
+/// This function spawns a new thread responsible for periodically polling Kafka metadata
+/// and refreshing the number of known partitions. It marks the source has needing to be
+/// refreshed if new partitions are detected.
+fn metadata_fetch_thread(
+    state: Arc<TimestampingCoordinationState>,
+    consumer: Arc<BaseConsumer<GlueConsumerContext>>,
+    partition_count: Arc<Mutex<(bool, i32)>>,
+    id: &str,
+    topic: &str,
+    wait: Duration,
+) {
+    debug!(
+        "Starting realtime Kafka thread for {} (source {})",
+        &topic, id
+    );
+
+    while !state.stop.load(Ordering::SeqCst) {
+        let metadata = consumer.fetch_metadata(Some(&topic), Duration::from_secs(30));
+        match metadata {
+            Ok(metadata) => {
+                if metadata.topics().len() == 0 {
+                    error!("topic {} does not exist", topic);
+                    continue;
+                } else if metadata.topics().len() > 1 {
+                    error!("topic metadata had more than one result");
+                    continue;
+                }
+                let metadata_topic = metadata.topics().into_element();
+                if metadata_topic.name() != topic {
+                    error!(
+                        "got results for wrong topic {} (expected {})",
+                        metadata_topic.name(),
+                        topic
+                    );
+                    continue;
+                }
+                let new_partition_count = metadata_topic.partitions().len();
+                let mut refresh_data = partition_count.lock().expect("lock poisoned");
+                refresh_data.0 = true;
+                // Kafka partition are i32, and Kafka consequently cannot support more than i32
+                // partitions
+                refresh_data.1 = new_partition_count.try_into().unwrap();
+            }
+            Err(e) => {
+                error!("Failed to obtain Kafka Metadata Information {}", e);
+            }
+        }
+        thread::sleep(wait);
+    }
+
+    debug!("Terminating realtime Kafka thread for {}", topic);
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
@@ -656,6 +804,7 @@ where
         group_id_prefix,
     } = connector.clone();
 
+    // TODO(natacha): move timestamping thread
     activate_source_timestamping(&config, connector);
 
     let SourceConfig {
@@ -666,17 +815,28 @@ where
         timestamp_tx,
         worker_id,
         worker_count,
+        consistency,
         ..
     } = config;
 
-    let (stream, capability) = source(id, Some(timestamp_tx), scope, &name.clone(), move |info| {
+    // We only activate the timestamper thread for this source if it is a BYO source
+    let timestamp_channel = if let Consistency::BringYourOwn(_) = consistency {
+        Some(timestamp_tx)
+    } else {
+        None
+    };
+
+    let (stream, capability) = source(id, timestamp_channel, scope, &name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
 
         // Create control plane information (Consistency-related information)
-        let mut cp_info = ControlPlaneInfo::new(MzOffset {
-            offset: start_offset,
-        });
+        let mut cp_info = ControlPlaneInfo::new(
+            MzOffset {
+                offset: start_offset,
+            },
+            consistency.clone(),
+        );
 
         // Create dataplane information (Kafka-related information)
         let mut dp_info = DataPlaneInfo::new(
@@ -687,6 +847,7 @@ where
             Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
             worker_id,
             worker_count,
+            consistency,
         );
 
         move |cap, output| {
@@ -718,6 +879,9 @@ where
                 }
             }
 
+            // Update any metadata changes triggered by the metadata thread
+            dp_info.refresh_metadata(&mut cp_info);
+
             // Check if the capability can be downgraded (this is independent of whether
             // there are new messages that can be processed) as timestamps can become
             // closed in the absence of messages
@@ -731,7 +895,13 @@ where
                 partition_metrics.offset_received.set(offset.offset);
 
                 // Determine the timestamp to which we need to assign this message
-                let ts = find_matching_timestamp(&id, partition, offset, &timestamp_histories);
+                let ts = find_matching_timestamp(
+                    &mut cp_info,
+                    &id,
+                    partition,
+                    offset,
+                    &timestamp_histories,
+                );
                 match ts {
                     None => {
                         // We have not yet decided on a timestamp for this message,
@@ -792,7 +962,7 @@ where
                 KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
             }
             // Ensure that we poll kafka more often than the eviction timeout
-            activator.activate_after(Duration::from_secs(60));
+            activator.activate_after(Duration::from_secs(1));
             SourceStatus::Alive
         }
     });
@@ -800,28 +970,38 @@ where
 }
 
 /// For a given offset, returns an option type returning the matching timestamp or None
-/// if no timestamp can be assigned. The timestamp history contains a sequence of
+/// if no timestamp can be assigned.
+///
+/// The timestamp history contains a sequence of
 /// (partition_count, timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
 /// for which offset>=x.
 fn find_matching_timestamp(
+    cp_info: &mut ControlPlaneInfo,
     id: &SourceInstanceId,
     partition: i32,
     offset: MzOffset,
     timestamp_histories: &TimestampHistories,
 ) -> Option<Timestamp> {
-    match timestamp_histories.borrow().get(id) {
-        None => None,
-        Some(entries) => match entries.get(&PartitionId::Kafka(partition)) {
-            Some(entries) => {
-                for (_, ts, max_offset) in entries {
-                    if offset <= *max_offset {
-                        return Some(ts.clone());
-                    }
-                }
-                None
-            }
+    if let Consistency::RealTime = cp_info.source_type {
+        // In Real-Time consistency,
+        cp_info.generate_next_timestamp();
+        Some(cp_info.last_closed_ts)
+    } else {
+        // The source is a BYO source, we must check the TimestampHistories to obtain a
+        match timestamp_histories.borrow().get(id) {
             None => None,
-        },
+            Some(entries) => match entries.get(&PartitionId::Kafka(partition)) {
+                Some(entries) => {
+                    for (_, ts, max_offset) in entries {
+                        if offset <= *max_offset {
+                            return Some(ts.clone());
+                        }
+                    }
+                    None
+                }
+                None => None,
+            },
+        }
     }
 }
 
@@ -895,82 +1075,90 @@ fn downgrade_capability(
 ) {
     let mut changed = false;
 
-    // Determine which timestamps have been closed. A timestamp is closed once we have processed
-    // all messages that we are going to process for this timestamp across all partitions
-    // In practice, the following happens:
-    // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
-    // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
-    // in next_partition_ts
-    if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
-        // Iterate over each partition that we know about
-        for (pid, entries) in entries {
-            let pid = match pid {
-                PartitionId::Kafka(pid) => *pid,
-                _ => unreachable!(
-                    "timestamp.rs should never send messages with non-Kafka partitions \
+    if let Consistency::BringYourOwn(_) = cp_info.source_type {
+        // Determine which timestamps have been closed. A timestamp is closed once we have processed
+        // all messages that we are going to process for this timestamp across all partitions
+        // In practice, the following happens:
+        // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
+        // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
+        // in next_partition_ts
+        if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            // Iterate over each partition that we know about
+            for (pid, entries) in entries {
+                let pid = match pid {
+                    PartitionId::Kafka(pid) => *pid,
+                    _ => unreachable!(
+                        "timestamp.rs should never send messages with non-Kafka partitions \
                                    to Kafka sources."
-                ),
-            };
+                    ),
+                };
 
-            dp_info.ensure_partition(cp_info, pid);
+                dp_info.ensure_partition(cp_info, pid);
 
-            // Check whether timestamps can be closed on this partition
-            while let Some((partition_count, ts, offset)) = entries.front() {
-                assert!(
+                // Check whether timestamps can be closed on this partition
+                while let Some((partition_count, ts, offset)) = entries.front() {
+                    assert!(
                         *offset >= cp_info.start_offset,
                         "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
                         offset, cp_info.start_offset
                     );
 
-                assert!(
-                    *ts > 0,
-                    "Internal error! Received a zero-timestamp. Materialize will crash now."
-                );
+                    assert!(
+                        *ts > 0,
+                        "Internal error! Received a zero-timestamp. Materialize will crash now."
+                    );
 
-                // This timestamp update was done with the expectation that there were more partitions
-                // than we know about. Partition IDs are assigned contiguously
-                // starting from zero, so seeing a `partition_count` of N means
-                // that we should have partitions up to N-1.
-                dp_info.ensure_partition(cp_info, partition_count - 1);
+                    // This timestamp update was done with the expectation that there were more partitions
+                    // than we know about. Partition IDs are assigned contiguously
+                    // starting from zero, so seeing a `partition_count` of N means
+                    // that we should have partitions up to N-1.
+                    dp_info.ensure_partition(cp_info, partition_count - 1);
 
-                if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
-                    pmetrics
-                        .closed_ts
-                        .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
-                }
+                    if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
+                        pmetrics
+                            .closed_ts
+                            .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
+                    }
 
-                if can_close_timestamp(cp_info, dp_info, pid, *offset) {
-                    // We have either 1) seen all messages corresponding to this timestamp for this
-                    // partition 2) do not own this partition 3) the consumer has forwarded past the
-                    // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
-                    // again
-                    // We can close the timestamp (on this partition) and remove the associated metadata
-                    cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
-                    entries.pop_front();
-                    changed = true;
-                } else {
-                    // Offset isn't at a timestamp boundary, we take no action
-                    break;
+                    if can_close_timestamp(cp_info, dp_info, pid, *offset) {
+                        // We have either 1) seen all messages corresponding to this timestamp for this
+                        // partition 2) do not own this partition 3) the consumer has forwarded past the
+                        // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
+                        // again
+                        // We can close the timestamp (on this partition) and remove the associated metadata
+                        cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
+                        entries.pop_front();
+                        changed = true;
+                    } else {
+                        // Offset isn't at a timestamp boundary, we take no action
+                        break;
+                    }
                 }
             }
         }
-    }
 
-    //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
-    //  timestamp
-    // across partitions.
-    let min = cp_info
-        .partition_metadata
-        .iter()
-        .map(|(_, cons_info)| cons_info.ts)
-        .min()
-        .unwrap_or(0);
+        //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
+        //  timestamp
+        // across partitions.
+        let min = cp_info
+            .partition_metadata
+            .iter()
+            .map(|(_, cons_info)| cons_info.ts)
+            .min()
+            .unwrap_or(0);
 
-    // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-    if changed && min > 0 {
-        dp_info.source_metrics.capability.set(min);
-        cap.downgrade(&(&min + 1));
-        cp_info.last_closed_ts = min;
+        // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
+        if changed && min > 0 {
+            dp_info.source_metrics.capability.set(min);
+            cap.downgrade(&(&min + 1));
+            cp_info.last_closed_ts = min;
+        }
+    } else {
+        // This a RT source. It is always possible to close the timestamp and downgrade the
+        // capability
+        let ts = cp_info.generate_next_timestamp();
+        dp_info.source_metrics.capability.set(ts);
+        cap.downgrade(&(&ts + 1));
     }
 }
 
