@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.31"
 log = "0.4"
-rusoto_core = "0.43.0-beta.1"
+rusoto_core = "0.44.0"
 rusoto_credential = "0.43.0-beta.1"
 rusoto_kinesis = "0.43.0-beta.1"
 rusoto_sts = "0.43.0-beta.1"

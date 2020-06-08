@@ -16,7 +16,7 @@ futures-channel = "0.3.5"
 log = "0.4.8"
 ore = { path = "../../../src/ore" }
 rand = "0.7.3"
-rusoto_core = "0.43.0-beta.1"
+rusoto_core = "0.44.0"
 rusoto_credential = "0.43.0-beta.1"
 rusoto_kinesis = "0.43.0-beta.1"
 structopt = "0.3.11"
