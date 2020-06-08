@@ -686,7 +686,9 @@ where
                     match message {
                         Ok(message) => {
                             panic!(
-                                "Received an unexpected message Offset: {} PID: {} on main partition loop",
+                                "Internal Error. Received an unexpected message Source: {} PID: {} Offset: {} on main partition loop.\
+                                Materialize will now crash.",
+                                id,
                                 message.partition(),
                                 message.offset()
                             );
