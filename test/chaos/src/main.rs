@@ -42,8 +42,12 @@ async fn run() -> Result<(), anyhow::Error> {
 
     // Create Kafka topic.
     log::info!("creating Kafka topic=> {}", topic);
-    let kafka_client =
-        kafka::kafka_client::KafkaClient::new(&args.kafka_url, "materialize.chaos", &topic)?;
+    let kafka_client = kafka::kafka_client::KafkaClient::new(
+        &args.kafka_url,
+        "materialize.chaos",
+        &topic,
+        Some(&[("enable.idempotence", "true")]),
+    )?;
     retry::retry_for(Duration::from_secs(10), |_| {
         kafka_client.create_topic(args.kafka_partitions)
     })

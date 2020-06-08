@@ -26,11 +26,20 @@ pub struct KafkaClient {
 }
 
 impl KafkaClient {
-    pub fn new(kafka_url: &str, group_id: &str, topic: &str) -> Result<KafkaClient, anyhow::Error> {
+    pub fn new(
+        kafka_url: &str,
+        group_id: &str,
+        topic: &str,
+        configs: Option<&[(&str, &str)]>,
+    ) -> Result<KafkaClient, anyhow::Error> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", kafka_url);
         config.set("group.id", group_id);
-        config.set("enable.idempotence", "true");
+        if let Some(configs) = configs {
+            for (key, val) in configs {
+                config.set(key, val);
+            }
+        }
 
         let producer: FutureProducer = config.create()?;
 
