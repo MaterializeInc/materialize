@@ -35,10 +35,8 @@ impl KafkaClient {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", kafka_url);
         config.set("group.id", group_id);
-        if let Some(configs) = configs {
-            for (key, val) in configs {
-                config.set(key, val);
-            }
+        for (key, val) in configs {
+            config.set(key, val);
         }
 
         let producer: FutureProducer = config.create()?;
