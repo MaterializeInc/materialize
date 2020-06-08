@@ -908,6 +908,7 @@ lazy_static! {
         use super::expr::BinaryFunc::*;
         use OperationType::*;
         binary_op_impls! {
+            // ARITHMETIC
             Plus => {
                 params!(Int32, Int32) => AddInt32,
                 params!(Int64, Int64) => AddInt64,
@@ -1014,27 +1015,75 @@ lazy_static! {
                     lexpr.call_binary(rexpr, ModDecimal)
                 })
             },
+
+            // BINARY OPS
             BinaryOperator::And => {
                 params!(Bool, Bool) => BinaryFunc::And
             },
             BinaryOperator::Or => {
                 params!(Bool, Bool) => BinaryFunc::Or
             },
+
+            // LIKE
             Like => {
                 params!(String, String) => MatchLikePattern
             },
             NotLike => {
                 params!(String, String) => BClosure(|_ecx, lhs, rhs| {
-                    let expr = ScalarExpr::CallBinary {
-                        func: BinaryFunc::MatchLikePattern,
-                        expr1: Box::new(lhs),
-                        expr2: Box::new(rhs),
-                    };
-                    ScalarExpr::CallUnary {
-                        func: UnaryFunc::Not,
-                        expr: Box::new(expr),
-                    }
+                    lhs
+                        .call_binary(rhs, MatchLikePattern)
+                        .call_unary(UnaryFunc::Not)
                 })
+            },
+
+            //JSON
+            JsonGet => {
+                params!(Jsonb, Int64) => JsonbGetInt64,
+                params!(Jsonb, String) => JsonbGetString
+            },
+            JsonGetAsText => {
+                params!(Jsonb, Int64) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_binary(rhs, BinaryFunc::JsonbGetInt64)
+                        .call_unary(UnaryFunc::JsonbStringifyUnlessString)
+                }),
+                params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_binary(rhs, BinaryFunc::JsonbGetString)
+                        .call_unary(UnaryFunc::JsonbStringifyUnlessString)
+                })
+            },
+            JsonContainsJson => {
+                params!(Jsonb, Jsonb) => JsonbContainsJsonb,
+                params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_binary(
+                        rhs.call_unary(UnaryFunc::CastStringToJsonb),
+                        JsonbContainsJsonb,
+                    )
+                }),
+                params!(String, Jsonb) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_unary(UnaryFunc::CastStringToJsonb)
+                        .call_binary(rhs, JsonbContainsJsonb)
+                })
+            },
+            JsonContainedInJson => {
+                params!(Jsonb, Jsonb) =>  BClosure(|_ecx, lhs, rhs| {
+                    rhs.call_binary(
+                        lhs,
+                        JsonbContainsJsonb
+                    )
+                }),
+                params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
+                    rhs.call_unary(UnaryFunc::CastStringToJsonb)
+                        .call_binary(lhs, BinaryFunc::JsonbContainsJsonb)
+                }),
+                params!(String, Jsonb) => BClosure(|_ecx, lhs, rhs| {
+                    rhs.call_binary(
+                        lhs.call_unary(UnaryFunc::CastStringToJsonb),
+                        BinaryFunc::JsonbContainsJsonb,
+                    )
+                })
+            },
+            JsonContainsField => {
+                params!(Jsonb, String) => JsonbContainsString
             }
         }
     };
@@ -1058,6 +1107,37 @@ fn rescale_decimals_add_sub_mod(
     }
 }
 
+// JsonConcat cannot be easily generalized because it's implementations are:
+// ```
+// (!String, String) | (String, !String) | (String, String) | (Jsonb, Jsonb)
+// ```
+// Our framework doesn't support the concept of exclusionary parameters, and no
+// other functions currently require it, so we instead side-channel this
+// implementation.
+fn jsonb_concat(
+    ecx: &ExprContext,
+    left: &Expr,
+    right: &Expr,
+) -> Result<ScalarExpr, failure::Error> {
+    use ScalarType::*;
+    let lexpr = super::query::plan_expr(ecx, left, Some(String))?;
+    let ltype = ecx.scalar_type(&lexpr);
+    let rexpr = super::query::plan_expr(ecx, right, Some(String))?;
+    let rtype = ecx.scalar_type(&rexpr);
+
+    match (&ltype, &rtype) {
+        (Jsonb, Jsonb) => Ok(lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat)),
+        (String, _) | (_, String) => {
+            let lexpr =
+                super::query::plan_cast_internal("||", ecx, lexpr, CastTo::Explicit(String))?;
+            let rexpr =
+                super::query::plan_cast_internal("||", ecx, rexpr, CastTo::Explicit(String))?;
+            Ok(lexpr.call_binary(rexpr, BinaryFunc::TextConcat))
+        }
+        (_, _) => bail!("no overload for {} || {}", ltype, rtype),
+    }
+}
+
 /// Gets an arithmetic function and the `ScalarExpr`s required to invoke it.
 pub fn select_binary_op<'a>(
     ecx: &ExprContext,
@@ -1065,12 +1145,23 @@ pub fn select_binary_op<'a>(
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
+    // Nonstandard implementations go here.
+    if let BinaryOperator::JsonConcat = op {
+        return jsonb_concat(ecx, left, right);
+    }
+    // Generalizable implementations.
     let impls = match BINARY_OP_IMPLS.get(&op) {
         Some(i) => i,
-        None => unreachable!(
-            "only call select_arithmetic_op with arithmetic BinaryOperators, not {:?}",
-            op
-        ),
+        // TODO: these require sql arrays
+        // JsonContainsAnyFields
+        // JsonContainsAllFields
+        // TODO: these require json paths
+        // JsonGetPath
+        // JsonGetPathAsText
+        // JsonDeletePath
+        // JsonContainsPath
+        // JsonApplyPathPredicate
+        None => unsupported!(op),
     };
 
     let args = vec![left.clone(), right.clone()];
