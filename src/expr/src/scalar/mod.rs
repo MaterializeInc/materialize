@@ -344,20 +344,21 @@ impl ScalarExpr {
             }
             ScalarExpr::CallVariadic { func, exprs } => {
                 if *func == VariadicFunc::Coalesce {
-                    // If all inputs are NULL, output is null.
-                    if exprs.iter().all(|e| e.is_literal_null()) {
+                    // If all inputs are null, output is null. This check must
+                    // be done before `exprs.retain...` because `e.typ` requires
+                    // > 0 `exprs` remain.
+                    if exprs.iter().all(|expr| expr.is_literal_null()) {
                         *e = ScalarExpr::literal_null(e.typ(&relation_type));
                         return;
                     }
 
-                    // Throw away any literal nulls. These can never
-                    // affect the result.
+                    // Remove any null values if not all values are null.
                     exprs.retain(|e| !e.is_literal_null());
 
-                    // Then find the first argument that is a literal or
-                    // non-nullable column. All arguments after this argument
-                    // will be ignored, so throw them away. This intentionally
-                    // throws away errors that can never happen.
+                    // Find the first argument that is a literal or non-nullable
+                    // column. All arguments after it get ignored, so throw them
+                    // away. This intentionally throws away errors that can
+                    // never happen.
                     if let Some(i) = exprs
                         .iter()
                         .position(|e| e.is_literal() || !e.typ(&relation_type).nullable)
