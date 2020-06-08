@@ -322,7 +322,9 @@ mzconduct:
       steps:
       - step: start-services
         services: [materialized, mysql]
-      - step: wait-for-mz
+      - step: wait-for-tcp
+        host: materialized
+        port: 6875
       - step: wait-for-mysql
         user: root
         password: debezium
