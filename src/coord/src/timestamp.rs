@@ -28,7 +28,6 @@ use failure::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
-use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
@@ -38,7 +37,7 @@ use rusqlite::{params, NO_PARAMS};
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector, KafkaOffset,
+    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
     KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
 };
 use expr::{PartitionId, SourceInstanceId};
@@ -46,9 +45,6 @@ use ore::collections::CollectionExt;
 
 use crate::catalog::storage::{self, SqlVal};
 use crate::coord;
-
-/// Number of seconds that must elapse before we update watermarks again
-const WATERMARK_METRIC_MAX_UPDATE_INTERVAL_SECS: u64 = 1;
 
 lazy_static! {
 
@@ -150,21 +146,6 @@ lazy_static! {
         .unwrap()
     };
 
-    /// The high watermark for a partition, the maximum offset that we could hope to ingest
-    static ref KAFKA_PARTITION_OFFSET_MAX: IntGaugeVec = register_int_gauge_vec!(
-        "mz_kafka_partition_offset_max",
-        "The high watermark for a partition, the maximum offset that we could hope to ingest",
-        &["topic", "source_id", "partition_id"]
-    )
-    .unwrap();
-
-      /// The max timestamp that we have allocated for this partition
-    static ref MAX_TIMESTAMP: IntGaugeVec = register_int_gauge_vec!(
-        "mz_max_timestamp",
-        "The high watermark for a partition, the maximum offset that we could hope to ingest",
-        &["source_id", "partition_id"]
-    )
-    .unwrap();
 }
 
 pub struct TimestampConfig {
@@ -219,8 +200,6 @@ struct ByoTimestampConsumer {
     /// * For kinesis this is the stream name
     /// * For file types this is the file name
     source_name: String,
-    /// The SourceId that this consumer is associated with
-    source_id: SourceInstanceId,
     /// The format of the connector
     envelope: ConsistencyFormatting,
     /// The last timestamp assigned per partition
@@ -311,58 +290,16 @@ struct RtKafkaState {
     high_watermarks: Mutex<Vec<i64>>,
 }
 
-use std::{fmt::Display, time::Instant};
+use std::fmt::Display;
 
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
     consumer: BaseConsumer,
-    /// Used to track if we should update watermark metrics
-    last_watermark_update: Instant,
 }
 
 impl ByoKafkaConnector {
     fn new(consumer: BaseConsumer) -> ByoKafkaConnector {
-        ByoKafkaConnector {
-            consumer,
-            last_watermark_update: Instant::now(),
-        }
-    }
-
-    /// Update watermark metadata if appropriate
-    ///
-    /// "Appropriate" meants that it has been more than [`WATERMARK_METRIC_MAX_UPDATE_INTERVAL_SECS`]
-    /// since the last update.
-    fn update_watermark_metrics(&mut self, topic: &str, source_id: &SourceInstanceId) {
-        if self.last_watermark_update.elapsed().as_secs()
-            >= WATERMARK_METRIC_MAX_UPDATE_INTERVAL_SECS
-        {
-            // TODO(benesch): 1s is too small a timeout for some Kafka clusters,
-            // but we don't want to just up the timeout here because this
-            // presently blocks the main Kafka thread.
-            let partitions =
-                match get_kafka_partitions(&self.consumer, topic, Duration::from_secs(1)) {
-                    Ok(partitions) => partitions,
-                    Err(e) => {
-                        error!("while fetching kafka partitions for topic {}: {}", topic, e);
-                        return;
-                    }
-                };
-            for p in partitions {
-                match self
-                    .consumer
-                    .fetch_watermarks(&topic, p, Duration::from_secs(1))
-                {
-                    Ok((_low, high)) => KAFKA_PARTITION_OFFSET_MAX
-                        .with_label_values(&[&source_id.to_string(), &topic, &p.to_string()])
-                        .set(high),
-                    Err(e) => warn!(
-                        "error loading watermarks topic={} partition={} error={}",
-                        topic, p, e
-                    ),
-                }
-            }
-            self.last_watermark_update = Instant::now();
-        }
+        ByoKafkaConnector { consumer }
     }
 }
 
@@ -393,8 +330,6 @@ fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> Vec<ValueEncoding> {
     let mut msg_count = 0;
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_connector) => {
-            let topic = &consumer.source_name;
-            kafka_connector.update_watermark_metrics(topic, &consumer.source_id);
             while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer) {
                 messages.push(ValueEncoding::Bytes(payload));
                 msg_count += 1;
@@ -698,6 +633,7 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
 /// Ex: last processed offset is 0 (ak, no records have been timestamped yet)
 /// The current max kafka offset is 0 (ak, the stream is empty). The function will return
 /// 0.
+#[allow(dead_code)]
 fn determine_next_offset(
     // The last offset which we have assigned a timestamp for
     last_processed_offset: MzOffset,
@@ -861,9 +797,6 @@ impl Timestamper {
             self.rt_persist_timestamp(&watermarks);
         }
         for (id, partition_count, pid, offset) in watermarks {
-            MAX_TIMESTAMP
-                .with_label_values(&[&id.to_string(), &pid.to_string()])
-                .set(self.current_timestamp.try_into().unwrap());
             self.tx
                 .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                     id,
@@ -895,6 +828,7 @@ impl Timestamper {
                         envelope,
                         consistency,
                         max_ts_batch,
+                        ts_frequency: _,
                     } = sc
                     {
                         (connector, encoding, envelope, consistency, max_ts_batch)
@@ -1506,7 +1440,6 @@ impl Timestamper {
                 match self.create_byo_kafka_connector(id, &kc, timestamp_topic) {
                     Some(connector) => Some(ByoTimestampConsumer {
                         source_name: topic,
-                        source_id: id,
                         connector: ByoTimestampConnector::Kafka(connector),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1522,7 +1455,6 @@ impl Timestamper {
                 match self.create_byo_file_connector(id, &fc, timestamp_topic, max_ts_batch) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
-                        source_id: id,
                         connector: ByoTimestampConnector::File(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1538,7 +1470,6 @@ impl Timestamper {
                 match self.create_byo_ocf_connector(id, &fc, timestamp_topic, max_ts_batch) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: fc.path.to_string_lossy().into_owned(),
-                        source_id: id,
                         connector: ByoTimestampConnector::Ocf(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1554,7 +1485,6 @@ impl Timestamper {
                 match self.create_byo_kinesis_connector(id, &kinc, timestamp_topic) {
                     Some(consumer) => Some(ByoTimestampConsumer {
                         source_name: kinc.stream_name,
-                        source_id: id,
                         connector: ByoTimestampConnector::Kinesis(consumer),
                         envelope: identify_consistency_format(enc, env),
                         last_partition_ts: HashMap::new(),
@@ -1712,43 +1642,45 @@ impl Timestamper {
         let mut result = vec![];
         for (id, cons) in self.rt_sources.iter_mut() {
             match &mut cons.connector {
-                RtTimestampConnector::Kafka(kc) => {
-                    let high_watermarks = kc.state.high_watermarks.lock().expect("lock poisoned");
-                    let partition_count: i32 = high_watermarks
-                        .len()
-                        .try_into()
-                        .expect("invalid partition count");
-                    for (p, high_watermark) in high_watermarks.iter().enumerate() {
-                        let p: i32 = p.try_into().expect("invalid partition id");
-                        let current_p_offset = cons
-                            .last_partition_offset
-                            .entry(PartitionId::Kafka(p))
-                            .or_insert(cons.start_offset);
-                        let old_offset = *current_p_offset;
-                        // high here corresponds to the next available Kafka offset.
-                        // Ex: a stream with 0 records will return a high of 0
-                        // a stream with one record (written at offset 0) will return a high of 1
-                        // high - 1 corresponds the Kafka Offset of the last *currently* available
-                        // message
-                        let current_max_kafka_offset = KafkaOffset {
-                            offset: high_watermark - 1,
-                        };
-                        *current_p_offset = determine_next_offset(
-                            *current_p_offset,
-                            current_max_kafka_offset.into(),
-                            cons.max_ts_batch,
-                        );
-                        result.push((
-                            *id,
-                            partition_count,
-                            PartitionId::Kafka(p),
-                            *current_p_offset,
-                        ));
-                        KAFKA_PARTITION_OFFSET_MAX
-                            .with_label_values(&[&kc.topic, &id.to_string(), &p.to_string()])
-                            .set(*high_watermark);
-                        assert!(*current_p_offset >= old_offset);
-                    }
+                RtTimestampConnector::Kafka(_kc) => {
+                    unreachable!("Kafka real-time sources no longer use the timestamper");
+                    /* let high_watermarks = kc.state.high_watermarks.lock().expect("lock poisoned");
+                     let partition_count: i32 = high_watermarks
+                         .len()
+                         .try_into()
+                         .expect("invalid partition count");
+                     for (p, high_watermark) in high_watermarks.iter().enumerate() {
+                         let p: i32 = p.try_into().expect("invalid partition id");
+                         let current_p_offset = cons
+                             .last_partition_offset
+                             .entry(PartitionId::Kafka(p))
+                             .or_insert(cons.start_offset);
+                         let old_offset = *current_p_offset;
+                         // high here corresponds to the next available Kafka offset.
+                         // Ex: a stream with 0 records will return a high of 0
+                         // a stream with one record (written at offset 0) will return a high of 1
+                         // high - 1 corresponds the Kafka Offset of the last *currently* available
+                         // message
+                         let current_max_kafka_offset = KafkaOffset {
+                             offset: high_watermark - 1,
+                         };
+                         *current_p_offset = determine_next_offset(
+                             *current_p_offset,
+                             current_max_kafka_offset.into(),
+                             cons.max_ts_batch,
+                         );
+                         result.push((
+                             *id,
+                             partition_count,
+                             PartitionId::Kafka(p),
+                             *current_p_offset,
+                         ));
+                         KAFKA_PARTITION_OFFSET_MAX
+                             .with_label_values(&[&kc.topic, &id.to_string(), &p.to_string()])
+                             .set(*high_watermark);
+                         assert!(*current_p_offset >= old_offset);
+                     }
+                    */
                 }
                 RtTimestampConnector::File(ref mut fc) => {
                     let mut count = 0;

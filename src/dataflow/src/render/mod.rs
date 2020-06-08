@@ -257,6 +257,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     envelope,
                     consistency,
                     max_ts_batch: _,
+                    ts_frequency,
                 } = src.connector
                 {
                     let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
@@ -290,6 +291,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         timestamp_histories: timestamp_histories.clone(),
                         timestamp_tx: timestamp_channel.clone(),
                         consistency,
+                        timestamp_frequency: ts_frequency,
                         worker_id: worker_index,
                         // Assumption: worker.peers() == total number of workers in Materialize
                         worker_count: worker_peers,

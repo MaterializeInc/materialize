@@ -147,7 +147,7 @@ pub enum SequencedCommand {
     AppendLog(MaterializedEvent),
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
-        /// TODO(ncrooks)
+        /// The ID of the timestamped source
         id: SourceInstanceId,
         /// TODO(ncrooks)
         partition_count: i32,
@@ -254,15 +254,18 @@ where
 /// A type wrapper for the number of partitions associated with a source
 pub type PartitionCount = i32;
 
-/// A type wrapper for a timestamp update that consists of a PartititionCount, a Timestamp,
+/// A type wrapper for a timestamp update that consists of a PartitionCount, a Timestamp,
 /// and a MzOffset
 pub type TimestampUpdate = (PartitionCount, Timestamp, MzOffset);
 
 /// Map of source ID to per-partition timestamp history.
 ///
-/// Timestamp history is a vector of tuples (partition_count, timestamp, offset),
+/// Timestamp history is a vector of
+/// 1) BYO timestamp updates which are tuples (partition_count, timestamp, offset),
 /// where the correct timestamp for a given offset `x` is the highest timestamp value for
 /// the first offset >= `x`.
+/// 2) RT timestamp updates which are integers (partition_count) which represent the current
+/// partition_count associated with the source
 pub type TimestampHistories =
     Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, VecDeque<TimestampUpdate>>>>>;
 

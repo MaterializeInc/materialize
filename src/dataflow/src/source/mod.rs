@@ -11,6 +11,9 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{
@@ -52,13 +55,15 @@ pub struct SourceConfig<'a, G> {
     /// The total count of workers
     pub worker_count: usize,
     // Timestamping fields.
-    // TODO: document these.
-    /// TODO(ncrooks)
+    /// Data-timestamping updates: information about (timestamp, source offset)
     pub timestamp_histories: TimestampHistories,
-    /// TODO(ncrooks)
+    /// Control-timestamping updates: information about when to start/stop timestamping a source
     pub timestamp_tx: TimestampChanges,
-    /// TODO(ncrooks)
+    /// A source can use Real-Time consistency timestamping or BYO consistency information.
     pub consistency: Consistency,
+    /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
+    /// downgraded)
+    pub timestamp_frequency: Duration,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -128,7 +133,12 @@ pub struct SourceToken {
     id: SourceInstanceId,
     capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
     activator: Activator,
+    /// A reference to the timestamper control channel. Inserts a timestamp drop message
+    /// when this source token is dropped
     timestamp_drop: Option<TimestampChanges>,
+    /// A boolean flag that is set to true when this source token is dropped and timestamping
+    /// should stop
+    stop_timestamping: Arc<AtomicBool>,
 }
 
 impl SourceToken {
@@ -149,6 +159,7 @@ impl Drop for SourceToken {
                 .borrow_mut()
                 .push((self.id, None));
         }
+        self.stop_timestamping.store(true, Ordering::SeqCst);
     }
 }
 

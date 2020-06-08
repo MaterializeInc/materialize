@@ -3246,6 +3246,7 @@ dependencies = [
  "lazy_static",
  "log",
  "ore",
+ "parse_duration",
  "pgrepr",
  "rdkafka",
  "regex",
