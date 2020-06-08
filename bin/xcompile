@@ -97,12 +97,6 @@ bootstrap() {
 
     run rustup target add x86_64-unknown-linux-gnu
 
-    mkdir -p .cargo
-    cat > .cargo/config <<EOF
-    [target.x86_64-unknown-linux-gnu]
-    linker = "x86_64-unknown-linux-gnu-cc"
-EOF
-
     mkdir -p target/sysroot/x86_64-unknown-linux-gnu
     cd target/sysroot/x86_64-unknown-linux-gnu
 
@@ -122,7 +116,6 @@ install_pkg() {
 }
 
 clean() {
-    run rm -f .cargo/config
     run rm -rf target/sysroot
     # N.B.: `cargo clean --target=x86_64-unknown-linux-gnu-cc` cleans the entire
     # target directory, not just the directory for the specified target triple.
