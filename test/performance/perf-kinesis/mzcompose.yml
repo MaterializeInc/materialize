@@ -82,7 +82,9 @@ mzconduct:
           services: [materialized]
         - step: start-services
           services: [prometheus_sql_exporter_mz]
-        - step: wait-for-mz
+        - step: wait-for-tcp
+          host: materialized
+          port: 6875
         - step: run
           service: perf-kinesis
           daemon: true
