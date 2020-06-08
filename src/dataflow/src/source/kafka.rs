@@ -682,7 +682,20 @@ where
             // via individual partition queues.
             {
                 let message = dp_info.consumer.poll(Duration::from_secs(0));
-                assert!(message.is_none());
+                if let Some(message) = message {
+                    match message {
+                        Ok(message) => {
+                            panic!(
+                                "Internal Error. Received an unexpected message Source: {} PID: {} Offset: {} on main partition loop.\
+                                Materialize will now crash.",
+                                id,
+                                message.partition(),
+                                message.offset()
+                            );
+                        }
+                        Err(e) => error!("Error when polling: {}", e),
+                    }
+                }
             }
 
             // Check if the capability can be downgraded (this is independent of whether
