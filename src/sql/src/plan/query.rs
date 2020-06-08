@@ -2181,7 +2181,7 @@ fn plan_binary_op<'a>(
 ) -> Result<ScalarExpr, failure::Error> {
     use BinaryOperator::*;
     match op {
-        Plus | Minus | Multiply | Divide | Modulus | And | Or => {
+        Plus | Minus | Multiply | Divide | Modulus | And | Or | Like | NotLike => {
             super::func::select_binary_op(ecx, op, left, right)
         }
 
@@ -2191,9 +2191,6 @@ fn plan_binary_op<'a>(
         GtEq => plan_comparison_op(ecx, ComparisonOp::GtEq, left, right),
         Eq => plan_comparison_op(ecx, ComparisonOp::Eq, left, right),
         NotEq => plan_comparison_op(ecx, ComparisonOp::NotEq, left, right),
-
-        Like => plan_like(ecx, left, right, false),
-        NotLike => plan_like(ecx, left, right, true),
 
         JsonGet => plan_json_op(ecx, JsonOp::Get, left, right),
         JsonGetAsText => plan_json_op(ecx, JsonOp::GetAsText, left, right),
@@ -2243,39 +2240,6 @@ fn plan_comparison_op<'a>(
         ComparisonOp::NotEq => BinaryFunc::NotEq,
     };
     Ok(lexpr.call_binary(rexpr, func))
-}
-
-fn plan_like<'a>(
-    ecx: &ExprContext,
-    left: &'a Expr,
-    right: &'a Expr,
-    negate: bool,
-) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(ecx, left, Some(ScalarType::String))?;
-    let ltype = ecx.column_type(&lexpr);
-    let rexpr = plan_expr(ecx, right, Some(ScalarType::String))?;
-    let rtype = ecx.column_type(&rexpr);
-
-    if (ltype.scalar_type != ScalarType::String) || (rtype.scalar_type != ScalarType::String) {
-        bail!(
-            "LIKE operator requires two string operators, found: {:?} and {:?}",
-            ltype,
-            rtype
-        );
-    }
-
-    let mut expr = ScalarExpr::CallBinary {
-        func: BinaryFunc::MatchLikePattern,
-        expr1: Box::new(lexpr),
-        expr2: Box::new(rexpr),
-    };
-    if negate {
-        expr = ScalarExpr::CallUnary {
-            func: UnaryFunc::Not,
-            expr: Box::new(expr),
-        };
-    }
-    Ok(expr)
 }
 
 fn plan_json_op(

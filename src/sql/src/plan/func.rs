@@ -1019,6 +1019,22 @@ lazy_static! {
             },
             BinaryOperator::Or => {
                 params!(Bool, Bool) => BinaryFunc::Or
+            },
+            Like => {
+                params!(String, String) => MatchLikePattern
+            },
+            NotLike => {
+                params!(String, String) => BClosure(|_ecx, lhs, rhs| {
+                    let expr = ScalarExpr::CallBinary {
+                        func: BinaryFunc::MatchLikePattern,
+                        expr1: Box::new(lhs),
+                        expr2: Box::new(rhs),
+                    };
+                    ScalarExpr::CallUnary {
+                        func: UnaryFunc::Not,
+                        expr: Box::new(expr),
+                    }
+                })
             }
         }
     };
