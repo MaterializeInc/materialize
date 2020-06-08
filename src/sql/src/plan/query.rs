@@ -2983,8 +2983,8 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
         self.within_aggregate = old_within_aggregate;
     }
 
-    fn visit_subquery(&mut self, _subquery: &'ast Query) {
-        // don't go into subqueries
+    fn visit_query(&mut self, _query: &'ast Query) {
+        // Don't go into subqueries.
     }
 }
 
