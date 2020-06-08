@@ -682,8 +682,8 @@ where
             // via individual partition queues.
             {
                 let message = dp_info.consumer.poll(Duration::from_secs(0));
-                if !message.is_none() {
-                    match message.unwrap() {
+                if let Some(message) = message {
+                    match message {
                         Ok(message) => {
                             panic!(
                                 "Received an unexpected message Offset: {} PID: {} on main partition loop",
