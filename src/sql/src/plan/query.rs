@@ -2968,7 +2968,6 @@ impl<'ast> AggregateFuncVisitor<'ast> {
 
 impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
-        let old_within_aggregate = self.within_aggregate;
         if let Ok(name) = normalize::function_name(func.name.clone()) {
             if is_aggregate_func(&name) {
                 if self.within_aggregate {
@@ -2976,11 +2975,24 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
                     return;
                 }
                 self.aggs.push(func);
+                let Function {
+                    name: _,
+                    args,
+                    filter,
+                    over: _,
+                    distinct: _,
+                } = func;
+                if let Some(filter) = filter {
+                    self.visit_expr(filter);
+                }
+                let old_within_aggregate = self.within_aggregate;
                 self.within_aggregate = true;
+                self.visit_function_args(args);
+                self.within_aggregate = old_within_aggregate;
+                return;
             }
         }
         visit::visit_function(self, func);
-        self.within_aggregate = old_within_aggregate;
     }
 
     fn visit_query(&mut self, _query: &'ast Query) {

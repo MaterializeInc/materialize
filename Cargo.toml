@@ -25,6 +25,7 @@ members = [
     "src/symbiosis",
     "src/testdrive",
     "src/transform",
+    "src/walkabout",
     "test/chaos",
     "test/correctness",
     "test/metabase/smoketest",

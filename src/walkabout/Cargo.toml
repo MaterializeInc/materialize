@@ -1,0 +1,17 @@
+[package]
+name = "walkabout"
+description = "AST visitor generation."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0.31"
+fstrings = "0.2.3"
+ore = { path = "../ore" }
+quote = { version = "1.0.7" }
+syn = { version = "1.0.30", features = ["extra-traits", "full", "parsing"] }
+
+[dev-dependencies]
+datadriven = "0.1.0"
+tempfile = "3.1.0"

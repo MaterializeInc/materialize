@@ -1,0 +1,106 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+visit
+struct Foo {
+    ty: std::cell::Rc<Foo>,
+}
+----
+error: Unable to analyze type path with more than one component: 'std :: cell :: Rc < Foo >'
+
+visit
+struct Foo {
+    ty: bool::<'a>,
+}
+----
+error: Primitive type had unexpected arguments: bool :: < 'a >
+
+visit
+struct Foo {
+    ty: Vec(A),
+}
+----
+error: Container type has unexpected parenthesized type arguments: Vec ( A )
+
+visit
+struct Foo {
+    ty: Vec<>,
+}
+----
+error: Container type does not have exactly one type argument: Vec < >
+
+visit
+struct Foo {
+    ty: Vec<A, B>,
+}
+----
+error: Container type does not have exactly one type argument: Vec < A , B >
+
+visit
+struct Foo {
+    ty: Vec<'a>,
+}
+----
+error: Container type argument is not a basic (i.e., non-lifetime, non-constraint) type argument: Vec < 'a >
+
+visit
+struct Foo {
+    ty: Vec<T: Foo>,
+}
+----
+error: Container type argument is not a basic (i.e., non-lifetime, non-constraint) type argument: Vec < T : Foo >
+
+visit
+struct Foo {
+    ty: (usize, usize)
+}
+----
+error: Unable to analyze non-struct, non-enum type: ( usize , usize )
+
+visit
+struct Foo {
+    ty: &[usize],
+}
+----
+error: Unable to analyze non-struct, non-enum type: & [ usize ]
+
+visit
+struct Foo {
+    ty: fn(),
+}
+----
+error: Unable to analyze non-struct, non-enum type: fn ( )
+
+visit
+struct Foo<T> {
+    ty: T,
+}
+----
+error: Unable to analyze non built-in type that is not defined in input: T
+
+visit
+struct Foo {
+    ty: Bar,
+}
+----
+error: Unable to analyze non built-in type that is not defined in input: Bar
+
+visit
+union Foo {
+    f1: u32,
+    f2: u32,
+}
+----
+error: Unable to analyze union: Foo
