@@ -344,7 +344,13 @@ impl ScalarExpr {
             }
             ScalarExpr::CallVariadic { func, exprs } => {
                 if *func == VariadicFunc::Coalesce {
-                    // First throw away any literal nulls. These can never
+                    // If all inputs are NULL, output is null.
+                    if exprs.iter().all(|e| e.is_literal_null()) {
+                        *e = ScalarExpr::literal_null(e.typ(&relation_type));
+                        return;
+                    }
+
+                    // Throw away any literal nulls. These can never
                     // affect the result.
                     exprs.retain(|e| !e.is_literal_null());
 
@@ -366,9 +372,6 @@ impl ScalarExpr {
                     } else if exprs.len() == 1 {
                         // Only one argument, so the coalesce is a no-op.
                         *e = exprs[0].take();
-                    } else if exprs.len() == 0 {
-                        // With no arguments coalesce always returns null.
-                        *e = ScalarExpr::literal_null(e.typ(&relation_type));
                     }
                 } else if exprs.iter().all(|e| e.is_literal()) {
                     *e = eval(e);
