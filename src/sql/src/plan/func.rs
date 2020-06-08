@@ -884,7 +884,7 @@ pub fn select_scalar_func(
 
 /// Provides a macro to write HashMap "literals" for matching `ArithmeticOp`s to
 /// `Vec<FuncImpl>`.
-macro_rules! arithmetic_impls(
+macro_rules! binary_op_impls(
     {
         $(
             $arithmeticop:expr => {
@@ -902,12 +902,12 @@ macro_rules! arithmetic_impls(
 
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
-    static ref ARITHMETIC_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
+    static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
         use ScalarType::*;
         use BinaryOperator::*;
         use super::expr::BinaryFunc::*;
         use OperationType::*;
-        arithmetic_impls! {
+        binary_op_impls! {
             Plus => {
                 params!(Int32, Int32) => AddInt32,
                 params!(Int64, Int64) => AddInt64,
@@ -1037,13 +1037,13 @@ fn rescale_decimals_add_sub_mod(
 }
 
 /// Gets an arithmetic function and the `ScalarExpr`s required to invoke it.
-pub fn select_arithmetic_op<'a>(
+pub fn select_binary_op<'a>(
     ecx: &ExprContext,
     op: &'a BinaryOperator,
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let impls = match ARITHMETIC_IMPLS.get(&op) {
+    let impls = match BINARY_OP_IMPLS.get(&op) {
         Some(i) => i,
         None => unreachable!(
             "only call select_arithmetic_op with arithmetic BinaryOperators, not {:?}",

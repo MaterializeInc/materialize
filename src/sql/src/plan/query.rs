@@ -2185,7 +2185,7 @@ fn plan_binary_op<'a>(
         Or => plan_boolean_op(ecx, BooleanOp::Or, left, right),
 
         Plus | Minus | Multiply | Divide | Modulus => {
-            super::func::select_arithmetic_op(ecx, op, left, right)
+            super::func::select_binary_op(ecx, op, left, right)
         }
 
         Lt => plan_comparison_op(ecx, ComparisonOp::Lt, left, right),
