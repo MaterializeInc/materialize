@@ -43,7 +43,7 @@ SELECT id, fname, lname FROM customer WHERE id = 1 LIMIT 5
 ----
 SELECT id, fname, lname FROM customer WHERE id = 1 LIMIT 5
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("id")]), op: Eq, right: Value(Number("1")) }), group_by: [], having: None }), order_by: [], limit: Some(Value(Number("5"))), offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("id")]), op: Eq, right: Value(Number("1")) }), group_by: [], having: None }), order_by: [], limit: Some(Value(Number("5"))), offset: None, fetch: None })
 
 # LIMIT should not be parsed as an alias.
 
@@ -52,7 +52,7 @@ SELECT id FROM customer LIMIT 1
 ----
 SELECT id FROM customer LIMIT 1
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: Some(Value(Number("1"))), offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: Some(Value(Number("1"))), offset: None, fetch: None })
 
 parse-statement
 SELECT 1 LIMIT 5
@@ -66,7 +66,7 @@ SELECT DISTINCT name FROM customer
 ----
 SELECT DISTINCT name FROM customer
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: true, projection: [UnnamedExpr(Identifier([Ident("name")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: true, projection: [UnnamedExpr(Identifier([Ident("name")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement roundtrip
 SELECT ALL name FROM customer
@@ -78,14 +78,14 @@ SELECT * FROM foo
 ----
 SELECT * FROM foo
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT foo.* FROM foo
 ----
 SELECT foo.* FROM foo
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [QualifiedWildcard(ObjectName([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [QualifiedWildcard(ObjectName([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement roundtrip
 SELECT count(employee.*) FROM "order" JOIN employee ON "order".employee = employee.id
@@ -97,7 +97,7 @@ SELECT a.col + 1 AS newname FROM foo AS a
 ----
 SELECT a.col + 1 AS newname FROM foo AS a
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: BinaryOp { left: Identifier([Ident("a"), Ident("col")]), op: Plus, right: Value(Number("1")) }, alias: Ident("newname") }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), alias: Some(TableAlias { name: Ident("a"), columns: [] }), args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: BinaryOp { left: Identifier([Ident("a"), Ident("col")]), op: Plus, right: Value(Number("1")) }, alias: Ident("newname") }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), args: None, alias: Some(TableAlias { name: Ident("a"), columns: [] }), with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement roundtrip
 SELECT a.col + 1 AS newname FROM foo AS a
@@ -139,14 +139,14 @@ SELECT count(*) FILTER (WHERE foo) FROM customer
 ----
 SELECT count(*) FILTER (WHERE foo) FROM customer
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident("count")]), args: Star, filter: Some(Identifier([Ident("foo")])), over: None, distinct: false }))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident("count")]), args: Star, filter: Some(Identifier([Ident("foo")])), over: None, distinct: false }))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT count(DISTINCT + x) FROM customer
 ----
 SELECT count(DISTINCT + x) FROM customer
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident("count")]), args: Args([UnaryOp { op: Plus, expr: Identifier([Ident("x")]) }]), filter: None, over: None, distinct: true }))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Function(Function { name: ObjectName([Ident("count")]), args: Args([UnaryOp { op: Plus, expr: Identifier([Ident("x")]) }]), filter: None, over: None, distinct: true }))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement roundtrip
 SELECT count(ALL + x) FROM customer
@@ -220,70 +220,70 @@ SELECT * FROM customers WHERE segment IN (SELECT segm FROM bar)
 ----
 SELECT * FROM customers WHERE segment IN (SELECT segm FROM bar)
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customers")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("segment")]), subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("segm")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, negated: false }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customers")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("segment")]), subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("segm")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, negated: false }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t WHERE x IN (VALUES (1))
 ----
 SELECT * FROM t WHERE x IN (VALUES (1))
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: [], body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None, fetch: None }, negated: false }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: [], body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None, fetch: None }, negated: false }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM customers WHERE age BETWEEN 25 AND 32
 ----
 SELECT * FROM customers WHERE age BETWEEN 25 AND 32
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customers")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: false, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customers")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: false, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM customers WHERE age NOT BETWEEN 25 AND 32
 ----
 SELECT * FROM customers WHERE age NOT BETWEEN 25 AND 32
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customers")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: true, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customers")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(Between { expr: Identifier([Ident("age")]), negated: true, low: Value(Number("25")), high: Value(Number("32")) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 ----
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(IsNull(Between { expr: Value(Number("1")), negated: false, low: BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("2")) }, high: BinaryOp { left: Value(Number("3")), op: Plus, right: Value(Number("4")) } })), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(IsNull(Between { expr: Value(Number("1")), negated: false, low: BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("2")) }, high: BinaryOp { left: Value(Number("3")), op: Plus, right: Value(Number("4")) } })), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 ----
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: BinaryOp { left: Value(Number("1")), op: Eq, right: Value(Number("1")) }, op: And, right: Between { expr: BinaryOp { left: Value(Number("1")), op: Plus, right: Identifier([Ident("x")]) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: BinaryOp { left: Value(Number("1")), op: Eq, right: Value(Number("1")) }, op: And, right: Between { expr: BinaryOp { left: Value(Number("1")), op: Plus, right: Identifier([Ident("x")]) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 ----
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: BinaryOp { left: Value(Number("1")), op: Eq, right: Value(Number("1")) }, op: And, right: Between { expr: BinaryOp { left: Value(Number("1")), op: Plus, right: Identifier([Ident("x")]) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: BinaryOp { left: Value(Number("1")), op: Eq, right: Value(Number("1")) }, op: And, right: Between { expr: BinaryOp { left: Value(Number("1")), op: Plus, right: Identifier([Ident("x")]) }, negated: false, low: Value(Number("1")), high: Value(Number("2")) } }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DESC, id
 ----
 SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DESC, id
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("id")]), op: Lt, right: Value(Number("5")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("id")]), op: Lt, right: Value(Number("5")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
 ----
 SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
 ----
 SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer WHERE id < 5
@@ -291,35 +291,35 @@ ORDER BY lname ASC, fname DESC LIMIT 2
 ----
 SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DESC LIMIT 2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("id")]), op: Lt, right: Value(Number("5")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }], limit: Some(Value(Number("2"))), offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("id")]), op: Lt, right: Value(Number("5")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }], limit: Some(Value(Number("2"))), offset: None, fetch: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer GROUP BY lname, fname
 ----
 SELECT id, fname, lname FROM customer GROUP BY lname, fname
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("lname")]), Identifier([Ident("fname")])], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("id")])), UnnamedExpr(Identifier([Ident("fname")])), UnnamedExpr(Identifier([Ident("lname")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("lname")]), Identifier([Ident("fname")])], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT foo FROM bar GROUP BY foo HAVING count(*) > 1
 ----
 SELECT foo FROM bar GROUP BY foo HAVING count(*) > 1
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("foo")])], having: Some(BinaryOp { left: Function(Function { name: ObjectName([Ident("count")]), args: Star, filter: None, over: None, distinct: false }), op: Gt, right: Value(Number("1")) }) }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("foo")])], having: Some(BinaryOp { left: Function(Function { name: ObjectName([Ident("count")]), args: Star, filter: None, over: None, distinct: false }), op: Gt, right: Value(Number("1")) }) }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT foo FROM bar GROUP BY foo HAVING count(*) > 1
 ----
 SELECT foo FROM bar GROUP BY foo HAVING count(*) > 1
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("foo")])], having: Some(BinaryOp { left: Function(Function { name: ObjectName([Ident("count")]), args: Star, filter: None, over: None, distinct: false }), op: Gt, right: Value(Number("1")) }) }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("foo")])], having: Some(BinaryOp { left: Function(Function { name: ObjectName([Ident("count")]), args: Star, filter: None, over: None, distinct: false }), op: Gt, right: Value(Number("1")) }) }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT foo FROM bar GROUP BY foo HAVING 1 = 1
 ----
 SELECT foo FROM bar GROUP BY foo HAVING 1 = 1
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("foo")])], having: Some(BinaryOp { left: Value(Number("1")), op: Eq, right: Value(Number("1")) }) }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [Identifier([Ident("foo")])], having: Some(BinaryOp { left: Value(Number("1")), op: Eq, right: Value(Number("1")) }) }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement roundtrip
 SELECT id, fname, lname FROM customer WHERE id = 1 LIMIT ALL
@@ -378,63 +378,63 @@ SELECT * FROM t1, t2
 ----
 SELECT * FROM t1, t2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1a NATURAL JOIN t1b, t2a NATURAL JOIN t2b
 ----
 SELECT * FROM t1a NATURAL JOIN t1b, t2a NATURAL JOIN t2b
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1a")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t1b")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }, TableWithJoins { relation: Table { name: ObjectName([Ident("t2a")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2b")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1a")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t1b")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }, TableWithJoins { relation: Table { name: ObjectName([Ident("t2a")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2b")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 CROSS JOIN t2
 ----
 SELECT * FROM t1 CROSS JOIN t2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: CrossJoin }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: CrossJoin }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 JOIN t2 AS foo USING(c1)
 ----
 SELECT * FROM t1 JOIN t2 AS foo USING(c1)
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: Some(TableAlias { name: Ident("foo"), columns: [] }), args: None, with_hints: [] }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: Some(TableAlias { name: Ident("foo"), columns: [] }), with_hints: [] }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 JOIN t2 foo USING(c1)
 ----
 SELECT * FROM t1 JOIN t2 AS foo USING(c1)
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: Some(TableAlias { name: Ident("foo"), columns: [] }), args: None, with_hints: [] }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: Some(TableAlias { name: Ident("foo"), columns: [] }), with_hints: [] }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL JOIN t2
 ----
 SELECT * FROM t1 NATURAL JOIN t2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL LEFT JOIN t2
 ----
 SELECT * FROM t1 NATURAL LEFT JOIN t2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: LeftOuter(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: LeftOuter(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL RIGHT JOIN t2
 ----
 SELECT * FROM t1 NATURAL RIGHT JOIN t2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: RightOuter(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: RightOuter(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL FULL JOIN t2
 ----
 SELECT * FROM t1 NATURAL FULL JOIN t2
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: FullOuter(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: FullOuter(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM t1 natural
@@ -450,35 +450,35 @@ SELECT c1, c2 FROM t1, t4 JOIN t2 ON t2.c = t1.c LEFT JOIN t3 USING(q, c) WHERE 
 ----
 SELECT c1, c2 FROM t1, t4 JOIN t2 ON t2.c = t1.c LEFT JOIN t3 USING(q, c) WHERE t4.c = t1.c
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")])), UnnamedExpr(Identifier([Ident("c2")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("t4")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(On(BinaryOp { left: Identifier([Ident("t2"), Ident("c")]), op: Eq, right: Identifier([Ident("t1"), Ident("c")]) })) }, Join { relation: Table { name: ObjectName([Ident("t3")]), alias: None, args: None, with_hints: [] }, join_operator: LeftOuter(Using([Ident("q"), Ident("c")])) }] }], selection: Some(BinaryOp { left: Identifier([Ident("t4"), Ident("c")]), op: Eq, right: Identifier([Ident("t1"), Ident("c")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")])), UnnamedExpr(Identifier([Ident("c2")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("t4")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(On(BinaryOp { left: Identifier([Ident("t2"), Ident("c")]), op: Eq, right: Identifier([Ident("t1"), Ident("c")]) })) }, Join { relation: Table { name: ObjectName([Ident("t3")]), args: None, alias: None, with_hints: [] }, join_operator: LeftOuter(Using([Ident("q"), Ident("c")])) }] }], selection: Some(BinaryOp { left: Identifier([Ident("t4"), Ident("c")]), op: Eq, right: Identifier([Ident("t1"), Ident("c")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM a NATURAL JOIN (b NATURAL JOIN (c NATURAL JOIN d NATURAL JOIN e)) NATURAL JOIN (f NATURAL JOIN (g NATURAL JOIN h))
 ----
 SELECT * FROM a NATURAL JOIN (b NATURAL JOIN (c NATURAL JOIN d NATURAL JOIN e)) NATURAL JOIN (f NATURAL JOIN (g NATURAL JOIN h))
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("c")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("d")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }, Join { relation: Table { name: ObjectName([Ident("e")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }, Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("f")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("g")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("h")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("c")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("d")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }, Join { relation: Table { name: ObjectName([Ident("e")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }, Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("f")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("g")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("h")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM (a NATURAL JOIN b) NATURAL JOIN c
 ----
 SELECT * FROM (a NATURAL JOIN b) NATURAL JOIN c
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }), joins: [Join { relation: Table { name: ObjectName([Ident("c")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }), joins: [Join { relation: Table { name: ObjectName([Ident("c")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM (((a NATURAL JOIN b)))
 ----
 SELECT * FROM (((a NATURAL JOIN b)))
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }), joins: [] }), joins: [] }), joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }), joins: [] }), joins: [] }), joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM a NATURAL JOIN (((b NATURAL JOIN c)))
 ----
 SELECT * FROM a NATURAL JOIN (((b NATURAL JOIN c)))
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("c")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Natural) }] }), joins: [] }), joins: [] }), join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("c")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Natural) }] }), joins: [] }), joins: [] }), join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM (a NATURAL JOIN (b))
@@ -494,28 +494,28 @@ SELECT c1 FROM t1 INNER JOIN t2 USING(c1)
 ----
 SELECT c1 FROM t1 JOIN t2 USING(c1)
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT c1 FROM t1 LEFT OUTER JOIN t2 USING(c1)
 ----
 SELECT c1 FROM t1 LEFT JOIN t2 USING(c1)
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: LeftOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: LeftOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT c1 FROM t1 RIGHT OUTER JOIN t2 USING(c1)
 ----
 SELECT c1 FROM t1 RIGHT JOIN t2 USING(c1)
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: RightOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: RightOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT c1 FROM t1 FULL OUTER JOIN t2 USING(c1)
 ----
 SELECT c1 FROM t1 FULL JOIN t2 USING(c1)
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), alias: None, args: None, with_hints: [] }, join_operator: FullOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("c1")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t1")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Table { name: ObjectName([Ident("t2")]), args: None, alias: None, with_hints: [] }, join_operator: FullOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM a OUTER JOIN b ON 1
@@ -534,7 +534,7 @@ SELECT foo + bar FROM a, b
 ----
 WITH a AS (SELECT 1 AS foo), b AS (SELECT 2 AS bar) SELECT foo + bar FROM a, b
 =>
-Query(Query { ctes: [Cte { alias: TableAlias { name: Ident("a"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("1")), alias: Ident("foo") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }, Cte { alias: TableAlias { name: Ident("b"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("2")), alias: Ident("bar") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }], body: Select(Select { distinct: false, projection: [UnnamedExpr(BinaryOp { left: Identifier([Ident("foo")]), op: Plus, right: Identifier([Ident("bar")]) })], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None, args: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [Cte { alias: TableAlias { name: Ident("a"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("1")), alias: Ident("foo") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }, Cte { alias: TableAlias { name: Ident("b"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("2")), alias: Ident("bar") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }], body: Select(Select { distinct: false, projection: [UnnamedExpr(BinaryOp { left: Identifier([Ident("foo")]), op: Plus, right: Identifier([Ident("bar")]) })], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), args: None, alias: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 CREATE VIEW v AS
@@ -545,7 +545,7 @@ CREATE VIEW v AS
 ----
 CREATE VIEW v AS WITH a AS (SELECT 1 AS foo), b AS (SELECT 2 AS bar) SELECT foo + bar FROM a, b
 =>
-CreateView { name: ObjectName([Ident("v")]), columns: [], query: Query { ctes: [Cte { alias: TableAlias { name: Ident("a"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("1")), alias: Ident("foo") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }, Cte { alias: TableAlias { name: Ident("b"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("2")), alias: Ident("bar") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }], body: Select(Select { distinct: false, projection: [UnnamedExpr(BinaryOp { left: Identifier([Ident("foo")]), op: Plus, right: Identifier([Ident("bar")]) })], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None, args: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false, with_options: [] }
+CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [Cte { alias: TableAlias { name: Ident("a"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("1")), alias: Ident("foo") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }, Cte { alias: TableAlias { name: Ident("b"), columns: [] }, query: Query { ctes: [], body: Select(Select { distinct: false, projection: [ExprWithAlias { expr: Value(Number("2")), alias: Ident("bar") }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }], body: Select(Select { distinct: false, projection: [UnnamedExpr(BinaryOp { left: Identifier([Ident("foo")]), op: Plus, right: Identifier([Ident("bar")]) })], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), args: None, alias: None, with_hints: [] }, joins: [] }, TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
 
 parse-statement roundtrip
 WITH cte (col1, col2) AS (SELECT foo, bar FROM baz) SELECT * FROM cte
@@ -626,35 +626,35 @@ SELECT foo FROM bar OFFSET 2 ROWS
 ----
 SELECT foo FROM bar OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 OFFSET 2 ROWS
 ----
 SELECT foo FROM bar WHERE foo = 4 OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM bar ORDER BY baz OFFSET 2 ROWS
 ----
 SELECT foo FROM bar ORDER BY baz OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ROWS
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT 'foo' OFFSET 0 ROWS
@@ -668,49 +668,49 @@ SELECT foo FROM bar OFFSET 2
 ----
 SELECT foo FROM bar OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 OFFSET 2
 ----
 SELECT foo FROM bar WHERE foo = 4 OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM bar ORDER BY baz OFFSET 2
 ----
 SELECT foo FROM bar ORDER BY baz OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2 ROWS
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None })
 
 parse-statement
 SELECT 'foo' OFFSET 0
@@ -729,7 +729,7 @@ SELECT foo FROM bar FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM bar FETCH FIRST 2 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT 'foo' FETCH FIRST 2 ROWS ONLY
@@ -743,105 +743,105 @@ SELECT foo FROM bar FETCH FIRST ROWS ONLY
 ----
 SELECT foo FROM bar FETCH FIRST ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: None }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: None }) })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM bar WHERE foo = 4 FETCH FIRST 2 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT foo FROM bar ORDER BY baz FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM bar ORDER BY baz FETCH FIRST 2 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz FETCH FIRST 2 ROWS WITH TIES
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz FETCH FIRST 2 ROWS WITH TIES
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: None, fetch: Some(Fetch { with_ties: true, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: None, fetch: Some(Fetch { with_ties: true, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT foo FROM bar FETCH FIRST 50 PERCENT ROWS ONLY
 ----
 SELECT foo FROM bar FETCH FIRST 50 PERCENT ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: true, quantity: Some(Value(Number("50"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: true, quantity: Some(Value(Number("50"))) }) })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("foo")]), op: Eq, right: Value(Number("4")) }), group_by: [], having: None }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))), fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar FETCH FIRST 2 ROWS ONLY) FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM (SELECT * FROM bar FETCH FIRST 2 ROWS ONLY) FETCH FIRST 2 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY) OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY) OFFSET 2 ROWS FETCH FIRST 2 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT foo FROM bar FETCH FIRST 10 ROW ONLY
 ----
 SELECT foo FROM bar FETCH FIRST 10 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("10"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("10"))) }) })
 
 parse-statement
 SELECT foo FROM bar FETCH NEXT 10 ROW ONLY
 ----
 SELECT foo FROM bar FETCH FIRST 10 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("10"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("10"))) }) })
 
 parse-statement
 SELECT foo FROM bar FETCH NEXT 10 ROWS WITH TIES
 ----
 SELECT foo FROM bar FETCH FIRST 10 ROWS WITH TIES
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: true, percent: false, quantity: Some(Value(Number("10"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: true, percent: false, quantity: Some(Value(Number("10"))) }) })
 
 parse-statement
 SELECT foo FROM bar FETCH NEXT ROWS WITH TIES
 ----
 SELECT foo FROM bar FETCH FIRST ROWS WITH TIES
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: true, percent: false, quantity: None }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: true, percent: false, quantity: None }) })
 
 parse-statement
 SELECT foo FROM bar FETCH FIRST ROWS ONLY
 ----
 SELECT foo FROM bar FETCH FIRST ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: None }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: None }) })
 
 parse-statement
 SELECT * FROM customer LEFT JOIN (SELECT * FROM "order" WHERE "order".customer = customer.id LIMIT 3) AS "order" ON true
 ----
 SELECT * FROM customer LEFT JOIN (SELECT * FROM "order" WHERE "order".customer = customer.id LIMIT 3) AS "order" ON true
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("order")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("order"), Ident("customer")]), op: Eq, right: Identifier([Ident("customer"), Ident("id")]) }), group_by: [], having: None }), order_by: [], limit: Some(Value(Number("3"))), offset: None, fetch: None }, alias: Some(TableAlias { name: Ident("order"), columns: [] }) }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("order")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("order"), Ident("customer")]), op: Eq, right: Identifier([Ident("customer"), Ident("id")]) }), group_by: [], having: None }), order_by: [], limit: Some(Value(Number("3"))), offset: None, fetch: None }, alias: Some(TableAlias { name: Ident("order"), columns: [] }) }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM customer LEFT JOIN LATERAL (SELECT * FROM "order" WHERE "order".customer = customer.id LIMIT 3) AS "order" ON true
 ----
 SELECT * FROM customer LEFT JOIN LATERAL (SELECT * FROM "order" WHERE "order".customer = customer.id LIMIT 3) AS "order" ON true
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None, args: None, with_hints: [] }, joins: [Join { relation: Derived { lateral: true, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("order")]), alias: None, args: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("order"), Ident("customer")]), op: Eq, right: Identifier([Ident("customer"), Ident("id")]) }), group_by: [], having: None }), order_by: [], limit: Some(Value(Number("3"))), offset: None, fetch: None }, alias: Some(TableAlias { name: Ident("order"), columns: [] }) }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), args: None, alias: None, with_hints: [] }, joins: [Join { relation: Derived { lateral: true, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("order")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("order"), Ident("customer")]), op: Eq, right: Identifier([Ident("customer"), Ident("id")]) }), group_by: [], having: None }), order_by: [], limit: Some(Value(Number("3"))), offset: None, fetch: None }, alias: Some(TableAlias { name: Ident("order"), columns: [] }) }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })
 
 parse-statement
 SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id)

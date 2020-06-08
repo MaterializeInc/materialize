@@ -946,11 +946,11 @@ pub enum Statement {
         /// View name
         name: ObjectName,
         columns: Vec<Ident>,
+        with_options: Vec<SqlOption>,
         query: Box<Query>,
         if_exists: IfExistsBehavior,
         temporary: bool,
         materialized: bool,
-        with_options: Vec<SqlOption>,
     },
     /// `CREATE TABLE`
     CreateTable {

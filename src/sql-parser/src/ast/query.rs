@@ -254,10 +254,10 @@ impl_display!(TableWithJoins);
 pub enum TableFactor {
     Table {
         name: ObjectName,
-        alias: Option<TableAlias>,
         /// Arguments of a table-valued function, as supported by Postgres
         /// and MSSQL.
         args: Option<FunctionArgs>,
+        alias: Option<TableAlias>,
         /// MSSQL-specific `WITH (...)` hints such as NOLOCK.
         with_hints: Vec<Expr>,
     },
