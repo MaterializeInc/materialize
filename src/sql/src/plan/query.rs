@@ -20,7 +20,6 @@
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
@@ -44,6 +43,7 @@ use repr::{
 };
 
 use crate::names::PartialName;
+use crate::plan::cast;
 use crate::plan::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
     JoinKind, NullaryFunc, RelationExpr, ScalarExpr, ScalarTypeable, TableFunc, UnaryFunc,
@@ -805,8 +805,18 @@ fn plan_table_function(
             ) {
                 (ScalarType::Int32, ScalarType::Int32) => ScalarType::Int32,
                 _ => {
-                    start = promote_int_int64(ecx, "first generate_series argument", start)?;
-                    stop = promote_int_int64(ecx, "second generate_series argument", stop)?;
+                    start = plan_cast_internal(
+                        "first generate_series argument",
+                        ecx,
+                        start,
+                        cast::CastTo::Explicit(ScalarType::Int64),
+                    )?;
+                    stop = plan_cast_internal(
+                        "second generate_series argument",
+                        ecx,
+                        stop,
+                        cast::CastTo::Explicit(ScalarType::Int64),
+                    )?;
                     ScalarType::Int64
                 }
             };
@@ -1391,7 +1401,7 @@ pub fn plan_coerce<'a>(
         }
         (LiteralString(s), Plain(typ)) => {
             let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String));
-            plan_cast_internal(ecx, CastContext::Implicit("string literal"), lit, typ)?
+            plan_cast_internal("string literal", ecx, lit, cast::CastTo::Explicit(typ))?
         }
         (LiteralString(s), JsonbAny) => {
             ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::Jsonb))
@@ -1608,10 +1618,10 @@ pub fn plan_coercible_expr<'a>(
                 let mut typ = ecx.scalar_type(&expr);
                 if let ScalarType::Date = typ {
                     expr = plan_cast_internal(
+                        "EXTRACT",
                         ecx,
-                        CastContext::Implicit("EXTRACT"),
                         expr,
-                        ScalarType::Timestamp,
+                        cast::CastTo::Explicit(ScalarType::Timestamp),
                     )?;
                     typ = ecx.scalar_type(&expr);
                 }
@@ -1765,10 +1775,10 @@ pub fn plan_homogeneous_exprs(
     let mut out = Vec::new();
     for (expr, typ) in pending.into_iter().map(Option::unwrap) {
         match plan_cast_internal(
+            name,
             ecx,
-            CastContext::Implicit(name),
             expr,
-            best_target_type.clone().unwrap(),
+            cast::CastTo::Explicit(best_target_type.clone().unwrap()),
         ) {
             Ok(expr) => out.push(expr),
             Err(_) => bail!(
@@ -1890,7 +1900,7 @@ fn plan_cast<'a>(
     let to_scalar_type = scalar_type_from_sql(data_type)?;
     let (expr, maybe_name) = plan_expr_returning_name(ecx, expr, Some(to_scalar_type.clone()))?;
     Ok((
-        plan_cast_internal(ecx, CastContext::Explicit, expr, to_scalar_type)?,
+        plan_cast_internal("CAST", ecx, expr, cast::CastTo::Explicit(to_scalar_type))?,
         maybe_name,
     ))
 }
@@ -1925,7 +1935,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
                 AggregateFunc::JsonbAgg => {
                     // We need to transform input into jsonb in order to
                     // match Postgres' behavior here.
-                    let expr = plan_to_jsonb(ecx, "jsonb_agg", expr)?;
+                    let expr = plan_cast_internal("jsonb_agg", ecx, expr, cast::CastTo::JsonbAny)?;
                     (expr, AggregateFunc::JsonbAgg)
                 }
                 func => (expr, func),
@@ -2045,10 +2055,10 @@ fn plan_function<'a>(
                 _ => bail!("internal.avg_promotion called with unexpected argument"),
             };
             plan_cast_internal(
+                "internal.avg_promotion",
                 ecx,
-                CastContext::Implicit("internal.avg_promotion"),
                 expr,
-                output_type,
+                cast::CastTo::Explicit(output_type),
             )
         }
 
@@ -2101,33 +2111,6 @@ fn plan_function<'a>(
             }
         }
     }
-}
-
-pub fn plan_to_jsonb(
-    ecx: &ExprContext,
-    name: &str,
-    arg: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error> {
-    let typ = ecx.column_type(&arg).scalar_type;
-    Ok(match typ {
-        ScalarType::Jsonb => arg,
-        ScalarType::String | ScalarType::Float64 | ScalarType::Bool => {
-            arg.call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
-        }
-        ScalarType::Int32 => arg
-            .call_unary(UnaryFunc::CastInt32ToFloat64)
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        ScalarType::Int64 | ScalarType::Float32 | ScalarType::Decimal(..) => {
-            // TODO(jamii) this is awaiting a decision about how to represent numbers in jsonb
-            bail!(
-                "{}() doesn't currently support {} arguments, try adding ::float to the argument for now",
-                name,
-                typ
-            )
-        }
-        _ => plan_cast_internal(ecx, CastContext::Implicit(name), arg, ScalarType::String)?
-            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-    })
 }
 
 fn plan_is_null_expr<'a>(
@@ -2376,8 +2359,8 @@ fn plan_json_op(
             // These are philosophically internal casts, but PostgreSQL
             // considers them to be explicit (perhaps for historical reasons),
             // so we do too.
-            let lexpr = plan_cast_internal(ecx, CastContext::Explicit, lexpr, String)?;
-            let rexpr = plan_cast_internal(ecx, CastContext::Explicit, rexpr, String)?;
+            let lexpr = plan_cast_internal("||", ecx, lexpr, cast::CastTo::Explicit(String))?;
+            let rexpr = plan_cast_internal("||", ecx, rexpr, cast::CastTo::Explicit(String))?;
             lexpr.call_binary(rexpr, BinaryFunc::TextConcat)
         }
         (Concat, _, _) => bail!("No overload for {} {} {}", ltype, op, rtype),
@@ -2693,202 +2676,41 @@ pub fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<Sc
         })
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum CastContext<'a> {
-    Explicit,
-    Implicit(&'a str),
-}
-
-impl<'a> fmt::Display for CastContext<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CastContext::Explicit => f.write_str("CAST"),
-            CastContext::Implicit(s) => write!(f, "{}", s),
-        }
-    }
-}
-
-/// Plans a cast between two `RelationExpr`s of different types. If it is
-/// impossible to cast between the two types, an error is returned.
+/// Plans a cast between [`ScalarType`]s, specifying which types of casts are
+/// permitted using [`cast::CastTo`].
 ///
 /// Note that `plan_cast_internal` only understands [`ScalarType`]s. If you need
 /// to cast between SQL [`DataType`]s, see [`Planner::plan_cast`].
+///
+/// # Errors
+///
+/// If a cast between the `ScalarExpr`'s base type and the specified type is:
+/// - Not possible, e.g. `Bytes` to `Decimal`
+/// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
 pub fn plan_cast_internal<'a>(
+    caller_name: &str,
     ecx: &ExprContext<'a>,
-    ccx: CastContext<'a>,
     expr: ScalarExpr,
-    to_scalar_type: ScalarType,
+    cast_to: cast::CastTo,
 ) -> Result<ScalarExpr, failure::Error> {
-    use ScalarType::*;
-    use UnaryFunc::*;
-    let from_scalar_type = ecx.column_type(&expr).scalar_type;
+    let from_scalar_type = ecx.scalar_type(&expr);
 
-    let expr = match (from_scalar_type, to_scalar_type.clone()) {
-        (Bool, String) => expr.call_unary(match ccx {
-            CastContext::Explicit => CastBoolToStringExplicit,
-            CastContext::Implicit(_) => CastBoolToStringImplicit,
-        }),
-        (Int32, Bool) => expr.call_unary(CastInt32ToBool),
-        (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
-        (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
-        (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
-        (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, s),
-        (Int32, String) => expr.call_unary(CastInt32ToString),
-        (Int64, Bool) => expr.call_unary(CastInt64ToBool),
-        (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, s),
-        (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
-        (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
-        (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
-        (Int64, String) => expr.call_unary(CastInt64ToString),
-        (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
-        (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
-        (Float32, Decimal(_, s)) => {
-            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
-            expr.call_binary(s, BinaryFunc::CastFloat32ToDecimal)
-        }
-        (Float32, String) => expr.call_unary(CastFloat32ToString),
-        (Float64, Int32) => expr.call_unary(CastFloat64ToInt32),
-        (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
-        (Float64, Decimal(_, s)) => {
-            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
-            expr.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
-        }
-        (Float64, String) => expr.call_unary(CastFloat64ToString),
-        (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
-        (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
-        (Decimal(_, s), Float32) => {
-            let factor = 10_f32.powi(i32::from(s));
-            let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastSignificandToFloat32)
-                .call_binary(factor, BinaryFunc::DivFloat32)
-        }
-        (Decimal(_, s), Float64) => {
-            let factor = 10_f64.powi(i32::from(s));
-            let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastSignificandToFloat64)
-                .call_binary(factor, BinaryFunc::DivFloat64)
-        }
-        (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),
-        (Decimal(_, s), String) => expr.call_unary(UnaryFunc::CastDecimalToString(s)),
-        (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
-        (Date, TimestampTz) => expr.call_unary(CastDateToTimestampTz),
-        (Date, String) => expr.call_unary(CastDateToString),
-        (Time, String) => expr.call_unary(CastTimeToString),
-        (Time, Interval) => expr.call_unary(CastTimeToInterval),
-        (Timestamp, Date) => expr.call_unary(CastTimestampToDate),
-        (Timestamp, TimestampTz) => expr.call_unary(CastTimestampToTimestampTz),
-        (Timestamp, String) => expr.call_unary(CastTimestampToString),
-        (TimestampTz, Date) => expr.call_unary(CastTimestampTzToDate),
-        (TimestampTz, Timestamp) => expr.call_unary(CastTimestampTzToTimestamp),
-        (TimestampTz, String) => expr.call_unary(CastTimestampTzToString),
-        (Interval, String) => expr.call_unary(CastIntervalToString),
-        (Interval, Time) => expr.call_unary(CastIntervalToTime),
-        (Bytes, String) => expr.call_unary(CastBytesToString),
-        (Jsonb, String) => expr.call_unary(JsonbStringify),
-        (Jsonb, Float64) => expr.call_unary(CastJsonbToFloat64),
-        (Jsonb, Bool) => expr.call_unary(CastJsonbToBool),
-        (Jsonb, Int32) | (Jsonb, Int64) | (Jsonb, Float32) | (Jsonb, Decimal(..)) => {
-            plan_cast_internal(
-                ecx,
-                ccx,
-                expr.call_unary(CastJsonbToFloat64),
-                to_scalar_type,
-            )?
-        }
-        (Jsonb, Date) | (Jsonb, Timestamp) | (Jsonb, TimestampTz) | (Jsonb, Interval) => {
-            plan_cast_internal(ecx, ccx, expr.call_unary(CastJsonbToString), to_scalar_type)?
-        }
-        (String, Bool) => expr.call_unary(CastStringToBool),
-        (String, Int32) => expr.call_unary(CastStringToInt32),
-        (String, Int64) => expr.call_unary(CastStringToInt64),
-        (String, Float32) => expr.call_unary(CastStringToFloat32),
-        (String, Float64) => expr.call_unary(CastStringToFloat64),
-        (String, Decimal(_, s)) => expr.call_unary(CastStringToDecimal(s)),
-        (String, Date) => expr.call_unary(CastStringToDate),
-        (String, Time) => expr.call_unary(CastStringToTime),
-        (String, Timestamp) => expr.call_unary(CastStringToTimestamp),
-        (String, TimestampTz) => expr.call_unary(CastStringToTimestampTz),
-        (String, Interval) => expr.call_unary(CastStringToInterval),
-        (String, Bytes) => expr.call_unary(CastStringToBytes),
-        (String, Jsonb) => expr.call_unary(CastStringToJsonb),
-        (from, to) if from == to => expr,
-        (from, to) => {
-            bail!(
-                "{} does not support casting from {:?} to {:?}",
-                ccx,
-                from,
-                to
-            );
-        }
-    };
-    Ok(expr)
-}
-
-pub fn plan_cast_implicit<'a>(
-    ecx: &ExprContext<'a>,
-    ccx: CastContext<'a>,
-    expr: ScalarExpr,
-    to_scalar_type: ScalarType,
-) -> Result<ScalarExpr, failure::Error> {
-    use ScalarType::*;
-    let from_scalar_type = ecx.column_type(&expr).scalar_type;
-
-    match (&from_scalar_type, &to_scalar_type) {
-        (String, String) | (Jsonb, Jsonb) => (),
-        (String, _)
-        | (_, String)
-        | (Jsonb, _)
-        | (Int64, Int32)
-        | (Float32, Int64)
-        | (Float32, Decimal(_, _))
-        | (Float64, Int32)
-        | (Float64, Int64)
-        | (Float64, Float32)
-        | (Float64, Decimal(_, _))
-        | (Decimal(_, _), Int32)
-        | (Decimal(_, _), Int64)
-        | (TimestampTz, Timestamp) => bail!(
-            "{} does not support implicitly casting from {:?} to {:?}; request an explicit cast",
-            ccx,
+    let cast_op = match cast::get_cast(&from_scalar_type, &cast_to) {
+        Some(cast_op) => cast_op,
+        None => bail!(
+            "{} does not support {}casting from {} to {}",
+            caller_name,
+            if let cast::CastTo::Implicit(_) = cast_to {
+                "implicitly "
+            } else {
+                ""
+            },
             from_scalar_type,
-            to_scalar_type
+            cast_to
         ),
-        _ => {}
-    }
+    };
 
-    plan_cast_internal(ecx, ccx, expr, to_scalar_type)
-}
-
-fn promote_int_int64<'a>(
-    ecx: &ExprContext<'a>,
-    name: &str,
-    expr: ScalarExpr,
-) -> Result<ScalarExpr, failure::Error> {
-    Ok(match ecx.column_type(&expr).scalar_type {
-        ScalarType::Int64 => expr,
-        ScalarType::Int32 => {
-            plan_cast_internal(ecx, CastContext::Implicit(name), expr, ScalarType::Int64)?
-        }
-        other => bail!("{} has non-integer type {:?}", name, other,),
-    })
-}
-
-pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
-    match s1.cmp(&s2) {
-        Ordering::Less => {
-            let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
-            let factor = 10_i128.pow(u32::from(s2 - s1));
-            let factor = ScalarExpr::literal(Datum::from(factor), typ);
-            expr.call_binary(factor, BinaryFunc::MulDecimal)
-        }
-        Ordering::Equal => expr,
-        Ordering::Greater => {
-            let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
-            let factor = 10_i128.pow(u32::from(s1 - s2));
-            let factor = ScalarExpr::literal(Datum::from(factor), typ);
-            expr.call_binary(factor, BinaryFunc::DivDecimal)
-        }
-    }
+    Ok(cast_op.gen_expr(ecx, expr, cast_to))
 }
 
 pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
