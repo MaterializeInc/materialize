@@ -453,7 +453,7 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
             let mut col_iters = Vec::with_capacity(ncols);
             let mut col_types = Vec::with_capacity(ncols);
             for col in cols {
-                let col = plan_homogeneous_exprs("VALUES", ecx, &col, Some(ScalarType::String))?;
+                let col = plan_homogeneous_exprs("VALUES", ecx, &col)?;
                 col_types.push(ecx.column_type(&col[0]));
                 col_iters.push(col.into_iter());
             }
@@ -1324,16 +1324,6 @@ fn plan_using_constraint(
     Ok((both, both_scope))
 }
 
-/// Reports whether `e` has an unknown type, due to a query parameter whose type
-/// has not yet been constrained.
-pub fn expr_has_unknown_type(ecx: &ExprContext, expr: &Expr) -> bool {
-    match unnest(expr) {
-        Expr::Parameter(n) => !ecx.qcx.param_types.borrow().contains_key(n),
-        Expr::Value(Value::Null) => true,
-        _ => false,
-    }
-}
-
 pub fn plan_expr<'a>(
     ecx: &ExprContext,
     e: &'a Expr,
@@ -1690,12 +1680,7 @@ pub fn plan_coercible_expr<'a>(
                 assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
                 let expr = ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
-                    exprs: plan_homogeneous_exprs(
-                        "coalesce",
-                        ecx,
-                        exprs,
-                        Some(ScalarType::String),
-                    )?,
+                    exprs: plan_homogeneous_exprs("coalesce", ecx, exprs)?,
                 };
                 let name = ScopeItemName {
                     table_name: None,
@@ -1720,70 +1705,57 @@ pub fn plan_coercible_expr<'a>(
     }
 }
 
-// Plans a list of expressions such that all input expressions will be cast to
-// the same type. If successful, returns a new list of expressions in the same
-// order as the input, where each expression has the appropriate casts to make
-// them all of a uniform type.
-//
-// When types don't match exactly, SQL has some poorly-documented type promotion
-// rules. For now, just promote integers into decimals or floats, decimals into
-// floats, dates into timestamps, and small Xs into bigger Xs.
-// TODO(sploiselle): Allow implicit casts between elements, namely allow
-// converting string literals to the `best_target_type`.
+/// Plans a list of expressions such that all input expressions will be cast to
+/// the same type. If successful, returns a new list of expressions in the same
+/// order as the input, where each expression has the appropriate casts to make
+/// them all of a uniform type.
+///
+/// Note that this is our implementation of Postres' type conversion for
+/// ["`UNION`, `CASE`, and Related Constructs"][union-type-conv], though it isn't
+/// yet used in all of those cases.
+///
+/// [union-type-conv]:
+/// https://www.postgresql.org/docs/12/typeconv-union-case.html
 pub fn plan_homogeneous_exprs(
     name: &str,
     ecx: &ExprContext,
     exprs: &[impl std::borrow::Borrow<Expr>],
-    type_hint: Option<ScalarType>,
 ) -> Result<Vec<ScalarExpr>, failure::Error> {
     assert!(!exprs.is_empty());
 
-    let mut pending = vec![None; exprs.len()];
-
-    // Compute the types of all known expressions.
-    for (i, expr) in exprs.iter().enumerate() {
-        if expr_has_unknown_type(ecx, expr.borrow()) {
-            continue;
-        }
-        let expr = plan_expr(ecx, expr.borrow(), None)?;
-        let typ = ecx.column_type(&expr);
-        pending[i] = Some((expr, typ));
+    let mut cexprs = Vec::new();
+    for expr in exprs.iter() {
+        let cexpr = super::query::plan_coercible_expr(ecx, expr.borrow())?.0;
+        cexprs.push(cexpr);
     }
 
-    // Determine the best target type. If all the expressions were parameters,
-    // fall back to `type_hint`.
-    let best_target_type = best_target_type(
-        pending
-            .iter()
-            .filter_map(|slot| slot.as_ref().map(|(_expr, typ)| typ.scalar_type.clone())),
-    )
-    .or(type_hint);
+    let types: Vec<_> = cexprs
+        .iter()
+        .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
+        .collect();
 
-    // Plan all the parameter expressions with `best_target_type` as the type
-    // hint.
-    for (i, slot) in pending.iter_mut().enumerate() {
-        if slot.is_none() {
-            let expr = plan_expr(ecx, exprs[i].borrow(), best_target_type.clone())?;
-            let typ = ecx.column_type(&expr);
-            *slot = Some((expr, typ));
-        }
-    }
+    let target = match cast::guess_best_common_type(&types) {
+        Some(t) => t,
+        None => bail!("Cannot determine homogenous type for arguments to {}", name),
+    };
 
-    // Try to cast all expressions to `best_target_type`.
+    // Try to cast all expressions to `target`.
     let mut out = Vec::new();
-    for (expr, typ) in pending.into_iter().map(Option::unwrap) {
+    for cexpr in cexprs {
+        let arg = super::query::plan_coerce(ecx, cexpr, CoerceTo::Plain(target.clone()))?;
+
         match plan_cast_internal(
             name,
             ecx,
-            expr,
-            cast::CastTo::Explicit(best_target_type.clone().unwrap()),
+            arg.clone(),
+            cast::CastTo::Implicit(target.clone()),
         ) {
             Ok(expr) => out.push(expr),
             Err(_) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
                 name,
-                typ.scalar_type,
-                best_target_type,
+                ecx.scalar_type(&arg),
+                target,
             ),
         }
     }
@@ -2263,8 +2235,7 @@ fn plan_case<'a>(
         Some(else_result) => else_result,
         None => &Expr::Value(Value::Null),
     });
-    let mut result_exprs =
-        plan_homogeneous_exprs("CASE", ecx, &result_exprs, Some(ScalarType::String))?;
+    let mut result_exprs = plan_homogeneous_exprs("CASE", ecx, &result_exprs)?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
     for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
@@ -2354,28 +2325,6 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
         }
     }
     equivalences
-}
-
-fn unnest(expr: &Expr) -> &Expr {
-    match expr {
-        Expr::Nested(expr) => unnest(expr),
-        _ => expr,
-    }
-}
-
-pub fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<ScalarType> {
-    iter.into_iter()
-        .max_by_key(|scalar_type| match scalar_type {
-            ScalarType::Int32 => 0,
-            ScalarType::Int64 => 1,
-            ScalarType::Decimal(_, _) => 2,
-            ScalarType::Float32 => 3,
-            ScalarType::Float64 => 4,
-            ScalarType::Date => 5,
-            ScalarType::Timestamp => 6,
-            ScalarType::TimestampTz => 7,
-            _ => 8,
-        })
 }
 
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are
