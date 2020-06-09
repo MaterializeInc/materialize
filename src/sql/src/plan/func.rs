@@ -882,19 +882,19 @@ pub fn select_scalar_func(
     }
 }
 
-/// Provides a macro to write HashMap "literals" for matching `ArithmeticOp`s to
+/// Provides a macro to write HashMap "literals" for matching `BinaryOperator`s to
 /// `Vec<FuncImpl>`.
-macro_rules! arithmetic_impls(
+macro_rules! binary_op_impls(
     {
         $(
-            $arithmeticop:expr => {
+            $binop:expr => {
                 $($params:expr => $op:expr),+
             }
         ),+
     } => {{
         let mut m: HashMap<BinaryOperator, Vec<FuncImpl>> = HashMap::new();
         $(
-            insert_impl!{m, $arithmeticop, $($params => $op),+}
+            insert_impl!{m, $binop, $($params => $op),+}
         )+
         m
     }};
@@ -902,12 +902,13 @@ macro_rules! arithmetic_impls(
 
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
-    static ref ARITHMETIC_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
+    static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
         use ScalarType::*;
         use BinaryOperator::*;
         use super::expr::BinaryFunc::*;
         use OperationType::*;
-        arithmetic_impls! {
+        binary_op_impls! {
+            // ARITHMETIC
             Plus => {
                 params!(Int32, Int32) => AddInt32,
                 params!(Int64, Int64) => AddInt64,
@@ -1013,6 +1014,76 @@ lazy_static! {
                     let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
                     lexpr.call_binary(rexpr, ModDecimal)
                 })
+            },
+
+            // BOOLEAN OPS
+            BinaryOperator::And => {
+                params!(Bool, Bool) => BinaryFunc::And
+            },
+            BinaryOperator::Or => {
+                params!(Bool, Bool) => BinaryFunc::Or
+            },
+
+            // LIKE
+            Like => {
+                params!(String, String) => MatchLikePattern
+            },
+            NotLike => {
+                params!(String, String) => BClosure(|_ecx, lhs, rhs| {
+                    lhs
+                        .call_binary(rhs, MatchLikePattern)
+                        .call_unary(UnaryFunc::Not)
+                })
+            },
+
+            //JSON
+            JsonGet => {
+                params!(Jsonb, Int64) => JsonbGetInt64,
+                params!(Jsonb, String) => JsonbGetString
+            },
+            JsonGetAsText => {
+                params!(Jsonb, Int64) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_binary(rhs, BinaryFunc::JsonbGetInt64)
+                        .call_unary(UnaryFunc::JsonbStringifyUnlessString)
+                }),
+                params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_binary(rhs, BinaryFunc::JsonbGetString)
+                        .call_unary(UnaryFunc::JsonbStringifyUnlessString)
+                })
+            },
+            JsonContainsJson => {
+                params!(Jsonb, Jsonb) => JsonbContainsJsonb,
+                params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_binary(
+                        rhs.call_unary(UnaryFunc::CastStringToJsonb),
+                        JsonbContainsJsonb,
+                    )
+                }),
+                params!(String, Jsonb) => BClosure(|_ecx, lhs, rhs| {
+                    lhs.call_unary(UnaryFunc::CastStringToJsonb)
+                        .call_binary(rhs, JsonbContainsJsonb)
+                })
+            },
+            JsonContainedInJson => {
+                params!(Jsonb, Jsonb) =>  BClosure(|_ecx, lhs, rhs| {
+                    rhs.call_binary(
+                        lhs,
+                        JsonbContainsJsonb
+                    )
+                }),
+                params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
+                    rhs.call_unary(UnaryFunc::CastStringToJsonb)
+                        .call_binary(lhs, BinaryFunc::JsonbContainsJsonb)
+                }),
+                params!(String, Jsonb) => BClosure(|_ecx, lhs, rhs| {
+                    rhs.call_binary(
+                        lhs.call_unary(UnaryFunc::CastStringToJsonb),
+                        BinaryFunc::JsonbContainsJsonb,
+                    )
+                })
+            },
+            JsonContainsField => {
+                params!(Jsonb, String) => JsonbContainsString
             }
         }
     };
@@ -1036,19 +1107,58 @@ fn rescale_decimals_add_sub_mod(
     }
 }
 
-/// Gets an arithmetic function and the `ScalarExpr`s required to invoke it.
-pub fn select_arithmetic_op<'a>(
+// Concat cannot be easily generalized because it's implementations are:
+// ```
+// (!String, String) | (String, !String) | (String, String) | (Jsonb, Jsonb)
+// ```
+// Our framework doesn't support the concept of exclusionary parameters, and no
+// other functions currently require it, so we instead side-channel this
+// implementation.
+fn concat_impl(ecx: &ExprContext, left: &Expr, right: &Expr) -> Result<ScalarExpr, failure::Error> {
+    use ScalarType::*;
+    let lexpr = super::query::plan_expr(ecx, left, Some(String))?;
+    let ltype = ecx.scalar_type(&lexpr);
+    let rexpr = super::query::plan_expr(ecx, right, Some(String))?;
+    let rtype = ecx.scalar_type(&rexpr);
+
+    match (&ltype, &rtype) {
+        (Jsonb, Jsonb) => Ok(lexpr.call_binary(rexpr, BinaryFunc::JsonbConcat)),
+        (String, _) | (_, String) => {
+            let lexpr =
+                super::query::plan_cast_internal("||", ecx, lexpr, CastTo::Explicit(String))?;
+            let rexpr =
+                super::query::plan_cast_internal("||", ecx, rexpr, CastTo::Explicit(String))?;
+            Ok(lexpr.call_binary(rexpr, BinaryFunc::TextConcat))
+        }
+        (_, _) => bail!("no overload for {} || {}", ltype, rtype),
+    }
+}
+
+/// Gets a function compatible with the `BinaryOperator` and the `ScalarExpr`s
+/// required to invoke it.
+pub fn select_binary_op<'a>(
     ecx: &ExprContext,
     op: &'a BinaryOperator,
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let impls = match ARITHMETIC_IMPLS.get(&op) {
+    // Nonstandard implementations go here.
+    if let BinaryOperator::Concat = op {
+        return concat_impl(ecx, left, right);
+    }
+    // Generalizable implementations.
+    let impls = match BINARY_OP_IMPLS.get(&op) {
         Some(i) => i,
-        None => unreachable!(
-            "only call select_arithmetic_op with arithmetic BinaryOperators, not {:?}",
-            op
-        ),
+        // TODO: these require sql arrays
+        // JsonContainsAnyFields
+        // JsonContainsAllFields
+        // TODO: these require json paths
+        // JsonGetPath
+        // JsonGetPathAsText
+        // JsonDeletePath
+        // JsonContainsPath
+        // JsonApplyPathPredicate
+        None => unsupported!(op),
     };
 
     let args = vec![left.clone(), right.clone()];
