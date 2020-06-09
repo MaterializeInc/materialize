@@ -69,6 +69,15 @@ services:
 
 mzconduct:
   workflows:
+    # This test is designed to delay inbound and outbound network
+    # traffic of the Kafka broker.
+    #
+    # Success: Kafka broker traffic is delayed, materialize does not
+    #          crash, chaos container exits successfully.
+    #          Note: to confirm that broker traffic is delayed, you can run the
+    #                following on the Kafka broker's container: `tc qdisc show  dev eth0`
+    # Failure: Kafka broker traffic is not delayed, materialize crashes,
+    #          or chaos container exits unsuccessfully.
     delay-kafka:
       steps:
         - step: workflow
@@ -85,6 +94,13 @@ mzconduct:
             --kafka-partitions 1
             --message-count 10000
 
+    # This test is designed to pause and unpause the running Kafka broker
+    # (chaos-kill-container sends a SIGSTOP signal to the container).
+    #
+    # Success: Kafka is continuously paused and unpaused, materialize
+    #          does not crash, chaos container exits successfully.
+    # Failure: Kafka is not paused and unpaused, materialize crashes,
+    #          or chaos container exits unsuccessfully.
     pause-kafka:
       steps:
         - step: workflow
@@ -104,6 +120,14 @@ mzconduct:
           running_time: 60
           paused_time: 30
 
+    # This test is designed to stop and start the running Kafka broker
+    # (chaos-kill-container sends a SIGTERM, then SIGKILL signal to the
+    # container).
+    #
+    # Success: Kafka is continuously stopped and restarted, materialize
+    #          does not crash, chaos container exits successfully.
+    # Failure: Kafka is not stopped and restarted, materialize crashes,
+    #          or chaos container exits unsuccessfully.
     stop-kafka:
       steps:
         - step: workflow
@@ -122,6 +146,29 @@ mzconduct:
           loop: true
           running_time: 60
           stopped_time: 30
+
+    # This test is designed to kill the running Kafka broker
+    # (chaos-kill-container sends a SIGKILL signal to the container).
+    #
+    # Success: Kafka is killed and materialize does not crash.
+    #          Note: the chaos test will not be able to proceed and
+    #                will therefore never exit.
+    # Failure: Kafka is not killed or materialize does crash.
+    kill-kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 1
+            --message-count 10000
+        - step: chaos-kill-container
+          container: chaos_kafka_1
 
     # Helper workflows
 

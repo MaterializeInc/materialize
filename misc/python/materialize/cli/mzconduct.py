@@ -862,6 +862,25 @@ class ChaosStopContainerStep(ChaosContainerBaseWorkflowStep):
         )
 
 
+@Steps.register("chaos-kill-container")
+class ChaosKillContainerStep(ChaosContainerBaseWorkflowStep):
+    """Stops and restarts the designated Docker container.
+
+    Params:
+        container: Docker container to kill
+    """
+
+    def __init__(self, container: str,) -> None:
+        self._container = container
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        print(f"Killing container: {self._container}")
+        try:
+            spawn.runv(["docker", "kill", self._container])
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"Unable to kill container {self._container}: {e}")
+
+
 @Steps.register("chaos-delay-container")
 class ChaosDelayContainerStep(WorkflowStep):
     """Delay the incoming and outgoing network traffic for a Docker container.
