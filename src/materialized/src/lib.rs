@@ -226,14 +226,14 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
                     start_time,
                     &num_timely_workers.to_string(),
                 ));
-                mux.serve(incoming.take_until(drain_tripwire)).await;
+                mux.serve(incoming.take_until_if(drain_tripwire)).await;
             }
 
             // Draining primaries and non-primary servers are only responsible
             // for switchboard traffic.
             let mut mux = Mux::new();
             mux.add_handler(switchboard.clone());
-            mux.serve(incoming.take_until(shutdown_tripwire)).await
+            mux.serve(incoming.take_until_if(shutdown_tripwire)).await
         }
     });
 
