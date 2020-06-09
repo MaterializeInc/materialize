@@ -22,7 +22,6 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
-use std::fmt;
 use std::iter;
 use std::rc::Rc;
 
@@ -49,6 +48,7 @@ use crate::plan::expr::{
     JoinKind, NullaryFunc, RelationExpr, ScalarExpr, ScalarTypeable, TableFunc, UnaryFunc,
     VariadicFunc,
 };
+use crate::plan::func;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform;
@@ -1500,7 +1500,7 @@ pub fn plan_coercible_expr<'a>(
             Expr::IsNotNull(expr) => (plan_is_null_expr(ecx, expr, true)?.into(), None),
             Expr::UnaryOp { op, expr } => (plan_unary_op(ecx, op, expr)?.into(), None),
             Expr::BinaryOp { op, left, right } => {
-                (plan_binary_op(ecx, op, left, right)?.into(), None)
+                (func::plan_binary_op(ecx, op, left, right)?.into(), None)
             }
             Expr::Between {
                 expr,
@@ -1604,9 +1604,7 @@ pub fn plan_coercible_expr<'a>(
                 };
 
                 (
-                    CoercibleScalarExpr::Coerced(super::func::select_scalar_func(
-                        ecx, ident, exprs,
-                    )?),
+                    CoercibleScalarExpr::Coerced(func::select_scalar_func(ecx, ident, exprs)?),
                     None,
                 )
             }
@@ -1850,7 +1848,7 @@ fn plan_any_or_all<'a>(
         // =>
         // SELECT NOT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
 
-        let mut cond = plan_binary_op(
+        let mut cond = func::plan_binary_op(
             &any_ecx,
             op,
             left,
@@ -1870,7 +1868,7 @@ fn plan_any_or_all<'a>(
             els: Box::new(exists),
         })
     } else {
-        let op_expr = plan_binary_op(
+        let op_expr = func::plan_binary_op(
             &any_ecx,
             op,
             left,
@@ -2062,12 +2060,7 @@ fn plan_function<'a>(
             )
         }
 
-        "mod" => {
-            if args.len() != 2 {
-                bail!("mod requires exactly two arguments");
-            }
-            plan_binary_op(ecx, &BinaryOperator::Modulus, &args[0], &args[1])
-        }
+        "mod" => func::plan_binary_op(ecx, &BinaryOperator::Modulus, &args[0], &args[1]),
 
         "mz_logical_timestamp" => {
             if !args.is_empty() {
@@ -2107,7 +2100,7 @@ fn plan_function<'a>(
                     format!("table function ({}) in scalar position", ident)
                 );
             } else {
-                super::func::select_scalar_func(ecx, ident, args)
+                func::select_scalar_func(ecx, ident, args)
             }
         }
     }
@@ -2171,59 +2164,6 @@ fn plan_unary_op<'a>(
         expr: Box::new(expr),
     };
     Ok(expr)
-}
-
-fn plan_binary_op<'a>(
-    ecx: &ExprContext,
-    op: &'a BinaryOperator,
-    left: &'a Expr,
-    right: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
-    use BinaryOperator::*;
-    match op {
-        Lt => plan_comparison_op(ecx, ComparisonOp::Lt, left, right),
-        LtEq => plan_comparison_op(ecx, ComparisonOp::LtEq, left, right),
-        Gt => plan_comparison_op(ecx, ComparisonOp::Gt, left, right),
-        GtEq => plan_comparison_op(ecx, ComparisonOp::GtEq, left, right),
-        Eq => plan_comparison_op(ecx, ComparisonOp::Eq, left, right),
-        NotEq => plan_comparison_op(ecx, ComparisonOp::NotEq, left, right),
-
-        _ => super::func::select_binary_op(ecx, op, left, right),
-    }
-}
-
-fn plan_comparison_op<'a>(
-    ecx: &ExprContext,
-    op: ComparisonOp,
-    left: &'a Expr,
-    right: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
-    let op_name = op.to_string();
-    let mut exprs =
-        plan_homogeneous_exprs(&op_name, ecx, &[left, right], Some(ScalarType::String))?;
-    assert_eq!(exprs.len(), 2);
-    let rexpr = exprs.pop().unwrap();
-    let lexpr = exprs.pop().unwrap();
-    let rtype = ecx.column_type(&rexpr);
-    let ltype = ecx.column_type(&lexpr);
-
-    if ltype.scalar_type != rtype.scalar_type {
-        bail!(
-            "{:?} and {:?} are not comparable",
-            ltype.scalar_type,
-            rtype.scalar_type
-        )
-    }
-
-    let func = match op {
-        ComparisonOp::Lt => BinaryFunc::Lt,
-        ComparisonOp::LtEq => BinaryFunc::Lte,
-        ComparisonOp::Gt => BinaryFunc::Gt,
-        ComparisonOp::GtEq => BinaryFunc::Gte,
-        ComparisonOp::Eq => BinaryFunc::Eq,
-        ComparisonOp::NotEq => BinaryFunc::NotEq,
-    };
-    Ok(lexpr.call_binary(rexpr, func))
 }
 
 fn plan_between<'a>(
@@ -2374,28 +2314,6 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error>
     let typ = ColumnType::new(scalar_type).nullable(nullable);
     let expr = ScalarExpr::literal(datum, typ);
     Ok(expr.into())
-}
-
-enum ComparisonOp {
-    Lt,
-    LtEq,
-    Gt,
-    GtEq,
-    Eq,
-    NotEq,
-}
-
-impl fmt::Display for ComparisonOp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ComparisonOp::Lt => f.write_str("<"),
-            ComparisonOp::LtEq => f.write_str("<="),
-            ComparisonOp::Gt => f.write_str(">"),
-            ComparisonOp::GtEq => f.write_str(">="),
-            ComparisonOp::Eq => f.write_str("="),
-            ComparisonOp::NotEq => f.write_str("<>"),
-        }
-    }
 }
 
 fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
