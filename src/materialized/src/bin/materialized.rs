@@ -32,6 +32,7 @@ use std::thread;
 use std::time::Duration;
 
 use backtrace::Backtrace;
+use chrono::Utc;
 use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -375,7 +376,7 @@ message: {}
     if LOG_FILE.get().is_some() {
         log::error!("{}", crash_message);
     }
-    eprintln!("{}", crash_message);
+    eprintln!("{} {}", Utc::now().format("%b %d %T%.3fZ"), crash_message);
     process::exit(1);
 }
 
