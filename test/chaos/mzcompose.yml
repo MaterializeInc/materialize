@@ -82,8 +82,8 @@ mzconduct:
       steps:
         - step: workflow
           workflow: start-everything
-        - step: chaos-delay-container
-          container: chaos_kafka_1
+        - step: chaos-delay-docker
+          service: kafka
         - step: run
           service: chaos
           daemon: true
@@ -114,8 +114,8 @@ mzconduct:
             --kafka-url kafka:9092
             --kafka-partitions 1
             --message-count 10000
-        - step: chaos-pause-container
-          container: chaos_kafka_1
+        - step: chaos-pause-docker
+          service: kafka
           loop: true
           running_time: 60
           paused_time: 30
@@ -141,8 +141,8 @@ mzconduct:
             --kafka-url kafka:9092
             --kafka-partitions 1
             --message-count 10000
-        - step: chaos-stop-container
-          container: chaos_kafka_1
+        - step: chaos-stop-docker
+          service: kafka
           loop: true
           running_time: 60
           stopped_time: 30
@@ -167,8 +167,8 @@ mzconduct:
             --kafka-url kafka:9092
             --kafka-partitions 1
             --message-count 10000
-        - step: chaos-kill-container
-          container: chaos_kafka_1
+        - step: chaos-kill-docker
+          service: kafka
 
     # Helper workflows
 
