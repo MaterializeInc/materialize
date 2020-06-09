@@ -864,7 +864,7 @@ class ChaosStopContainerStep(ChaosContainerBaseWorkflowStep):
 
 @Steps.register("chaos-kill-container")
 class ChaosKillContainerStep(ChaosContainerBaseWorkflowStep):
-    """Stops and restarts the designated Docker container.
+    """Kills the designated Docker container.
 
     Params:
         container: Docker container to kill
