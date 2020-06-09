@@ -53,11 +53,18 @@ where
     // so that we can spread the decoding among all the workers.
     // See #2133
     let envelope = envelope.clone();
-    let mut dbz_state = if envelope.get_avro_envelope_type() == EnvelopeType::Debezium {
-        DebeziumDecodeState::new(&schema, debug_name.to_string(), stream.scope().index())
-    } else {
-        None
-    };
+    let avro_envelope = envelope.get_avro_envelope_type();
+    let mut dbz_state =
+        if avro_envelope == EnvelopeType::Debezium || avro_envelope == EnvelopeType::FlatDebezium {
+            DebeziumDecodeState::new(
+                &schema,
+                debug_name.to_string(),
+                stream.scope().index(),
+                avro_envelope == EnvelopeType::FlatDebezium,
+            )
+        } else {
+            None
+        };
     stream.pass_through("AvroValues").flat_map(
         move |(
             SourceOutput {
@@ -76,7 +83,7 @@ where
                         after: r,
                     })
                 }
-                Envelope::Debezium => {
+                Envelope::Debezium { .. } => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
                         dbz_state.extract(value, top_node, index)
                     } else {
@@ -429,7 +436,7 @@ where
         (DataEncoding::Csv(enc), Envelope::None) => {
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators)
         }
-        (DataEncoding::Avro(enc), Envelope::Debezium) => decode_values_inner(
+        (DataEncoding::Avro(enc), Envelope::Debezium { .. }) => decode_values_inner(
             stream,
             avro::AvroDecoderState::new(
                 &enc.value_schema,
@@ -460,7 +467,7 @@ where
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
         }
-        (_, Envelope::Debezium) => unreachable!(
+        (_, Envelope::Debezium { .. }) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
         (DataEncoding::Regex { regex }, Envelope::None) => regex_fn(stream, regex, debug_name),

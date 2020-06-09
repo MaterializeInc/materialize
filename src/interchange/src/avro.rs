@@ -62,6 +62,7 @@ pub fn validate_key_schema(key_schema: &str, value_desc: &RelationDesc) -> Resul
 pub enum EnvelopeType {
     None,
     Debezium,
+    FlatDebezium,
     Upsert,
 }
 
@@ -74,7 +75,7 @@ pub fn validate_value_schema(
     let node = schema.top_node();
 
     let row_schema = match envelope {
-        EnvelopeType::Debezium => {
+        EnvelopeType::Debezium | EnvelopeType::FlatDebezium => {
             // The top-level record needs to be a diff "envelope" that contains
             // `before` and `after` fields, where the `before` and `after` fields
             // have the same schema.
@@ -138,7 +139,29 @@ pub fn validate_value_schema(
     };
 
     // The diff envelope is sane. Convert the actual record schema for the row.
-    validate_schema_1(node.step(row_schema))
+    let mut typ = validate_schema_1(node.step(row_schema))?;
+    if envelope == EnvelopeType::FlatDebezium {
+        typ.push(("mz_diff".into(), ColumnType::new(ScalarType::Int64)));
+        typ.push((
+            "mz_is_snapshot".into(),
+            ColumnType::new(ScalarType::Bool).nullable(true),
+        ));
+        typ.push((
+            "mz_binlog_file".into(),
+            ColumnType::new(ScalarType::String).nullable(true),
+        ));
+        typ.push((
+            "mz_binlog_pos".into(),
+            ColumnType::new(ScalarType::Int64).nullable(true),
+        ));
+        typ.push((
+            "mz_binlog_row".into(),
+            ColumnType::new(ScalarType::Int64).nullable(true),
+        ));
+        typ.push(("mz_worker".into(), ColumnType::new(ScalarType::Int64)));
+        typ.push(("mz_would_skip".into(), ColumnType::new(ScalarType::Bool)));
+    }
+    Ok(typ)
 }
 
 fn validate_schema_1(schema: SchemaNode) -> Result<Vec<(ColumnName, ColumnType)>> {
@@ -454,6 +477,8 @@ pub struct DebeziumDecodeState {
     debug_name: String,
     /// Worker we are running on (used for printing debug information)
     worker_idx: usize,
+    /// Whether we are decoding the `FLAT_DEBEZIUM` debugging format
+    is_flat: bool,
 }
 
 fn field_indices(node: SchemaNode) -> Option<HashMap<String, usize>> {
@@ -493,7 +518,12 @@ fn take_field_by_index(
 }
 
 impl DebeziumDecodeState {
-    pub fn new(schema: &Schema, debug_name: String, worker_idx: usize) -> Option<Self> {
+    pub fn new(
+        schema: &Schema,
+        debug_name: String,
+        worker_idx: usize,
+        is_flat: bool,
+    ) -> Option<Self> {
         let top_node = schema.top_node();
         let top_indices = field_indices(top_node)?;
         let before_idx = *top_indices.get("before")?;
@@ -507,6 +537,7 @@ impl DebeziumDecodeState {
             binlog_schema_indices,
             debug_name,
             worker_idx,
+            is_flat,
         })
     }
 
@@ -532,6 +563,9 @@ impl DebeziumDecodeState {
 
         match v {
             Value::Record(mut fields) => {
+                let mut binlog_coords: Option<(String, usize, usize)> = None;
+                let mut snapshot: Option<bool> = None;
+                let mut would_skip: bool = false;
                 if let Some(schema_indices) = self.binlog_schema_indices {
                     let source_val =
                         take_field_by_index(schema_indices.source_idx, "source", &mut fields)?;
@@ -544,8 +578,8 @@ impl DebeziumDecodeState {
                         "snapshot",
                         &mut source_fields,
                     )?;
-
-                    if is_snapshot(snapshot_val)? != Some(true) {
+                    snapshot = is_snapshot(snapshot_val)?;
+                    if snapshot != Some(true) {
                         let file_val = take_field_by_index(
                             schema_indices.source_file_idx,
                             "file",
@@ -569,10 +603,13 @@ impl DebeziumDecodeState {
                         .ok_or_else(|| format_err!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
+                        binlog_coords = Some((file_val, pos, row));
+                        let file_val = &binlog_coords.as_ref().unwrap().0;
                         match self.binlog_offsets.entry(file_val.clone()) {
                             Entry::Occupied(mut oe) => {
                                 let (old_max_pos, old_max_row, old_offset) = *oe.get();
                                 if old_max_pos > pos || (old_max_pos == pos && old_max_row >= row) {
+                                    would_skip = true;
                                     let offset_string = if let Some(coord) = coord {
                                         format!(" at offset {}", coord)
                                     } else {
@@ -585,12 +622,15 @@ impl DebeziumDecodeState {
                                     };
                                     warn!("Debezium for source {}:{} did not advance in binlog file {}: previously read ({}, {}){}, now read ({}, {}){}. Skipping record.",
                                           self.debug_name, self.worker_idx, file_val, old_max_pos, old_max_row, old_offset_string, pos, row, offset_string);
-                                    return Ok(DiffPair {
-                                        before: None,
-                                        after: None,
-                                    });
+                                    if self.is_flat {
+                                        return Ok(DiffPair {
+                                            before: None,
+                                            after: None,
+                                        });
+                                    }
+                                } else {
+                                    oe.insert((pos, row, coord));
                                 }
-                                oe.insert((pos, row, coord));
                             }
                             Entry::Vacant(ve) => {
                                 ve.insert((pos, row, coord));
@@ -603,11 +643,50 @@ impl DebeziumDecodeState {
                 // we will not have gotten this far if before/after aren't records, so the unwrap is okay.
                 let before_node = n.step(&unwrap_record_fields(n)[self.before_idx].schema);
                 let after_node = n.step(&unwrap_record_fields(n)[self.after_idx].schema);
-                let before =
-                    extract_nullable_row(before_val, iter::once(Datum::Int64(-1)), before_node)?;
-                let after =
-                    extract_nullable_row(after_val, iter::once(Datum::Int64(1)), after_node)?;
-                Ok(DiffPair { before, after })
+                if self.is_flat {
+                    let mut before_extra = vec![
+                        Datum::Int64(-1),
+                        snapshot.into(),
+                        Datum::Null,
+                        Datum::Null,
+                        Datum::Null,
+                        (self.worker_idx as i64).into(),
+                        would_skip.into(),
+                    ];
+                    let mut after_extra = vec![
+                        Datum::Int64(1),
+                        snapshot.into(),
+                        Datum::Null,
+                        Datum::Null,
+                        Datum::Null,
+                        (self.worker_idx as i64).into(),
+                        would_skip.into(),
+                    ];
+                    if let Some((file, pos, row)) = binlog_coords {
+                        before_extra[2] = file.as_str().into();
+                        before_extra[3] = (pos as i64).into();
+                        before_extra[4] = (row as i64).into();
+                        after_extra[2] = file.as_str().into();
+                        after_extra[3] = (pos as i64).into();
+                        after_extra[4] = (row as i64).into();
+                        let before = extract_nullable_row(before_val, before_extra, before_node)?;
+                        let after = extract_nullable_row(after_val, after_extra, after_node)?;
+                        Ok(DiffPair { before, after })
+                    } else {
+                        let before = extract_nullable_row(before_val, before_extra, before_node)?;
+                        let after = extract_nullable_row(after_val, after_extra, after_node)?;
+                        Ok(DiffPair { before, after })
+                    }
+                } else {
+                    let before = extract_nullable_row(
+                        before_val,
+                        iter::once(Datum::Int64(-1)),
+                        before_node,
+                    )?;
+                    let after =
+                        extract_nullable_row(after_val, iter::once(Datum::Int64(1)), after_node)?;
+                    Ok(DiffPair { before, after })
+                }
             }
             _ => bail!("avro envelope had unexpected type: {:?}", v),
         }
@@ -659,14 +738,20 @@ impl Decoder {
         let writer_schemas =
             schema_registry.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
 
-        let debezium = if envelope == EnvelopeType::Debezium {
-            Some(
-                DebeziumDecodeState::new(&reader_schema, debug_name.clone(), worker_index)
+        let debezium =
+            if envelope == EnvelopeType::Debezium || envelope == EnvelopeType::FlatDebezium {
+                Some(
+                    DebeziumDecodeState::new(
+                        &reader_schema,
+                        debug_name.clone(),
+                        worker_index,
+                        envelope == EnvelopeType::FlatDebezium,
+                    )
                     .ok_or_else(|| format_err!("Failed to extract Debezium schema information!"))?,
-            )
-        } else {
-            None
-        };
+                )
+            } else {
+                None
+            };
         Ok(Decoder {
             reader_schema,
             writer_schemas,
@@ -708,7 +793,9 @@ impl Decoder {
             None => &self.reader_schema,
         };
 
-        let result = if self.envelope == EnvelopeType::Debezium {
+        let result = if self.envelope == EnvelopeType::Debezium
+            || self.envelope == EnvelopeType::FlatDebezium
+        {
             let dbz_state = self.debezium.as_mut().ok_or_else(|| {
                 format_err!("Debezium schema extraction failed; can't decode message.")
             })?;

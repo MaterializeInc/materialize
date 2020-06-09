@@ -433,8 +433,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             };
 
                         let mut collection = match envelope {
-                            Envelope::None => stream.as_collection(),
-                            Envelope::Debezium => {
+                            Envelope::None | Envelope::Debezium { explode: false } => {
+                                stream.as_collection()
+                            }
+                            Envelope::Debezium { explode: true } => {
                                 // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
                                 stream.as_collection().explode({
                                     let mut row_packer = repr::RowPacker::new();

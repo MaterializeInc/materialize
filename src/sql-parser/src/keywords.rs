@@ -209,6 +209,7 @@ define_keywords!(
     FILTER,
     FIRST,
     FIRST_VALUE,
+    FLAT_DEBEZIUM,
     FLOAT,
     FLOOR,
     FOLLOWING,

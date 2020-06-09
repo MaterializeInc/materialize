@@ -745,6 +745,7 @@ pub enum Format {
 pub enum Envelope {
     None,
     Debezium,
+    FlatDebezium,
     Upsert(Option<Format>),
 }
 
@@ -760,6 +761,9 @@ impl AstDisplay for Envelope {
             Self::None => {
                 // this is unreachable as long as the default is None, but include it in case we ever change that
                 f.write_str("NONE");
+            }
+            Self::FlatDebezium => {
+                f.write_str("FLAT_DEBEZIUM");
             }
             Self::Debezium => {
                 f.write_str("DEBEZIUM");

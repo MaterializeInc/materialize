@@ -1352,6 +1352,8 @@ impl Parser {
             Envelope::None
         } else if self.parse_keyword("DEBEZIUM") {
             Envelope::Debezium
+        } else if self.parse_keyword("FLAT_DEBEZIUM") {
+            Envelope::FlatDebezium
         } else if self.parse_keyword("UPSERT") {
             let format = if self.parse_keyword("FORMAT") {
                 Some(self.parse_format()?)

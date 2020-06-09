@@ -427,7 +427,7 @@ pub struct SinkDesc {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Envelope {
     None,
-    Debezium,
+    Debezium { explode: bool },
     Upsert(DataEncoding),
 }
 
@@ -435,7 +435,8 @@ impl Envelope {
     pub fn get_avro_envelope_type(&self) -> avro::EnvelopeType {
         match self {
             Envelope::None => avro::EnvelopeType::None,
-            Envelope::Debezium => avro::EnvelopeType::Debezium,
+            Envelope::Debezium { explode: true } => avro::EnvelopeType::Debezium,
+            Envelope::Debezium { explode: false } => avro::EnvelopeType::FlatDebezium,
             Envelope::Upsert(_) => avro::EnvelopeType::Upsert,
         }
     }
