@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::VecDeque;
-use std::thread;
 use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
@@ -84,11 +83,9 @@ pub fn kafka<G>(
     // TODO(rkhaitan): experiment with different settings for this value to see
     // if it makes a big difference
     config.set("queue.buffering.max.ms", &format!("{}", 10));
-    let producer = FlushingProducer::new(
-        config
-            .create_with_context(SinkProducerContext)
-            .expect("creating kafka producer for kafka sinks failed"),
-    );
+    let producer: ThreadedProducer<_> = config
+        .create_with_context(SinkProducerContext)
+        .expect("creating kafka producer for kafka sinks failed");
     let mut queue: VecDeque<(Row, Diff)> = VecDeque::new();
     let mut vector = Vec::new();
     let mut encoded_buffer = None;
@@ -152,7 +149,7 @@ pub fn kafka<G>(
                     };
 
                     let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
-                    if let Err((e, _)) = producer.inner().send(record) {
+                    if let Err((e, _)) = producer.send(record) {
                         error!("unable to produce in {}: {}", name, e);
                         if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
                             // We are overloading Kafka by sending too many records
@@ -182,38 +179,16 @@ pub fn kafka<G>(
                     return true;
                 }
 
+                if producer.in_flight_count() > 0 {
+                    // We still have messages that need to be flushed out to Kafka
+                    // Let's make sure to keep the sink operator around until
+                    // we flush them out
+                    activator.activate_after(Duration::from_secs(5));
+                    return true;
+                }
+
                 false
             }
         },
     )
-}
-
-struct FlushingProducer<C>
-where
-    C: ProducerContext + 'static,
-{
-    inner: Option<ThreadedProducer<C>>,
-}
-
-impl<C> FlushingProducer<C>
-where
-    C: ProducerContext + 'static,
-{
-    fn new(inner: ThreadedProducer<C>) -> FlushingProducer<C> {
-        FlushingProducer { inner: Some(inner) }
-    }
-
-    fn inner(&self) -> &ThreadedProducer<C> {
-        self.inner.as_ref().unwrap()
-    }
-}
-
-impl<C> Drop for FlushingProducer<C>
-where
-    C: ProducerContext,
-{
-    fn drop(&mut self) {
-        let producer = self.inner.take().unwrap();
-        thread::spawn(move || producer.flush(None));
-    }
 }
