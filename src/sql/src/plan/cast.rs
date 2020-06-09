@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Maintains a catalog of valid casts between [`repr::ScalarType`]s.
+//! Maintains a catalog of valid casts between [`repr::ScalarType`]s, as well as
+//! other cast-related functions.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -343,4 +344,53 @@ pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
             expr.call_binary(factor, BinaryFunc::DivDecimal)
         }
     }
+}
+
+fn get_most_compatible_cast_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<ScalarType> {
+    iter.into_iter()
+        .max_by_key(|scalar_type| match scalar_type {
+            ScalarType::Int32 => 0,
+            ScalarType::Int64 => 1,
+            ScalarType::Decimal(_, _) => 2,
+            ScalarType::Float32 => 3,
+            ScalarType::Float64 => 4,
+            ScalarType::Date => 5,
+            ScalarType::Timestamp => 6,
+            ScalarType::TimestampTz => 7,
+            _ => 8,
+        })
+}
+
+/// Determines the most-common type among a set of [`ScalarType`]s that all
+/// members can be cast to. Returns `None` if a common type cannot be deduced.
+///
+/// The `types` parameter is meant to represent the types inferred from a
+/// `Vec<CoercibleScalarExpr>`.
+pub fn determine_best_common_type(types: &[Option<ScalarType>]) -> Option<ScalarType> {
+    // Remove unknown types.
+    let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).cloned().collect();
+
+    // Determine best cast type among known types.
+    if let Some(btt) = get_most_compatible_cast_type(known_types.clone()) {
+        // Ensure this is a valid cast for all types.
+        if known_types
+            .iter()
+            .all(|t| get_cast(t, &CastTo::Implicit(btt.clone())).is_some())
+        {
+            if let ScalarType::Decimal(_, _) = btt {
+                // Determine best decimal scale (i.e. largest).
+                let mut max_s = 0;
+                for t in known_types {
+                    if let ScalarType::Decimal(_, s) = t {
+                        max_s = std::cmp::max(s, max_s);
+                    }
+                }
+                return Some(ScalarType::Decimal(38, max_s));
+            } else {
+                return Some(btt);
+            }
+        }
+    }
+
+    None
 }
