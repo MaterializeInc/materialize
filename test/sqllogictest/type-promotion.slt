@@ -44,3 +44,10 @@ true
 true
 false
 true
+
+# Do not allow i32 text comparisons
+query error no overload for string < i32
+SELECT 'foo'::text < 5::int;
+
+query error no overload for i32 < string
+SELECT 1 < ALL(VALUES(NULL))

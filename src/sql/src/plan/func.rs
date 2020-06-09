@@ -704,13 +704,12 @@ macro_rules! params(
 /// Provides shorthand for inserting [`FuncImpl`]s into arbitrary `HashMap`s.
 macro_rules! insert_impl(
     ($hashmap:ident, $key:expr, $($params:expr => $op:expr),+) => {
-        let impls = vec![
+        $hashmap.insert($key, vec![
             $(FuncImpl {
                 params: $params.into(),
                 op: $op.into(),
             },)+
-        ];
-        $hashmap.insert($key, impls);
+        ]);
     };
 );
 
@@ -900,14 +899,37 @@ macro_rules! binary_op_impls(
     }};
 );
 
+/// Provides shorthand for inserting the same implementation for each "twin"
+/// pair of types.
+macro_rules! insert_impl_for_each_type_twin(
+    ($hashmap:ident, $op:expr, $func:expr) => {
+        insert_impl!{$hashmap, $op,
+            params!(Bool, Bool) => $func,
+            params!(Int32, Int32) => $func,
+            params!(Int64, Int64) => $func,
+            params!(Float32, Float32) => $func,
+            params!(Float64, Float64) => $func,
+            params!(Decimal(0, 0), Decimal(0, 0)) => $func,
+            params!(Date, Date) => $func,
+            params!(Time, Time) => $func,
+            params!(Timestamp, Timestamp) => $func,
+            params!(TimestampTz, TimestampTz) => $func,
+            params!(Interval, Interval) => $func,
+            params!(Bytes, Bytes) => $func,
+            params!(String, String) => $func,
+            params!(Jsonb, Jsonb) => $func
+        }
+    }
+);
+
 lazy_static! {
-    /// Correlates a built-in function name to its implementations.
+    /// Correlates a `BinaryOperator` with all of its implementations.
     static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
         use ScalarType::*;
         use BinaryOperator::*;
         use super::expr::BinaryFunc::*;
         use OperationType::*;
-        binary_op_impls! {
+        let mut m = binary_op_impls! {
             // ARITHMETIC
             Plus => {
                 params!(Int32, Int32) => AddInt32,
@@ -1085,7 +1107,20 @@ lazy_static! {
             JsonContainsField => {
                 params!(Jsonb, String) => JsonbContainsString
             }
+        };
+
+        for (op, func) in vec![
+            (BinaryOperator::Lt, BinaryFunc::Lt),
+            (BinaryOperator::LtEq, BinaryFunc::Lte),
+            (BinaryOperator::Gt, BinaryFunc::Gt),
+            (BinaryOperator::GtEq, BinaryFunc::Gte),
+            (BinaryOperator::Eq, BinaryFunc::Eq),
+            (BinaryOperator::NotEq, BinaryFunc::NotEq)
+        ] {
+            insert_impl_for_each_type_twin!(m, op, func.clone());
         }
+
+        m
     };
 }
 
@@ -1134,9 +1169,8 @@ fn concat_impl(ecx: &ExprContext, left: &Expr, right: &Expr) -> Result<ScalarExp
     }
 }
 
-/// Gets a function compatible with the `BinaryOperator` and the `ScalarExpr`s
-/// required to invoke it.
-pub fn select_binary_op<'a>(
+/// Plans a function compatible with the `BinaryOperator`.
+pub fn plan_binary_op<'a>(
     ecx: &ExprContext,
     op: &'a BinaryOperator,
     left: &'a Expr,
