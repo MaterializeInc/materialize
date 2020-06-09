@@ -45,7 +45,7 @@ async fn run() -> Result<(), anyhow::Error> {
     let kafka_client =
         kafka::kafka_client::KafkaClient::new(&args.kafka_url, "materialize.chaos", &topic)?;
     retry::retry_for(Duration::from_secs(10), |_| {
-        kafka_client.create_topic(args.kafka_partitions)
+        kafka_client.create_topic(args.kafka_partitions, Some(Duration::from_secs(10)))
     })
     .await?;
 

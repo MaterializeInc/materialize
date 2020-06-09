@@ -20,6 +20,7 @@
 
 use std::error::Error as _;
 use std::process;
+use std::time::Duration;
 
 use protobuf::Message;
 use structopt::StructOpt;
@@ -103,7 +104,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
 
     if let Some(partitions) = config.partitions {
         k_client
-            .create_topic(partitions)
+            .create_topic(partitions, Some(Duration::from_secs(5)))
             .await
             .map_err(|e| error::Error::from(e.to_string()))?;
     }

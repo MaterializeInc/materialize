@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 
+use anyhow::Context;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
@@ -41,7 +42,11 @@ impl KafkaClient {
         })
     }
 
-    pub async fn create_topic(&self, partitions: i32) -> Result<(), anyhow::Error> {
+    pub async fn create_topic(
+        &self,
+        partitions: i32,
+        timeout: Option<Duration>,
+    ) -> Result<(), anyhow::Error> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
         let res = config
@@ -53,9 +58,10 @@ impl KafkaClient {
                     partitions,
                     TopicReplication::Fixed(1),
                 )],
-                &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+                &AdminOptions::new().request_timeout(timeout),
             )
-            .await?;
+            .await
+            .context(format!("creating Kafka topic: {}", &self.topic))?;
 
         if res.len() != 1 {
             return Err(anyhow::anyhow!(
