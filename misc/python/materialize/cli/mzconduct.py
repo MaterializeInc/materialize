@@ -757,11 +757,12 @@ class DropKafkaTopicsStep(WorkflowStep):
             say(f"INFO: error purging topics: {e}")
 
 
-class ChaosContainerBaseWorkflowStep(WorkflowStep):
-    """Stops and starts the designated Docker container.
+class ChaosDockerWorkflowStep(WorkflowStep):
+    """Stops/pauses and starts the designated Docker service.
 
     Params:
-        container: Docker container to stop and start
+        service: target Docker service, will be translated into a container
+                 name like: {comp.name}_{container}_1
         loop: True to stop, start in a continuous loop, False to run once
         run_cmd: command to start the Docker container
         running_time: seconds to spend running each loop (default: 60)
@@ -771,14 +772,14 @@ class ChaosContainerBaseWorkflowStep(WorkflowStep):
 
     def __init__(
         self,
-        container: str,
+        service: str,
         loop: bool,
         run_cmd: str,
         stop_cmd: str,
         running_time: int = 60,
         stopped_time: int = 10,
     ):
-        self._container = container
+        self._service = service
         self._loop = loop
         self._run_cmd = run_cmd
         self._stop_cmd = stop_cmd
@@ -786,46 +787,47 @@ class ChaosContainerBaseWorkflowStep(WorkflowStep):
         self._stopped_time = stopped_time
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        print(
-            f"{self._stop_cmd} and {self._run_cmd} {self._container}: running for {self._running_time} seconds, stopping for {self._stopped_time} seconds"
+        container = "{comp.name}_{self._service}_1"
+        say(
+            f"{self._stop_cmd} and {self._run_cmd} {container}: running for {self._running_time} seconds, stopping for {self._stopped_time} seconds"
         )
 
         if self._loop:
             while True:
-                self.stop_and_start()
+                self.stop_and_start(container)
         else:
-            self.stop_and_start()
+            self.stop_and_start(container)
 
-    def stop_and_start(self) -> None:
+    def stop_and_start(self, container: str) -> None:
         try:
-            spawn.runv(["docker", self._stop_cmd, self._container])
+            spawn.runv(["docker", self._stop_cmd, container])
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to {self._stop_cmd} container {self._container}: {e}")
+            raise Failed(f"Unable to {self._stop_cmd} container {container}: {e}")
         time.sleep(self._stopped_time)
 
         try:
-            spawn.runv(["docker", self._run_cmd, self._container])
+            spawn.runv(["docker", self._run_cmd, container])
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to {self._run_cmd} container {self._container}: {e}")
+            raise Failed(f"Unable to {self._run_cmd} container {container}: {e}")
         time.sleep(self._running_time)
 
 
-@Steps.register("chaos-pause-container")
-class ChaosPauseContainerStep(ChaosContainerBaseWorkflowStep):
-    """Pauses and unpauses the designated Docker container.
+@Steps.register("chaos-pause-docker")
+class ChaosPauseDockerStep(ChaosDockerWorkflowStep):
+    """Pauses and unpauses the designated Docker service.
 
     Params:
-        container: Docker container to pause
+        service: Docker service to pause
         loop: True to pause, unpause in a continuous loop, False to run once
         running_time: seconds to spend running each loop (default: 60)
         paused_time: seconds to spend paused each loop (default: 10)
     """
 
     def __init__(
-        self, container: str, loop: bool, running_time: int = 60, paused_time: int = 10,
+        self, service: str, loop: bool, running_time: int = 60, paused_time: int = 10,
     ) -> None:
         super().__init__(
-            container=container,
+            service=service,
             loop=loop,
             run_cmd="unpause",
             stop_cmd="pause",
@@ -834,26 +836,22 @@ class ChaosPauseContainerStep(ChaosContainerBaseWorkflowStep):
         )
 
 
-@Steps.register("chaos-stop-container")
-class ChaosStopContainerStep(ChaosContainerBaseWorkflowStep):
-    """Stops and restarts the designated Docker container.
+@Steps.register("chaos-stop-docker")
+class ChaosStopDockerStep(ChaosDockerWorkflowStep):
+    """Stops and restarts the designated Docker service.
 
     Params:
-        container: Docker container to pause
-        loop: True to pause, unpause in a continuous loop, False to run once
+        service: Docker service to stop
+        loop: True to stop, start in a continuous loop, False to run once
         running_time: seconds to spend running each loop (default: 60)
         stopped_time: seconds to spend stopped each loop (default: 10)
     """
 
     def __init__(
-        self,
-        container: str,
-        loop: bool,
-        running_time: int = 60,
-        stopped_time: int = 10,
+        self, service: str, loop: bool, running_time: int = 60, stopped_time: int = 10,
     ) -> None:
         super().__init__(
-            container=container,
+            service=service,
             loop=loop,
             run_cmd="start",
             stop_cmd="stop",
@@ -862,25 +860,47 @@ class ChaosStopContainerStep(ChaosContainerBaseWorkflowStep):
         )
 
 
-@Steps.register("chaos-delay-container")
-class ChaosDelayContainerStep(WorkflowStep):
-    """Delay the incoming and outgoing network traffic for a Docker container.
+@Steps.register("chaos-kill-docker")
+class ChaosKillDockerStep(ChaosDockerWorkflowStep):
+    """Kills the designated Docker service.
 
     Params:
-        container: Docker container to delay
+        service: Docker service to kill, will be translated into a container
+                 name like: {comp.name}_{container}_1
+    """
+
+    def __init__(self, service: str) -> None:
+        self._service = service
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        container = f"{comp.name}_{self._service}_1"
+        say(f"Killing container: {container}")
+        try:
+            spawn.runv(["docker", "kill", container])
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"Unable to kill container {container}: {e}")
+
+
+@Steps.register("chaos-delay-docker")
+class ChaosDelayDockerCStep(WorkflowStep):
+    """Delay the incoming and outgoing network traffic for a Docker service.
+
+    Params:
+        service: Docker service to delay
         delay: milliseconds to delay network traffic (default: 100ms)
     """
 
-    def __init__(self, container: str, delay: int = 100) -> None:
-        self._container = container
+    def __init__(self, service: str, delay: int = 100) -> None:
+        self._service = service
         self._delay = delay
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
         try:
-            cmd = f"docker exec {self._container} tc qdisc add dev eth0 root netem delay {self._delay}ms".split()
+            container = f"{comp.name}_{self._service}_1"
+            cmd = f"docker exec {container} tc qdisc add dev eth0 root netem delay {self._delay}ms".split()
             spawn.runv(cmd)
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to delay container {self._container}: {e}")
+            raise Failed(f"Unable to delay container {container}: {e}")
 
 
 @Steps.register("workflow")
