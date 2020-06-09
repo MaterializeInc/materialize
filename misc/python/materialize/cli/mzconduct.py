@@ -787,7 +787,7 @@ class ChaosDockerWorkflowStep(WorkflowStep):
         self._stopped_time = stopped_time
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        container = "{comp.name}_{self._service}_1"
+        container = f"{comp.name}_{self._service}_1"
         say(
             f"{self._stop_cmd} and {self._run_cmd} {container}: running for {self._running_time} seconds, stopping for {self._stopped_time} seconds"
         )
