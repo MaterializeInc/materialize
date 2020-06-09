@@ -842,7 +842,7 @@ class ChaosStopDockerStep(ChaosDockerWorkflowStep):
 
     Params:
         service: Docker service to stop
-        loop: True to pause, unpause in a continuous loop, False to run once
+        loop: True to stop, start in a continuous loop, False to run once
         running_time: seconds to spend running each loop (default: 60)
         stopped_time: seconds to spend stopped each loop (default: 10)
     """
