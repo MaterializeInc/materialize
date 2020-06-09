@@ -17,11 +17,12 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::collections::{BTreeMap, HashMap};
+use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use failure::{bail, ResultExt};
 use futures::executor::block_on;
@@ -124,10 +125,14 @@ where
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
-    local_input_time: Timestamp,
     log: bool,
     executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
+    /// Remember the last assigned timestamp so that we can ensure monotonicity.
+    last_assigned: Timestamp,
+    /// The startup time of the coordinator, from which local input timstamps are generated
+    /// relative to.
+    start_time: Instant,
 }
 
 impl<C> Coordinator<C>
@@ -182,12 +187,13 @@ where
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
-            local_input_time: 1,
             log: config.logging.is_some(),
             executor: config.executor.clone(),
             timestamp_config: config.timestamp,
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
+            last_assigned: 1,
+            start_time: Instant::now(),
         };
 
         let catalog_entries: Vec<_> = coord
@@ -281,6 +287,23 @@ where
             }
         }
         Ok(coord)
+    }
+
+    pub fn now(&mut self) -> Timestamp {
+        let mut t = self
+            .start_time
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .expect("system time did not fit in u64");
+        // This is a hack. In a perfect world we would represent time as having a "real" dimension
+        // and a "coordinator" dimension so that clients always observed linearizability from
+        // things the coordinator did without being related to the real dimension.
+        if t <= self.last_assigned {
+            t = self.last_assigned + 1
+        }
+        self.last_assigned = t;
+        t
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
@@ -814,6 +837,7 @@ where
         ]) {
             Ok(_) => {
                 self.views.insert(source_id, ViewState::new(false, vec![]));
+                let advance_to = self.now();
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateLocalInput {
@@ -824,7 +848,7 @@ where
                             keys: index.keys.clone(),
                         },
                         on_type: source.desc.typ().clone(),
-                        advance_to: self.local_input_time,
+                        advance_to,
                     },
                 );
                 self.insert_index(index_id, &index, self.logical_compaction_window_ms);
@@ -1403,23 +1427,24 @@ where
         affected_rows: usize,
         kind: MutationKind,
     ) -> Result<ExecuteResponse, failure::Error> {
+        let timestamp = self.last_assigned;
         let updates = updates
             .into_iter()
             .map(|(row, diff)| Update {
                 row,
                 diff,
-                timestamp: self.local_input_time,
+                timestamp,
             })
             .collect();
 
-        self.local_input_time += 1;
+        let advance_to = self.now();
 
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::Insert {
                 id,
                 updates,
-                advance_to: self.local_input_time,
+                advance_to,
             },
         );
 
@@ -2032,9 +2057,9 @@ where
             // In symbiosis mode, we enforce serializability by forcing all
             // PEEKs to peek at the latest input time.
             // TODO(benesch): should this be saturating subtraction, and what should happen
-            // when `self.local_input_time` is zero?
-            assert!(self.local_input_time > 0);
-            return Ok(self.local_input_time - 1);
+            // when `self.last_assigned` is zero?
+            assert!(self.last_assigned > 0);
+            return Ok(self.last_assigned - 1);
         }
 
         // Each involved trace has a validity interval `[since, upper)`.
