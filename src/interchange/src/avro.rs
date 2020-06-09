@@ -620,9 +620,14 @@ impl DebeziumDecodeState {
                                     } else {
                                         format!("")
                                     };
-                                    warn!("Debezium for source {}:{} did not advance in binlog file {}: previously read ({}, {}){}, now read ({}, {}){}. Skipping record.",
-                                          self.debug_name, self.worker_idx, file_val, old_max_pos, old_max_row, old_offset_string, pos, row, offset_string);
-                                    if self.is_flat {
+                                    let skipping_str = if self.is_flat {
+                                        "Not skipping record for `FLAT_DEBEZIUM` envelope"
+                                    } else {
+                                        "Skipping record"
+                                    };
+                                    warn!("Debezium for source {}:{} did not advance in binlog file {}: previously read ({}, {}){}, now read ({}, {}){}. {}.",
+                                          self.debug_name, self.worker_idx, file_val, old_max_pos, old_max_row, old_offset_string, pos, row, offset_string, skipping_str);
+                                    if !self.is_flat {
                                         return Ok(DiffPair {
                                             before: None,
                                             after: None,
