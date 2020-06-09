@@ -105,7 +105,7 @@ mzconduct:
       - step: down
         destroy_volumes: true
 
-    load-test:
+    cloud-load-test:
       env:
         MZ_SQL_EXPORTER_PORT: "9400:9399"
       steps:

@@ -296,7 +296,7 @@ mzconduct:
         container: dashboard
         seconds: 1
 
-    nightly:
+    cloud-load-test:
       env:
         PEEKER_PORT: "16875:16875"
         MYSQL_EXPORTER_PORT: "9399:9399"
