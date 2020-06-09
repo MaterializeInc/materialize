@@ -1840,3 +1840,22 @@ query T
 SELECT to_jsonb(TIMESTAMP '1969-06-01 10:10:10.41');
 ----
 "1969-06-01 10:10:10.41"
+
+# jsonb_agg
+
+query T
+SELECT jsonb_agg(1)
+----
+[1.0]
+
+query T
+SELECT jsonb_agg(column1) FROM (VALUES (1), (2), (3))
+----
+[1.0,2.0,3.0]
+
+query error jsonb_agg function requires exactly one non-star argument
+SELECT jsonb_agg(1, 2)
+
+# todo@jldlaughlin: Fix test when #2414 is implemented
+query error parse error
+SELECT jsonb_agg((1, 2))
