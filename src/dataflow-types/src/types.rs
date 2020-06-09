@@ -330,9 +330,13 @@ impl DataEncoding {
                         .into_iter()
                         .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
                 if let Some(key_schema) = key_schema {
-                    let key = avro::validate_key_schema(key_schema, &desc)
-                        .with_context(|e| format!("validating avro key schema: {}", e))?;
-                    desc.with_key(key)
+                    if let Envelope::Debezium { explode: false } = envelope {
+                        desc
+                    } else {
+                        let key = avro::validate_key_schema(key_schema, &desc)
+                            .with_context(|e| format!("validating avro key schema: {}", e))?;
+                        desc.with_key(key)
+                    }
                 } else {
                     desc
                 }
