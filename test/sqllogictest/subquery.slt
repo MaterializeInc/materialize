@@ -142,13 +142,12 @@ eve true
 
 # ANY/ALL semantics
 
-query BBBBBBBBBBBBBBBB
+query BBBBBBBBBBBBBBB
 (VALUES (
   1 < ANY(SELECT * FROM (VALUES (1)) WHERE false),
   1 < ANY(VALUES (0)),
   1 < ANY(VALUES (1)),
   1 < ANY(VALUES (2)),
-  1 < ANY(VALUES (NULL)),
   1 < ANY(VALUES (0), (NULL)),
   1 < ANY(VALUES (1), (NULL)),
   1 < ANY(VALUES (2), (NULL)),
@@ -162,15 +161,14 @@ query BBBBBBBBBBBBBBBB
   NULL < ANY(VALUES (2), (NULL))
 ))
 ----
-false  false  false  true  NULL  NULL  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+false  false  false  true  NULL  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
-query BBBBBBBBBBBBBBBB
+query BBBBBBBBBBBBBBB
 (VALUES (
   1 < ALL(SELECT * FROM (VALUES (1)) WHERE false),
   1 < ALL(VALUES (0)),
   1 < ALL(VALUES (1)),
   1 < ALL(VALUES (2)),
-  1 < ALL(VALUES (NULL)),
   1 < ALL(VALUES (0), (NULL)),
   1 < ALL(VALUES (1), (NULL)),
   1 < ALL(VALUES (2), (NULL)),
@@ -184,7 +182,7 @@ query BBBBBBBBBBBBBBBB
   NULL < ALL(VALUES (2), (NULL))
 ))
 ----
-true  false  false  true  NULL  false  false  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+true  false  false  true  false  false  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
 statement ok
 CREATE TABLE s1 (a int NOT NULL)

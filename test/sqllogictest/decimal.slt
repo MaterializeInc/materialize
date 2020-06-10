@@ -343,3 +343,13 @@ CREATE VIEW github_2293 AS SELECT 1 AS a
 
 query error division by zero
 SELECT 1::decimal(38,0) / 0 / a + 1 FROM github_2293;
+
+query T
+SELECT 1::decimal(38, 3) > 2::decimal(20,1)
+----
+false
+
+query T
+SELECT 10.5::decimal(38, 3) = 10.50::decimal(20,1)
+----
+true

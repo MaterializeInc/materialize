@@ -581,15 +581,6 @@ impl<'a> ArgImplementationMatcher<'a> {
         use ScalarType::*;
 
         let mut f = f.clone();
-        // TODO(sploiselle): Add support for saturating decimals in other
-        // contexts.
-        if let ParamList::Exact(ref mut param_list) = f.params {
-            for (i, param) in param_list.iter_mut().enumerate() {
-                if let Plain(Decimal(..)) = param {
-                    *param = Plain(types[i].clone());
-                }
-            }
-        }
 
         f.op = match f.op {
             Unary(UnaryFunc::CeilDecimal(_)) => match types[0] {
@@ -614,6 +605,15 @@ impl<'a> ArgImplementationMatcher<'a> {
             },
             other => other,
         };
+        // TODO(sploiselle): Add support for saturating decimals in other
+        // contexts.
+        if let ParamList::Exact(ref mut param_list) = f.params {
+            for (i, param) in param_list.iter_mut().enumerate() {
+                if let Plain(Decimal(..)) = param {
+                    *param = Plain(types[i].clone());
+                }
+            }
+        }
 
         f
     }
@@ -704,19 +704,25 @@ macro_rules! params(
 /// Provides shorthand for inserting [`FuncImpl`]s into arbitrary `HashMap`s.
 macro_rules! insert_impl(
     ($hashmap:ident, $key:expr, $($params:expr => $op:expr),+) => {
-        let impls = vec![
+        let mut impls = vec![
             $(FuncImpl {
                 params: $params.into(),
-                op: $op.into(),
+                op: $op.clone().into(),
             },)+
         ];
+
+        // Append existing impls to new impls.
+        if let Some(v) = $hashmap.get(&$key) {
+            impls.extend(v.to_vec());
+        }
+
         $hashmap.insert($key, impls);
     };
 );
 
-/// Provides a macro to write HashMap "literals" for matching function names to
+/// Provides a macro to write HashMap "literals" for matching some key to
 /// `Vec<FuncImpl>`.
-macro_rules! func_impls(
+macro_rules! impls(
     {
         $(
             $name:expr => {
@@ -724,7 +730,7 @@ macro_rules! func_impls(
             }
         ),+
     } => {{
-        let mut m: HashMap<&str, Vec<FuncImpl>> = HashMap::new();
+        let mut m: HashMap<_, Vec<FuncImpl>> = HashMap::new();
         $(
             insert_impl!{m, $name, $($params => $op),+}
         )+
@@ -739,7 +745,7 @@ lazy_static! {
         use ParamList::*;
         use ParamType::*;
         use ScalarType::*;
-        func_impls! {
+        impls! {
             "abs" => {
                 params!(Int32) => UnaryFunc::AbsInt32,
                 params!(Int64) => UnaryFunc::AbsInt64,
@@ -882,32 +888,14 @@ pub fn select_scalar_func(
     }
 }
 
-/// Provides a macro to write HashMap "literals" for matching `BinaryOperator`s to
-/// `Vec<FuncImpl>`.
-macro_rules! binary_op_impls(
-    {
-        $(
-            $binop:expr => {
-                $($params:expr => $op:expr),+
-            }
-        ),+
-    } => {{
-        let mut m: HashMap<BinaryOperator, Vec<FuncImpl>> = HashMap::new();
-        $(
-            insert_impl!{m, $binop, $($params => $op),+}
-        )+
-        m
-    }};
-);
-
 lazy_static! {
-    /// Correlates a built-in function name to its implementations.
+    /// Correlates a `BinaryOperator` with all of its implementations.
     static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
         use ScalarType::*;
         use BinaryOperator::*;
         use super::expr::BinaryFunc::*;
         use OperationType::*;
-        binary_op_impls! {
+        let mut m = impls! {
             // ARITHMETIC
             Plus => {
                 params!(Int32, Int32) => AddInt32,
@@ -916,7 +904,7 @@ lazy_static! {
                 params!(Float64, Float64) => AddFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
-                        let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
+                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         lexpr.call_binary(rexpr, AddDecimal)
                     })
                 },
@@ -948,7 +936,7 @@ lazy_static! {
                 params!(Float32, Float32) => SubFloat32,
                 params!(Float64, Float64) => SubFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
-                    let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
+                    let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     lexpr.call_binary(rexpr, SubDecimal)
                 }),
                 params!(Interval, Interval) => SubInterval,
@@ -1011,7 +999,7 @@ lazy_static! {
                 params!(Float32, Float32) => ModFloat32,
                 params!(Float64, Float64) => ModFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
-                    let (lexpr, rexpr) = rescale_decimals_add_sub_mod(ecx, lhs, rhs);
+                    let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     lexpr.call_binary(rexpr, ModDecimal)
                 })
             },
@@ -1084,14 +1072,91 @@ lazy_static! {
             },
             JsonContainsField => {
                 params!(Jsonb, String) => JsonbContainsString
+            },
+            // COMPARISON OPS
+            // n.b. Decimal impls are separated from other types because they
+            // require a function pointer, which you cannot dynamically generate.
+            BinaryOperator::Lt => {
+                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                    BClosure(|ecx, lhs, rhs| {
+                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
+                        lexpr.call_binary(rexpr, BinaryFunc::Lt)
+                    })
+                }
+            },
+            BinaryOperator::LtEq => {
+                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                    BClosure(|ecx, lhs, rhs| {
+                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
+                        lexpr.call_binary(rexpr, BinaryFunc::Lte)
+                    })
+                }
+            },
+            BinaryOperator::Gt => {
+                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                    BClosure(|ecx, lhs, rhs| {
+                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
+                        lexpr.call_binary(rexpr, BinaryFunc::Gt)
+                    })
+                }
+            },
+            BinaryOperator::GtEq => {
+                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                    BClosure(|ecx, lhs, rhs| {
+                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
+                        lexpr.call_binary(rexpr, BinaryFunc::Gte)
+                    })
+                }
+            },
+            BinaryOperator::Eq => {
+                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                    BClosure(|ecx, lhs, rhs| {
+                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
+                        lexpr.call_binary(rexpr, BinaryFunc::Eq)
+                    })
+                }
+            },
+            BinaryOperator::NotEq => {
+                params!(Decimal(0, 0), Decimal(0, 0)) => {
+                    BClosure(|ecx, lhs, rhs| {
+                        let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
+                        lexpr.call_binary(rexpr, BinaryFunc::NotEq)
+                    })
+                }
             }
+        };
+
+        for (op, func) in vec![
+            (BinaryOperator::Lt, BinaryFunc::Lt),
+            (BinaryOperator::LtEq, BinaryFunc::Lte),
+            (BinaryOperator::Gt, BinaryFunc::Gt),
+            (BinaryOperator::GtEq, BinaryFunc::Gte),
+            (BinaryOperator::Eq, BinaryFunc::Eq),
+            (BinaryOperator::NotEq, BinaryFunc::NotEq)
+        ] {
+            insert_impl!(m, op,
+                params!(Bool, Bool) => func,
+                params!(Int32, Int32) => func,
+                params!(Int64, Int64) => func,
+                params!(Float32, Float32) => func,
+                params!(Float64, Float64) => func,
+                params!(Date, Date) => func,
+                params!(Time, Time) => func,
+                params!(Timestamp, Timestamp) => func,
+                params!(TimestampTz, TimestampTz) => func,
+                params!(Interval, Interval) => func,
+                params!(Bytes, Bytes) => func,
+                params!(String, String) => func,
+                params!(Jsonb, Jsonb) => func
+            );
         }
+
+        m
     };
 }
 
-/// Collects the common rescaling procedure used by [`AddDecimal`],
-/// [`SubDecimal`], [`ModDecimal`] to prepare operands.
-fn rescale_decimals_add_sub_mod(
+/// Rescales two decimals to have the same scale.
+fn rescale_decimals_to_same(
     ecx: &ExprContext,
     lhs: ScalarExpr,
     rhs: ScalarExpr,
@@ -1134,9 +1199,8 @@ fn concat_impl(ecx: &ExprContext, left: &Expr, right: &Expr) -> Result<ScalarExp
     }
 }
 
-/// Gets a function compatible with the `BinaryOperator` and the `ScalarExpr`s
-/// required to invoke it.
-pub fn select_binary_op<'a>(
+/// Plans a function compatible with the `BinaryOperator`.
+pub fn plan_binary_op<'a>(
     ecx: &ExprContext,
     op: &'a BinaryOperator,
     left: &'a Expr,
