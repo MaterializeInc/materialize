@@ -313,17 +313,19 @@ struct DataPlaneInfo {
 
 impl DataPlaneInfo {
     fn new(
-        topic_name: String,
-        source_name: String,
-        source_id: SourceInstanceId,
+        name: (String, String, SourceInstanceId),
         kafka_config: ClientConfig,
         consumer_activator: Arc<Mutex<SyncActivator>>,
-        worker_id: usize,
-        worker_count: usize,
+        workers: (usize, usize),
         source_type: Consistency,
         timestamping_stopped: Arc<AtomicBool>,
+        metadata_refresh_frequency: Duration,
     ) -> DataPlaneInfo {
-        let source_id = source_id.to_string();
+        let topic_name = name.0;
+        let source_name = name.1;
+        let source_id = name.2.to_string();
+        let worker_id = workers.0;
+        let worker_count = workers.1;
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
@@ -332,7 +334,7 @@ impl DataPlaneInfo {
             partition_metrics: HashMap::new(),
             buffered_metadata: HashSet::new(),
             topic_name: topic_name.clone(),
-            source_name: source_name.clone(),
+            source_name,
             source_id: source_id.clone(),
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
@@ -358,7 +360,7 @@ impl DataPlaneInfo {
                     refresh.clone(),
                     &source_id,
                     &topic_name,
-                    Duration::from_secs(1),
+                    metadata_refresh_frequency,
                 )
             });
         }
@@ -368,8 +370,8 @@ impl DataPlaneInfo {
 
     /// Update metadata information as refreshed by the metadata thread
     fn refresh_metadata(&mut self, cp_info: &mut ControlPlaneInfo) {
-        let mut refresh = false;
-        let mut new_partition_count = 0;
+        let refresh;
+        let new_partition_count;
         {
             let mut refresh_data = self.refresh_metadata_info.lock().expect("lock poisoned");
             refresh = refresh_data.0;
@@ -726,7 +728,7 @@ fn activate_source_timestamping<G>(
                 config.consistency.clone(),
             )),
         ));
-        Some(config.timestamp_tx.clone());
+        return Some(config.timestamp_tx.clone());
     }
     None
 }
@@ -800,6 +802,7 @@ where
         config_options,
         start_offset,
         group_id_prefix,
+        metadata_refresh_frequency,
     } = connector.clone();
 
     let timestamp_channel = activate_source_timestamping(&config, connector);
@@ -836,15 +839,13 @@ where
 
             // Create dataplane information (Kafka-related information)
             let mut dp_info = DataPlaneInfo::new(
-                topic.clone(),
-                name.clone(),
-                id.clone(),
+                (topic.clone(), name.clone(), id.clone()),
                 create_kafka_config(&name, &url, group_id_prefix, &config_options),
                 Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
-                worker_id,
-                worker_count,
+                (worker_id, worker_count),
                 consistency,
                 timestamping_stopped,
+                metadata_refresh_frequency,
             );
 
             move |cap, output| {
@@ -958,8 +959,10 @@ where
                 if bytes_read > 0 {
                     KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                 }
-                // Ensure that we poll kafka more often than the eviction timeout
-                activator.activate_after(Duration::from_secs(1));
+                // Ensure that we activate the source frequently enough to keep downgrading
+                // capabilities, even when no data has arrived
+                // TODO(ncrooks): make this configurable
+                activator.activate_after(Duration::from_millis(1));
                 SourceStatus::Alive
             }
         },

@@ -73,6 +73,7 @@ $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED SOURCE data_rt
     FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+    WITH (metadata_refresh_frequency='50ms')
     FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW view_byo AS SELECT b, sum(a) FROM data_byo GROUP BY b
