@@ -538,7 +538,7 @@ pub struct KafkaSourceConnector {
     pub start_offset: i64,
     pub group_id_prefix: Option<String>,
     /// Frequency at which we should check for new partitions
-    pub metadata_refresh_frequency: Duration
+    pub metadata_refresh_frequency: Duration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
