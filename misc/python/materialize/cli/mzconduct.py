@@ -353,6 +353,28 @@ class Composition:
             ports.extend(these_ports)
         return ports
 
+    def get_container_id(self, service: str) -> str:
+        """Given a service name, tries to find a unique matching container id
+        """
+        try:
+            cmd = f"docker ps -a".split()
+            list_containers = spawn.capture(cmd, unicode=True)
+
+            pattern = re.compile(f"^(?P<c_id>[^ ]+).*{service}")
+            matches = []
+            for line in list_containers.splitlines():
+                m = pattern.search(line)
+                if m:
+                    matches.append(m.group("c_id"))
+            if len(matches) != 1:
+                raise Failed(
+                    f"failed to get a unique container id for {service}, found: {matches}"
+                )
+
+            return matches[0]
+        except subprocess.CalledProcessError as e:
+            raise Failed(f"failed to get container id for {service}: {e}")
+
 
 def _substitute_env_vars(val: T) -> T:
     """Substitute docker-compose style env vars in a dict
@@ -761,8 +783,8 @@ class ChaosDockerWorkflowStep(WorkflowStep):
     """Stops/pauses and starts the designated Docker service.
 
     Params:
-        service: target Docker service, will be translated into a container
-                 name like: {comp.name}_{container}_1
+        service: target Docker service, will be used to grep for container id
+                 NOTE: service name must be unique to correctly match the container id
         loop: True to stop, start in a continuous loop, False to run once
         run_cmd: command to start the Docker container
         running_time: seconds to spend running each loop (default: 60)
@@ -787,28 +809,28 @@ class ChaosDockerWorkflowStep(WorkflowStep):
         self._stopped_time = stopped_time
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        container = f"{comp.name}_{self._service}_1"
+        container_id = comp.get_container_id(self._service)
         say(
-            f"{self._stop_cmd} and {self._run_cmd} {container}: running for {self._running_time} seconds, stopping for {self._stopped_time} seconds"
+            f"{self._stop_cmd} and {self._run_cmd} {container_id}: running for {self._running_time} seconds, stopping for {self._stopped_time} seconds"
         )
 
         if self._loop:
             while True:
-                self.stop_and_start(container)
+                self.stop_and_start(container_id)
         else:
-            self.stop_and_start(container)
+            self.stop_and_start(container_id)
 
-    def stop_and_start(self, container: str) -> None:
+    def stop_and_start(self, container_id: str) -> None:
         try:
-            spawn.runv(["docker", self._stop_cmd, container])
+            spawn.runv(["docker", self._stop_cmd, container_id])
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to {self._stop_cmd} container {container}: {e}")
+            raise Failed(f"Unable to {self._stop_cmd} container {container_id}: {e}")
         time.sleep(self._stopped_time)
 
         try:
-            spawn.runv(["docker", self._run_cmd, container])
+            spawn.runv(["docker", self._run_cmd, container_id])
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to {self._run_cmd} container {container}: {e}")
+            raise Failed(f"Unable to {self._run_cmd} container {container_id}: {e}")
         time.sleep(self._running_time)
 
 
@@ -817,7 +839,8 @@ class ChaosPauseDockerStep(ChaosDockerWorkflowStep):
     """Pauses and unpauses the designated Docker service.
 
     Params:
-        service: Docker service to pause
+        service: Docker service to kill, will be used to grep for container id
+                 NOTE: service name must be unique to correctly match the container id
         loop: True to pause, unpause in a continuous loop, False to run once
         running_time: seconds to spend running each loop (default: 60)
         paused_time: seconds to spend paused each loop (default: 10)
@@ -841,7 +864,8 @@ class ChaosStopDockerStep(ChaosDockerWorkflowStep):
     """Stops and restarts the designated Docker service.
 
     Params:
-        service: Docker service to stop
+        service: Docker service to stop, will be used to grep for container id
+                 NOTE: service name must be unique to correctly match the container id
         loop: True to stop, start in a continuous loop, False to run once
         running_time: seconds to spend running each loop (default: 60)
         stopped_time: seconds to spend stopped each loop (default: 10)
@@ -865,28 +889,29 @@ class ChaosKillDockerStep(ChaosDockerWorkflowStep):
     """Kills the designated Docker service.
 
     Params:
-        service: Docker service to kill, will be translated into a container
-                 name like: {comp.name}_{container}_1
+        service: Docker service to kill, will be used to grep for container id
+                 NOTE: service name must be unique to correctly match the container id
     """
 
     def __init__(self, service: str) -> None:
         self._service = service
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        container = f"{comp.name}_{self._service}_1"
-        say(f"Killing container: {container}")
+        container_id = comp.get_container_id(self._service)
+        say(f"Killing container: {container_id}")
         try:
-            spawn.runv(["docker", "kill", container])
+            spawn.runv(["docker", "kill", container_id])
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to kill container {container}: {e}")
+            raise Failed(f"Unable to kill container {container_id}: {e}")
 
 
 @Steps.register("chaos-delay-docker")
-class ChaosDelayDockerCStep(WorkflowStep):
+class ChaosDelayDockerStep(WorkflowStep):
     """Delay the incoming and outgoing network traffic for a Docker service.
 
     Params:
-        service: Docker service to delay
+        service: Docker service to delay, will be used to grep for container id
+                 NOTE: service name must be unique to correctly match the container id
         delay: milliseconds to delay network traffic (default: 100ms)
     """
 
@@ -896,11 +921,60 @@ class ChaosDelayDockerCStep(WorkflowStep):
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
         try:
-            container = f"{comp.name}_{self._service}_1"
-            cmd = f"docker exec {container} tc qdisc add dev eth0 root netem delay {self._delay}ms".split()
+            container_id = comp.get_container_id(self._service)
+            cmd = f"docker exec {container_id} tc qdisc add dev eth0 root netem delay {self._delay}ms".split()
             spawn.runv(cmd)
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to delay container {container}: {e}")
+            raise Failed(f"Unable to delay container {container_id}: {e}")
+
+
+@Steps.register("chaos-confirm")
+class ChaosConfirmStep(WorkflowStep):
+    """Confirm the status of a Docker service's container at the end of a workflow.
+
+    Params:
+        service: Docker service to confirm, will be used to grep for container id
+                 NOTE: service name must be unique to correctly match the container id
+        running: True if it should be running, False otherwise (default: False)
+        exit_code: expected exit code, if not running (default: 0)
+    """
+
+    def __init__(self, service: str, running: bool = False, exit_code: int = 0) -> None:
+        self._service = service
+        self._running = running
+        self._exit_code = exit_code
+
+    def run(self, comp: Composition, workflow: Workflow) -> None:
+        container_id = comp.get_container_id(self._service)
+        if self._running:
+            self.confirm_is_running(container_id)
+        else:
+            self.confirm_exit_code(container_id, self._exit_code)
+
+    def docker_inspect(self, format: str, container_id: str) -> str:
+        try:
+            cmd = f"docker inspect -f '{format}' {container_id}".split()
+            output = spawn.capture(cmd, unicode=True, stderr_too=True).splitlines()[0]
+        except subprocess.CalledProcessError as e:
+            ui.log_in_automation(
+                "chaos-confirm ({}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
+                    container_id, ui.shell_quote(cmd), e, e.stdout, e.stderr,
+                )
+            )
+            raise Failed(f"chaos-confirm: failed to inspect Docker container: {e}")
+        else:
+            return output
+
+    def confirm_is_running(self, container_id: str) -> None:
+        if self.docker_inspect("{{.State.Running}}", container_id) != "'true'":
+            raise Failed(f"chaos-confirm: container {container_id} is not running")
+
+    def confirm_exit_code(self, container_id: str, expected_exit_code: int) -> None:
+        actual_exit_code = self.docker_inspect("{{.State.ExitCode}}", container_id)
+        if actual_exit_code != f"'{expected_exit_code}'":
+            raise Failed(
+                f"chaos-confirm: expected exit code '{expected_exit_code}' for {container_id}, found {actual_exit_code}"
+            )
 
 
 @Steps.register("workflow")
