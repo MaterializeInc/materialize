@@ -74,7 +74,7 @@ pub async fn try_query_one(
 /// instead of failing.
 fn check_error(e: Error) -> Result<(), anyhow::Error> {
     if e.to_string()
-        .contains("At least one input has no complete timestamps yet.")
+        .contains("At least one input has no complete timestamps yet")
     {
         log::info!("Error querying, will try again... {}", e.to_string());
         Ok(())

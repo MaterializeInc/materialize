@@ -248,7 +248,7 @@ Materialize to maintain for us.
     SELECT * FROM query07;
     ```
     ```nofmt
-    At least one input has no complete timestamps yet.
+    At least one input has no complete timestamps yet: { .. }
     ```
 
     If you receive an empty set of results, either wait or disconnect from `mzcli`

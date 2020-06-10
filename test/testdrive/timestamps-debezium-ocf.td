@@ -107,13 +107,13 @@ $ avro-ocf-write path=bar.ocf schema=${schema}
 > CREATE MATERIALIZED VIEW join AS SELECT * FROM foo JOIN bar USING (b);
 
 ! SELECT * FROM bar;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 ! SELECT * FROM foo;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 ! SELECT * FROM join ;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ avro-ocf-append path=consistency.ocf
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}

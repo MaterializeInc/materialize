@@ -64,7 +64,7 @@ $ avro-ocf-write path=data2.ocf schema=${schema}
 > CREATE MATERIALIZED SOURCE data_byo2 FROM AVRO OCF '${testdrive.temp-dir}/data2.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf')
 
 ! SELECT * FROM data_byo;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 > SELECT * FROM data_byo2;
 a b  line

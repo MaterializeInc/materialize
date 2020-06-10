@@ -117,13 +117,13 @@ $ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
 > CREATE MATERIALIZED VIEW join AS SELECT * FROM foo JOIN bar USING (b);
 
 ! SELECT * FROM bar;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 ! SELECT * FROM foo;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 ! SELECT * FROM join ;
-At least one input has no complete timestamps yet.
+At least one input has no complete timestamps yet:
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschemakey}
 {"id": "1"}
