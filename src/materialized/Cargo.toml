@@ -11,7 +11,7 @@ license = "proprietary"
 
 [dependencies]
 async-trait = "0.1.33"
-backtrace = { version = "0.3.48", features = ["coresymbolication"] }
+backtrace = { version = "0.3.48", default-features = false, features = ["coresymbolication", "libbacktrace"] }
 comm = { path = "../comm" }
 compile-time-run = "0.2.8"
 coord = { path = "../coord" }
