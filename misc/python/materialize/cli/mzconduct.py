@@ -354,20 +354,24 @@ class Composition:
         return ports
 
     def get_container_id(self, service: str) -> str:
-        """Given a service name, grep for a Docker container id
+        """Given a service name, tries to find a unique matching container id
         """
         try:
             cmd = f"docker ps -a".split()
-            list_containers = spawn.capture(cmd)
+            list_containers = spawn.capture(cmd, unicode=True)
 
-            cmd = f"grep {service}".split()
-            grepped_containers = spawn.capture(cmd, stdin=list_containers)
+            pattern = re.compile(f"^(?P<c_id>[^ ]+).*{service}")
+            matches = []
+            for line in list_containers.splitlines():
+                m = pattern.search(line)
+                if m:
+                    matches.append(m.group("c_id"))
+            if len(matches) != 1:
+                raise Failed(
+                    f"failed to get a unique container id for {service}, found: {matches}"
+                )
 
-            cmd = f"cut -c 1-12".split()
-            container_id = (
-                spawn.capture(cmd, stdin=grepped_containers).strip().decode("utf-8")
-            )
-            return container_id
+            return matches[0]
         except subprocess.CalledProcessError as e:
             raise Failed(f"failed to get container id for {service}: {e}")
 

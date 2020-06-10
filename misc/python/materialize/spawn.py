@@ -103,6 +103,7 @@ def capture(
         args: A list of strings or paths describing the program to run and
             the arguments to pass to it.
         cwd: An optional directory to change into before executing the process.
+        stdin: Optional input stream for the process.
         unicode: Whether to return output as a unicode string or as bytes.
         stderr_too: Whether to capture stderr in the returned value
 
