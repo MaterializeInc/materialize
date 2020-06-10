@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{cmp, thread};
@@ -36,9 +37,8 @@ use url::Url;
 
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
-use crate::server::TimestampHistories;
+use crate::server::{TimestampChanges, TimestampHistories};
 use ore::collections::CollectionExt;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 // Global Kafka metrics.
 lazy_static! {
@@ -297,7 +297,7 @@ struct DataPlaneInfo {
     /// The number of known partitions.
     known_partitions: i32,
     /// Metadata to coordinate timestamping information (source independent)
-    timestamp_coordination_state: Arc<TimestampingCoordinationState>,
+    timestamping_stopped: Arc<AtomicBool>,
     /// Information about new partitions (obtained by the metadata thread)
     refresh_metadata_info: Arc<Mutex<(bool, i32)>>,
     /// (RT only: if true, the metadata thread has detected new partitions)
@@ -321,6 +321,7 @@ impl DataPlaneInfo {
         worker_id: usize,
         worker_count: usize,
         source_type: Consistency,
+        timestamping_stopped: Arc<AtomicBool>,
     ) -> DataPlaneInfo {
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
@@ -335,9 +336,7 @@ impl DataPlaneInfo {
             source_id: source_id.clone(),
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
-            timestamp_coordination_state: Arc::new(TimestampingCoordinationState {
-                stop: AtomicBool::new(false),
-            }),
+            timestamping_stopped,
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
             worker_count: worker_count.try_into().unwrap(),
@@ -345,8 +344,8 @@ impl DataPlaneInfo {
         };
 
         let consumer = data_plane.consumer.clone();
-        let timestamp_coordination_state = data_plane.timestamp_coordination_state.clone();
         let refresh = data_plane.refresh_metadata_info.clone();
+        let timestamping_stopped = data_plane.timestamping_stopped.clone();
 
         // Metadata fetch requests on production Kafka clusters can take
         // more than 1s to complete. This makes it far too expensive to run on
@@ -354,7 +353,7 @@ impl DataPlaneInfo {
         if let Consistency::RealTime = source_type {
             thread::spawn(move || {
                 metadata_fetch_thread(
-                    timestamp_coordination_state,
+                    timestamping_stopped,
                     consumer,
                     refresh.clone(),
                     &source_id,
@@ -654,11 +653,6 @@ struct ControlPlaneInfo {
     source_type: Consistency,
 }
 
-struct TimestampingCoordinationState {
-    // TODO(natacha): threads never currently stop
-    stop: AtomicBool,
-}
-
 impl ControlPlaneInfo {
     fn new(start_offset: MzOffset, consistency: Consistency) -> ControlPlaneInfo {
         ControlPlaneInfo {
@@ -712,9 +706,12 @@ impl ControlPlaneInfo {
 
 /// This function activates the necessary timestamping information when a source is first created
 /// 1) for BYO sources, we notify the timestamping thread that a source has been created.
-/// 2) for a RT source, must create These steps are only taken for BYO sources..
+/// 2) for a RT source, take no steps
 //
-fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSourceConnector) {
+fn activate_source_timestamping<G>(
+    config: &SourceConfig<G>,
+    connector: KafkaSourceConnector,
+) -> Option<TimestampChanges> {
     if let Consistency::BringYourOwn(_) = config.consistency {
         let prev = config
             .timestamp_histories
@@ -729,14 +726,16 @@ fn activate_source_timestamping<G>(config: &SourceConfig<G>, connector: KafkaSou
                 config.consistency.clone(),
             )),
         ));
+        Some(config.timestamp_tx.clone());
     }
+    None
 }
 
 /// This function spawns a new thread responsible for periodically polling Kafka metadata
 /// and refreshing the number of known partitions. It marks the source has needing to be
 /// refreshed if new partitions are detected.
 fn metadata_fetch_thread(
-    state: Arc<TimestampingCoordinationState>,
+    timestamping_stopped: Arc<AtomicBool>,
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     partition_count: Arc<Mutex<(bool, i32)>>,
     id: &str,
@@ -748,7 +747,7 @@ fn metadata_fetch_thread(
         &topic, id
     );
 
-    while !state.stop.load(Ordering::SeqCst) {
+    while !timestamping_stopped.load(Ordering::SeqCst) {
         let metadata = consumer.fetch_metadata(Some(&topic), Duration::from_secs(30));
         match metadata {
             Ok(metadata) => {
@@ -781,7 +780,6 @@ fn metadata_fetch_thread(
         }
         thread::sleep(wait);
     }
-
     debug!("Terminating realtime Kafka thread for {}", topic);
 }
 
@@ -804,168 +802,168 @@ where
         group_id_prefix,
     } = connector.clone();
 
-    // TODO(natacha): move timestamping thread
-    activate_source_timestamping(&config, connector);
+    let timestamp_channel = activate_source_timestamping(&config, connector);
+    let timestamping_stopped = Arc::new(AtomicBool::new(false));
 
     let SourceConfig {
         name,
         id,
         scope,
         timestamp_histories,
-        timestamp_tx,
         worker_id,
         worker_count,
         consistency,
         ..
     } = config;
 
-    // We only activate the timestamper thread for this source if it is a BYO source
-    let timestamp_channel = if let Consistency::BringYourOwn(_) = consistency {
-        Some(timestamp_tx)
-    } else {
-        None
-    };
+    let (stream, capability) = source(
+        id,
+        timestamp_channel,
+        timestamping_stopped.clone(),
+        scope,
+        &name.clone(),
+        move |info| {
+            // Create activator for source
+            let activator = scope.activator_for(&info.address[..]);
 
-    let (stream, capability) = source(id, timestamp_channel, scope, &name.clone(), move |info| {
-        // Create activator for source
-        let activator = scope.activator_for(&info.address[..]);
+            // Create control plane information (Consistency-related information)
+            let mut cp_info = ControlPlaneInfo::new(
+                MzOffset {
+                    offset: start_offset,
+                },
+                consistency.clone(),
+            );
 
-        // Create control plane information (Consistency-related information)
-        let mut cp_info = ControlPlaneInfo::new(
-            MzOffset {
-                offset: start_offset,
-            },
-            consistency.clone(),
-        );
+            // Create dataplane information (Kafka-related information)
+            let mut dp_info = DataPlaneInfo::new(
+                topic.clone(),
+                name.clone(),
+                id.clone(),
+                create_kafka_config(&name, &url, group_id_prefix, &config_options),
+                Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
+                worker_id,
+                worker_count,
+                consistency,
+                timestamping_stopped,
+            );
 
-        // Create dataplane information (Kafka-related information)
-        let mut dp_info = DataPlaneInfo::new(
-            topic.clone(),
-            name.clone(),
-            id.clone(),
-            create_kafka_config(&name, &url, group_id_prefix, &config_options),
-            Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
-            worker_id,
-            worker_count,
-            consistency,
-        );
+            move |cap, output| {
+                let timer = Instant::now();
 
-        move |cap, output| {
-            let timer = Instant::now();
+                dp_info.source_metrics.operator_scheduled_counter.inc();
 
-            dp_info.source_metrics.operator_scheduled_counter.inc();
+                // Accumulate updates to BYTES_READ_COUNTER;
+                let mut bytes_read = 0;
 
-            // Accumulate updates to BYTES_READ_COUNTER;
-            let mut bytes_read = 0;
-
-            // Trigger any waiting librdkafka callbacks. This should never
-            // return any messages, because we've set things up to receive those
-            // via individual partition queues.
-            {
-                let message = dp_info.consumer.poll(Duration::from_secs(0));
-                if let Some(message) = message {
-                    match message {
-                        Ok(message) => {
-                            panic!(
+                // Trigger any waiting librdkafka callbacks. This should never
+                // return any messages, because we've set things up to receive those
+                // via individual partition queues.
+                {
+                    let message = dp_info.consumer.poll(Duration::from_secs(0));
+                    if let Some(message) = message {
+                        match message {
+                            Ok(message) => {
+                                panic!(
                                 "Internal Error. Received an unexpected message Source: {} PID: {} Offset: {} on main partition loop.\
                                 Materialize will now crash.",
                                 id,
                                 message.partition(),
                                 message.offset()
                             );
+                            }
+                            Err(e) => error!("Error when polling: {}", e),
                         }
-                        Err(e) => error!("Error when polling: {}", e),
                     }
                 }
-            }
 
-            // Update any metadata changes triggered by the metadata thread
-            dp_info.refresh_metadata(&mut cp_info);
+                // Update any metadata changes triggered by the metadata thread
+                dp_info.refresh_metadata(&mut cp_info);
 
-            // Check if the capability can be downgraded (this is independent of whether
-            // there are new messages that can be processed) as timestamps can become
-            // closed in the absence of messages
-            downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
+                // Check if the capability can be downgraded (this is independent of whether
+                // there are new messages that can be processed) as timestamps can become
+                // closed in the absence of messages
+                downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
 
-            while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
-                let partition = message.partition;
-                let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
-                let offset = MzOffset::from(message.offset);
+                while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
+                    let partition = message.partition;
+                    let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
+                    let offset = MzOffset::from(message.offset);
 
-                partition_metrics.offset_received.set(offset.offset);
+                    partition_metrics.offset_received.set(offset.offset);
 
-                // Determine the timestamp to which we need to assign this message
-                let ts = find_matching_timestamp(
-                    &mut cp_info,
-                    &id,
-                    partition,
-                    offset,
-                    &timestamp_histories,
-                );
-                match ts {
-                    None => {
-                        // We have not yet decided on a timestamp for this message,
-                        // we need to buffer the message
-                        dp_info.buffer_message(message);
+                    // Determine the timestamp to which we need to assign this message
+                    let ts = find_matching_timestamp(
+                        &mut cp_info,
+                        &id,
+                        partition,
+                        offset,
+                        &timestamp_histories,
+                    );
+                    match ts {
+                        None => {
+                            // We have not yet decided on a timestamp for this message,
+                            // we need to buffer the message
+                            dp_info.buffer_message(message);
+                            activator.activate();
+                            return SourceStatus::Alive;
+                        }
+                        Some(ts) => {
+                            // Note: empty and null payload/keys are currently
+                            // treated as the same thing.
+                            let key = message.key.unwrap_or_default();
+                            let out = message.payload.unwrap_or_default();
+                            // Entry for partition_metadata is guaranteed to exist as messages
+                            // are only processed after we have updated the partition_metadata for a
+                            // partition and created a partition queue for it.
+                            cp_info
+                                .partition_metadata
+                                .get_mut(&partition)
+                                .unwrap()
+                                .offset = offset;
+                            bytes_read += key.len() as i64;
+                            bytes_read += out.len() as i64;
+                            let ts_cap = cap.delayed(&ts);
+                            output.session(&ts_cap).give(SourceOutput::new(
+                                key,
+                                out,
+                                Some(Into::<KafkaOffset>::into(offset).offset),
+                            ));
+
+                            partition_metrics.offset_ingested.set(offset.offset);
+                            partition_metrics.messages_ingested.inc();
+
+                            downgrade_capability(
+                                &id,
+                                cap,
+                                &mut cp_info,
+                                &mut dp_info,
+                                &timestamp_histories,
+                            );
+                        }
+                    }
+
+                    if timer.elapsed().as_millis() > 10 {
+                        // We didn't drain the entire queue, so indicate that we
+                        // should run again. We suppress the activation when the
+                        // queue is drained, as in that case librdkafka is
+                        // configured to unpark our thread when a new message
+                        // arrives.
+                        if bytes_read > 0 {
+                            KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
+                        }
                         activator.activate();
                         return SourceStatus::Alive;
                     }
-                    Some(ts) => {
-                        // Note: empty and null payload/keys are currently
-                        // treated as the same thing.
-                        let key = message.key.unwrap_or_default();
-                        let out = message.payload.unwrap_or_default();
-                        // Entry for partition_metadata is guaranteed to exist as messages
-                        // are only processed after we have updated the partition_metadata for a
-                        // partition and created a partition queue for it.
-                        cp_info
-                            .partition_metadata
-                            .get_mut(&partition)
-                            .unwrap()
-                            .offset = offset;
-                        bytes_read += key.len() as i64;
-                        bytes_read += out.len() as i64;
-                        let ts_cap = cap.delayed(&ts);
-                        output.session(&ts_cap).give(SourceOutput::new(
-                            key,
-                            out,
-                            Some(Into::<KafkaOffset>::into(offset).offset),
-                        ));
-
-                        partition_metrics.offset_ingested.set(offset.offset);
-                        partition_metrics.messages_ingested.inc();
-
-                        downgrade_capability(
-                            &id,
-                            cap,
-                            &mut cp_info,
-                            &mut dp_info,
-                            &timestamp_histories,
-                        );
-                    }
                 }
-
-                if timer.elapsed().as_millis() > 10 {
-                    // We didn't drain the entire queue, so indicate that we
-                    // should run again. We suppress the activation when the
-                    // queue is drained, as in that case librdkafka is
-                    // configured to unpark our thread when a new message
-                    // arrives.
-                    if bytes_read > 0 {
-                        KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
-                    }
-                    activator.activate();
-                    return SourceStatus::Alive;
+                if bytes_read > 0 {
+                    KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                 }
+                // Ensure that we poll kafka more often than the eviction timeout
+                activator.activate_after(Duration::from_secs(1));
+                SourceStatus::Alive
             }
-            if bytes_read > 0 {
-                KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
-            }
-            // Ensure that we poll kafka more often than the eviction timeout
-            activator.activate_after(Duration::from_secs(1));
-            SourceStatus::Alive
-        }
-    });
+        },
+    );
     (stream, Some(capability))
 }
 

@@ -11,6 +11,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{
@@ -127,7 +129,12 @@ pub struct SourceToken {
     id: SourceInstanceId,
     capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
     activator: Activator,
+    /// A reference to the timestamper control channel. Inserts a timestamp drop message
+    /// when this source token is dropped
     timestamp_drop: Option<TimestampChanges>,
+    /// A boolean flag that is set to true when this source token is dropped and timestamping
+    /// should stop
+    stop_timestamping: Arc<AtomicBool>,
 }
 
 impl SourceToken {
@@ -148,6 +155,7 @@ impl Drop for SourceToken {
                 .borrow_mut()
                 .push((self.id, None));
         }
+        self.stop_timestamping.store(true, Ordering::SeqCst);
     }
 }
 

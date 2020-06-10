@@ -38,7 +38,7 @@ use rusqlite::{params, NO_PARAMS};
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector, KafkaOffset,
+    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
     KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
 };
 use expr::{PartitionId, SourceInstanceId};
@@ -698,6 +698,7 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
 /// Ex: last processed offset is 0 (ak, no records have been timestamped yet)
 /// The current max kafka offset is 0 (ak, the stream is empty). The function will return
 /// 0.
+#[allow(dead_code)]
 fn determine_next_offset(
     // The last offset which we have assigned a timestamp for
     last_processed_offset: MzOffset,
@@ -1712,43 +1713,45 @@ impl Timestamper {
         let mut result = vec![];
         for (id, cons) in self.rt_sources.iter_mut() {
             match &mut cons.connector {
-                RtTimestampConnector::Kafka(kc) => {
-                    let high_watermarks = kc.state.high_watermarks.lock().expect("lock poisoned");
-                    let partition_count: i32 = high_watermarks
-                        .len()
-                        .try_into()
-                        .expect("invalid partition count");
-                    for (p, high_watermark) in high_watermarks.iter().enumerate() {
-                        let p: i32 = p.try_into().expect("invalid partition id");
-                        let current_p_offset = cons
-                            .last_partition_offset
-                            .entry(PartitionId::Kafka(p))
-                            .or_insert(cons.start_offset);
-                        let old_offset = *current_p_offset;
-                        // high here corresponds to the next available Kafka offset.
-                        // Ex: a stream with 0 records will return a high of 0
-                        // a stream with one record (written at offset 0) will return a high of 1
-                        // high - 1 corresponds the Kafka Offset of the last *currently* available
-                        // message
-                        let current_max_kafka_offset = KafkaOffset {
-                            offset: high_watermark - 1,
-                        };
-                        *current_p_offset = determine_next_offset(
-                            *current_p_offset,
-                            current_max_kafka_offset.into(),
-                            cons.max_ts_batch,
-                        );
-                        result.push((
-                            *id,
-                            partition_count,
-                            PartitionId::Kafka(p),
-                            *current_p_offset,
-                        ));
-                        KAFKA_PARTITION_OFFSET_MAX
-                            .with_label_values(&[&kc.topic, &id.to_string(), &p.to_string()])
-                            .set(*high_watermark);
-                        assert!(*current_p_offset >= old_offset);
-                    }
+                RtTimestampConnector::Kafka(_kc) => {
+                    unreachable!("Kafka real-time sources no longer use the timestamper");
+                    /* let high_watermarks = kc.state.high_watermarks.lock().expect("lock poisoned");
+                     let partition_count: i32 = high_watermarks
+                         .len()
+                         .try_into()
+                         .expect("invalid partition count");
+                     for (p, high_watermark) in high_watermarks.iter().enumerate() {
+                         let p: i32 = p.try_into().expect("invalid partition id");
+                         let current_p_offset = cons
+                             .last_partition_offset
+                             .entry(PartitionId::Kafka(p))
+                             .or_insert(cons.start_offset);
+                         let old_offset = *current_p_offset;
+                         // high here corresponds to the next available Kafka offset.
+                         // Ex: a stream with 0 records will return a high of 0
+                         // a stream with one record (written at offset 0) will return a high of 1
+                         // high - 1 corresponds the Kafka Offset of the last *currently* available
+                         // message
+                         let current_max_kafka_offset = KafkaOffset {
+                             offset: high_watermark - 1,
+                         };
+                         *current_p_offset = determine_next_offset(
+                             *current_p_offset,
+                             current_max_kafka_offset.into(),
+                             cons.max_ts_batch,
+                         );
+                         result.push((
+                             *id,
+                             partition_count,
+                             PartitionId::Kafka(p),
+                             *current_p_offset,
+                         ));
+                         KAFKA_PARTITION_OFFSET_MAX
+                             .with_label_values(&[&kc.topic, &id.to_string(), &p.to_string()])
+                             .set(*high_watermark);
+                         assert!(*current_p_offset >= old_offset);
+                     }
+                    */
                 }
                 RtTimestampConnector::File(ref mut fc) => {
                     let mut count = 0;
