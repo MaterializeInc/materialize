@@ -947,9 +947,9 @@ class ChaosConfirmStep(WorkflowStep):
     def run(self, comp: Composition, workflow: Workflow) -> None:
         container_id = comp.get_container_id(self._service)
         if self._running:
-            self.is_running(container_id)
+            self.confirm_is_running(container_id)
         else:
-            self.exit_code(container_id, self._exit_code)
+            self.confirm_exit_code(container_id, self._exit_code)
 
     def docker_inspect(self, format: str, container_id: str) -> str:
         try:
@@ -965,11 +965,11 @@ class ChaosConfirmStep(WorkflowStep):
         else:
             return output
 
-    def is_running(self, container_id: str) -> None:
+    def confirm_is_running(self, container_id: str) -> None:
         if self.docker_inspect("{{.State.Running}}", container_id) != "'true'":
             raise Failed(f"chaos-confirm: container {container_id} is not running")
 
-    def exit_code(self, container_id: str, expected_exit_code: int) -> None:
+    def confirm_exit_code(self, container_id: str, expected_exit_code: int) -> None:
         actual_exit_code = self.docker_inspect("{{.State.ExitCode}}", container_id)
         if actual_exit_code != f"'{expected_exit_code}'":
             raise Failed(
