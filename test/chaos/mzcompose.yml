@@ -86,13 +86,18 @@ mzconduct:
           service: kafka
         - step: run
           service: chaos
-          daemon: true
           command: >-
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 1
             --message-count 10000
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: chaos_run
+          exit_code: 0
 
     # This test is designed to pause and unpause the running Kafka broker
     # (chaos-kill-container sends a SIGSTOP signal to the container).
@@ -169,6 +174,12 @@ mzconduct:
             --message-count 10000
         - step: chaos-kill-docker
           service: kafka
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: kafka
+          exit_code: 137 #SIGKILL
 
     # Helper workflows
 
