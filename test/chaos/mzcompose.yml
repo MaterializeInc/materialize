@@ -90,7 +90,7 @@ mzconduct:
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
-            --kafka-partitions 1
+            --kafka-partitions 5
             --message-count 10000
         - step: chaos-confirm
           service: materialized
@@ -117,7 +117,7 @@ mzconduct:
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
-            --kafka-partitions 1
+            --kafka-partitions 5
             --message-count 10000
         - step: chaos-pause-docker
           service: kafka
@@ -144,7 +144,7 @@ mzconduct:
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
-            --kafka-partitions 1
+            --kafka-partitions 5
             --message-count 10000
         - step: chaos-stop-docker
           service: kafka
@@ -170,7 +170,7 @@ mzconduct:
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
-            --kafka-partitions 1
+            --kafka-partitions 5
             --message-count 10000
         - step: chaos-kill-docker
           service: kafka
