@@ -322,6 +322,7 @@ impl DataPlaneInfo {
         worker_count: usize,
         source_type: Consistency,
         timestamping_stopped: Arc<AtomicBool>,
+        metadata_refresh_frequency: Duration,
     ) -> DataPlaneInfo {
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
@@ -358,7 +359,7 @@ impl DataPlaneInfo {
                     refresh.clone(),
                     &source_id,
                     &topic_name,
-                    Duration::from_secs(1),
+                   metadata_refresh_frequency
                 )
             });
         }
@@ -800,6 +801,7 @@ where
         config_options,
         start_offset,
         group_id_prefix,
+        metadata_refresh_frequency
     } = connector.clone();
 
     let timestamp_channel = activate_source_timestamping(&config, connector);
@@ -845,6 +847,7 @@ where
                 worker_count,
                 consistency,
                 timestamping_stopped,
+                metadata_refresh_frequency
             );
 
             move |cap, output| {
@@ -908,6 +911,7 @@ where
                             return SourceStatus::Alive;
                         }
                         Some(ts) => {
+                            println!("{}, {}, {}", partition, ts, offset);
                             // Note: empty and null payload/keys are currently
                             // treated as the same thing.
                             let key = message.key.unwrap_or_default();
@@ -958,8 +962,10 @@ where
                 if bytes_read > 0 {
                     KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                 }
-                // Ensure that we poll kafka more often than the eviction timeout
-                activator.activate_after(Duration::from_secs(1));
+                // Ensure that we activate the source frequently enough to keep downgrading
+                // capabilities, even when no data has arrived
+                // TODO(ncrooks): make this configurable
+                activator.activate_after(Duration::from_millis(1));
                 SourceStatus::Alive
             }
         },

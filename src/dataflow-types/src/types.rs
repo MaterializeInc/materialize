@@ -29,6 +29,7 @@ use interchange::avro;
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
 use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
+use std::time::Duration;
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -536,6 +537,8 @@ pub struct KafkaSourceConnector {
     // #2736
     pub start_offset: i64,
     pub group_id_prefix: Option<String>,
+    /// Frequency at which we should check for new partitions
+    pub metadata_refresh_frequency: Duration
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
