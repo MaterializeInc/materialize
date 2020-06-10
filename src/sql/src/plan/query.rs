@@ -784,6 +784,7 @@ fn plan_table_function(
     alias: Option<PartialName>,
     args: &FunctionArgs,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
+    use cast::CastContext::Internal;
     let ident = &*normalize::function_name(name.clone())?;
     if !is_table_func(ident) {
         // so we don't forget to add names over there
@@ -806,13 +807,13 @@ fn plan_table_function(
                 (ScalarType::Int32, ScalarType::Int32) => ScalarType::Int32,
                 _ => {
                     start = plan_cast_internal(
-                        "first generate_series argument",
+                        Internal("first generate_series argument"),
                         ecx,
                         start,
                         cast::CastTo::Explicit(ScalarType::Int64),
                     )?;
                     stop = plan_cast_internal(
-                        "second generate_series argument",
+                        Internal("second generate_series argument"),
                         ecx,
                         stop,
                         cast::CastTo::Explicit(ScalarType::Int64),
@@ -1391,7 +1392,12 @@ pub fn plan_coerce<'a>(
         }
         (LiteralString(s), Plain(typ)) => {
             let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String));
-            plan_cast_internal("string literal", ecx, lit, cast::CastTo::Explicit(typ))?
+            plan_cast_internal(
+                cast::CastContext::Internal("string literal"),
+                ecx,
+                lit,
+                cast::CastTo::Explicit(typ),
+            )?
         }
         (LiteralString(s), JsonbAny) => {
             ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::Jsonb))
@@ -1606,7 +1612,7 @@ pub fn plan_coercible_expr<'a>(
                 let mut typ = ecx.scalar_type(&expr);
                 if let ScalarType::Date = typ {
                     expr = plan_cast_internal(
-                        "EXTRACT",
+                        cast::CastContext::Internal("EXTRACT"),
                         ecx,
                         expr,
                         cast::CastTo::Explicit(ScalarType::Timestamp),
@@ -1745,7 +1751,7 @@ pub fn plan_homogeneous_exprs(
         let arg = super::query::plan_coerce(ecx, cexpr, CoerceTo::Plain(target.clone()))?;
 
         match plan_cast_internal(
-            name,
+            cast::CastContext::Internal(name),
             ecx,
             arg.clone(),
             cast::CastTo::Implicit(target.clone()),
@@ -1870,7 +1876,12 @@ fn plan_cast<'a>(
     let to_scalar_type = scalar_type_from_sql(data_type)?;
     let (expr, maybe_name) = plan_expr_returning_name(ecx, expr, Some(to_scalar_type.clone()))?;
     Ok((
-        plan_cast_internal("CAST", ecx, expr, cast::CastTo::Explicit(to_scalar_type))?,
+        plan_cast_internal(
+            cast::CastContext::CastFunc,
+            ecx,
+            expr,
+            cast::CastTo::Explicit(to_scalar_type),
+        )?,
         maybe_name,
     ))
 }
@@ -1905,7 +1916,12 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
                 AggregateFunc::JsonbAgg => {
                     // We need to transform input into jsonb in order to
                     // match Postgres' behavior here.
-                    let expr = plan_cast_internal("jsonb_agg", ecx, expr, cast::CastTo::JsonbAny)?;
+                    let expr = plan_cast_internal(
+                        cast::CastContext::Internal("jsonb_agg"),
+                        ecx,
+                        expr,
+                        cast::CastTo::JsonbAny,
+                    )?;
                     (expr, AggregateFunc::JsonbAgg)
                 }
                 func => (expr, func),
@@ -2025,7 +2041,7 @@ fn plan_function<'a>(
                 _ => bail!("internal.avg_promotion called with unexpected argument"),
             };
             plan_cast_internal(
-                "internal.avg_promotion",
+                cast::CastContext::Internal("internal.avg_promotion"),
                 ecx,
                 expr,
                 cast::CastTo::Explicit(output_type),
@@ -2339,18 +2355,18 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
 /// - Not possible, e.g. `Bytes` to `Decimal`
 /// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
 pub fn plan_cast_internal<'a>(
-    caller_name: &str,
+    ccx: cast::CastContext,
     ecx: &ExprContext<'a>,
     expr: ScalarExpr,
     cast_to: cast::CastTo,
 ) -> Result<ScalarExpr, failure::Error> {
     let from_scalar_type = ecx.scalar_type(&expr);
 
-    let cast_op = match cast::get_cast(&from_scalar_type, &cast_to) {
+    let cast_op = match cast::get_cast(ccx.clone(), &from_scalar_type, &cast_to) {
         Some(cast_op) => cast_op,
         None => bail!(
             "{} does not support {}casting from {} to {}",
-            caller_name,
+            ccx,
             if let cast::CastTo::Implicit(_) = cast_to {
                 "implicitly "
             } else {

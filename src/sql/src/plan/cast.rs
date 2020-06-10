@@ -63,7 +63,8 @@ fn to_jsonb_any_string_cast(ecx: &ExprContext, e: ScalarExpr, _: CastTo) -> Scal
     let s = ecx.scalar_type(&e);
     let to = CastTo::Explicit(ScalarType::String);
 
-    let cast_op = get_cast(&s, &to).unwrap();
+    // String casts behave as if they were explicitly requested by the user.
+    let cast_op = get_cast(CastContext::CastFunc, &s, &to).unwrap();
 
     cast_op
         .gen_expr(ecx, e, to)
@@ -75,7 +76,7 @@ fn to_jsonb_any_f64_cast(ecx: &ExprContext, e: ScalarExpr, _: CastTo) -> ScalarE
     let s = ecx.scalar_type(&e);
     let to = CastTo::Explicit(ScalarType::Float64);
 
-    let cast_op = get_cast(&s, &to).unwrap();
+    let cast_op = get_cast(CastContext::Internal("to_jsonb_any_f64_cast"), &s, &to).unwrap();
 
     cast_op
         .gen_expr(ecx, e, to)
@@ -84,8 +85,34 @@ fn to_jsonb_any_f64_cast(ecx: &ExprContext, e: ScalarExpr, _: CastTo) -> ScalarE
 
 // Cast `e` (`Jsonb`) to `Float64` and then to `cast_to`.
 fn from_jsonb_f64_cast(ecx: &ExprContext, e: ScalarExpr, cast_to: CastTo) -> ScalarExpr {
-    let from_f64_to_cast = get_cast(&ScalarType::Float64, &cast_to).unwrap();
+    let from_f64_to_cast = get_cast(
+        CastContext::Internal("from_jsonb_f64_cast"),
+        &ScalarType::Float64,
+        &cast_to,
+    )
+    .unwrap();
     from_f64_to_cast.gen_expr(ecx, e.call_unary(UnaryFunc::CastJsonbToFloat64), cast_to)
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Hash)]
+/// Expresses whether you want casts from `ScalarType::Boolean` to
+/// `ScalarType::String` to print `true` or `t`.
+///
+/// There might be other uses for this in the future, but for now that's it!
+pub enum CastContext<'a> {
+    /// Print `t` or `f`.
+    Internal(&'a str),
+    /// Print `true` or `false`.
+    CastFunc,
+}
+
+impl<'a> fmt::Display for CastContext<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CastContext::Internal(func) => write!(f, "{}", func),
+            CastContext::CastFunc => write!(f, "CAST"),
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Hash)]
@@ -142,7 +169,6 @@ lazy_static! {
 
         casts! {
             // BOOL
-            (Bool, Implicit(String)) => CastBoolToStringImplicit,
             (Bool, Explicit(String)) => CastBoolToStringExplicit,
             (Bool, Explicit(Jsonb)) => CastJsonbOrNullToJsonb,
             (Bool, JsonbAny) => CastJsonbOrNullToJsonb,
@@ -306,8 +332,9 @@ lazy_static! {
 /// over allowing implicit or explicit casts using [`CastTo`].
 ///
 /// Use the returned [`CastOp`] with [`CastOp::gen_expr`].
-pub fn get_cast<'a>(from: &ScalarType, cast_to: &CastTo) -> Option<&'a CastOp> {
+pub fn get_cast<'a>(ccx: CastContext, from: &ScalarType, cast_to: &CastTo) -> Option<&'a CastOp> {
     use CastTo::*;
+    use UnaryFunc::*;
 
     if *from == cast_to.scalar_type() {
         return Some(&CastOp::F(noop_cast));
@@ -321,10 +348,16 @@ pub fn get_cast<'a>(from: &ScalarType, cast_to: &CastTo) -> Option<&'a CastOp> {
 
     let cast = VALID_CASTS.get(&(from.desaturate(), cast_to.clone()));
 
-    match (cast, cast_to) {
+    match (ccx, cast, cast_to) {
+        // Modify the bool->string cast to the correct behavior.
+        (CastContext::Internal(_), Some(CastOp::U(CastBoolToStringExplicit)), _) => {
+            Some(&CastOp::U(CastBoolToStringImplicit))
+        }
         // If no explicit implementation, look for an implicit one.
-        (None, CastTo::Explicit(t)) => VALID_CASTS.get(&(from.desaturate(), CastTo::Implicit(t))),
-        (c, _) => c,
+        (_, None, CastTo::Explicit(t)) => {
+            VALID_CASTS.get(&(from.desaturate(), CastTo::Implicit(t)))
+        }
+        (_, c, _) => c,
     }
 }
 
