@@ -433,22 +433,29 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             (stream, capability)
                         };
 
-                        let mut collection = match envelope {
+                        let collection = match envelope {
                             Envelope::None => stream.as_collection(),
                             Envelope::Debezium(_) => {
                                 // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
                                 stream.as_collection().explode({
                                     let mut row_packer = repr::RowPacker::new();
-                                    move |row| {
+                                    move |(row, position)| {
                                         let mut datums = row.unpack();
                                         let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                                        Some((row_packer.pack(datums.into_iter()), diff))
+                                        Some((
+                                            (row_packer.pack(datums.into_iter()), position),
+                                            diff,
+                                        ))
                                     }
                                 })
                             }
                             Envelope::Upsert(_) => unreachable!(),
                         };
 
+                        // TODO do the source persistence here
+
+                        // Clear out the offset data
+                        let mut collection = collection.map(|(row, _)| row);
                         // Implement source filtering and projection.
                         // At the moment this is strictly optional, but we perform it anyhow
                         // to demonstrate the intended use.

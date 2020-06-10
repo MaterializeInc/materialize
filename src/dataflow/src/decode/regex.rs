@@ -25,7 +25,7 @@ pub fn regex<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     regex: Regex,
     name: &str,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> Stream<G, ((Row, Option<i64>), Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -57,11 +57,12 @@ where
                             None => continue,
                         };
                         session.give((
-                            row_packer.pack(captures.iter().skip(1).map(
+                            (row_packer.pack(captures.iter().skip(1).map(
                                 |m| Datum::from( m.map(
                                     |m| m.as_str())
                                 )
                             ).chain(iter::once(line_no.map(Datum::Int64).into()))),
+                            None),
                             *cap.time(),
                             1,
                         ));

@@ -88,14 +88,14 @@ impl DecoderState for ProtobufDecoderState {
         &mut self,
         bytes: &[u8],
         _: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, ((Row, Option<i64>), Timestamp, Diff)>,
         time: Timestamp,
     ) {
         match self.decoder.decode(bytes) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;
-                    session.give((row, time, 1));
+                    session.give(((row, None), time, 1));
                 } else {
                     self.events_error += 1;
                     error!("protobuf deserialization returned None");

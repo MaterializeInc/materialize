@@ -103,7 +103,7 @@ impl DecoderState for AvroDecoderState {
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, ((Row, Option<i64>), Timestamp, Diff)>,
         time: Timestamp,
     ) {
         match self.decoder.decode(bytes, coord).await {
@@ -118,10 +118,10 @@ impl DecoderState for AvroDecoderState {
                     // element of the data, which will cause it to turn into a retraction
                     // in a future call to `explode`
                     // (currently in dataflow/render/mod.rs:299)
-                    session.give((diff_pair.before.unwrap(), time, 1));
+                    session.give(((diff_pair.before.unwrap(), coord), time, 1));
                 }
                 if let Some(after) = diff_pair.after {
-                    session.give((after, time, 1));
+                    session.give(((after, coord), time, 1));
                 }
             }
             Err(err) => {

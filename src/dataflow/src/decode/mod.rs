@@ -45,7 +45,7 @@ pub fn decode_avro_values<G>(
     envelope: &Envelope,
     schema: Schema,
     debug_name: &str,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> Stream<G, ((Row, Option<i64>), Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -107,7 +107,7 @@ where
                 .before
                 .into_iter()
                 .chain(diffs.after.into_iter())
-                .map(move |row| (row, r, d))
+                .map(move |row| ((row, None), r, d))
         },
     )
 }
@@ -134,7 +134,7 @@ pub trait DecoderState {
         &mut self,
         bytes: &[u8],
         aux_num: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, ((Row, Option<i64>), Timestamp, Diff)>,
         time: Timestamp,
     );
     /// Register number of success and failures with decoding
@@ -199,11 +199,11 @@ where
         &mut self,
         bytes: &[u8],
         line_no: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, ((Row, Option<i64>), Timestamp, Diff)>,
         time: Timestamp,
     ) {
         session.give((
-            pack_with_line_no((self.datum_func)(bytes), line_no),
+            (pack_with_line_no((self.datum_func)(bytes), line_no), None),
             time,
             1,
         ));
@@ -371,7 +371,7 @@ fn decode_values_inner<G, V, C>(
     mut value_decoder_state: V,
     op_name: &str,
     contract: C,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> Stream<G, ((Row, Option<i64>), Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
     V: DecoderState + 'static,
@@ -413,7 +413,7 @@ pub fn decode_values<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> Stream<G, ((Row, Option<i64>), Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {

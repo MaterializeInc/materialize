@@ -28,7 +28,7 @@ pub fn csv<G>(
     n_cols: usize,
     delimiter: u8,
     operators: &mut Option<LinearOperator>,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> Stream<G, ((Row, Option<i64>), Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -118,7 +118,7 @@ where
                                         } else {
                                             events_success += 1;
                                             session.give((
-                                                row_packer.pack(
+                                                (row_packer.pack(
                                                     (0..n_cols)
                                                         .map(|i| {
                                                             // Unsafety rationalized as 1. the input text is determined to be
@@ -139,6 +139,8 @@ where
                                                             line_no.map(Datum::Int64).into(),
                                                         )),
                                                 ),
+                                                None
+                                                    ),
                                                 *cap.time(),
                                                 1,
                                             ));
