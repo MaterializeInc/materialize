@@ -121,7 +121,7 @@ mzconduct:
             --message-count 10000
         - step: chaos-pause-docker
           service: kafka
-          loop: true
+          other_service: chaos_run
           running_time: 60
           paused_time: 30
 
@@ -148,7 +148,7 @@ mzconduct:
             --message-count 10000
         - step: chaos-stop-docker
           service: kafka
-          loop: true
+          other_service: chaos_run
           running_time: 60
           stopped_time: 30
 
