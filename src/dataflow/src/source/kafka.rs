@@ -718,11 +718,6 @@ where
                 }
             }
 
-            // Check if the capability can be downgraded (this is independent of whether
-            // there are new messages that can be processed) as timestamps can become
-            // closed in the absence of messages
-            downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
-
             while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                 let partition = message.partition;
                 let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
@@ -738,6 +733,14 @@ where
                         // we need to buffer the message
                         dp_info.buffer_message(message);
                         activator.activate();
+                        // Downgrade capability before exiting
+                        downgrade_capability(
+                            &id,
+                            cap,
+                            &mut cp_info,
+                            &mut dp_info,
+                            &timestamp_histories,
+                        );
                         return SourceStatus::Alive;
                     }
                     Some(ts) => {
@@ -761,17 +764,8 @@ where
                             out,
                             Some(Into::<KafkaOffset>::into(offset).offset),
                         ));
-
                         partition_metrics.offset_ingested.set(offset.offset);
                         partition_metrics.messages_ingested.inc();
-
-                        downgrade_capability(
-                            &id,
-                            cap,
-                            &mut cp_info,
-                            &mut dp_info,
-                            &timestamp_histories,
-                        );
                     }
                 }
 
@@ -784,13 +778,25 @@ where
                     if bytes_read > 0 {
                         KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                     }
+                    // Downgrade capability before exiting
+                    downgrade_capability(
+                        &id,
+                        cap,
+                        &mut cp_info,
+                        &mut dp_info,
+                        &timestamp_histories,
+                    );
                     activator.activate();
                     return SourceStatus::Alive;
                 }
             }
+
             if bytes_read > 0 {
                 KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
             }
+
+            //Downgrade capability before exiting
+            downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
             // Ensure that we poll kafka more often than the eviction timeout
             activator.activate_after(Duration::from_secs(60));
             SourceStatus::Alive
@@ -848,9 +854,12 @@ fn can_close_timestamp(
     // In Kafka, the position of the consumer is set to the offset *after* the last offset that the consumer has
     // processed, so we have to decrement it by one to get the last processed offset
 
-    // We separate these two cases, has consumer.position() is an expensive call that should
-    // be avoided if possible. Case 1 and 2.a
-    return if !dp_info.has_partition(pid) || last_offset >= offset {
+    // We separate these two cases, as consumer.position() is an expensive call that should
+    // be avoided if possible. Case 1 and 2.a occur first, and we only test 2.b when necessary
+    if !dp_info.has_partition(pid) // Case 1
+    || last_offset >= offset
+    // Case 2.a
+    {
         true
     } else {
         let mut current_consumer_position: MzOffset = KafkaOffset {
@@ -861,15 +870,17 @@ fn can_close_timestamp(
                     .map(|el| el.offset().to_raw() - 1),
                 Err(_) => Some(-1),
             }
-                .unwrap_or(-1),
+            .unwrap_or(-1),
         }
-            .into();
+        .into();
 
         // If a message has been buffered (but not timestamped), the consumer will already have
         // moved ahead.
         if dp_info.is_buffered(pid) {
             current_consumer_position.offset -= 1;
         }
+
+        // Case 2.b
         current_consumer_position >= offset
     }
 }
