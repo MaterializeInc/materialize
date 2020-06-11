@@ -92,9 +92,7 @@ pub enum Type {
 /// This is a very, very lightweight semantic analysis phase for Rust code. Our
 /// main goal is to determine the type of each field of a struct or enum
 /// variant, so we know how to visit it. See [`Type`] for details.
-///
-/// Types whose names are listed in `ignored_types` are not included in the IR.
-pub fn analyze(items: &[syn::DeriveInput]) -> Result<Ir> {
+pub(crate) fn analyze(items: &[syn::DeriveInput]) -> Result<Ir> {
     let ir = items
         .iter()
         .map(|item| {
