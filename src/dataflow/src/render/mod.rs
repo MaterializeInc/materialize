@@ -453,9 +453,17 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         };
 
                         // TODO do the source persistence here
+                        collection.inner.sink(Pipeline, &format!("source-persistence-{}", uid), move |input| {
+                            input.for_each(|_, rows| {
+                                for ((_row, position), time, diff) in rows.iter() {
+                                    println!("Got a row, position: {:?} time: {} diff: {}", position, time, diff);
+                                }
+                            });
+                        });
 
                         // Clear out the offset data
                         let mut collection = collection.map(|(row, _)| row);
+
                         // Implement source filtering and projection.
                         // At the moment this is strictly optional, but we perform it anyhow
                         // to demonstrate the intended use.
