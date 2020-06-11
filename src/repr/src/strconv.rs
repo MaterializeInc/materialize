@@ -591,7 +591,7 @@ where
     while let Some(elem) = elems.next() {
         let start = buf.len();
         if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem) {
-            escape_list_elem(buf, start);
+            escape_elem::<_, ListElementEscaper>(buf, start);
         }
         if elems.peek().is_some() {
             buf.write_char(',')
@@ -601,23 +601,62 @@ where
     Nestable::Yes
 }
 
-/// Escapes a list element in place.
+pub trait ElementEscaper {
+    fn needs_escaping(elem: &[u8]) -> bool;
+    fn escape_char(c: u8) -> u8;
+}
+
+struct ListElementEscaper;
+
+impl ElementEscaper for ListElementEscaper {
+    fn needs_escaping(elem: &[u8]) -> bool {
+        elem.is_empty()
+            || elem == b"NULL"
+            || elem
+                .iter()
+                .any(|c| matches!(c, b'{' | b'}' | b',' | b'"' | b'\\') || c.is_ascii_whitespace())
+    }
+
+    fn escape_char(_: u8) -> u8 {
+        b'\\'
+    }
+}
+
+struct RecordElementEscaper;
+
+impl ElementEscaper for RecordElementEscaper {
+    fn needs_escaping(elem: &[u8]) -> bool {
+        elem.is_empty()
+            || elem
+                .iter()
+                .any(|c| matches!(c, b'(' | b')' | b',' | b'"' | b'\\') || c.is_ascii_whitespace())
+    }
+
+    fn escape_char(c: u8) -> u8 {
+        if c == b'"' {
+            b'"'
+        } else {
+            b'\\'
+        }
+    }
+}
+
+/// Escapes a list or record element in place.
 ///
-/// The list element must start at `start` and extend to the end of the buffer.
-/// The buffer will be resized if escaping is necessary to account for the
+/// The element must start at `start` and extend to the end of the buffer. The
+/// buffer will be resized if escaping is necessary to account for the
 /// additional escape characters.
-fn escape_list_elem<F>(buf: &mut F, start: usize)
+///
+/// The `needs_escaping` function is used to determine whether an element needs
+/// to be escaped. It is provided with the bytes of each element and should
+/// return whether the element needs to be escaped.
+fn escape_elem<F, E>(buf: &mut F, start: usize)
 where
     F: FormatBuffer,
+    E: ElementEscaper,
 {
     let elem = &buf.as_ref()[start..];
-    if !elem.is_empty()
-        && elem != b"NULL"
-        && !elem
-            .iter()
-            .any(|c| matches!(c, b'{' | b'}' | b',' | b' ' | b'"' | b'\\'))
-    {
-        // Element does not need escaping.
+    if !E::needs_escaping(elem) {
         return;
     }
 
@@ -651,7 +690,7 @@ where
         elem[wi] = elem[ri];
         wi -= 1;
         if let b'\\' | b'"' = elem[ri] {
-            elem[wi] = b'\\';
+            elem[wi] = E::escape_char(elem[ri]);
             wi -= 1;
         }
     }
@@ -671,6 +710,49 @@ where
     /// Marks this list element as null.
     pub fn write_null(self) -> Nestable {
         self.0.write_str("NULL");
+        Nestable::Yes
+    }
+
+    /// Returns a [`FormatBuffer`] into which a non-null element can be
+    /// written.
+    pub fn nonnull_buffer(self) -> &'a mut F {
+        self.0
+    }
+}
+
+pub fn format_record<F, T>(
+    buf: &mut F,
+    elems: &[T],
+    mut format_elem: impl FnMut(RecordElementWriter<F>, &T) -> Nestable,
+) -> Nestable
+where
+    F: FormatBuffer,
+{
+    buf.write_char('(');
+    let mut elems = elems.iter().peekable();
+    while let Some(elem) = elems.next() {
+        let start = buf.len();
+        if let Nestable::MayNeedEscaping = format_elem(RecordElementWriter(buf), elem) {
+            escape_elem::<_, RecordElementEscaper>(buf, start);
+        }
+        if elems.peek().is_some() {
+            buf.write_char(',')
+        }
+    }
+    buf.write_char(')');
+    Nestable::MayNeedEscaping
+}
+
+/// A helper for `format_record` that formats a single record element.
+#[derive(Debug)]
+pub struct RecordElementWriter<'a, F>(&'a mut F);
+
+impl<'a, F> RecordElementWriter<'a, F>
+where
+    F: FormatBuffer,
+{
+    /// Marks this record element as null.
+    pub fn write_null(self) -> Nestable {
         Nestable::Yes
     }
 

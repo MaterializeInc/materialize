@@ -33,8 +33,11 @@ pub enum Expr {
     /// Identifier e.g. table name or column name
     Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
-    /// (Same caveats apply to `QualifiedWildcard` as to `Wildcard`.)
     QualifiedWildcard(Vec<Ident>),
+    FieldAccess {
+        expr: Box<Expr>,
+        field: Option<Ident>,
+    },
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// `IS NULL` expression
@@ -132,6 +135,15 @@ impl AstDisplay for Expr {
             Expr::QualifiedWildcard(q) => {
                 f.write_node(&display::separated(q, "."));
                 f.write_str(".*");
+            }
+            Expr::FieldAccess { expr, field } => {
+                f.write_node(expr);
+                f.write_str(".");
+                if let Some(field) = field {
+                    f.write_node(field);
+                } else {
+                    f.write_str("*");
+                }
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
             Expr::IsNull(ast) => {

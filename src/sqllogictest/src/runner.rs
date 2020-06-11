@@ -36,6 +36,7 @@ use std::str;
 use std::thread;
 use std::time::Duration;
 
+use bytes::BytesMut;
 use failure::{bail, format_err, ResultExt};
 use futures::executor::block_on;
 use itertools::izip;
@@ -48,11 +49,7 @@ use coord::{ExecuteResponse, TimestampConfig};
 use dataflow_types::PeekResponse;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::adt::jsonb::JsonbRef;
-use repr::strconv::{
-    format_date, format_interval, format_time, format_timestamp, format_timestamptz,
-};
-use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
+use repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 use sql::ast::Statement;
 use sql_parser::parser::ParserError as SqlParserError;
 
@@ -316,86 +313,65 @@ fn format_row(
     mode: Mode,
     sort: &Sort,
 ) -> Vec<String> {
-    let row = izip!(slt_types, col_types, row.iter()).map(|(slt_typ, col_typ, datum)| {
-        if let Datum::Null = datum {
-            "NULL".to_owned()
-        } else if let ScalarType::Jsonb = col_typ.scalar_type {
-            JsonbRef::from_datum(datum).to_string()
-        } else if let ScalarType::List(_) = col_typ.scalar_type {
-            // produce the same output as we would for psql
-            let mut buf = ::bytes::BytesMut::new();
-            pgrepr::Value::from_datum(datum, &col_typ.scalar_type)
-                .unwrap()
-                .encode_text(&mut buf);
-            str::from_utf8(&buf).unwrap().to_owned()
-        } else {
-            match (slt_typ, datum) {
-                // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
-                (Type::Integer, Datum::Int64(i)) => format!("{}", i),
-                (Type::Integer, Datum::Int32(i)) => format!("{}", i),
-                (Type::Real, Datum::Float64(f)) => match mode {
-                    Mode::Standard => format!("{:.3}", f),
-                    Mode::Cockroach => format!("{}", f),
-                },
-                (Type::Real, Datum::Decimal(d)) => {
-                    let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
-                    let d = d.with_scale(scale);
-                    match mode {
-                        Mode::Standard => format!("{:.3}", d),
-                        Mode::Cockroach => format!("{}", d),
-                    }
-                }
-                (Type::Text, Datum::String(string)) => {
-                    if string.is_empty() {
-                        "(empty)".to_owned()
-                    } else {
-                        (*string).to_owned()
-                    }
-                }
-                (Type::Bool, Datum::False) => "false".to_owned(),
-                (Type::Bool, Datum::True) => "true".to_owned(),
-                (Type::Text, Datum::False) => "false".to_owned(),
-                (Type::Text, Datum::True) => "true".to_owned(),
+    let row = izip!(slt_types, col_types, row.iter()).map(|(slt_typ, col_typ, d)| {
+        if d.is_null() {
+            return "NULL".to_owned();
+        }
 
-                // weird type coercions that sqllogictest doesn't document
-                (Type::Integer, Datum::Decimal(d)) => {
-                    let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
-                    let d = d.with_scale(scale);
-                    format!("{:.0}", d)
-                }
-                (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
-                (Type::Integer, Datum::String(_)) => "0".to_owned(),
-                (Type::Integer, Datum::False) => "0".to_owned(),
-                (Type::Integer, Datum::True) => "1".to_owned(),
-                (Type::Real, Datum::Int32(i)) => format!("{:.3}", i),
-                (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
-                (Type::Text, Datum::Int32(i)) => format!("{}", i),
-                (Type::Text, Datum::Int64(i)) => format!("{}", i),
-                (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
-                // Bytes are printed as text iff they are valid UTF-8. This
-                // seems guaranteed to confuse everyone, but it is required for
-                // compliance with the CockroachDB sqllogictest runner. [0]
-                //
-                // [0]: https://github.com/cockroachdb/cockroach/blob/970782487/pkg/sql/logictest/logic.go#L2038-L2043
-                (Type::Text, Datum::Bytes(buf)) => match str::from_utf8(buf) {
-                    Ok(s) => s.to_owned(),
-                    Err(_) => format!("{:?}", buf),
-                },
-                (Type::Text, ..) => {
-                    let mut buf = String::new();
-                    match datum {
-                        Datum::Date(d) => format_date(&mut buf, d),
-                        Datum::Time(t) => format_time(&mut buf, t),
-                        Datum::Timestamp(d) => format_timestamp(&mut buf, d),
-                        Datum::TimestampTz(d) => format_timestamptz(&mut buf, d),
-                        Datum::Interval(iv) => format_interval(&mut buf, iv),
-                        other => panic!("Don't know how to format {:?}", (slt_typ, other)),
-                    };
-                    buf
-                }
-
-                other => panic!("Don't know how to format {:?}", other),
+        match (slt_typ, &col_typ.scalar_type) {
+            (Type::Bool, ScalarType::Bool) | (Type::Text, ScalarType::Bool) => {
+                d.unwrap_bool().to_string()
             }
+
+            (Type::Integer, ScalarType::Int32) => d.unwrap_int32().to_string(),
+            (Type::Integer, ScalarType::Int64) => d.unwrap_int64().to_string(),
+            (Type::Integer, ScalarType::Decimal(_, s)) => {
+                let d = d.unwrap_decimal().with_scale(*s);
+                format!("{:.0}", d)
+            }
+            (Type::Integer, ScalarType::Float64) => format!("{:.0}", d.unwrap_float64().trunc()),
+            (Type::Integer, ScalarType::String) => "0".to_owned(),
+            (Type::Integer, ScalarType::Bool) => i8::from(d.unwrap_bool()).to_string(),
+
+            (Type::Real, ScalarType::Int32) => format!("{:.3}", d.unwrap_int32()),
+            (Type::Real, ScalarType::Int64) => format!("{:.3}", d.unwrap_int64()),
+            (Type::Real, ScalarType::Float64) => match mode {
+                Mode::Standard => format!("{:.3}", d.unwrap_float64()),
+                Mode::Cockroach => format!("{}", d.unwrap_float64()),
+            },
+            (Type::Real, ScalarType::Decimal(_, s)) => {
+                let d = d.unwrap_decimal().with_scale(*s);
+                match mode {
+                    Mode::Standard => format!("{:.3}", d),
+                    Mode::Cockroach => format!("{}", d),
+                }
+            }
+
+            (Type::Text, ScalarType::Int32) => format!("{}", d.unwrap_int32()),
+            (Type::Text, ScalarType::Int64) => format!("{}", d.unwrap_int64()),
+            (Type::Text, ScalarType::Float64) => format!("{:.3}", d.unwrap_float64()),
+            // Bytes are printed as text iff they are valid UTF-8. This
+            // seems guaranteed to confuse everyone, but it is required for
+            // compliance with the CockroachDB sqllogictest runner. [0]
+            //
+            // [0]: https://github.com/cockroachdb/cockroach/blob/970782487/pkg/sql/logictest/logic.go#L2038-L2043
+            (Type::Text, ScalarType::Bytes) => match str::from_utf8(d.unwrap_bytes()) {
+                Ok(s) => s.to_owned(),
+                Err(_) => format!("{:?}", d.unwrap_bytes()),
+            },
+            (Type::Text, ScalarType::String) => match d.unwrap_str() {
+                "" => "(empty)".to_owned(),
+                s => s.to_owned(),
+            },
+            (Type::Text, _) => {
+                let mut buf = BytesMut::new();
+                pgrepr::Value::from_datum(d, &col_typ.scalar_type)
+                    .unwrap()
+                    .encode_text(&mut buf);
+                str::from_utf8(&buf).unwrap().to_owned()
+            }
+
+            other => panic!("Don't know how to format {:?}", other),
         }
     });
     if mode == Mode::Cockroach && sort.yes() {

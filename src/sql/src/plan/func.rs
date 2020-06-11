@@ -40,6 +40,7 @@ use crate::unsupported;
 /// https://www.postgresql.org/docs/9.6/catalog-pg-type.html#CATALOG-TYPCATEGORY-TABLE
 pub enum TypeCategory {
     Bool,
+    Composite,
     DateTime,
     Numeric,
     Pseudo,
@@ -75,6 +76,8 @@ impl TypeCategory {
             | ScalarType::Int64 => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::String => Self::String,
+            ScalarType::Record { oid: None, .. } => Self::Pseudo,
+            ScalarType::Record { oid: Some(_), .. } => Self::Composite,
         }
     }
 
@@ -99,7 +102,7 @@ impl TypeCategory {
             Self::Numeric => Some(ScalarType::Float64),
             Self::String => Some(ScalarType::String),
             Self::Timespan => Some(ScalarType::Interval),
-            Self::Pseudo | Self::UserDefined => None,
+            Self::Composite | Self::Pseudo | Self::UserDefined => None,
         }
     }
 }
@@ -1458,6 +1461,12 @@ lazy_static! {
                     Ok((ScalarExpr::literal_true(), AggregateFunc::CountAll))
                 }),
                 params!(Any) => AggregateFunc::Count
+            },
+            "internal_all" => {
+                params!(Any) => AggregateFunc::All
+            },
+            "internal_any" => {
+                params!(Any) => AggregateFunc::Any
             },
             "max" => {
                 params!(Int32) => AggregateFunc::MaxInt32,

@@ -13,16 +13,27 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use failure::format_err;
+use uuid::Uuid;
+
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    BinaryOperator, Expr, Function, FunctionArgs, Ident, ObjectName, Query, SelectItem, Value,
+    self, BinaryOperator, Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select,
+    SelectItem, SetExpr, TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value,
 };
 
 use crate::normalize;
 
-pub fn transform(query: &mut Query) {
+pub fn transform(query: &mut Query) -> Result<(), failure::Error> {
     FuncRewriter.visit_query_mut(query);
     IdentFuncRewriter.visit_query_mut(query);
+
+    let mut rcr = RowComparisonRewriter { err: None };
+    rcr.visit_query_mut(query);
+    match rcr.err {
+        None => Ok(()),
+        Some(err) => Err(format_err!("{}", err)),
+    }
 }
 
 // Transforms various functions to forms that are more easily handled by the
@@ -216,10 +227,13 @@ impl FuncRewriter {
 
 impl<'ast> VisitMut<'ast> for FuncRewriter {
     fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem) {
-        if let SelectItem::UnnamedExpr(expr) = item {
+        if let SelectItem::Expr { expr, alias: None } = item {
             visit_mut::visit_expr_mut(self, expr);
             if let Some((alias, expr)) = Self::rewrite_expr(expr) {
-                *item = SelectItem::ExprWithAlias { expr, alias }
+                *item = SelectItem::Expr {
+                    expr,
+                    alias: Some(alias),
+                }
             }
         } else {
             visit_mut::visit_select_item_mut(self, item);
@@ -256,5 +270,238 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
                 })
             }
         }
+    }
+}
+
+/// Unpacks `ROW op ROW` comparisons.
+///
+/// `ROW(l1, l2) = ROW(r1, r2)`  -> `(l1 = r1) AND (l2 = r2)`
+/// `ROW(l1, l2) < ROW(r1, r2)`  -> `(l1 < r1) OR (l1 = r1 AND l2 < r2)`
+/// `ROW(l1, l2) <= ROW(r1, r2)` -> `(l1 < r1) OR (l1 = r1 AND l2 <= r2)`
+struct RowComparisonRewriter {
+    err: Option<String>,
+}
+
+impl RowComparisonRewriter {
+    fn err<S>(&mut self, s: S)
+    where
+        S: Into<String>,
+    {
+        self.err.get_or_insert_with(|| s.into());
+    }
+}
+
+impl<'ast> VisitMut<'ast> for RowComparisonRewriter {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
+        use self::Value::*;
+        use BinaryOperator::*;
+        use Expr::*;
+
+        while let Expr::Nested(e) = expr {
+            *expr = (**e).clone();
+        }
+
+        if let InSubquery {
+            expr: e,
+            subquery,
+            negated,
+        } = expr
+        {
+            if *negated {
+                // `<expr> NOT IN (<subquery>)` is equivalent to
+                // `<expr> <> ALL (<subquery>)`.
+                *expr = All {
+                    left: e.clone(),
+                    op: NotEq,
+                    right: subquery.clone(),
+                };
+            } else {
+                // `<expr> IN (<subquery>)` is equivalent to
+                // `<expr> = ANY (<subquery>)`.
+                *expr = Any {
+                    left: e.clone(),
+                    op: Eq,
+                    right: subquery.clone(),
+                    some: false,
+                };
+            }
+        }
+
+        if let InList {
+            expr: e,
+            list,
+            negated,
+        } = expr
+        {
+            let mut cond = Value(Boolean(false));
+            for l in list {
+                cond = BinaryOp {
+                    left: Box::new(cond),
+                    op: Or,
+                    right: Box::new(BinaryOp {
+                        left: e.clone(),
+                        op: Eq,
+                        right: Box::new(l.clone()),
+                    }),
+                }
+            }
+            if *negated {
+                cond = UnaryOp {
+                    op: UnaryOperator::Not,
+                    expr: Box::new(cond),
+                }
+            }
+            *expr = cond;
+        }
+
+        if let Any {
+            left,
+            op,
+            right,
+            some: _,
+        }
+        | All { left, op, right } = expr
+        {
+            let right_arity = set_expr_arity(&right.body);
+            let bindings: Vec<_> = (0..right_arity)
+                .map(|_| Ident::new(format!("right_{}", Uuid::new_v4())))
+                .collect();
+            let left = match &**left {
+                Row { .. } => left.clone(),
+                _ => Box::new(Row {
+                    exprs: vec![(**left).clone()],
+                }),
+            };
+            let op = op.clone();
+            let subquery = right.clone();
+            *expr = Subquery(Box::new(Query {
+                ctes: vec![],
+                body: SetExpr::Select(Box::new(Select {
+                    distinct: false,
+                    projection: vec![SelectItem::Expr {
+                        expr: Function(ast::Function {
+                            name: ObjectName(vec![Ident::new(match expr {
+                                Any { .. } => "internal_any",
+                                All { .. } => "internal_all",
+                                _ => unreachable!(),
+                            })]),
+                            args: FunctionArgs::Args(vec![BinaryOp {
+                                left,
+                                op,
+                                right: Box::new(Row {
+                                    exprs: bindings
+                                        .iter()
+                                        .map(|b| Expr::Identifier(vec![b.clone()]))
+                                        .collect(),
+                                }),
+                            }]),
+                            filter: None,
+                            over: None,
+                            distinct: false,
+                        }),
+                        alias: None,
+                    }],
+                    from: vec![TableWithJoins {
+                        relation: TableFactor::Derived {
+                            lateral: false,
+                            subquery,
+                            alias: Some(TableAlias {
+                                name: Ident::new("_"),
+                                columns: bindings,
+                            }),
+                        },
+                        joins: vec![],
+                    }],
+                    selection: None,
+                    group_by: vec![],
+                    having: None,
+                })),
+                order_by: vec![],
+                limit: None,
+                offset: None,
+                fetch: None,
+            }))
+        }
+
+        if let BinaryOp { left, right, op } = expr {
+            if let (Row { exprs: left }, Row { exprs: right }) = (&**left, &**right) {
+                if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
+                    if left.len() != right.len() {
+                        self.err("unequal number of entries in row expressions");
+                        return;
+                    }
+                    if left.is_empty() {
+                        assert!(right.is_empty());
+                        self.err("cannot compare rows of zero length");
+                    }
+                }
+                match op {
+                    Eq | NotEq => {
+                        let mut new = Value(Boolean(true));
+                        for (l, r) in left.iter().zip(right) {
+                            new = BinaryOp {
+                                left: Box::new(BinaryOp {
+                                    left: Box::new(l.clone()),
+                                    op: Eq,
+                                    right: Box::new(r.clone()),
+                                }),
+                                op: And,
+                                right: Box::new(new),
+                            };
+                        }
+                        if let NotEq = op {
+                            new = UnaryOp {
+                                expr: Box::new(new),
+                                op: UnaryOperator::Not,
+                            }
+                        }
+                        *expr = new;
+                    }
+                    Lt | LtEq | Gt | GtEq => {
+                        let mut new = BinaryOp {
+                            left: Box::new(left.last().unwrap().clone()),
+                            op: op.clone(),
+                            right: Box::new(right.last().unwrap().clone()),
+                        };
+                        for (l, r) in left.iter().zip(right).rev().skip(1) {
+                            new = BinaryOp {
+                                left: Box::new(BinaryOp {
+                                    left: Box::new(l.clone()),
+                                    op: match op {
+                                        Lt | LtEq => Lt,
+                                        Gt | GtEq => Gt,
+                                        _ => unreachable!(),
+                                    },
+                                    right: Box::new(r.clone()),
+                                }),
+                                op: Or,
+                                right: Box::new(BinaryOp {
+                                    left: Box::new(BinaryOp {
+                                        left: Box::new(l.clone()),
+                                        op: Eq,
+                                        right: Box::new(r.clone()),
+                                    }),
+                                    op: And,
+                                    right: Box::new(new),
+                                }),
+                            };
+                        }
+                        *expr = new;
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        visit_mut::visit_expr_mut(self, expr);
+    }
+}
+
+fn set_expr_arity(expr: &SetExpr) -> usize {
+    match expr {
+        SetExpr::Select(select) => select.projection.len(),
+        SetExpr::Query(query) => set_expr_arity(&query.body),
+        SetExpr::SetOperation { left, .. } => set_expr_arity(left),
+        SetExpr::Values(values) => values.0[0].len(),
     }
 }

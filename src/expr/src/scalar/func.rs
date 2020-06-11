@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ore::collections::CollectionExt;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::regex::Regex;
-use repr::{ColumnType, Datum, RowArena, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, RowArena, ScalarType};
 
 use crate::{EvalError, ScalarExpr};
 
@@ -29,6 +29,7 @@ pub(crate) mod interval;
 pub(crate) mod jsonb;
 pub(crate) mod list;
 pub(crate) mod null;
+pub(crate) mod record;
 pub(crate) mod string;
 
 /// Specifies the null behavior of a function.
@@ -58,6 +59,7 @@ pub enum OutputType {
     Fixed(ScalarType),
     /// The output type is computed based on the input types.
     Computed(fn(Vec<ColumnType>) -> ScalarType),
+    Computed2(Box<dyn Fn(Vec<ColumnType>) -> ScalarType>),
 }
 
 impl fmt::Debug for OutputType {
@@ -66,6 +68,7 @@ impl fmt::Debug for OutputType {
             OutputType::MatchesInput => f.write_str("OutputType::MatchesInput"),
             OutputType::Fixed(ty) => write!(f, "OutputType::Fixed({:?})", ty),
             OutputType::Computed(_) => f.write_str("OutputType::Computed(<omitted>)"),
+            OutputType::Computed2(_) => f.write_str("OutputType::Computed2(<omitted>)"),
         }
     }
 }
@@ -126,6 +129,7 @@ impl FuncProps {
                 input_types.into_first().nullable(nullable)
             }
             OutputType::Computed(f) => ColumnType::new(f(input_types)).nullable(nullable),
+            OutputType::Computed2(f) => ColumnType::new(f(input_types)).nullable(nullable),
         }
     }
 
@@ -300,6 +304,9 @@ pub enum UnaryFunc {
     // Null-handling functions.
     IsNull,
 
+    // Record functions.
+    RecordGet(usize),
+
     // String functions.
     CastBytesToString,
     CastStringToBytes,
@@ -439,6 +446,9 @@ impl UnaryFunc {
             // Null-handling functions.
             IsNull => null::is_null(a),
 
+            // Record functions.
+            RecordGet(i) => record::record_get(a, *i),
+
             // String functions.
             CastBytesToString => string::cast_bytes_to_string(a, temp_storage),
             CastStringToBytes => string::cast_string_to_bytes(a, temp_storage),
@@ -556,6 +566,9 @@ impl UnaryFunc {
 
             // Null-handling functions.
             IsNull => null::IS_NULL_PROPS,
+
+            // Record functions.
+            RecordGet(i) => record::record_get_props(*i),
 
             // String functions.
             CastBytesToString => string::CAST_BYTES_TO_STRING_PROPS,
@@ -684,7 +697,10 @@ impl fmt::Display for UnaryFunc {
             JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
 
             // Null-handling functions.
-            UnaryFunc::IsNull => f.write_str("isnull"),
+            IsNull => f.write_str("isnull"),
+
+            // Record functions.
+            RecordGet(i) => write!(f, "record_get_{}", i),
 
             // String functions.
             CastBytesToString => f.write_str("bytestostr"),
@@ -1114,7 +1130,9 @@ pub enum VariadicFunc {
     MakeTimestamp,
 
     // List functions.
-    ListCreate { elem_type: ScalarType },
+    ListCreate {
+        elem_type: ScalarType,
+    },
 
     // JSONB functions.
     JsonbBuildArray,
@@ -1122,6 +1140,12 @@ pub enum VariadicFunc {
 
     // Null-handling functions.
     Coalesce,
+
+    // Record functions.
+    RecordCreate {
+        field_names: Vec<ColumnName>,
+        oid: Option<u32>,
+    },
 
     // String functions.
     Concat,
@@ -1168,6 +1192,9 @@ impl VariadicFunc {
             // Null-handling functions.
             Coalesce => null::coalesce(datums, temp_storage, exprs),
 
+            // Record functions.
+            RecordCreate { .. } => eager!(record::record_create, temp_storage),
+
             // String functions.
             Concat => eager!(string::concat_variadic, temp_storage),
             Substr => eager!(string::substr),
@@ -1191,6 +1218,11 @@ impl VariadicFunc {
 
             // Null-handling functions.
             Coalesce => null::COALESCE_PROPS,
+
+            // Record functions.
+            RecordCreate { field_names, oid } => {
+                record::record_create_props(field_names.clone(), *oid)
+            }
 
             // String functions.
             Concat => string::CONCAT_VARIADIC_PROPS,
@@ -1221,6 +1253,9 @@ impl fmt::Display for VariadicFunc {
 
             // Null-handling functions.
             Coalesce => f.write_str("coalesce"),
+
+            // Record functions.
+            RecordCreate { .. } => f.write_str("record_create"),
 
             // String functions.
             Concat => f.write_str("concat"),

@@ -174,8 +174,9 @@ pub enum CoercibleScalarExpr {
     Coerced(ScalarExpr),
     Parameter(usize),
     LiteralNull,
-    LiteralList(Vec<CoercibleScalarExpr>),
     LiteralString(String),
+    LiteralList(Vec<CoercibleScalarExpr>),
+    LiteralRecord(Vec<CoercibleScalarExpr>),
 }
 
 pub trait ScalarTypeable {

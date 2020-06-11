@@ -54,11 +54,16 @@ SELECT (1, 2, 'hello', NULL, NULL) AS t, (true, NULL, (false, 6.6, false)) AS u 
 t              u
 (1,2,hello,,)  (t,,"(f,6.6,f)")
 
-query T
+mode standard
+
+query T multiline
 SELECT (1, e'hello\nworld')
 ----
 (1,"hello
 world")
+EOF
+
+mode cockroach
 
 query BBBBBBBBB colnames
 SELECT
@@ -167,10 +172,10 @@ SELECT
 a     b     c      d
 true  NULL  false  NULL
 
-statement error pq: tuples \(1, 2\), \(1, 'hi'\) are not comparable at index 2: unsupported comparison operator
+statement error invalid input syntax for int4
 SELECT (1, 2) > (1, 'hi') FROM tb
 
-statement error pq: expected tuple \(1, 2, 3\) to have a length of 2
+statement error unequal number of entries in row expressions
 SELECT (1, 2) > (1, 2, 3) FROM tb
 
 statement ok
@@ -194,13 +199,15 @@ a b c
 2 3 1
 3 1 2
 
-query T colnames,rowsort
+# NOTE(benesch): Cockroach mishandles this. This test has been adapted to match
+# PostgreSQL.
+query III colnames,rowsort
 SELECT (t.*) AS a FROM t
 ----
-a
-(2,3,1)
-(3,1,2)
-(1,2,3)
+a b c
+2 3 1
+3 1 2
+1 2 3
 
 query BB colnames
 SELECT ((1, 2), 'equal') = ((1, 2.0), 'equal') AS a,
@@ -218,20 +225,20 @@ a
 false
 
 query B colnames
-SELECT (ROW(pow(1, 10.0) + 9), 'a' || 'b') = (ROW(sqrt(100.0)), 'ab') AS a
+SELECT (ROW(1 + 9), 'a' || 'b') = (ROW(sqrt(100.0)), 'ab') AS a
   FROM tb
 ----
 a
 true
 
 query B colnames
-SELECT (ROW(sqrt(100.0)), 'ab') = (ROW(pow(1, 10.0) + 9), 'a' || 'b') AS a
+SELECT (ROW(sqrt(100.0)), 'ab') = (ROW(1 + 9), 'a' || 'b') AS a
   FROM tb
 ----
 a
 true
 
-query error pq: tuples \(\(1, 2\), 'equal'\), \(\(1, 'huh'\), 'equal'\) are not comparable at index 1: tuples \(1, 2\), \(1, 'huh'\) are not comparable at index 2: unsupported comparison operator
+query error invalid input syntax for int4
 SELECT ((1, 2), 'equal') = ((1, 'huh'), 'equal') FROM tb
 
 # Issue #3568
@@ -311,7 +318,7 @@ r
 NULL
 
 query B colnames
-SELECT 1 IN (2, x) AS r FROM (SELECT NULL AS x FROM tb)
+SELECT 1 IN (2, x) AS r FROM (SELECT NULL::int AS x FROM tb)
 ----
 r
 NULL
@@ -678,219 +685,33 @@ DROP TABLE uvw
 
 subtest tuple_placeholders
 
-statement ok
-PREPARE x AS SELECT $1 = (1,2) AS r FROM tb
+# TODO(benesch): support the statement form of PREPARE and EXECUTE.
+#
+# statement ok
+# PREPARE x AS SELECT $1 = (1,2) AS r FROM tb
+#
+# statement ok
+# PREPARE y AS SELECT (1,2) = $1 AS r FROM tb
+#
+# query B colnames
+# EXECUTE x((1,2))
+# ----
+# r
+# true
+#
+# query B colnames
+# EXECUTE y((1,2))
+# ----
+# r
+# true
+#
+# query error expected EXECUTE parameter expression to have type tuple\{int, int\}, but '\(1, 2, 3\)' has type tuple\{int, int, int\}
+# EXECUTE x((1,2,3))
 
-statement ok
-PREPARE y AS SELECT (1,2) = $1 AS r FROM tb
-
-query B colnames
-EXECUTE x((1,2))
-----
-r
-true
-
-query B colnames
-EXECUTE y((1,2))
-----
-r
-true
-
-query error expected EXECUTE parameter expression to have type tuple\{int, int\}, but '\(1, 2, 3\)' has type tuple\{int, int, int\}
-EXECUTE x((1,2,3))
-
-subtest labeled_tuple
-
-# Selecting two tuples
-query TT colnames
-SELECT ((1, 2, 'hello', NULL, NULL) AS a1, b2, c3, d4, e5) AS r,
-       ((true, NULL, (false, 6.6, false)) AS a1, b2, c3) AS s
-  FROM tb
-----
-r              s
-(1,2,hello,,)  (t,,"(f,6.6,f)")
-
-# Comparing tuples
-query BBB colnames
-SELECT ((2, 2) AS a, b) < ((1, 1) AS c, d) AS r
-      ,((2, 2) AS a, b) < (1, 2) AS s
-      ,(2, 2) < ((1, 3) AS c, d) AS t
- FROM tb
-----
-r      s      t
-false  false  false
-
-statement error pq: tuples \(\(1, 2\) AS a, b\), \(\(1, 'hi'\) AS c, d\) are not comparable at index 2: unsupported comparison operator: <int> > <string>
-SELECT ((1, 2) AS a, b) > ((1, 'hi') AS c, d) FROM tb
-
-statement error pq: expected tuple \(\(1, 2, 3\) AS a, b, c\) to have a length of 2
-SELECT ((1, 2) AS a, b, c) > ((1, 2, 3) AS a, b, c) FROM tb
-
-query BBBBBBBBBBBBBBBB colnames
-SELECT ((((1, 2) AS a, b), 'value') AS c, d) = ((((1, 2) AS e, f), 'value') AS g, h) AS nnnn
-      ,((((1, 2) AS a, b), 'value') AS c, d) = (((1, 2) AS e, f), 'value')           AS nnnu
-      ,((((1, 2) AS a, b), 'value') AS c, d) = (((1, 2), 'value') AS g, h)           AS nnun
-      ,((((1, 2) AS a, b), 'value') AS c, d) = ((1, 2), 'value')                     AS nnuu
-      ,(((1, 2) AS a, b), 'value')           = ((((1, 2) AS e, f), 'value') AS g, h) AS nunn
-      ,(((1, 2) AS a, b), 'value')           = (((1, 2) AS e, f), 'value')           AS nunu
-      ,(((1, 2) AS a, b), 'value')           = (((1, 2), 'value') AS g, h)           AS nuun
-      ,(((1, 2) AS a, b), 'value')           = ((1, 2), 'value')                     AS nuuu
-      ,(((1, 2), 'value') AS c, d)           = ((((1, 2) AS e, f), 'value') AS g, h) AS unnn
-      ,(((1, 2), 'value') AS c, d)           = (((1, 2) AS e, f), 'value')           AS unnu
-      ,(((1, 2), 'value') AS c, d)           = (((1, 2), 'value') AS g, h)           AS unun
-      ,(((1, 2), 'value') AS c, d)           = ((1, 2), 'value')                     AS unuu
-      ,((1, 2), 'value')                     = ((((1, 2) AS e, f), 'value') AS g, h) AS uunn
-      ,((1, 2), 'value')                     = (((1, 2) AS e, f), 'value')           AS uunu
-      ,((1, 2), 'value')                     = (((1, 2), 'value') AS g, h)           AS uuun
-      ,((1, 2), 'value')                     = ((1, 2), 'value')                     AS uuuu
- FROM tb
-----
-nnnn  nnnu  nnun  nnuu  nunn  nunu  nuun  nuuu  unnn  unnu  unun  unuu  uunn  uunu  uuun  uuuu
-true  true  true  true  true  true  true  true  true  true  true  true  true  true  true  true
-
-query BB colnames
-SELECT (((ROW(pow(1, 10.0) + 9) AS t1), 'a' || 'b') AS t2, t3) = (((ROW(sqrt(100.0)) AS t4), 'ab') AS t5, t6) AS a
-      ,(ROW(pow(1, 10.0) + 9), 'a' || 'b') = (((ROW(sqrt(100.0)) AS t4), 'ab') AS t5, t6) AS b
- FROM tb
-----
-a     b
-true  true
-
-subtest labeled_tuple_errors
-
-query error pq: tuples \(\(\(\(1, 2\) AS a, b\), 'equal'\) AS c, d\), \(\(\(\(1, 'huh'\) AS e, f\), 'equal'\) AS g, h\) are not comparable at index 1: tuples \(\(1, 2\) AS a, b\), \(\(1, 'huh'\) AS e, f\) are not comparable at index 2: unsupported comparison operator: <int> = <string>
-SELECT ((((1, 2) AS a, b), 'equal') AS c, d) = ((((1, 'huh') AS e, f), 'equal') AS g, h) FROM tb
-
-# Ensure the number of labels matches the number of expressions
-query error pq: mismatch in tuple definition: 2 expressions, 1 labels
-SELECT ((1, '2') AS a) FROM tb
-
-query error pq: mismatch in tuple definition: 1 expressions, 2 labels
-SELECT (ROW(1) AS a, b) FROM tb
-
-# Tuple labels must be different
-query error pq: found duplicate tuple label: "a"
-SELECT ((1, '2') AS a, a) FROM tb
-
-query error pq: found duplicate tuple label: "a"
-SELECT ((1, '2', true) AS a, a, b) FROM tb
-
-query error pq: found duplicate tuple label: "a"
-SELECT ((1, '2', true) AS a, b, a) FROM tb
-
-query error pq: found duplicate tuple label: "a"
-SELECT ((1, '2', true) AS b, a, a) FROM tb
-
-# But inner tuples can reuse labels
-query T colnames
-SELECT ((
-         (
-          (((1, '2', 3) AS a, b, c),
-           ((4,'5') AS a, b),
-		   (ROW(6) AS a))
-		   AS a, b, c),
-		 ((7, 8) AS a, b),
-		 (ROW('9') AS a))
-		 AS a, b, c
-		) AS r
- FROM tb
-----
-r
-("(""(1,2,3)"",""(4,5)"",""(6)"")","(7,8)","(9)")
-
-subtest labeled_tuple_column_access
-
-## base working case
-
-# Accessing a specific column
-query error pq: could not identify column "x" in tuple{int AS a, int AS b, int AS c}
-SELECT (((1,2,3) AS a,b,c)).x FROM tb
-
-query ITBITB colnames
-SELECT (((1,'2',true) AS a,b,c)).a
-      ,(((1,'2',true) AS a,b,c)).b
-      ,(((1,'2',true) AS a,b,c)).c
-      ,((ROW(1,'2',true) AS a,b,c)).a
-      ,((ROW(1,'2',true) AS a,b,c)).b
-      ,((ROW(1,'2',true) AS a,b,c)).c
- FROM tb
-----
-a  b  c     a  b  c
-1  2  true  1  2  true
-
-subtest labeled_tuple_column_access_errors
-
-# column doesn't exist
-query error pq: could not identify column "x" in tuple{int AS a, int AS b, int AS c}
-SELECT (((1,2,3) AS a,b,c)).x FROM tb
-
-# Missing extra parentheses
-query error pq: syntax error at or near "."
-SELECT ((1,2,3) AS a,b,c).x FROM tb
-
-query error pq: syntax error at or near "."
-SELECT ((1,2,3) AS a,b,c).* FROM tb
-
-# No labels
-query error pq: type tuple{int, int, int} is not composite
-SELECT ((1,2,3)).x FROM tb
-
-query error pq: type tuple{int, int, int} is not composite
-SELECT ((1,2,3)).* FROM tb
-
-# Accessing all the columns
-
-query ITB colnames
-SELECT (((1,'2',true) AS a,b,c)).* FROM tb
-----
-a  b  c
-1  2  true
-
-query ITB colnames
-SELECT ((ROW(1,'2',true) AS a,b,c)).* FROM tb
-----
-a  b  c
-1  2  true
-
-query T
-SELECT (((ROW(1,'2',true) AS a,b,c)).*, 456) FROM tb
-----
-("(1,2,t)",456)
-
-query I colnames
-SELECT ((ROW(1) AS a)).* FROM tb
-----
-a
-1
-
-
-subtest literal_labeled_tuple_in_subquery
-
-query ITB colnames
-SELECT (x).e, (x).f, (x).g
-FROM (
-  SELECT ((1,'2',true) AS e,f,g) AS x FROM tb
-)
-----
-e  f  g
-1  2  true
-
-query ITB colnames
-SELECT (x).*
-FROM (
-  SELECT ((1,'2',true) AS e,f,g) AS x FROM tb
-)
-----
-e  f  g
-1  2  true
-
-subtest labeled_tuples_derived_from_relational_subquery_schema
-
-query IT
-  SELECT (x).a, (x).b
-    FROM (SELECT (ROW(a, b) AS a, b) AS x FROM (VALUES (1, 'one')) AS t(a, b))
-----
-1 one
+# NOTE(benesch): many tests related to a CockroachDB extension called "labeled
+# tuples" were removed from this test file. The labeled tuple extension looks
+# like a bad hack to work around CockroachDB's missing support for true
+# composite types, and I do not expect us to ever support it.
 
 statement ok
 CREATE TABLE t (a int, b string)
@@ -899,14 +720,12 @@ statement ok
 INSERT INTO t VALUES (1, 'one'), (2, 'two')
 
 query IT
-  SELECT (x).a, (x).b
-    FROM (SELECT (ROW(a, b) AS a, b) AS x FROM t)
+  SELECT (x).f1, (x).f2
+    FROM (SELECT (ROW(a, b)) AS x FROM t)
 ORDER BY 1
    LIMIT 1
 ----
 1 one
-
-subtest labeled_column_access_from_table
 
 query IT colnames
 SELECT (t.*).* FROM t ORDER BY 1,2
@@ -915,22 +734,18 @@ a  b
 1  one
 2  two
 
-
-# Pending #26719
-query error pq: column "t" does not exist
+query I colnames rowsort
 SELECT (t).a FROM t
-
-statement ok
-DROP TABLE t
+----
+a
+1
+2
 
 query B
 SELECT (1, 2, 3) IS NULL AS r
 ----
 false
 
-subtest regression_for_34262
-
-query B
+query error syntax error
 SELECT () = ()
-----
-true
+

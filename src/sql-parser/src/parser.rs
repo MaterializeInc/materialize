@@ -380,7 +380,7 @@ impl Parser {
                 }
             })),
             Token::LParen => {
-                let expr = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
+                let mut expr = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
                     self.prev_token();
                     Expr::Subquery(Box::new(self.parse_query()?))
                 } else {
@@ -392,6 +392,23 @@ impl Parser {
                     }
                 };
                 self.expect_token(&Token::RParen)?;
+                while self.consume_token(&Token::Period) {
+                    let field = match self.next_token() {
+                        Some(Token::Word(w)) => Some(w.to_ident()),
+                        Some(Token::Mult) => None,
+                        unexpected => {
+                            return self.expected(
+                                self.peek_prev_range(),
+                                "an identifier or a '*' after '.'",
+                                unexpected,
+                            );
+                        }
+                    };
+                    expr = Expr::FieldAccess {
+                        expr: Box::new(expr),
+                        field,
+                    };
+                }
                 Ok(expr)
             }
             unexpected => self.expected(self.peek_prev_range(), "an expression", Some(unexpected)),
@@ -2768,18 +2785,12 @@ impl Parser {
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem, ParserError> {
         if self.consume_token(&Token::Mult) {
-            return Ok(SelectItem::Wildcard);
-        }
-        let expr = self.parse_expr()?;
-        if let Expr::QualifiedWildcard(prefix) = expr {
-            Ok(SelectItem::QualifiedWildcard(ObjectName(prefix)))
+            Ok(SelectItem::Wildcard)
         } else {
-            // `expr` is a regular SQL expression and can be followed by an alias
-            if let Some(alias) = self.parse_optional_alias(keywords::RESERVED_FOR_COLUMN_ALIAS)? {
-                Ok(SelectItem::ExprWithAlias { expr, alias })
-            } else {
-                Ok(SelectItem::UnnamedExpr(expr))
-            }
+            Ok(SelectItem::Expr {
+                expr: self.parse_expr()?,
+                alias: self.parse_optional_alias(keywords::RESERVED_FOR_COLUMN_ALIAS)?,
+            })
         }
     }
 

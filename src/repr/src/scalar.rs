@@ -11,12 +11,13 @@ use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
-use crate::{ColumnType, DatumDict, DatumList};
+use crate::{ColumnName, ColumnType, DatumDict, DatumList};
 
 /// A single value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -52,7 +53,7 @@ pub enum Datum<'a> {
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(&'a str),
-    /// A homogeneous sequence of `Datum`s.
+    /// A sequence of `Datum`s.
     List(DatumList<'a>),
     /// A mapping from string keys to `Datum`s.
     Dict(DatumDict<'a>),
@@ -330,6 +331,10 @@ impl<'a> Datum<'a> {
                 (Datum::List(list), ScalarType::List(t)) => list
                     .iter()
                     .all(|e| e.is_null() || e.is_instance_of_scalar(t)),
+                (Datum::List(list), ScalarType::Record { fields, .. }) => list
+                    .iter()
+                    .zip_eq(fields)
+                    .all(|(e, (_, t))| e.is_null() || e.is_instance_of_scalar(t)),
                 (Datum::List(_), _) => false,
                 (Datum::Dict(_), _) => false,
                 (Datum::JsonNull, _) => false,
@@ -584,6 +589,16 @@ pub enum ScalarType {
     /// Elements within the list are of the specified type. List elements may
     /// always be [`Datum::Null`].
     List(Box<ScalarType>),
+    /// An ordered and named sequence of datums.
+    Record {
+        /// The names and types of the fields of the record, in order from left
+        /// to right.
+        fields: Vec<(ColumnName, ScalarType)>,
+        /// An optional OID associated with this type. OIDs are opaque to the
+        /// dataflow layer, but are used by the SQL layer to track additional
+        /// metadata associated with record types.
+        oid: Option<u32>,
+    },
 }
 
 impl<'a> ScalarType {
@@ -619,6 +634,8 @@ impl<'a> ScalarType {
             ScalarType::String => Datum::String(""),
             ScalarType::Jsonb => Datum::JsonNull,
             ScalarType::List(_) => Datum::List(DatumList::empty()),
+            // This is wrong, but so is the existence of this method.
+            ScalarType::Record { .. } => Datum::List(DatumList::empty()),
         }
     }
 
@@ -657,6 +674,16 @@ impl PartialEq for ScalarType {
             | (Jsonb, Jsonb) => true,
 
             (List(a), List(b)) => a.eq(b),
+            (
+                Record {
+                    fields: fields_a,
+                    oid: oid_a,
+                },
+                Record {
+                    fields: fields_b,
+                    oid: oid_b,
+                },
+            ) => fields_a.eq(fields_b) && oid_a.eq(oid_b),
 
             (Bool, _)
             | (Int32, _)
@@ -672,7 +699,8 @@ impl PartialEq for ScalarType {
             | (Bytes, _)
             | (String, _)
             | (Jsonb, _)
-            | (List(_), _) => false,
+            | (List(_), _)
+            | (Record { .. }, _) => false,
         }
     }
 }
@@ -704,6 +732,11 @@ impl Hash for ScalarType {
                 state.write_u8(14);
                 t.hash(state);
             }
+            Record { fields, oid } => {
+                state.write_u8(15);
+                fields.hash(state);
+                oid.hash(state);
+            }
         }
     }
 }
@@ -732,6 +765,15 @@ impl fmt::Display for ScalarType {
             String => f.write_str("string"),
             Jsonb => f.write_str("jsonb"),
             List(t) => write!(f, "{}[]", t),
+            Record { fields, oid } => {
+                f.write_str("record")?;
+                if let Some(oid) = oid {
+                    write!(f, "#{}", oid)?;
+                }
+                f.write_str("(")?;
+                write_delimited(f, ", ", fields, |f, (n, t)| write!(f, "{}: {}", n, t))?;
+                f.write_str(")")
+            }
         }
     }
 }
