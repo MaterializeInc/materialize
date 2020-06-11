@@ -18,8 +18,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::display::{AstDisplay, AstFormatter};
-use super::*;
+use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::{Expr, FunctionArgs, Ident, ObjectName};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -43,13 +43,13 @@ impl AstDisplay for Query {
     fn fmt(&self, f: &mut AstFormatter) {
         if !self.ctes.is_empty() {
             f.write_str("WITH ");
-            f.write_node(&display_comma_separated(&self.ctes));
+            f.write_node(&display::comma_separated(&self.ctes));
             f.write_str(" ");
         }
         f.write_node(&self.body);
         if !self.order_by.is_empty() {
             f.write_str(" ORDER BY ");
-            f.write_node(&display_comma_separated(&self.order_by));
+            f.write_node(&display::comma_separated(&self.order_by));
         }
         if let Some(ref limit) = self.limit {
             f.write_str(" LIMIT ");
@@ -160,10 +160,10 @@ impl AstDisplay for Select {
         if self.distinct {
             f.write_str("DISTINCT ");
         }
-        f.write_node(&display_comma_separated(&self.projection));
+        f.write_node(&display::comma_separated(&self.projection));
         if !self.from.is_empty() {
             f.write_str(" FROM ");
-            f.write_node(&display_comma_separated(&self.from));
+            f.write_node(&display::comma_separated(&self.from));
         }
         if let Some(ref selection) = self.selection {
             f.write_str(" WHERE ");
@@ -171,7 +171,7 @@ impl AstDisplay for Select {
         }
         if !self.group_by.is_empty() {
             f.write_str(" GROUP BY ");
-            f.write_node(&display_comma_separated(&self.group_by));
+            f.write_node(&display::comma_separated(&self.group_by));
         }
         if let Some(ref having) = self.having {
             f.write_str(" HAVING ");
@@ -294,7 +294,7 @@ impl AstDisplay for TableFactor {
                 }
                 if !with_hints.is_empty() {
                     f.write_str(" WITH (");
-                    f.write_node(&display_comma_separated(with_hints));
+                    f.write_node(&display::comma_separated(with_hints));
                     f.write_str(")");
                 }
             }
@@ -335,7 +335,7 @@ impl AstDisplay for TableAlias {
         f.write_node(&self.name);
         if !self.columns.is_empty() {
             f.write_str(" (");
-            f.write_node(&display_comma_separated(&self.columns));
+            f.write_node(&display::comma_separated(&self.columns));
             f.write_str(")");
         }
     }
@@ -367,7 +367,7 @@ impl AstDisplay for Join {
                         }
                         JoinConstraint::Using(attrs) => {
                             f.write_str(" USING(");
-                            f.write_node(&display_comma_separated(attrs));
+                            f.write_node(&display::comma_separated(attrs));
                             f.write_str(")");
                         }
                         _ => {}
@@ -497,7 +497,7 @@ impl AstDisplay for Values {
             f.write_str(delim);
             delim = ", ";
             f.write_str("(");
-            f.write_node(&display_comma_separated(row));
+            f.write_node(&display::comma_separated(row));
             f.write_str(")");
         }
     }

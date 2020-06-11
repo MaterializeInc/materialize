@@ -28,9 +28,9 @@ use std::rc::Rc;
 use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    BinaryOperator, DataType, Expr, ExtractField, Function, FunctionArgs, Ident, JoinConstraint,
-    JoinOperator, ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
-    TableAlias, TableFactor, TableWithJoins, TrimSide, UnaryOperator, Value, Values,
+    BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
+    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
+    TableFactor, TableWithJoins, TrimSide, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -1614,17 +1614,15 @@ pub fn plan_coercible_expr<'a>(
                     typ = ecx.scalar_type(&expr);
                 }
                 let func = match &typ {
-                    ScalarType::Interval => match field {
-                        ExtractField::Year => UnaryFunc::ExtractIntervalYear,
-                        ExtractField::Month => UnaryFunc::ExtractIntervalMonth,
-                        ExtractField::Day => UnaryFunc::ExtractIntervalDay,
-                        ExtractField::Hour => UnaryFunc::ExtractIntervalHour,
-                        ExtractField::Minute => UnaryFunc::ExtractIntervalMinute,
-                        ExtractField::Second => UnaryFunc::ExtractIntervalSecond,
-                        ExtractField::Epoch => UnaryFunc::ExtractIntervalEpoch,
-                        ExtractField::DayOfWeek
-                        | ExtractField::IsoDayOfWeek
-                        | ExtractField::Quarter => {
+                    ScalarType::Interval => match field.as_str() {
+                        "year" => UnaryFunc::ExtractIntervalYear,
+                        "month" => UnaryFunc::ExtractIntervalMonth,
+                        "day" => UnaryFunc::ExtractIntervalDay,
+                        "hour" => UnaryFunc::ExtractIntervalHour,
+                        "minute" => UnaryFunc::ExtractIntervalMinute,
+                        "second" => UnaryFunc::ExtractIntervalSecond,
+                        "epoch" => UnaryFunc::ExtractIntervalEpoch,
+                        "dow" | "isodow" | "quarter" => {
                             failure::bail!("invalid extract field for INTERVAL: {}", field)
                         }
                         _ => failure::bail!(
@@ -1632,37 +1630,37 @@ pub fn plan_coercible_expr<'a>(
                             field
                         ),
                     },
-                    ScalarType::Timestamp => match field {
-                        ExtractField::Year => UnaryFunc::ExtractTimestampYear,
-                        ExtractField::Quarter => UnaryFunc::ExtractTimestampQuarter,
-                        ExtractField::Month => UnaryFunc::ExtractTimestampMonth,
-                        ExtractField::Day => UnaryFunc::ExtractTimestampDay,
-                        ExtractField::Hour => UnaryFunc::ExtractTimestampHour,
-                        ExtractField::Minute => UnaryFunc::ExtractTimestampMinute,
-                        ExtractField::Second => UnaryFunc::ExtractTimestampSecond,
-                        ExtractField::WeekOfYear => UnaryFunc::ExtractTimestampWeek,
-                        ExtractField::DayOfYear => UnaryFunc::ExtractTimestampDayOfYear,
-                        ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampDayOfWeek,
-                        ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampIsoDayOfWeek,
-                        ExtractField::Epoch => UnaryFunc::ExtractTimestampEpoch,
+                    ScalarType::Timestamp => match field.as_str() {
+                        "year" => UnaryFunc::ExtractTimestampYear,
+                        "quarter" => UnaryFunc::ExtractTimestampQuarter,
+                        "month" => UnaryFunc::ExtractTimestampMonth,
+                        "day" => UnaryFunc::ExtractTimestampDay,
+                        "hour" => UnaryFunc::ExtractTimestampHour,
+                        "minute" => UnaryFunc::ExtractTimestampMinute,
+                        "second" => UnaryFunc::ExtractTimestampSecond,
+                        "week" => UnaryFunc::ExtractTimestampWeek,
+                        "doy" => UnaryFunc::ExtractTimestampDayOfYear,
+                        "dow" => UnaryFunc::ExtractTimestampDayOfWeek,
+                        "isodow" => UnaryFunc::ExtractTimestampIsoDayOfWeek,
+                        "epoch" => UnaryFunc::ExtractTimestampEpoch,
                         _ => failure::bail!(
                             "EXTRACT({} ..) for timestamp is not yet implemented",
                             field
                         ),
                     },
-                    ScalarType::TimestampTz => match field {
-                        ExtractField::Year => UnaryFunc::ExtractTimestampTzYear,
-                        ExtractField::Quarter => UnaryFunc::ExtractTimestampTzQuarter,
-                        ExtractField::Month => UnaryFunc::ExtractTimestampTzMonth,
-                        ExtractField::Day => UnaryFunc::ExtractTimestampTzDay,
-                        ExtractField::Hour => UnaryFunc::ExtractTimestampTzHour,
-                        ExtractField::Minute => UnaryFunc::ExtractTimestampTzMinute,
-                        ExtractField::Second => UnaryFunc::ExtractTimestampTzSecond,
-                        ExtractField::WeekOfYear => UnaryFunc::ExtractTimestampTzWeek,
-                        ExtractField::DayOfYear => UnaryFunc::ExtractTimestampTzDayOfYear,
-                        ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampTzDayOfWeek,
-                        ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampTzIsoDayOfWeek,
-                        ExtractField::Epoch => UnaryFunc::ExtractTimestampTzEpoch,
+                    ScalarType::TimestampTz => match field.as_str() {
+                        "year" => UnaryFunc::ExtractTimestampTzYear,
+                        "quarter" => UnaryFunc::ExtractTimestampTzQuarter,
+                        "month" => UnaryFunc::ExtractTimestampTzMonth,
+                        "day" => UnaryFunc::ExtractTimestampTzDay,
+                        "hour" => UnaryFunc::ExtractTimestampTzHour,
+                        "minute" => UnaryFunc::ExtractTimestampTzMinute,
+                        "second" => UnaryFunc::ExtractTimestampTzSecond,
+                        "week" => UnaryFunc::ExtractTimestampTzWeek,
+                        "doy" => UnaryFunc::ExtractTimestampTzDayOfYear,
+                        "dow" => UnaryFunc::ExtractTimestampTzDayOfWeek,
+                        "isodow" => UnaryFunc::ExtractTimestampTzIsoDayOfWeek,
+                        "epoch" => UnaryFunc::ExtractTimestampTzEpoch,
                         _ => failure::bail!(
                             "EXTRACT({} ..) for timestamp tz is not yet implemented",
                             field

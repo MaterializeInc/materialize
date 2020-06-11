@@ -112,107 +112,107 @@ id::numeric
 parse-scalar
 EXTRACT(YEAR FROM d)
 ----
-Extract { field: Year, expr: Identifier([Ident("d")]) }
+Extract { field: "year", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(MILLENIUM FROM d)
 ----
-Extract { field: Millenium, expr: Identifier([Ident("d")]) }
+Extract { field: "millenium", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(CENTURY FROM d)
 ----
-Extract { field: Century, expr: Identifier([Ident("d")]) }
+Extract { field: "century", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(YEAR FROM d)
 ----
-Extract { field: Year, expr: Identifier([Ident("d")]) }
+Extract { field: "year", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(ISOYEAR FROM d)
 ----
-Extract { field: IsoYear, expr: Identifier([Ident("d")]) }
+Extract { field: "isoyear", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(QUARTER FROM d)
 ----
-Extract { field: Quarter, expr: Identifier([Ident("d")]) }
+Extract { field: "quarter", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(MONTH FROM d)
 ----
-Extract { field: Month, expr: Identifier([Ident("d")]) }
+Extract { field: "month", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(DAY FROM d)
 ----
-Extract { field: Day, expr: Identifier([Ident("d")]) }
+Extract { field: "day", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(HOUR FROM d)
 ----
-Extract { field: Hour, expr: Identifier([Ident("d")]) }
+Extract { field: "hour", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(MINUTE FROM d)
 ----
-Extract { field: Minute, expr: Identifier([Ident("d")]) }
+Extract { field: "minute", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(SECOND FROM d)
 ----
-Extract { field: Second, expr: Identifier([Ident("d")]) }
+Extract { field: "second", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(MILLISECONDS FROM d)
 ----
-Extract { field: Milliseconds, expr: Identifier([Ident("d")]) }
+Extract { field: "milliseconds", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(MICROSECONDS FROM d)
 ----
-Extract { field: Microseconds, expr: Identifier([Ident("d")]) }
+Extract { field: "microseconds", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(TIMEZONE FROM d)
 ----
-Extract { field: Timezone, expr: Identifier([Ident("d")]) }
+Extract { field: "timezone", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(TIMEZONE_HOUR FROM d)
 ----
-Extract { field: TimezoneHour, expr: Identifier([Ident("d")]) }
+Extract { field: "timezone_hour", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(TIMEZONE_MINUTE FROM d)
 ----
-Extract { field: TimezoneMinute, expr: Identifier([Ident("d")]) }
+Extract { field: "timezone_minute", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(WEEK FROM d)
 ----
-Extract { field: WeekOfYear, expr: Identifier([Ident("d")]) }
+Extract { field: "week", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(DOY FROM d)
 ----
-Extract { field: DayOfYear, expr: Identifier([Ident("d")]) }
+Extract { field: "doy", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(DOW FROM d)
 ----
-Extract { field: DayOfWeek, expr: Identifier([Ident("d")]) }
+Extract { field: "dow", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(ISODOW FROM d)
 ----
-Extract { field: IsoDayOfWeek, expr: Identifier([Ident("d")]) }
+Extract { field: "isodow", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 EXTRACT(EPOCH FROM d)
 ----
-Extract { field: Epoch, expr: Identifier([Ident("d")]) }
+Extract { field: "epoch", expr: Identifier([Ident("d")]) }
 
 parse-scalar
 COALESCE(foo, bar)

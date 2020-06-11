@@ -19,21 +19,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-const AST_MOD: &str = "src/ast/mod.rs";
-
-// TODO(benesch): it might be cleaner to instead include only the types
-// reachable from `Statement`.
-const IGNORED_TYPES: &[&str] = &[
-    "AstFormatter",
-    "DisplaySeparated",
-    "EscapeSingleQuoteString",
-    "FormatMode",
-    "ValueError",
-];
+const AST_DEFS_MOD: &str = "src/ast/defs.rs";
 
 fn main() -> Result<()> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
-    let ir = walkabout::load(AST_MOD, IGNORED_TYPES)?;
+    let ir = walkabout::load(AST_DEFS_MOD)?;
     let visit = walkabout::gen_visit(&ir);
     let visit_mut = walkabout::gen_visit_mut(&ir);
     fs::write(out_dir.join("visit.rs"), visit)?;

@@ -20,6 +20,42 @@
 
 use std::fmt;
 
+pub struct DisplaySeparated<'a, T>
+where
+    T: AstDisplay,
+{
+    slice: &'a [T],
+    sep: &'static str,
+}
+
+impl<'a, T> AstDisplay for DisplaySeparated<'a, T>
+where
+    T: AstDisplay,
+{
+    fn fmt(&self, f: &mut AstFormatter) {
+        let mut delim = "";
+        for t in self.slice {
+            f.write_str(delim);
+            delim = self.sep;
+            t.fmt(f);
+        }
+    }
+}
+
+pub fn separated<'a, T>(slice: &'a [T], sep: &'static str) -> DisplaySeparated<'a, T>
+where
+    T: AstDisplay,
+{
+    DisplaySeparated { slice, sep }
+}
+
+pub fn comma_separated<T>(slice: &[T]) -> DisplaySeparated<'_, T>
+where
+    T: AstDisplay,
+{
+    DisplaySeparated { slice, sep: ", " }
+}
+
 /// Describes the context in which to print an AST.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FormatMode {
@@ -83,8 +119,8 @@ pub trait AstDisplay {
 // Derive a fmt::Display implementation for types implementing AstDisplay.
 macro_rules! impl_display {
     ($name:ident) => {
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(self.to_ast_string().as_str())
             }
         }
@@ -101,4 +137,27 @@ impl<T: AstDisplay> AstDisplay for Box<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         (**self).fmt(f);
     }
+}
+
+pub struct EscapeSingleQuoteString<'a>(&'a str);
+
+impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {
+    fn fmt(&self, f: &mut AstFormatter) {
+        for c in self.0.chars() {
+            if c == '\'' {
+                f.write_str("\'\'");
+            } else {
+                f.write_str(c);
+            }
+        }
+    }
+}
+impl<'a> fmt::Display for EscapeSingleQuoteString<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.to_ast_string())
+    }
+}
+
+pub fn escape_single_quote_string(s: &str) -> EscapeSingleQuoteString<'_> {
+    EscapeSingleQuoteString(s)
 }

@@ -20,9 +20,231 @@
 
 //! AST types specific to CREATE/ALTER variants of [Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
-use super::{display_comma_separated, DataType, Expr, Ident, ObjectName};
-use crate::ast::display::{AstDisplay, AstFormatter};
-use std::fmt;
+
+use std::path::PathBuf;
+
+use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::{DataType, Expr, Ident, ObjectName};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Schema {
+    File(PathBuf),
+    Inline(String),
+}
+
+impl AstDisplay for Schema {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::File(path) => {
+                f.write_str("SCHEMA FILE '");
+                f.write_node(&display::escape_single_quote_string(
+                    &path.display().to_string(),
+                ));
+                f.write_str("'");
+            }
+            Self::Inline(inner) => {
+                f.write_str("SCHEMA '");
+                f.write_node(&display::escape_single_quote_string(inner));
+                f.write_str("'");
+            }
+        }
+    }
+}
+impl_display!(Schema);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AvroSchema {
+    CsrUrl { url: String, seed: Option<CsrSeed> },
+    Schema(Schema),
+}
+
+impl AstDisplay for AvroSchema {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::CsrUrl { url, seed } => {
+                f.write_str("CONFLUENT SCHEMA REGISTRY '");
+                f.write_node(&display::escape_single_quote_string(url));
+                f.write_str("'");
+                if let Some(seed) = seed {
+                    f.write_str(" ");
+                    f.write_node(seed);
+                }
+            }
+            Self::Schema(schema) => schema.fmt(f),
+        }
+    }
+}
+impl_display!(AvroSchema);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsrSeed {
+    pub key_schema: Option<String>,
+    pub value_schema: String,
+}
+
+impl AstDisplay for CsrSeed {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SEED");
+        if let Some(key_schema) = &self.key_schema {
+            f.write_str(" KEY SCHEMA '");
+            f.write_node(&display::escape_single_quote_string(key_schema));
+            f.write_str("'");
+        }
+        f.write_str(" VALUE SCHEMA '");
+        f.write_node(&display::escape_single_quote_string(&self.value_schema));
+        f.write_str("'");
+    }
+}
+impl_display!(CsrSeed);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Format {
+    Bytes,
+    Avro(AvroSchema),
+    Protobuf {
+        message_name: String,
+        schema: Schema,
+    },
+    Regex(String),
+    Csv {
+        header_row: bool,
+        n_cols: Option<usize>,
+        delimiter: char,
+    },
+    Json,
+    Text,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Envelope {
+    None,
+    Debezium,
+    Upsert(Option<Format>),
+}
+
+impl Default for Envelope {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl AstDisplay for Envelope {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::None => {
+                // this is unreachable as long as the default is None, but include it in case we ever change that
+                f.write_str("NONE");
+            }
+            Self::Debezium => {
+                f.write_str("DEBEZIUM");
+            }
+            Self::Upsert(format) => {
+                f.write_str("UPSERT");
+                if let Some(format) = format {
+                    f.write_str(" FORMAT ");
+                    f.write_node(format);
+                }
+            }
+        }
+    }
+}
+impl_display!(Envelope);
+
+impl AstDisplay for Format {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::Bytes => f.write_str("BYTES"),
+            Self::Avro(inner) => {
+                f.write_str("AVRO USING ");
+                f.write_node(inner);
+            }
+            Self::Protobuf {
+                message_name,
+                schema,
+            } => {
+                f.write_str("PROTOBUF MESSAGE '");
+                f.write_node(&display::escape_single_quote_string(message_name));
+                f.write_str("' USING ");
+                f.write_str(schema);
+            }
+            Self::Regex(regex) => {
+                f.write_str("REGEX '");
+                f.write_node(&display::escape_single_quote_string(regex));
+                f.write_str("'");
+            }
+            Self::Csv {
+                header_row,
+                n_cols,
+                delimiter,
+            } => {
+                f.write_str("CSV WITH ");
+                if *header_row {
+                    f.write_str("HEADER");
+                } else {
+                    f.write_str(n_cols.unwrap());
+                    f.write_str(" COLUMNS");
+                }
+                if *delimiter != ',' {
+                    f.write_str(" DELIMITED BY '");
+                    f.write_node(&display::escape_single_quote_string(&delimiter.to_string()));
+                    f.write_str("'");
+                }
+            }
+            Self::Json => f.write_str("JSON"),
+            Self::Text => f.write_str("TEXT"),
+        }
+    }
+}
+impl_display!(Format);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Connector {
+    File {
+        path: String,
+    },
+    Kafka {
+        broker: String,
+        topic: String,
+    },
+    Kinesis {
+        arn: String,
+    },
+    /// Avro Object Container File
+    AvroOcf {
+        path: String,
+    },
+}
+
+impl AstDisplay for Connector {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Connector::File { path } => {
+                f.write_str("FILE '");
+                f.write_node(&display::escape_single_quote_string(path));
+                f.write_str("'");
+            }
+            Connector::Kafka { broker, topic } => {
+                f.write_str("KAFKA BROKER '");
+                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("'");
+                f.write_str(" TOPIC '");
+                f.write_node(&display::escape_single_quote_string(topic));
+                f.write_str("'");
+            }
+            Connector::Kinesis { arn } => {
+                f.write_str("KINESIS ARN '");
+                f.write_node(&display::escape_single_quote_string(arn));
+                f.write_str("'");
+            }
+            Connector::AvroOcf { path } => {
+                f.write_str("AVRO OCF '");
+                f.write_node(&display::escape_single_quote_string(path));
+                f.write_str("'");
+            }
+        }
+    }
+}
+impl_display!(Connector);
 
 /// An `ALTER TABLE` (`Statement::AlterTable`) operation
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -90,7 +312,7 @@ impl AstDisplay for TableConstraint {
                     f.write_str("UNIQUE ");
                 }
                 f.write_str("(");
-                f.write_node(&display_comma_separated(columns));
+                f.write_node(&display::comma_separated(columns));
                 f.write_str(")");
             }
             TableConstraint::ForeignKey {
@@ -101,11 +323,11 @@ impl AstDisplay for TableConstraint {
             } => {
                 f.write_node(&display_constraint_name(name));
                 f.write_str("FOREIGN KEY (");
-                f.write_node(&display_comma_separated(columns));
+                f.write_node(&display::comma_separated(columns));
                 f.write_str(") REFERENCES ");
                 f.write_node(foreign_table);
                 f.write_str("(");
-                f.write_node(&display_comma_separated(referred_columns));
+                f.write_node(&display::comma_separated(referred_columns));
                 f.write_str(")");
             }
             TableConstraint::Check { name, expr } => {
@@ -219,7 +441,7 @@ impl AstDisplay for ColumnOption {
                 f.write_str("REFERENCES ");
                 f.write_node(foreign_table);
                 f.write_str(" (");
-                f.write_node(&display_comma_separated(referred_columns));
+                f.write_node(&display::comma_separated(referred_columns));
                 f.write_str(")");
             }
             Check(expr) => {

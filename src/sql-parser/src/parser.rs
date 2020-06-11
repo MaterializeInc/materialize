@@ -23,7 +23,6 @@
 use std::error::Error;
 use std::fmt;
 use std::ops::Range;
-use std::str::FromStr;
 
 use log::debug;
 
@@ -462,14 +461,11 @@ impl Parser {
     }
 
     fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
-        let units = match self.next_token() {
-            Some(Token::Word(w)) => w
-                .keyword
-                .parse::<WindowFrameUnits>()
-                .map_err(|e| self.error(self.peek_prev_range(), e))?,
-            unexpected => {
-                return self.expected(self.peek_prev_range(), "ROWS, RANGE, GROUPS", unexpected)
-            }
+        let units = match self.expect_one_of_keywords(&["ROWS", "RANGE", "GROUPS"])? {
+            "ROWS" => WindowFrameUnits::Rows,
+            "RANGE" => WindowFrameUnits::Range,
+            "GROUPS" => WindowFrameUnits::Groups,
+            _ => unreachable!(),
         };
         let (start_bound, end_bound) = if self.parse_keyword("BETWEEN") {
             let start_bound = self.parse_window_frame_bound()?;
@@ -570,7 +566,11 @@ impl Parser {
 
     fn parse_extract_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let field = self.parse_extract_field()?;
+        let field = match self.next_token() {
+            Some(Token::Word(k)) => k.value.to_lowercase(),
+            Some(Token::SingleQuotedString(s)) => s,
+            t => self.expected(self.peek_prev_range(), "extract field token", t)?,
+        };
         self.expect_keyword("FROM")?;
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
@@ -578,20 +578,6 @@ impl Parser {
             field,
             expr: Box::new(expr),
         })
-    }
-
-    /// Parse the kinds of things that can be fed to EXTRACT and DATE_TRUNC
-    fn parse_extract_field(&mut self) -> Result<ExtractField, ParserError> {
-        let tok = self.next_token();
-        let field: Result<ExtractField, _> = match tok {
-            Some(Token::Word(ref k)) => k.keyword.parse(),
-            Some(Token::SingleQuotedString(ref s)) => s.parse(),
-            _ => return self.expected(self.peek_prev_range(), "extract field token", tok),
-        };
-        match field {
-            Ok(f) => Ok(f),
-            Err(_) => self.expected(self.peek_prev_range(), "valid extract field", tok)?,
-        }
     }
 
     // Parse calls to trim(), which can take the form:
@@ -660,9 +646,11 @@ impl Parser {
                         ])?;
                         let e_range = self.peek_prev_range();
 
-                        let high = DateTimeField::from_str(d)
+                        let high: DateTimeField = d
+                            .parse()
                             .map_err(|e| self.error(self.peek_prev_range(), e))?;
-                        let low = DateTimeField::from_str(e)
+                        let low: DateTimeField = e
+                            .parse()
                             .map_err(|e| self.error(self.peek_prev_range(), e))?;
 
                         // Check for invalid ranges, i.e. precision_high is the same
@@ -690,7 +678,8 @@ impl Parser {
 
                         (high, low, fsec_max_precision)
                     } else {
-                        let low = DateTimeField::from_str(d)
+                        let low: DateTimeField = d
+                            .parse()
                             .map_err(|e| self.error(self.peek_prev_range(), e))?;
                         let fsec_max_precision = if low == DateTimeField::Second {
                             self.parse_optional_precision()?
