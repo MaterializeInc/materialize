@@ -27,8 +27,6 @@ use futures::channel::mpsc::UnboundedReceiver;
 use futures::executor::block_on;
 use futures::future::TryFutureExt;
 use futures::sink::{Sink, SinkExt};
-use lazy_static::lazy_static;
-use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use serde::{Deserialize, Serialize};
 use timely::communication::allocator::generic::GenericBuilder;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
@@ -50,6 +48,7 @@ use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
+use self::metrics::Metrics;
 use super::render;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
@@ -57,20 +56,7 @@ use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
 use crate::source::SourceToken;
 
-lazy_static! {
-    static ref COMMAND_QUEUE_RAW: IntGaugeVec = register_int_gauge_vec!(
-        "mz_worker_command_queue_size",
-        "the number of commands we would like to handle",
-        &["worker"]
-    )
-    .unwrap();
-    static ref PENDING_PEEKS_RAW: IntGaugeVec = register_int_gauge_vec!(
-        "mz_worker_pending_peeks_queue_size",
-        "the number of peeks remaining to be processed",
-        &["worker"]
-    )
-    .unwrap();
-}
+mod metrics;
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
 /// Timely workers.
@@ -318,37 +304,6 @@ where
     metrics: Metrics,
 }
 
-/// Prometheus metrics that we would like to easily export
-struct Metrics {
-    /// The size of the command queue
-    ///
-    /// Updated every time we decide to handle some
-    command_queue: IntGauge,
-    /// The number of pending peeks
-    ///
-    /// Updated every time we successfully fulfill a peek
-    pending_peeks: IntGauge,
-}
-
-impl Metrics {
-    fn for_worker_id(id: usize) -> Metrics {
-        let worker_id = id.to_string();
-
-        Metrics {
-            command_queue: COMMAND_QUEUE_RAW.with_label_values(&[&worker_id]),
-            pending_peeks: PENDING_PEEKS_RAW.with_label_values(&[&worker_id]),
-        }
-    }
-
-    fn observe_command_queue(&self, commands: &[SequencedCommand]) {
-        self.command_queue.set(commands.len() as i64);
-    }
-
-    fn observe_pending_peeks(&self, pending_peeks: &[PendingPeek]) {
-        self.pending_peeks.set(pending_peeks.len() as i64);
-    }
-}
-
 impl<'w, A> Worker<'w, A>
 where
     A: Allocate + 'w,
@@ -474,10 +429,12 @@ where
                 if let SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
+                self.metrics.observe_command(&cmd);
                 self.handle_command(cmd);
             }
 
             self.metrics.observe_pending_peeks(&self.pending_peeks);
+            self.metrics.observe_command_finish();
             self.process_peeks();
         }
     }
@@ -646,9 +603,7 @@ where
                         logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                     }
                 }
-                self.metrics
-                    .pending_peeks
-                    .set(self.pending_peeks.len() as i64);
+                self.metrics.observe_pending_peeks(&self.pending_peeks);
             }
 
             SequencedCommand::CancelPeek { conn_id } => {
