@@ -480,7 +480,7 @@ impl DebeziumDeduplicationState {
                 match binlog_offsets.entry(file.to_owned()) {
                     Entry::Occupied(mut oe) => {
                         let (old_max_pos, old_max_row, old_offset) = *oe.get();
-                        if old_max_pos > pos || (old_max_pos == pos && old_max_row >= row) {
+                        if (old_max_pos, old_max_row) >= (pos, row) {
                             let offset_string = if let Some(coord) = coord {
                                 format!(" at offset {}", coord)
                             } else {
