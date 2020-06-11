@@ -52,6 +52,17 @@ SELECT 'foo'::text < 5::int;
 query error no overload for i32 < string
 SELECT 1 < ALL(VALUES(NULL))
 
+# But string *literals* can coerce to anything.
+query T
+SELECT '1' < 2
+----
+true
+
+query T
+SELECT 'true' OR 'false'
+----
+true
+
 # Use comparison ops to check for type promotion
 
 # Check i32 promotes to decimal
