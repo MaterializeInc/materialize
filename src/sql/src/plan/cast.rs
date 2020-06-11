@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Maintains a catalog of valid casts between [`repr::ScalarType`]s.
+//! Maintains a catalog of valid casts between [`repr::ScalarType`]s, as well as
+//! other cast-related functions.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -343,4 +344,76 @@ pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
             expr.call_binary(factor, BinaryFunc::DivDecimal)
         }
     }
+}
+
+// Tracks order of preferences for implicit casts for each [`TypeCategory`] that
+// contains multiple types, but does so irrespective of [`TypeCategory`].
+//
+// We could make this deterministic, but it offers no real benefit because the
+// information it provides is used in fallible functions anyway, so a bad guess
+// just gets caught elsewhere.
+fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
+    types.iter().max_by_key(|scalar_type| match scalar_type {
+        // [`TypeCategory::Numeric`]
+        ScalarType::Int32 => 0,
+        ScalarType::Int64 => 1,
+        ScalarType::Decimal(_, _) => 2,
+        ScalarType::Float32 => 3,
+        ScalarType::Float64 => 4,
+        // [`TypeCategory::DateTime`]
+        ScalarType::Date => 5,
+        ScalarType::Timestamp => 6,
+        ScalarType::TimestampTz => 7,
+        _ => 8,
+    })
+}
+
+/// Guesses the most-common type among a set of [`ScalarType`]s that all members
+/// can be cast to. Returns `None` if a common type cannot be deduced.
+///
+/// The returned type is not guaranteed to be accurate because we ignore type
+/// categories, e.g. on input `[SclarType::Date, ScalarType::Int32]`, will guess
+/// that `Date` is the common type.
+///
+/// However, if there _is_ a common type among the input, it will correctly
+/// determine it, i.e. returns false positives but never false negatives.
+///
+/// The `types` parameter is meant to represent the types inferred from a
+/// `Vec<CoercibleScalarExpr>`.
+///
+/// Note that this function implements the type-determination components of
+/// Postgres' ["`UNION`, `CASE`, and Related Constructs"][union-type-conv] type
+/// conversion.
+///
+/// [union-type-conv]:
+/// https://www.postgresql.org/docs/12/typeconv-union-case.html
+pub fn guess_best_common_type(types: &[Option<ScalarType>]) -> Option<ScalarType> {
+    // Remove unknown types.
+    let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).cloned().collect();
+
+    if known_types.is_empty() {
+        return Some(ScalarType::String);
+    }
+
+    if known_types.iter().all(|t| *t == known_types[0]) {
+        return Some(known_types[0].clone());
+    }
+
+    // Determine best cast type among known types.
+    if let Some(btt) = guess_compatible_cast_type(&known_types) {
+        if let ScalarType::Decimal(_, _) = btt {
+            // Determine best decimal scale (i.e. largest).
+            let mut max_s = 0;
+            for t in known_types {
+                if let ScalarType::Decimal(_, s) = t {
+                    max_s = std::cmp::max(s, max_s);
+                }
+            }
+            return Some(ScalarType::Decimal(38, max_s));
+        } else {
+            return Some(btt.clone());
+        }
+    }
+
+    None
 }
