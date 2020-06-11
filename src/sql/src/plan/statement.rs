@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use aws_arn::{Resource, ARN};
 use failure::{bail, format_err};
@@ -912,19 +912,6 @@ fn extract_batch_size_option(
     }
 }
 
-fn extract_metadata_refresh_frequency_option(
-    with_options: &mut HashMap<String, Value>,
-) -> Result<Duration, failure::Error> {
-    match with_options.remove("metadata_refresh_frequency") {
-        None => Ok(Duration::from_secs(10)),
-        Some(Value::SingleQuotedString(s)) => match parse_duration::parse(&s) {
-            Ok(d) => Ok(d),
-            Err(_) => bail!("metadata_refresh_frequency must be a valid time unit"),
-        },
-        Some(_) => bail!("metadata_refresh_frequency must be a string"),
-    }
-}
-
 fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     match &stmt {
         Statement::CreateSource {
@@ -1058,8 +1045,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
 
                     max_ts_batch = extract_batch_size_option(&mut with_options)?;
-                    let metadata_refresh_frequency =
-                        extract_metadata_refresh_frequency_option(&mut with_options)?;
 
                     // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
                     // until we have had time to think about what the right UX/design is on a non-urgent timeline!
@@ -1086,7 +1071,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         config_options,
                         start_offset,
                         group_id_prefix,
-                        metadata_refresh_frequency,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)
