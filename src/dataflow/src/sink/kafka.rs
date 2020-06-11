@@ -8,10 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
+use lazy_static::lazy_static;
 use log::error;
+use prometheus::{
+    register_int_counter_vec, register_uint_gauge_vec, IntCounter, IntCounterVec, UIntGauge,
+    UIntGaugeVec,
+};
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaError};
@@ -27,8 +33,73 @@ use repr::{RelationDesc, Row};
 
 use super::util::sink_reschedule;
 
+/// Per-Kafka sink metrics.
+pub struct SinkMetrics {
+    messages_sent_counter: IntCounter,
+    message_send_errors_counter: IntCounter,
+    message_delivery_errors_counter: IntCounter,
+    rows_queued: UIntGauge,
+    messages_in_flight: UIntGauge,
+}
+
+impl SinkMetrics {
+    fn new(topic_name: &str, sink_id: &str, worker_id: &str) -> SinkMetrics {
+        lazy_static! {
+            static ref MESSAGES_SENT_COUNTER: IntCounterVec = register_int_counter_vec!(
+                "mz_kafka_messages_sent_total",
+                "The number of messages the Kafka producer successfully sent for this sink",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
+            static ref MESSAGE_SEND_ERRORS_COUNTER: IntCounterVec = register_int_counter_vec!(
+                "mz_kafka_message_send_errors_total",
+                "The number of times the Kafka producer encountered an error on send",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
+            static ref MESSAGE_DELIVERY_ERRORS_COUNTER: IntCounterVec = register_int_counter_vec!(
+                "mz_kafka_message_delivery_errors_total",
+                "The number of messages that the Kafka producer could not deliver to the topic",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
+            static ref ROWS_QUEUED: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_kafka_sink_rows_queued",
+                "The current number of rows queued by the Kafka sink operator (note that one row can generate multiple Kafka messages)",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
+            static ref MESSAGES_IN_FLIGHT: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_kafka_sink_messages_in_flight",
+                "The current number of messages waiting to be delivered by the Kafka producer",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
+        }
+        let labels = &[topic_name, sink_id, worker_id];
+        SinkMetrics {
+            messages_sent_counter: MESSAGES_SENT_COUNTER.with_label_values(labels),
+            message_send_errors_counter: MESSAGE_SEND_ERRORS_COUNTER.with_label_values(labels),
+            message_delivery_errors_counter: MESSAGE_DELIVERY_ERRORS_COUNTER
+                .with_label_values(labels),
+            rows_queued: ROWS_QUEUED.with_label_values(labels),
+            messages_in_flight: MESSAGES_IN_FLIGHT.with_label_values(labels),
+        }
+    }
+}
+
 #[derive(Clone)]
-pub struct SinkProducerContext;
+pub struct SinkProducerContext {
+    metrics: Arc<SinkMetrics>,
+}
+
+impl SinkProducerContext {
+    pub fn new(metrics: &Arc<SinkMetrics>) -> Self {
+        SinkProducerContext {
+            metrics: metrics.clone(),
+        }
+    }
+}
 
 impl ClientContext for SinkProducerContext {}
 impl ProducerContext for SinkProducerContext {
@@ -37,11 +108,14 @@ impl ProducerContext for SinkProducerContext {
     fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
         match result {
             Ok(_) => (),
-            Err((e, msg)) => error!(
-                "received error while writing to kafka sink topic {}: {}",
-                msg.topic(),
-                e
-            ),
+            Err((e, msg)) => {
+                self.metrics.message_delivery_errors_counter.inc();
+                error!(
+                    "received error while writing to kafka sink topic {}: {}",
+                    msg.topic(),
+                    e
+                );
+            }
         }
     }
 }
@@ -83,8 +157,13 @@ pub fn kafka<G>(
     // TODO(rkhaitan): experiment with different settings for this value to see
     // if it makes a big difference
     config.set("queue.buffering.max.ms", &format!("{}", 10));
+    let sink_metrics = Arc::new(SinkMetrics::new(
+        &connector.topic,
+        &id.to_string(),
+        &stream.scope().index().to_string(),
+    ));
     let producer: ThreadedProducer<_> = config
-        .create_with_context(SinkProducerContext)
+        .create_with_context(SinkProducerContext::new(&sink_metrics))
         .expect("creating kafka producer for kafka sinks failed");
     let mut queue: VecDeque<(Row, Diff)> = VecDeque::new();
     let mut vector = Vec::new();
@@ -150,6 +229,7 @@ pub fn kafka<G>(
 
                     let record = BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
                     if let Err((e, _)) = producer.send(record) {
+                        sink_metrics.message_send_errors_counter.inc();
                         error!("unable to produce in {}: {}", name, e);
                         if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
                             // We are overloading Kafka by sending too many records
@@ -163,6 +243,8 @@ pub fn kafka<G>(
                             activator.activate_after(Duration::from_secs(60));
                             return true;
                         }
+                    } else {
+                        sink_metrics.messages_sent_counter.inc();
                     }
 
                     // Cache the Avro encoded data if we need to send again and
@@ -172,6 +254,10 @@ pub fn kafka<G>(
                     }
                 }
 
+                let in_flight = producer.in_flight_count();
+
+                sink_metrics.rows_queued.set(queue.len() as u64);
+                sink_metrics.messages_in_flight.set(in_flight as u64);
                 if encoded_buffer.is_some() || !queue.is_empty() {
                     // We need timely to reschedule this operator as we have pending
                     // items that we need to send to Kafka
@@ -179,7 +265,7 @@ pub fn kafka<G>(
                     return true;
                 }
 
-                if producer.in_flight_count() > 0 {
+                if in_flight > 0 {
                     // We still have messages that need to be flushed out to Kafka
                     // Let's make sure to keep the sink operator around until
                     // we flush them out
