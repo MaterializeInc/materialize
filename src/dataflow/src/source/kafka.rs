@@ -351,7 +351,7 @@ impl DataPlaneInfo {
         let consumer = self.consumer.clone();
         let refresh = self.refresh_metadata_info.clone();
         let id = self.source_id.clone();
-        let topic= self.topic_name.clone();
+        let topic = self.topic_name.clone();
         if let Consistency::RealTime = cp_info.source_type {
             thread::spawn(move || {
                 metadata_fetch_thread(
@@ -748,6 +748,7 @@ fn metadata_fetch_thread(
 
     while !timestamping_stopped.load(Ordering::SeqCst) {
         let metadata = consumer.fetch_metadata(Some(&topic), Duration::from_secs(30));
+        let new_partition_count;
         match metadata {
             Ok(metadata) => {
                 if metadata.topics().len() == 0 {
@@ -766,7 +767,7 @@ fn metadata_fetch_thread(
                     );
                     continue;
                 }
-                let new_partition_count = metadata_topic.partitions().len();
+                new_partition_count = metadata_topic.partitions().len();
                 let mut refresh_data = partition_count.lock().expect("lock poisoned");
                 refresh_data.0 = true;
                 // Kafka partition are i32, and Kafka consequently cannot support more than i32
@@ -774,10 +775,18 @@ fn metadata_fetch_thread(
                 refresh_data.1 = new_partition_count.try_into().unwrap();
             }
             Err(e) => {
+                new_partition_count = 0;
                 error!("Failed to obtain Kafka Metadata Information {}", e);
             }
         }
-        thread::sleep(wait);
+        if new_partition_count > 0 {
+            thread::sleep(wait);
+        } else {
+            // If no partitions have been detected yet, sleep for a second rather than
+            // the specified "wait" period of time, as we know that there should at least be one
+            // partition
+            thread::sleep(Duration::from_secs(1));
+        }
     }
     debug!("Terminating realtime Kafka thread for {}", topic);
 }
@@ -799,12 +808,10 @@ where
         config_options,
         start_offset,
         group_id_prefix,
-        metadata_refresh_frequency,
     } = connector.clone();
 
     let timestamp_channel = activate_source_timestamping(&config, connector);
     let timestamping_stopped = Arc::new(AtomicBool::new(false));
-
     let SourceConfig {
         name,
         id,
@@ -845,6 +852,17 @@ where
                 worker_count,
             );
 
+            // Start metadata refresh thread
+            // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+            let metadata_refresh_frequency = Duration::from_millis(
+                config_options
+                    .get("topic.metadata.refresh.interval.ms")
+                    // Safe conversion: statement::extract_config enforces that option is a value
+                    // between 0 and 3600000
+                    .unwrap_or(&"30000".to_owned())
+                    .parse()
+                    .unwrap(),
+            );
             dp_info.start_metadata_fetch(
                 &cp_info,
                 metadata_refresh_frequency,
