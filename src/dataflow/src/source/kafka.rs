@@ -848,27 +848,30 @@ fn can_close_timestamp(
     // In Kafka, the position of the consumer is set to the offset *after* the last offset that the consumer has
     // processed, so we have to decrement it by one to get the last processed offset
 
-    let mut current_consumer_position: MzOffset = KafkaOffset {
-        offset: match dp_info.consumer.position() {
-            Ok(topic_list) => topic_list
-                .elements_for_topic(&dp_info.topic_name)
-                .get(pid as usize)
-                .map(|el| el.offset().to_raw() - 1),
-            Err(_) => Some(-1),
+    // We separate these two cases, has consumer.position() is an expensive call that should
+    // be avoided if possible. Case 1 and 2.a
+    return if !dp_info.has_partition(pid) || last_offset >= offset {
+        true
+    } else {
+        let mut current_consumer_position: MzOffset = KafkaOffset {
+            offset: match dp_info.consumer.position() {
+                Ok(topic_list) => topic_list
+                    .elements_for_topic(&dp_info.topic_name)
+                    .get(pid as usize)
+                    .map(|el| el.offset().to_raw() - 1),
+                Err(_) => Some(-1),
+            }
+                .unwrap_or(-1),
         }
-        .unwrap_or(-1),
-    }
-    .into();
+            .into();
 
-    // If a message has been buffered (but not timestamped), the consumer will already have
-    // moved ahead.
-    if dp_info.is_buffered(pid) {
-        current_consumer_position.offset -= 1;
+        // If a message has been buffered (but not timestamped), the consumer will already have
+        // moved ahead.
+        if dp_info.is_buffered(pid) {
+            current_consumer_position.offset -= 1;
+        }
+        current_consumer_position >= offset
     }
-
-    !dp_info.has_partition(pid) // Case 1
-        || last_offset >= offset // Case 2.a
-        || current_consumer_position >= offset
 }
 
 /// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
