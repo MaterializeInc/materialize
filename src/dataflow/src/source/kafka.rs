@@ -296,8 +296,6 @@ struct DataPlaneInfo {
     buffered_metadata: HashSet<i32>,
     /// The number of known partitions.
     known_partitions: i32,
-    /// Metadata to coordinate timestamping information (source independent)
-    timestamping_stopped: Arc<AtomicBool>,
     /// Information about new partitions (obtained by the metadata thread)
     refresh_metadata_info: Arc<Mutex<(bool, i32)>>,
     /// (RT only: if true, the metadata thread has detected new partitions)
@@ -313,23 +311,19 @@ struct DataPlaneInfo {
 
 impl DataPlaneInfo {
     fn new(
-        name: (String, String, SourceInstanceId),
+        topic_name: String,
+        source_name: String,
+        source_id: SourceInstanceId,
         kafka_config: ClientConfig,
         consumer_activator: Arc<Mutex<SyncActivator>>,
-        workers: (usize, usize),
-        source_type: Consistency,
-        timestamping_stopped: Arc<AtomicBool>,
-        metadata_refresh_frequency: Duration,
+        worker_id: usize,
+        worker_count: usize,
     ) -> DataPlaneInfo {
-        let topic_name = name.0;
-        let source_name = name.1;
-        let source_id = name.2.to_string();
-        let worker_id = workers.0;
-        let worker_count = workers.1;
+        let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
-        let data_plane = DataPlaneInfo {
+        DataPlaneInfo {
             source_metrics: SourceMetrics::new(&topic_name, &source_id, &worker_id.to_string()),
             partition_metrics: HashMap::new(),
             buffered_metadata: HashSet::new(),
@@ -338,36 +332,39 @@ impl DataPlaneInfo {
             source_id: source_id.clone(),
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
-            timestamping_stopped,
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
             worker_count: worker_count.try_into().unwrap(),
             refresh_metadata_info: Arc::new(Mutex::new((false, 0))),
-        };
+        }
+    }
 
-        let consumer = data_plane.consumer.clone();
-        let refresh = data_plane.refresh_metadata_info.clone();
-        let timestamping_stopped = data_plane.timestamping_stopped.clone();
-
+    fn start_metadata_fetch(
+        &mut self,
+        cp_info: &ControlPlaneInfo,
+        metadata_refresh_frequency: Duration,
+        timestamping_stopped: Arc<AtomicBool>,
+    ) {
         // Metadata fetch requests on production Kafka clusters can take
         // more than 1s to complete. This makes it far too expensive to run on
         // the main Kafka threads. We only trigger metadata requests for Real time sources
-        if let Consistency::RealTime = source_type {
+        let consumer = self.consumer.clone();
+        let refresh = self.refresh_metadata_info.clone();
+        let id = self.source_id.clone();
+        let topic= self.topic_name.clone();
+        if let Consistency::RealTime = cp_info.source_type {
             thread::spawn(move || {
                 metadata_fetch_thread(
                     timestamping_stopped,
                     consumer,
-                    refresh.clone(),
-                    &source_id,
-                    &topic_name,
+                    refresh,
+                    &id,
+                    &topic,
                     metadata_refresh_frequency,
                 )
             });
         }
-
-        data_plane
     }
-
     /// Update metadata information as refreshed by the metadata thread
     fn refresh_metadata(&mut self, cp_info: &mut ControlPlaneInfo) {
         let refresh;
@@ -839,13 +836,19 @@ where
 
             // Create dataplane information (Kafka-related information)
             let mut dp_info = DataPlaneInfo::new(
-                (topic.clone(), name.clone(), id.clone()),
+                topic.clone(),
+                name.clone(),
+                id.clone(),
                 create_kafka_config(&name, &url, group_id_prefix, &config_options),
                 Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
-                (worker_id, worker_count),
-                consistency,
-                timestamping_stopped,
+                worker_id,
+                worker_count,
+            );
+
+            dp_info.start_metadata_fetch(
+                &cp_info,
                 metadata_refresh_frequency,
+                timestamping_stopped,
             );
 
             move |cap, output| {
