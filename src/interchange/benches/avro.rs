@@ -13,7 +13,7 @@ use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
 
-use interchange::avro::{parse_schema, Decoder, EnvelopeType};
+use interchange::avro::{parse_schema, DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
 use std::ops::Add;
 
 pub fn bench_avro(c: &mut Criterion) {
@@ -300,6 +300,7 @@ pub fn bench_avro(c: &mut Criterion) {
         EnvelopeType::Debezium,
         "avro_bench".to_string(),
         0,
+        Some(DebeziumDeduplicationStrategy::Ordered),
     )
     .unwrap();
 
