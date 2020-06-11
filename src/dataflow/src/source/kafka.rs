@@ -351,7 +351,7 @@ impl DataPlaneInfo {
         let consumer = self.consumer.clone();
         let refresh = self.refresh_metadata_info.clone();
         let id = self.source_id.clone();
-        let source_name = self.source_name.clone();
+        let topic= self.topic_name.clone();
         if let Consistency::RealTime = cp_info.source_type {
             thread::spawn(move || {
                 metadata_fetch_thread(
@@ -359,7 +359,7 @@ impl DataPlaneInfo {
                     consumer,
                     refresh,
                     &id,
-                    &source_name,
+                    &topic,
                     metadata_refresh_frequency,
                 )
             });
