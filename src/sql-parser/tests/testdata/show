@@ -163,7 +163,7 @@ SHOW EXTENDED INDEXES FROM foo WHERE index_name = 'bar'
 ----
 SHOW EXTENDED INDEXES FROM foo WHERE index_name = 'bar'
 =>
-ShowIndexes { table_name: ObjectName([Ident("foo")]), extended: true, filter: Some(Where(BinaryOp { left: Identifier([Ident("index_name")]), op: Eq, right: Value(SingleQuotedString("bar")) })) }
+ShowIndexes { table_name: ObjectName([Ident("foo")]), extended: true, filter: Some(Where(BinaryOp { left: Identifier([Ident("index_name")]), op: Eq, right: Value(String("bar")) })) }
 
 parse-statement
 SHOW CREATE VIEW foo
@@ -277,7 +277,7 @@ SET a = 'b'
 ----
 SET a = 'b'
 =>
-SetVariable { local: false, variable: Ident("a"), value: Literal(SingleQuotedString("b")) }
+SetVariable { local: false, variable: Ident("a"), value: Literal(String("b")) }
 
 parse-statement
 SET a = 0

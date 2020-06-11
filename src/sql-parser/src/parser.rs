@@ -280,9 +280,7 @@ impl Parser {
             match parser.parse_data_type()? {
                 DataType::Interval => parser.parse_literal_interval(),
                 data_type => Ok(Expr::Cast {
-                    expr: Box::new(Expr::Value(Value::SingleQuotedString(
-                        parser.parse_literal_string()?,
-                    ))),
+                    expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
                     data_type,
                 }),
             }
@@ -361,7 +359,7 @@ impl Parser {
                     expr: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
                 })
             }
-            Token::Number(_) | Token::SingleQuotedString(_) | Token::HexStringLiteral(_) => {
+            Token::Number(_) | Token::String(_) | Token::HexString(_) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
@@ -575,7 +573,7 @@ impl Parser {
         self.expect_token(&Token::LParen)?;
         let field = match self.next_token() {
             Some(Token::Word(k)) => k.value.to_lowercase(),
-            Some(Token::SingleQuotedString(s)) => s,
+            Some(Token::String(s)) => s,
             t => self.expected(self.peek_prev_range(), "extract field token", t)?,
         };
         self.expect_keyword("FROM")?;
@@ -1858,8 +1856,8 @@ impl Parser {
                     }
                 },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
-                Token::SingleQuotedString(ref s) => Ok(Value::SingleQuotedString(s.to_string())),
-                Token::HexStringLiteral(ref s) => Ok(Value::HexStringLiteral(s.to_string())),
+                Token::String(ref s) => Ok(Value::String(s.to_string())),
+                Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
                 _ => parser_err!(
                     self,
                     self.peek_prev_range(),
@@ -1916,7 +1914,7 @@ impl Parser {
     /// Parse a literal string
     fn parse_literal_string(&mut self) -> Result<String, ParserError> {
         match self.next_token() {
-            Some(Token::SingleQuotedString(ref s)) => Ok(s.clone()),
+            Some(Token::String(ref s)) => Ok(s.clone()),
             other => self.expected(self.peek_prev_range(), "literal string", other),
         }
     }

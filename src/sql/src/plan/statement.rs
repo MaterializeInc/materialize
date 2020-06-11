@@ -309,7 +309,7 @@ fn handle_set_variable(
     Ok(Plan::SetVariable {
         name: variable.to_string(),
         value: match value {
-            SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
+            SetVariableValue::Literal(Value::String(s)) => s,
             SetVariableValue::Literal(lit) => lit.to_string(),
             SetVariableValue::Ident(ident) => ident.value(),
         },
@@ -1033,13 +1033,13 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
-                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                        Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
 
                     let group_id_prefix = match with_options.remove("group_id_prefix") {
                         None => None,
-                        Some(Value::SingleQuotedString(s)) => Some(s),
+                        Some(Value::String(s)) => Some(s),
                         Some(_) => bail!("group_id_prefix must be a string"),
                     };
 
@@ -1099,7 +1099,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                                 // region, support it iff a valid endpoint for the stream
                                 // is also provided.
                                 match with_options.remove("endpoint") {
-                                    Some(Value::SingleQuotedString(endpoint)) => Region::Custom {
+                                    Some(Value::String(endpoint)) => Region::Custom {
                                         name: region,
                                         endpoint,
                                     },
@@ -1117,19 +1117,17 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
                     // https://github.com/materializeinc/materialize/issues/1991
                     let access_key_id = match with_options.remove("access_key_id") {
-                        Some(Value::SingleQuotedString(access_key_id)) => Some(access_key_id),
+                        Some(Value::String(access_key_id)) => Some(access_key_id),
                         Some(_) => bail!("access_key_id must be a string"),
                         _ => None,
                     };
                     let secret_access_key = match with_options.remove("secret_access_key") {
-                        Some(Value::SingleQuotedString(secret_access_key)) => {
-                            Some(secret_access_key)
-                        }
+                        Some(Value::String(secret_access_key)) => Some(secret_access_key),
                         Some(_) => bail!("secret_access_key must be a string"),
                         _ => None,
                     };
                     let token = match with_options.remove("token") {
-                        Some(Value::SingleQuotedString(token)) => Some(token),
+                        Some(Value::String(token)) => Some(token),
                         Some(_) => bail!("token must be a string"),
                         _ => None,
                     };
@@ -1152,7 +1150,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
-                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                        Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
                     max_ts_batch = extract_batch_size_option(&mut with_options)?;
@@ -1172,7 +1170,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
-                        Some(Value::SingleQuotedString(topic)) => Consistency::BringYourOwn(topic),
+                        Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
                         Some(_) => bail!("consistency must be a string"),
                     };
 
@@ -1189,7 +1187,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         .remove("reader_schema")
                         .expect("purification guarantees presence of reader_schema")
                     {
-                        Value::SingleQuotedString(s) => s,
+                        Value::String(s) => s,
                         _ => bail!("reader_schema option must be a string"),
                     };
                     let encoding = DataEncoding::AvroOcf { reader_schema };
@@ -1218,7 +1216,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                 sql_parser::ast::Envelope::Debezium => {
                     let dedup_strat = match with_options.remove("deduplication") {
                         None => DebeziumDeduplicationStrategy::Ordered,
-                        Some(Value::SingleQuotedString(s)) => match s.as_str() {
+                        Some(Value::String(s)) => match s.as_str() {
                             "full" => DebeziumDeduplicationStrategy::Full,
                             "ordered" => DebeziumDeduplicationStrategy::Ordered,
                             _ => bail!("deduplication must be either 'full' or 'ordered'."),

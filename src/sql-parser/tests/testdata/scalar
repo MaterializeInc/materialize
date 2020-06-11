@@ -33,32 +33,32 @@ BinaryOp { left: Parameter(91), op: Plus, right: Parameter(42) }
 parse-scalar
 NOT salary = ''
 ----
-UnaryOp { op: Not, expr: BinaryOp { left: Identifier([Ident("salary")]), op: Eq, right: Value(SingleQuotedString("")) } }
+UnaryOp { op: Not, expr: BinaryOp { left: Identifier([Ident("salary")]), op: Eq, right: Value(String("")) } }
 
 parse-scalar
 salary <> 'Not Provided' AND salary <> ''
 ----
-BinaryOp { left: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(SingleQuotedString("Not Provided")) }, op: And, right: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(SingleQuotedString("")) } }
+BinaryOp { left: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(String("Not Provided")) }, op: And, right: BinaryOp { left: Identifier([Ident("salary")]), op: NotEq, right: Value(String("")) } }
 
 parse-scalar
 name LIKE '%a'
 ----
-BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(SingleQuotedString("%a")) }
+BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) }
 
 parse-scalar
 name NOT LIKE '%a'
 ----
-BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(SingleQuotedString("%a")) }
+BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) }
 
 parse-scalar
 name LIKE '%a' IS NULL
 ----
-IsNull(BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(SingleQuotedString("%a")) })
+IsNull(BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) })
 
 parse-scalar
 name NOT LIKE '%a' IS NULL
 ----
-IsNull(BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(SingleQuotedString("%a")) })
+IsNull(BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) })
 
 # Casts
 
@@ -247,7 +247,7 @@ CASE WHEN bar IS NULL THEN 'null' WHEN bar = 0 THEN '=0' WHEN bar >= 0 THEN '>=0
 parse-scalar
 CASE foo WHEN 1 THEN 'Y' ELSE 'N' END
 ----
-Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1"))], results: [Value(SingleQuotedString("Y"))], else_result: Some(Value(SingleQuotedString("N"))) }
+Case { operand: Some(Identifier([Ident("foo")])), conditions: [Value(Number("1"))], results: [Value(String("Y"))], else_result: Some(Value(String("N"))) }
 
 parse-scalar
 (SELECT 1) + (SELECT 2)
@@ -267,7 +267,7 @@ List([])
 parse-scalar
 LIST[1, 'foo']
 ----
-List([Value(Number("1")), Value(SingleQuotedString("foo"))])
+List([Value(Number("1")), Value(String("foo"))])
 
 parse-scalar
 LIST[LIST[1 + 1, 2], a || b]

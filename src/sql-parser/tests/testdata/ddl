@@ -45,7 +45,7 @@ CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 ----
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 =>
-CreateTable { name: ObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Int, collation: None, options: [] }], constraints: [], with_options: [SqlOption { name: Ident("foo"), value: SingleQuotedString("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], if_not_exists: false }
+CreateTable { name: ObjectName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Int, collation: None, options: [] }], constraints: [], with_options: [SqlOption { name: Ident("foo"), value: String("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], if_not_exists: false }
 
 parse-statement
 CREATE TABLE foo (bar int,)
@@ -126,14 +126,14 @@ ALTER TABLE tab ADD CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> '')
 ----
 ALTER TABLE tab ADD CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> '')
 =>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Check { name: Some(Ident("ck")), expr: BinaryOp { left: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), op: NotEq, right: Value(SingleQuotedString("")) } }) }
+AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Check { name: Some(Ident("ck")), expr: BinaryOp { left: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), op: NotEq, right: Value(String("")) } }) }
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 ----
 CREATE TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: BinaryOp { left: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), op: NotEq, right: Value(SingleQuotedString("")) } }], with_options: [], if_not_exists: false }
+CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: BinaryOp { left: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), op: NotEq, right: Value(String("")) } }], with_options: [], if_not_exists: false }
 
 parse-statement
 ALTER TABLE tab ADD PRIMARY KEY (foo, bar)
@@ -295,7 +295,7 @@ CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 ----
 CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 =>
-CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [SqlOption { name: Ident("foo"), value: SingleQuotedString("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
+CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [SqlOption { name: Ident("foo"), value: String("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
 
 parse-statement
 CREATE VIEW v (has, cols) AS SELECT 1, 2
@@ -332,7 +332,7 @@ FORMAT BYTES
 ----
 CREATE SOURCE foo FROM KAFKA BROKER 'bar' TOPIC 'baz' WITH (consistency = 'lug', ssl_certificate_file = '/Path/to/file') FORMAT BYTES
 =>
-CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: Kafka { broker: "bar", topic: "baz" }, with_options: [SqlOption { name: Ident("consistency"), value: SingleQuotedString("lug") }, SqlOption { name: Ident("ssl_certificate_file"), value: SingleQuotedString("/Path/to/file") }], format: Some(Bytes), envelope: None, if_not_exists: false, materialized: false }
+CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: Kafka { broker: "bar", topic: "baz" }, with_options: [SqlOption { name: Ident("consistency"), value: String("lug") }, SqlOption { name: Ident("ssl_certificate_file"), value: String("/Path/to/file") }], format: Some(Bytes), envelope: None, if_not_exists: false, materialized: false }
 
 parse-statement
 CREATE MATERIALIZED SOURCE foo FROM FILE 'bar' FORMAT PROTOBUF MESSAGE

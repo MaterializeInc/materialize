@@ -115,7 +115,7 @@ pub fn plan_show_where(
                         names[0].clone().unwrap(),
                     )])),
                     op: BinaryOperator::Like,
-                    right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
+                    right: Box::new(Expr::Value(Value::String(s.into()))),
                 };
                 &owned
             }
@@ -917,7 +917,7 @@ fn plan_table_function(
                 bail!("Datum to search must be a string");
             }
             let regex = match &regex {
-                Expr::Value(Value::SingleQuotedString(s)) => s,
+                Expr::Value(Value::String(s)) => s,
                 _ => bail!("Regex must be a string literal."),
             };
 
@@ -2266,7 +2266,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error>
                 )
             }
         }
-        Value::HexStringLiteral(_) => unsupported!(3114, "hex string literals"),
+        Value::HexString(_) => unsupported!(3114, "hex string literals"),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
@@ -2277,7 +2277,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error>
             i.truncate_low_fields(iv.precision_low, iv.fsec_max_precision)?;
             (Datum::Interval(i), ScalarType::Interval)
         }
-        Value::SingleQuotedString(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
+        Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
     };
     let nullable = datum == Datum::Null;

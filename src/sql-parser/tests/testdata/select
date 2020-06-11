@@ -691,7 +691,7 @@ SELECT 'foo' OFFSET 0 ROWS
 ----
 SELECT 'foo' OFFSET 0 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(SingleQuotedString("foo")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("0"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(String("foo")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("0"))), fetch: None })
 
 parse-statement
 SELECT foo FROM bar OFFSET 2
@@ -747,7 +747,7 @@ SELECT 'foo' OFFSET 0
 ----
 SELECT 'foo' OFFSET 0 ROWS
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(SingleQuotedString("foo")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("0"))), fetch: None })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(String("foo")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("0"))), fetch: None })
 
 parse-statement roundtrip
 SELECT foo FROM bar OFFSET 1 ROW
@@ -766,7 +766,7 @@ SELECT 'foo' FETCH FIRST 2 ROWS ONLY
 ----
 SELECT 'foo' FETCH FIRST 2 ROWS ONLY
 =>
-Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(SingleQuotedString("foo")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
+Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(String("foo")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: Some(Fetch { with_ties: false, percent: false, quantity: Some(Value(Number("2"))) }) })
 
 parse-statement
 SELECT foo FROM bar FETCH FIRST ROWS ONLY

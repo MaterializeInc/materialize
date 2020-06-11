@@ -30,7 +30,19 @@ Value(Null)
 parse-scalar
 'Jim''s salary'
 ----
-Value(SingleQuotedString("Jim\'s salary"))
+Value(String("Jim\'s salary"))
+
+parse-scalar
+E'lots\tof\nescapes\bin\nhere\r.\f\U0001f64a\u2048'
+----
+Value(String("lots\tof\nescapes\u{8}in\nhere\r.\u{12}🙊⁈"))
+
+parse-scalar roundtrip
+E'lots\tof\nescapes\bin\nhere\r.\f\U0001f64a\u2048'
+----
+'lots	of
+escapesin
+here.🙊⁈'
 
 # Numbers
 
@@ -62,74 +74,74 @@ Value(Number("9007199254740993.0"))
 parse-scalar
 'one'
 ----
-Value(SingleQuotedString("one"))
+Value(String("one"))
 
 parse-scalar
 X'deadBEEF'
 ----
-Value(HexStringLiteral("deadBEEF"))
+Value(HexString("deadBEEF"))
 
 # Dates.
 
 parse-scalar
 DATE '1999-01-01'
 ----
-Cast { expr: Value(SingleQuotedString("1999-01-01")), data_type: Date }
+Cast { expr: Value(String("1999-01-01")), data_type: Date }
 
 parse-scalar
 DATE 'invalid date'
 ----
-Cast { expr: Value(SingleQuotedString("invalid date")), data_type: Date }
+Cast { expr: Value(String("invalid date")), data_type: Date }
 
 parse-scalar
 TIME '01:23:34'
 ----
-Cast { expr: Value(SingleQuotedString("01:23:34")), data_type: Time }
+Cast { expr: Value(String("01:23:34")), data_type: Time }
 
 parse-scalar
 TIME 'invalid time'
 ----
-Cast { expr: Value(SingleQuotedString("invalid time")), data_type: Time }
+Cast { expr: Value(String("invalid time")), data_type: Time }
 
 parse-scalar
 TIMESTAMP '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: Timestamp }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Timestamp }
 
 parse-scalar
 TIMESTAMPTZ '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: TimestampTz }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: TimestampTz }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(SingleQuotedString("1999-01-01 01:23:34.555")), data_type: Timestamp }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Timestamp }
 
 parse-scalar
 TIMESTAMP 'invalid timestamptx'
 ----
-Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: Timestamp }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Timestamp }
 
 parse-scalar
 TIMESTAMPTZ 'invalid timestamptx'
 ----
-Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: TimestampTz }
+Cast { expr: Value(String("invalid timestamptx")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE 'invalid timestamptx'
 ----
-Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: TimestampTz }
+Cast { expr: Value(String("invalid timestamptx")), data_type: TimestampTz }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE 'invalid timestamptx'
 ----
-Cast { expr: Value(SingleQuotedString("invalid timestamptx")), data_type: Timestamp }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Timestamp }
 
 parse-scalar
 INTERVAL '1' YEAR

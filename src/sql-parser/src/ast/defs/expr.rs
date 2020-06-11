@@ -100,7 +100,7 @@ pub enum Expr {
     Nested(Box<Expr>),
     /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
     Row {
-        exprs: Vec<Expr>
+        exprs: Vec<Expr>,
     },
     /// A literal value, such as string, number, date or NULL
     Value(Value),
@@ -366,7 +366,7 @@ impl_display!(Expr);
 
 impl Expr {
     pub fn is_string_literal(&self) -> bool {
-        if let Expr::Value(Value::SingleQuotedString(_)) = self {
+        if let Expr::Value(Value::String(_)) = self {
             true
         } else {
             false

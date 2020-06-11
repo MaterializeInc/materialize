@@ -35,16 +35,16 @@ impl fmt::Display for ValueError {
     }
 }
 
-/// Primitive SQL values such as number and string
+/// Primitive SQL values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Value {
-    /// Numeric literal
+    /// Numeric value.
     Number(String),
-    /// 'string value'
-    SingleQuotedString(String),
-    /// X'hex value'
-    HexStringLiteral(String),
-    /// Boolean value true or false
+    /// String value.
+    String(String),
+    /// Hex string value.
+    HexString(String),
+    /// Boolean value.
     Boolean(bool),
     /// INTERVAL literals, roughly in the following format:
     ///
@@ -54,7 +54,7 @@ pub enum Value {
     /// ```
     /// e.g. `INTERVAL '123:45.678' MINUTE TO SECOND(2)`.
     Interval(IntervalValue),
-    /// `NULL` value
+    /// `NULL` value.
     Null,
 }
 
@@ -62,12 +62,12 @@ impl AstDisplay for Value {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Value::Number(v) => f.write_str(v),
-            Value::SingleQuotedString(v) => {
+            Value::String(v) => {
                 f.write_str("'");
                 f.write_node(&display::escape_single_quote_string(v));
                 f.write_str("'");
             }
-            Value::HexStringLiteral(v) => {
+            Value::HexString(v) => {
                 f.write_str("X'");
                 f.write_str(v);
                 f.write_str("'");

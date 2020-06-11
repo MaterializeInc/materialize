@@ -207,3 +207,39 @@ Parse error:
 SELECT * FROM
              ^
 Expected identifier, found: EOF
+
+parse-statement
+SELECT '
+----
+error:
+Parse error:
+SELECT '
+       ^
+unexpected EOF while parsing string literal
+
+parse-statement
+SELECT E'
+----
+error:
+Parse error:
+SELECT E'
+       ^^
+unexpected EOF while parsing extended string literal
+
+parse-statement
+SELECT E'\u&'
+----
+error:
+Parse error:
+SELECT E'\u&'
+       ^^^^
+too few digits in unicode escape sequence
+
+parse-statement
+SELECT E'\u&&&&'
+----
+error:
+Parse error:
+SELECT E'\u&&&&'
+       ^^^^^^^^
+invalid unicode escape sequence
