@@ -26,7 +26,7 @@ use dataflow_types::{
     KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
 };
 use expr::{like_pattern, GlobalId, RowSetFinishing};
-use interchange::avro::Encoder;
+use interchange::avro::{DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
@@ -1215,7 +1215,18 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             // TODO: remove bails as more support for upsert is added.
             let envelope = match &envelope {
                 sql_parser::ast::Envelope::None => dataflow_types::Envelope::None,
-                sql_parser::ast::Envelope::Debezium => dataflow_types::Envelope::Debezium,
+                sql_parser::ast::Envelope::Debezium => {
+                    let dedup_strat = match with_options.remove("deduplication") {
+                        None => DebeziumDeduplicationStrategy::Ordered,
+                        Some(Value::SingleQuotedString(s)) => match s.as_str() {
+                            "full" => DebeziumDeduplicationStrategy::Full,
+                            "ordered" => DebeziumDeduplicationStrategy::Ordered,
+                            _ => bail!("deduplication must be either 'full' or 'ordered'."),
+                        },
+                        _ => bail!("deduplication must be either 'full' or 'ordered'."),
+                    };
+                    dataflow_types::Envelope::Debezium(dedup_strat)
+                }
                 sql_parser::ast::Envelope::Upsert(key_format) => match connector {
                     Connector::Kafka { .. } => {
                         let mut key_encoding = if key_format.is_some() {
@@ -1276,7 +1287,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             match (&encoding, &envelope) {
                 (DataEncoding::Avro { .. }, _)
                 | (DataEncoding::Protobuf { .. }, _)
-                | (_, Envelope::Debezium) => (),
+                | (_, Envelope::Debezium(_)) => (),
                 _ => {
                     for (name, ty) in external_connector.metadata_columns() {
                         desc = desc.with_column(name, ty);

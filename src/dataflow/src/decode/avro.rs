@@ -11,7 +11,7 @@ use log::error;
 
 use async_trait::async_trait;
 use dataflow_types::{Diff, Timestamp};
-use interchange::avro::{Decoder, EnvelopeType};
+use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
 use repr::Row;
 
 use super::{DecoderState, PushSession};
@@ -32,6 +32,7 @@ impl AvroDecoderState {
         reject_non_inserts: bool,
         debug_name: String,
         worker_index: usize,
+        dedup_strat: Option<DebeziumDeduplicationStrategy>,
     ) -> Result<Self, failure::Error> {
         Ok(AvroDecoderState {
             decoder: Decoder::new(
@@ -40,6 +41,7 @@ impl AvroDecoderState {
                 envelope,
                 debug_name,
                 worker_index,
+                dedup_strat,
             )?,
             events_success: 0,
             events_error: 0,

@@ -278,3 +278,46 @@ a b
 14 6
 2 3
 -1 7
+
+# Test that deduplication=ordered does the same thing as the default.
+
+> CREATE MATERIALIZED SOURCE new_dbz2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-new-dbz-data-${testdrive.seed}'
+  WITH (deduplication = 'ordered')
+  FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM new_dbz2
+a b
+---
+9 10
+11 11
+14 6
+2 3
+-1 7
+
+# Test that deduplication=full accepts mis-ordered Debezium data.
+
+$ kafka-create-topic topic=misordered-dbz-data
+
+$ kafka-ingest format=avro topic=misordered-dbz-data schema=${new-dbz-schema} timestamp=1
+{"before": null, "after": {"a": 1, "b": 1}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": "false"}}
+{"before": null, "after": {"a": 2, "b": 3}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": "false"}}
+{"before": null, "after": {"a": -1, "b": 7}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": "false"}}
+{"before": null, "after": {"a": 2, "b": 3}, "source": {"file": "binlog", "pos": 1, "row": 0, "snapshot": "false"}}
+{"before": null, "after": {"a": 1, "b": 1}, "source": {"file": "binlog", "pos": 2, "row": 0, "snapshot": "false"}}
+{"before": null, "after": {"a": 3, "b": 4}, "source": {"file": "binlog2", "pos": 2, "row": 0, "snapshot": "false"}}
+
+> CREATE MATERIALIZED SOURCE misordered_dbz
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-misordered-dbz-data-${testdrive.seed}'
+  WITH (deduplication = 'full')
+  FORMAT AVRO USING SCHEMA '${new-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM misordered_dbz
+a b
+---
+1 1
+2 3
+-1 7
+3 4

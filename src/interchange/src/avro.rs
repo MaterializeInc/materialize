@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::iter;
@@ -18,6 +18,7 @@ use chrono::Timelike;
 use failure::{bail, format_err};
 use itertools::Itertools;
 use log::{trace, warn};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
 
@@ -435,6 +436,94 @@ impl BinlogSchemaIndices {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub enum DebeziumDeduplicationStrategy {
+    Ordered,
+    Full,
+}
+
+#[derive(Debug)]
+enum DebeziumDeduplicationState {
+    Ordered {
+        /// Last recorded (pos, row, offset) for each MySQL binlog file.
+        /// Messages that are not ahead of the last recorded pos/row will be skipped.
+        binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
+    },
+    Full {
+        seen_offsets: HashMap<String, HashSet<(usize, usize)>>,
+    },
+}
+
+impl DebeziumDeduplicationState {
+    fn new(strat: DebeziumDeduplicationStrategy) -> Self {
+        match strat {
+            DebeziumDeduplicationStrategy::Ordered => DebeziumDeduplicationState::Ordered {
+                binlog_offsets: Default::default(),
+            },
+            DebeziumDeduplicationStrategy::Full => DebeziumDeduplicationState::Full {
+                seen_offsets: Default::default(),
+            },
+        }
+    }
+    #[must_use]
+    fn should_use_record(
+        &mut self,
+        file: &str,
+        pos: usize,
+        row: usize,
+        coord: Option<i64>,
+        debug_name: &str,
+        worker_idx: usize,
+    ) -> bool {
+        match self {
+            DebeziumDeduplicationState::Ordered { binlog_offsets } => {
+                match binlog_offsets.entry(file.to_owned()) {
+                    Entry::Occupied(mut oe) => {
+                        let (old_max_pos, old_max_row, old_offset) = *oe.get();
+                        if (old_max_pos, old_max_row) >= (pos, row) {
+                            let offset_string = if let Some(coord) = coord {
+                                format!(" at offset {}", coord)
+                            } else {
+                                format!("")
+                            };
+                            let old_offset_string = if let Some(old_offset) = old_offset {
+                                format!(" at offset {}", old_offset)
+                            } else {
+                                format!("")
+                            };
+                            warn!("Debezium for source {}:{} did not advance in binlog file {}: previously read ({}, {}){}, now read ({}, {}){}. Skipping record.",
+                                    debug_name, worker_idx, file, old_max_pos, old_max_row, old_offset_string, pos, row, offset_string);
+                            return false;
+                        }
+                        oe.insert((pos, row, coord));
+                    }
+                    Entry::Vacant(ve) => {
+                        ve.insert((pos, row, coord));
+                    }
+                }
+                true
+            }
+
+            DebeziumDeduplicationState::Full { seen_offsets } => {
+                if let Some(seen_offsets) = seen_offsets.get_mut(file) {
+                    if seen_offsets.insert((pos, row)) {
+                        true
+                    } else {
+                        warn!("Source {}:{} already ingested binlog coordinates ({}, {}) in file {}. Skipping record.",
+                              debug_name, worker_idx, pos, row, file);
+                        false
+                    }
+                } else {
+                    let mut hs = HashSet::new();
+                    hs.insert((pos, row));
+                    seen_offsets.insert(file.to_owned(), hs);
+                    true
+                }
+            }
+        }
+    }
+}
+
 /// Additional context needed for decoding
 /// Debezium-formatted data.
 #[derive(Debug)]
@@ -443,12 +532,7 @@ pub struct DebeziumDecodeState {
     before_idx: usize,
     /// Index of the "after" field in the payload schema
     after_idx: usize,
-    // TODO - this is not a complete fix for #3026.
-    // In particular, it doesn't help us with non-MySQL connectors,
-    // nor with the initial scan.
-    /// Last recorded (pos, row, offset) for each MySQL binlog file.
-    /// Messages that are not ahead of the last recorded pos/row will be skipped.
-    binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
+    dedup: DebeziumDeduplicationState,
     binlog_schema_indices: Option<BinlogSchemaIndices>,
     /// Human-readable name used for printing debug information
     debug_name: String,
@@ -493,7 +577,12 @@ fn take_field_by_index(
 }
 
 impl DebeziumDecodeState {
-    pub fn new(schema: &Schema, debug_name: String, worker_idx: usize) -> Option<Self> {
+    pub fn new(
+        schema: &Schema,
+        debug_name: String,
+        worker_idx: usize,
+        dedup_strat: DebeziumDeduplicationStrategy,
+    ) -> Option<Self> {
         let top_node = schema.top_node();
         let top_indices = field_indices(top_node)?;
         let before_idx = *top_indices.get("before")?;
@@ -503,7 +592,7 @@ impl DebeziumDecodeState {
         Some(Self {
             before_idx,
             after_idx,
-            binlog_offsets: Default::default(),
+            dedup: DebeziumDeduplicationState::new(dedup_strat),
             binlog_schema_indices,
             debug_name,
             worker_idx,
@@ -569,32 +658,18 @@ impl DebeziumDecodeState {
                         .ok_or_else(|| format_err!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
-                        match self.binlog_offsets.entry(file_val.clone()) {
-                            Entry::Occupied(mut oe) => {
-                                let (old_max_pos, old_max_row, old_offset) = *oe.get();
-                                if old_max_pos > pos || (old_max_pos == pos && old_max_row >= row) {
-                                    let offset_string = if let Some(coord) = coord {
-                                        format!(" at offset {}", coord)
-                                    } else {
-                                        format!("")
-                                    };
-                                    let old_offset_string = if let Some(old_offset) = old_offset {
-                                        format!(" at offset {}", old_offset)
-                                    } else {
-                                        format!("")
-                                    };
-                                    warn!("Debezium for source {}:{} did not advance in binlog file {}: previously read ({}, {}){}, now read ({}, {}){}. Skipping record.",
-                                          self.debug_name, self.worker_idx, file_val, old_max_pos, old_max_row, old_offset_string, pos, row, offset_string);
-                                    return Ok(DiffPair {
-                                        before: None,
-                                        after: None,
-                                    });
-                                }
-                                oe.insert((pos, row, coord));
-                            }
-                            Entry::Vacant(ve) => {
-                                ve.insert((pos, row, coord));
-                            }
+                        if !self.dedup.should_use_record(
+                            &file_val,
+                            pos,
+                            row,
+                            coord,
+                            &self.debug_name,
+                            self.worker_idx,
+                        ) {
+                            return Ok(DiffPair {
+                                before: None,
+                                after: None,
+                            });
                         }
                     }
                 }
@@ -652,7 +727,12 @@ impl Decoder {
         envelope: EnvelopeType,
         debug_name: String,
         worker_index: usize,
+        dedup_strat: Option<DebeziumDeduplicationStrategy>,
     ) -> Result<Decoder> {
+        assert!(
+            (envelope == EnvelopeType::Debezium && dedup_strat.is_some())
+                || (envelope != EnvelopeType::Debezium && dedup_strat.is_none())
+        );
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
         let reader_schema = parse_schema(reader_schema).unwrap();
@@ -661,8 +741,13 @@ impl Decoder {
 
         let debezium = if envelope == EnvelopeType::Debezium {
             Some(
-                DebeziumDecodeState::new(&reader_schema, debug_name.clone(), worker_index)
-                    .ok_or_else(|| format_err!("Failed to extract Debezium schema information!"))?,
+                DebeziumDecodeState::new(
+                    &reader_schema,
+                    debug_name.clone(),
+                    worker_index,
+                    dedup_strat.unwrap(), /* is_some already asserted */
+                )
+                .ok_or_else(|| format_err!("Failed to extract Debezium schema information!"))?,
             )
         } else {
             None

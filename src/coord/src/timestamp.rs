@@ -774,7 +774,7 @@ fn is_ts_valid(
 /// using the BYO_CONSISTENCY_SCHEMA Avro spec outlined above.
 ///
 fn identify_consistency_format(enc: DataEncoding, env: Envelope) -> ConsistencyFormatting {
-    if let Envelope::Debezium = env {
+    if let Envelope::Debezium(_) = env {
         if let DataEncoding::AvroOcf { reader_schema: _ } = enc {
             ConsistencyFormatting::DebeziumOcf
         } else {

@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use url::Url;
 
 use expr::{GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
-use interchange::avro;
+use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
 use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
@@ -427,7 +427,7 @@ pub struct SinkDesc {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Envelope {
     None,
-    Debezium,
+    Debezium(DebeziumDeduplicationStrategy),
     Upsert(DataEncoding),
 }
 
@@ -435,7 +435,7 @@ impl Envelope {
     pub fn get_avro_envelope_type(&self) -> avro::EnvelopeType {
         match self {
             Envelope::None => avro::EnvelopeType::None,
-            Envelope::Debezium => avro::EnvelopeType::Debezium,
+            Envelope::Debezium { .. } => avro::EnvelopeType::Debezium,
             Envelope::Upsert(_) => avro::EnvelopeType::Upsert,
         }
     }

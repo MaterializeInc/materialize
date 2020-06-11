@@ -33,7 +33,7 @@ use self::csv::csv;
 use self::regex::regex as regex_fn;
 use crate::{operator::StreamExt, source::SourceOutput};
 use ::avro::{types::Value, Schema};
-use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair, EnvelopeType};
+use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair};
 
 use failure::format_err;
 use log::error;
@@ -53,8 +53,13 @@ where
     // so that we can spread the decoding among all the workers.
     // See #2133
     let envelope = envelope.clone();
-    let mut dbz_state = if envelope.get_avro_envelope_type() == EnvelopeType::Debezium {
-        DebeziumDecodeState::new(&schema, debug_name.to_string(), stream.scope().index())
+    let mut dbz_state = if let Envelope::Debezium(dedup_strat) = envelope {
+        DebeziumDecodeState::new(
+            &schema,
+            debug_name.to_string(),
+            stream.scope().index(),
+            dedup_strat,
+        )
     } else {
         None
     };
@@ -76,7 +81,7 @@ where
                         after: r,
                     })
                 }
-                Envelope::Debezium => {
+                Envelope::Debezium(_) => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
                         dbz_state.extract(value, top_node, index)
                     } else {
@@ -288,6 +293,7 @@ where
                 false,
                 format!("{}-values", debug_name),
                 worker_index,
+                None,
             )
             .expect(avro_err),
             &op_name,
@@ -302,6 +308,7 @@ where
                 false,
                 format!("{}-values", debug_name),
                 worker_index,
+                None,
             )
             .expect(avro_err),
             &op_name,
@@ -315,6 +322,7 @@ where
                 false,
                 format!("{}-keys", debug_name),
                 worker_index,
+                None,
             )
             .expect(avro_err),
             avro::AvroDecoderState::new(
@@ -324,6 +332,7 @@ where
                 false,
                 format!("{}-values", debug_name),
                 worker_index,
+                None,
             )
             .expect(avro_err),
             &op_name,
@@ -421,7 +430,6 @@ where
 {
     let op_name = format!("{}Decode", encoding.op_name());
     let worker_index = stream.scope().index();
-
     match (encoding, envelope) {
         (_, Envelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
@@ -429,20 +437,29 @@ where
         (DataEncoding::Csv(enc), Envelope::None) => {
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators)
         }
-        (DataEncoding::Avro(enc), Envelope::Debezium) => decode_values_inner(
-            stream,
-            avro::AvroDecoderState::new(
-                &enc.value_schema,
-                enc.schema_registry_config,
-                envelope.get_avro_envelope_type(),
-                fast_forwarded,
-                debug_name.to_string(),
-                worker_index,
+        (DataEncoding::Avro(enc), Envelope::Debezium(_)) => {
+            // can't get this from the above match arm because:
+            // `error[E0658]: binding by-move and by-ref in the same pattern is unstable`
+            let dedup_strat = match envelope {
+                Envelope::Debezium(ds) => *ds,
+                _ => unreachable!(),
+            };
+            decode_values_inner(
+                stream,
+                avro::AvroDecoderState::new(
+                    &enc.value_schema,
+                    enc.schema_registry_config,
+                    envelope.get_avro_envelope_type(),
+                    fast_forwarded,
+                    debug_name.to_string(),
+                    worker_index,
+                    Some(dedup_strat),
+                )
+                .expect("Failed to create Avro decoder"),
+                &op_name,
+                SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
             )
-            .expect("Failed to create Avro decoder"),
-            &op_name,
-            SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
-        ),
+        }
         (DataEncoding::Avro(enc), envelope) => decode_values_inner(
             stream,
             avro::AvroDecoderState::new(
@@ -452,6 +469,7 @@ where
                 fast_forwarded,
                 debug_name.to_string(),
                 worker_index,
+                None,
             )
             .expect("Failed to create Avro decoder"),
             &op_name,
@@ -460,7 +478,7 @@ where
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
         }
-        (_, Envelope::Debezium) => unreachable!(
+        (_, Envelope::Debezium(_)) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
         (DataEncoding::Regex { regex }, Envelope::None) => regex_fn(stream, regex, debug_name),
