@@ -24,6 +24,7 @@
 //!
 //! The tokens then form the input for the parser, which outputs an Abstract Syntax Tree (AST).
 
+use std::convert::TryFrom;
 use std::fmt;
 use std::ops::Range;
 
@@ -40,9 +41,9 @@ pub enum Token {
     /// A character that could not be tokenized
     Char(char),
     /// Single quoted string: i.e: 'string'
-    SingleQuotedString(String),
+    String(String),
     /// Hexadecimal string literal: i.e.: X'deadbeef'
-    HexStringLiteral(String),
+    HexString(String),
     /// An unsigned numeric literal representing positional
     /// parameters like $1, $2, etc. in prepared statements and
     /// function definitions
@@ -132,8 +133,8 @@ impl fmt::Display for Token {
             Token::Word(ref w) => write!(f, "{}", w),
             Token::Number(ref n) => f.write_str(n),
             Token::Char(ref c) => write!(f, "{}", c),
-            Token::SingleQuotedString(ref s) => write!(f, "'{}'", s),
-            Token::HexStringLiteral(ref s) => write!(f, "X'{}'", s),
+            Token::String(ref s) => write!(f, "'{}'", s),
+            Token::HexString(ref s) => write!(f, "X'{}'", s),
             Token::Parameter(n) => write!(f, "${}", n),
             Token::Comma => f.write_str(","),
             Token::Whitespace(ws) => write!(f, "{}", ws),
@@ -274,7 +275,18 @@ impl<'a> PeekableChars<'a> {
         c
     }
 
-    fn peek(&mut self) -> Option<char> {
+    fn next_n(&mut self, n: usize) -> Option<&'a str> {
+        match self.str[self.index..].char_indices().nth(n) {
+            Some((i, _)) => {
+                let s = &self.str[self.index..self.index + i];
+                self.index += i;
+                Some(s)
+            }
+            None => None,
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
         self.str[self.index..].chars().next()
     }
 }
@@ -336,19 +348,32 @@ impl Tokenizer {
                     }
                     Ok(Some(Token::Whitespace(Whitespace::Newline)))
                 }
-                // The spec only allows an uppercase 'X' to introduce a hex
-                // string, but PostgreSQL, at least, allows a lowercase 'x' too.
                 x @ 'x' | x @ 'X' => {
-                    chars.next(); // consume, to check the next char
+                    chars.next();
                     match chars.peek() {
                         Some('\'') => {
-                            // X'...' - a <binary string literal>
-                            let s = self.tokenize_single_quoted_string(chars);
-                            Ok(Some(Token::HexStringLiteral(s)))
+                            // Hex string literal.
+                            let s = self.tokenize_string(chars)?;
+                            Ok(Some(Token::HexString(s)))
                         }
                         _ => {
-                            // regular identifier starting with an "X"
+                            // Regular identifier starting with an "X".
                             let s = self.tokenize_word(x, chars);
+                            Ok(Some(Token::make_word(&s, None)))
+                        }
+                    }
+                }
+                e @ 'e' | e @ 'E' => {
+                    chars.next();
+                    match chars.peek() {
+                        Some('\'') => {
+                            // Extended string literal.
+                            let s = self.tokenize_extended_string(chars)?;
+                            Ok(Some(Token::String(s)))
+                        }
+                        _ => {
+                            // Regular identifier starting with an "E".
+                            let s = self.tokenize_word(e, chars);
                             Ok(Some(Token::make_word(&s, None)))
                         }
                     }
@@ -361,8 +386,8 @@ impl Tokenizer {
                 }
                 // string
                 '\'' => {
-                    let s = self.tokenize_single_quoted_string(chars);
-                    Ok(Some(Token::SingleQuotedString(s)))
+                    let s = self.tokenize_string(chars)?;
+                    Ok(Some(Token::String(s)))
                 }
                 // delimited (quoted) identifier
                 quote_start if self.is_delimited_identifier_start(quote_start) => {
@@ -523,32 +548,69 @@ impl Tokenizer {
     }
 
     /// Read a single quoted string, starting with the opening quote.
-    fn tokenize_single_quoted_string(&self, chars: &mut PeekableChars) -> String {
-        //TODO: handle escaped quotes in string
-        //TODO: handle newlines in string
-        //TODO: handle EOF before terminating quote
-        //TODO: handle 'string' <white space> 'string continuation'
+    fn tokenize_string(&self, chars: &mut PeekableChars) -> Result<String, String> {
         let mut s = String::new();
-        chars.next(); // consume the opening quote
-        while let Some(ch) = chars.peek() {
-            match ch {
-                '\'' => {
-                    chars.next(); // consume
-                    let escaped_quote = chars.peek().map(|c| c == '\'').unwrap_or(false);
-                    if escaped_quote {
+        chars.next(); // Consume the opening quote.
+        loop {
+            match chars.next() {
+                Some('\'') => {
+                    if chars.peek() == Some('\'') {
+                        // Escaped quote.
                         s.push('\'');
                         chars.next();
                     } else {
-                        break;
+                        break Ok(s);
                     }
                 }
-                _ => {
-                    chars.next(); // consume
-                    s.push(ch);
-                }
+                Some(c) => s.push(c),
+                None => return Err("unexpected EOF while parsing string literal".into()),
             }
         }
-        s
+    }
+
+    /// Read a single quoted string, starting with the opening quote.
+    fn tokenize_extended_string(&self, chars: &mut PeekableChars) -> Result<String, String> {
+        let mut s = String::new();
+        chars.next(); // Consume the opening quote.
+        let unexpected_eof = || Err("unexpected EOF while parsing extended string literal".into());
+        let parse_unicode_escape = |s| match s {
+            Some(s) => u32::from_str_radix(s, 16)
+                .ok()
+                .and_then(|codepoint| char::try_from(codepoint).ok())
+                .ok_or_else(|| "invalid unicode escape sequence"),
+            None => Err("too few digits in unicode escape sequence"),
+        };
+        loop {
+            match chars.next() {
+                Some('\'') => {
+                    if chars.peek() == Some('\'') {
+                        // Escaped quote.
+                        s.push('\'');
+                        chars.next();
+                    } else {
+                        break Ok(s);
+                    }
+                }
+                Some('\\') => match chars.next() {
+                    Some('b') => s.push('\x08'),
+                    Some('f') => s.push('\x12'),
+                    Some('n') => s.push('\n'),
+                    Some('r') => s.push('\r'),
+                    Some('t') => s.push('\t'),
+                    Some('u') => s.push(parse_unicode_escape(chars.next_n(4))?),
+                    Some('U') => s.push(parse_unicode_escape(chars.next_n(8))?),
+                    // NOTE: we do not support octal (\o) or hexadecimal (\x)
+                    // escapes, since it is possible to construct invalid
+                    // UTF-8 with those escapes. We could check for and reject
+                    // invalid UTF-8, of course, but it is too annoying to be
+                    // worth doing right now.
+                    Some(c) => s.push(c),
+                    None => return unexpected_eof(),
+                },
+                Some(c) => s.push(c),
+                None => return unexpected_eof(),
+            }
+        }
     }
 
     fn tokenize_multiline_comment(
@@ -688,324 +750,4 @@ fn peeking_take_while(
         }
     }
     s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tokenize_select_1() {
-        let sql = String::from("SELECT 1");
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Number(String::from("1")),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_scalar_function() {
-        let sql = String::from("SELECT sqrt(1)");
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("sqrt", None),
-            Token::LParen,
-            Token::Number(String::from("1")),
-            Token::RParen,
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_simple_select() {
-        let sql = String::from("SELECT * FROM customer WHERE id = 1 LIMIT 5");
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Mult,
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("FROM"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("customer", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("WHERE"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("id", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::Eq,
-            Token::Whitespace(Whitespace::Space),
-            Token::Number(String::from("1")),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("LIMIT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Number(String::from("5")),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_string_predicate() {
-        let sql = String::from("SELECT * FROM customer WHERE salary != 'Not Provided'");
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-
-        let expected = vec![
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Mult,
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("FROM"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("customer", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("WHERE"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_word("salary", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::Neq,
-            Token::Whitespace(Whitespace::Space),
-            Token::SingleQuotedString(String::from("Not Provided")),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_invalid_string() {
-        let sql = String::from("\nمصطفىh");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-        println!("tokens: {:#?}", tokens);
-        let expected = vec![
-            Token::Whitespace(Whitespace::Newline),
-            Token::Char('م'),
-            Token::Char('ص'),
-            Token::Char('ط'),
-            Token::Char('ف'),
-            Token::Char('ى'),
-            Token::make_word("h", None),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_invalid_string_cols() {
-        let sql = String::from("\n\nSELECT * FROM table\tمصطفىh");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-        println!("tokens: {:#?}", tokens);
-        let expected = vec![
-            Token::Whitespace(Whitespace::Newline),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_keyword("SELECT"),
-            Token::Whitespace(Whitespace::Space),
-            Token::Mult,
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("FROM"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("table"),
-            Token::Whitespace(Whitespace::Tab),
-            Token::Char('م'),
-            Token::Char('ص'),
-            Token::Char('ط'),
-            Token::Char('ف'),
-            Token::Char('ى'),
-            Token::make_word("h", None),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_is_null() {
-        let sql = String::from("a IS NULL");
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-
-        let expected = vec![
-            Token::make_word("a", None),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("IS"),
-            Token::Whitespace(Whitespace::Space),
-            Token::make_keyword("NULL"),
-        ];
-
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_comment() {
-        let sql = String::from("0--this is a comment\n1");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-        let expected = vec![
-            Token::Number("0".to_string()),
-            Token::Whitespace(Whitespace::SingleLineComment(
-                "this is a comment\n".to_string(),
-            )),
-            Token::Number("1".to_string()),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_comment_at_eof() {
-        let sql = String::from("--this is a comment");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-        let expected = vec![Token::Whitespace(Whitespace::SingleLineComment(
-            "this is a comment".to_string(),
-        ))];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_multiline_comment() {
-        let sql = String::from("0/*multi-line\n* /comment*/1");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-        let expected = vec![
-            Token::Number("0".to_string()),
-            Token::Whitespace(Whitespace::MultiLineComment(
-                "multi-line\n* /comment".to_string(),
-            )),
-            Token::Number("1".to_string()),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_multiline_comment_with_even_asterisks() {
-        let sql = String::from("\n/** Comment **/\n");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-        let expected = vec![
-            Token::Whitespace(Whitespace::Newline),
-            Token::Whitespace(Whitespace::MultiLineComment("* Comment *".to_string())),
-            Token::Whitespace(Whitespace::Newline),
-        ];
-        compare(expected, tokens);
-    }
-
-    #[test]
-    fn tokenize_mismatched_quotes() {
-        let sql = String::from("\"foo");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        assert_eq!(
-            tokenizer.tokenize(),
-            Err(ParserError {
-                sql: sql,
-                range: 0..4,
-                message: "Expected close delimiter '\"' before EOF.".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn tokenize_newlines() {
-        let sql = String::from("line1\nline2\rline3\r\nline4\r");
-
-        let mut tokenizer = Tokenizer::new(&sql);
-        let tokens = tokenizer
-            .tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|(token, _)| token)
-            .collect::<Vec<_>>();
-        let expected = vec![
-            Token::make_word("line1", None),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_word("line2", None),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_word("line3", None),
-            Token::Whitespace(Whitespace::Newline),
-            Token::make_word("line4", None),
-            Token::Whitespace(Whitespace::Newline),
-        ];
-        compare(expected, tokens);
-    }
-
-    fn compare(expected: Vec<Token>, actual: Vec<Token>) {
-        //println!("------------------------------");
-        //println!("tokens   = {:?}", actual);
-        //println!("expected = {:?}", expected);
-        //println!("------------------------------");
-        assert_eq!(expected, actual);
-    }
 }

@@ -91,15 +91,6 @@ SELECT count(ALL DISTINCT + x) FROM customer
 Cannot specify both ALL and DISTINCT in function: count
 
 parse-statement
-SELECT EXTRACT(MILLISECOND FROM d)
-----
-error:
-Parse error:
-SELECT EXTRACT(MILLISECOND FROM d)
-               ^^^^^^^^^^^
-Expected valid extract field, found: MILLISECOND
-
-parse-statement
 SELECT INTERVAL '01:01.01' MINUTE (5) TO SECOND (5)
 ----
 error:
@@ -216,3 +207,39 @@ Parse error:
 SELECT * FROM
              ^
 Expected identifier, found: EOF
+
+parse-statement
+SELECT '
+----
+error:
+Parse error:
+SELECT '
+       ^
+unexpected EOF while parsing string literal
+
+parse-statement
+SELECT E'
+----
+error:
+Parse error:
+SELECT E'
+       ^^
+unexpected EOF while parsing extended string literal
+
+parse-statement
+SELECT E'\u&'
+----
+error:
+Parse error:
+SELECT E'\u&'
+       ^^^^
+too few digits in unicode escape sequence
+
+parse-statement
+SELECT E'\u&&&&'
+----
+error:
+Parse error:
+SELECT E'\u&&&&'
+       ^^^^^^^^
+invalid unicode escape sequence

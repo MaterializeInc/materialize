@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 failure = "0.1.8"
 log = "0.4.5"
+ore = { path = "../ore" }
 repr = { path = "../repr" }
 lazy_static = "1.4.0"
 

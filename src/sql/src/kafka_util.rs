@@ -65,8 +65,8 @@ impl Config {
 
     fn validate_val(&self, val: &Value) -> Result<String, failure::Error> {
         match (&self.val_type, val) {
-            (ValType::String, Value::SingleQuotedString(v)) => Ok(v.to_string()),
-            (ValType::Path, Value::SingleQuotedString(v)) => {
+            (ValType::String, Value::String(v)) => Ok(v.to_string()),
+            (ValType::Path, Value::String(v)) => {
                 if std::fs::metadata(&v).is_err() {
                     bail!("file does not exist")
                 }
@@ -127,7 +127,7 @@ impl<'a> ConfigAggregator<'a> {
 /// - Invalid values for known options, such as files that do not exist for
 /// expected file paths.
 /// - If any of the values in `with_options` are not
-///   `sql_parser::ast::Value::SingleQuotedString`.
+///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &mut HashMap<String, Value>,
 ) -> Result<HashMap<String, String>, failure::Error> {
@@ -155,7 +155,7 @@ pub fn extract_config(
 fn extract_security_config(mut agg: &mut ConfigAggregator) -> Result<(), failure::Error> {
     let security_protocol = match agg.remove_from_input("security_protocol") {
         None => None,
-        Some(Value::SingleQuotedString(p)) => Some(p.to_lowercase()),
+        Some(Value::String(p)) => Some(p.to_lowercase()),
         Some(_) => bail!("ssl_certificate_file must be a string"),
     };
 

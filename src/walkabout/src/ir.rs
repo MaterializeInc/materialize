@@ -94,10 +94,9 @@ pub enum Type {
 /// variant, so we know how to visit it. See [`Type`] for details.
 ///
 /// Types whose names are listed in `ignored_types` are not included in the IR.
-pub fn analyze(items: &[syn::DeriveInput], ignored_types: &[&str]) -> Result<Ir> {
+pub fn analyze(items: &[syn::DeriveInput]) -> Result<Ir> {
     let ir = items
         .iter()
-        .filter(|item| !ignored_types.contains(&&*item.ident.to_string()))
         .map(|item| {
             let name = item.ident.to_string();
             let item = match &item.data {

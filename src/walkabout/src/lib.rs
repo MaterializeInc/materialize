@@ -60,13 +60,10 @@ pub use gen::gen_visit_mut;
 /// Rust containers, like [`Option`] and [`Vec`]. It does, however, endeavor to
 /// produce understandable error messages when it encounters a type it does not
 /// know how to handle.
-///
-/// Type names listed in `ignored_types` will not be analyzed or included in the
-/// resulting IR.
-pub fn load<P>(path: P, ignored_types: &[&str]) -> Result<ir::Ir>
+pub fn load<P>(path: P) -> Result<ir::Ir>
 where
     P: AsRef<Path>,
 {
     let items = parse::parse_mod(path)?;
-    ir::analyze(&items, ignored_types)
+    ir::analyze(&items)
 }

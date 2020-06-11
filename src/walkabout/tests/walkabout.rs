@@ -17,7 +17,7 @@ fn datadriven() {
         f.run(|test_case| {
             let mut f = NamedTempFile::new().unwrap();
             f.write_all(test_case.input.as_bytes()).unwrap();
-            walkabout::load(f.path(), &[])
+            walkabout::load(f.path())
                 .map(|ir| match test_case.directive.as_str() {
                     "visit" => walkabout::gen_visit(&ir),
                     "visit-mut" => walkabout::gen_visit_mut(&ir),

@@ -23,10 +23,10 @@
 use std::error::Error;
 use std::fmt;
 use std::ops::Range;
-use std::str::FromStr;
 
 use log::debug;
 
+use ore::collections::CollectionExt;
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::*;
@@ -280,9 +280,7 @@ impl Parser {
             match parser.parse_data_type()? {
                 DataType::Interval => parser.parse_literal_interval(),
                 data_type => Ok(Expr::Cast {
-                    expr: Box::new(Expr::Value(Value::SingleQuotedString(
-                        parser.parse_literal_string()?,
-                    ))),
+                    expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
                     data_type,
                 }),
             }
@@ -308,6 +306,7 @@ impl Parser {
                     op: UnaryOperator::Not,
                     expr: Box::new(self.parse_subexpr(Precedence::UnaryNot)?),
                 }),
+                "ROW" => self.parse_row_expr(),
                 "TRIM" => self.parse_trim_expr(),
                 // Here `w` is a word, check if it's a part of a multi-part
                 // identifier, a function call, or a simple identifier:
@@ -360,7 +359,7 @@ impl Parser {
                     expr: Box::new(self.parse_subexpr(Precedence::UnaryOp)?),
                 })
             }
-            Token::Number(_) | Token::SingleQuotedString(_) | Token::HexStringLiteral(_) => {
+            Token::Number(_) | Token::String(_) | Token::HexString(_) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
@@ -380,7 +379,12 @@ impl Parser {
                     self.prev_token();
                     Expr::Subquery(Box::new(self.parse_query()?))
                 } else {
-                    Expr::Nested(Box::new(self.parse_expr()?))
+                    let exprs = self.parse_comma_separated(Parser::parse_expr)?;
+                    if exprs.len() == 1 {
+                        Expr::Nested(Box::new(exprs.into_element()))
+                    } else {
+                        Expr::Row { exprs }
+                    }
                 };
                 self.expect_token(&Token::RParen)?;
                 Ok(expr)
@@ -462,14 +466,11 @@ impl Parser {
     }
 
     fn parse_window_frame(&mut self) -> Result<WindowFrame, ParserError> {
-        let units = match self.next_token() {
-            Some(Token::Word(w)) => w
-                .keyword
-                .parse::<WindowFrameUnits>()
-                .map_err(|e| self.error(self.peek_prev_range(), e))?,
-            unexpected => {
-                return self.expected(self.peek_prev_range(), "ROWS, RANGE, GROUPS", unexpected)
-            }
+        let units = match self.expect_one_of_keywords(&["ROWS", "RANGE", "GROUPS"])? {
+            "ROWS" => WindowFrameUnits::Rows,
+            "RANGE" => WindowFrameUnits::Range,
+            "GROUPS" => WindowFrameUnits::Groups,
+            _ => unreachable!(),
         };
         let (start_bound, end_bound) = if self.parse_keyword("BETWEEN") {
             let start_bound = self.parse_window_frame_bound()?;
@@ -570,7 +571,11 @@ impl Parser {
 
     fn parse_extract_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let field = self.parse_extract_field()?;
+        let field = match self.next_token() {
+            Some(Token::Word(k)) => k.value.to_lowercase(),
+            Some(Token::String(s)) => s,
+            t => self.expected(self.peek_prev_range(), "extract field token", t)?,
+        };
         self.expect_keyword("FROM")?;
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
@@ -580,17 +585,14 @@ impl Parser {
         })
     }
 
-    /// Parse the kinds of things that can be fed to EXTRACT and DATE_TRUNC
-    fn parse_extract_field(&mut self) -> Result<ExtractField, ParserError> {
-        let tok = self.next_token();
-        let field: Result<ExtractField, _> = match tok {
-            Some(Token::Word(ref k)) => k.keyword.parse(),
-            Some(Token::SingleQuotedString(ref s)) => s.parse(),
-            _ => return self.expected(self.peek_prev_range(), "extract field token", tok),
-        };
-        match field {
-            Ok(f) => Ok(f),
-            Err(_) => self.expected(self.peek_prev_range(), "valid extract field", tok)?,
+    fn parse_row_expr(&mut self) -> Result<Expr, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        if self.consume_token(&Token::RParen) {
+            Ok(Expr::Row { exprs: vec![] })
+        } else {
+            let exprs = self.parse_comma_separated(Parser::parse_expr)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(Expr::Row { exprs })
         }
     }
 
@@ -601,7 +603,7 @@ impl Parser {
     // - trim(from 'string')
     // - trim('string')
     // - trim(side 'string')
-    pub fn parse_trim_expr(&mut self) -> Result<Expr, ParserError> {
+    fn parse_trim_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let side = match self.parse_one_of_keywords(&["BOTH", "LEADING", "TRAILING"]) {
             Some(d) => match d {
@@ -660,9 +662,11 @@ impl Parser {
                         ])?;
                         let e_range = self.peek_prev_range();
 
-                        let high = DateTimeField::from_str(d)
+                        let high: DateTimeField = d
+                            .parse()
                             .map_err(|e| self.error(self.peek_prev_range(), e))?;
-                        let low = DateTimeField::from_str(e)
+                        let low: DateTimeField = e
+                            .parse()
                             .map_err(|e| self.error(self.peek_prev_range(), e))?;
 
                         // Check for invalid ranges, i.e. precision_high is the same
@@ -690,7 +694,8 @@ impl Parser {
 
                         (high, low, fsec_max_precision)
                     } else {
-                        let low = DateTimeField::from_str(d)
+                        let low: DateTimeField = d
+                            .parse()
                             .map_err(|e| self.error(self.peek_prev_range(), e))?;
                         let fsec_max_precision = if low == DateTimeField::Second {
                             self.parse_optional_precision()?
@@ -1851,8 +1856,8 @@ impl Parser {
                     }
                 },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
-                Token::SingleQuotedString(ref s) => Ok(Value::SingleQuotedString(s.to_string())),
-                Token::HexStringLiteral(ref s) => Ok(Value::HexStringLiteral(s.to_string())),
+                Token::String(ref s) => Ok(Value::String(s.to_string())),
+                Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
                 _ => parser_err!(
                     self,
                     self.peek_prev_range(),
@@ -1909,7 +1914,7 @@ impl Parser {
     /// Parse a literal string
     fn parse_literal_string(&mut self) -> Result<String, ParserError> {
         match self.next_token() {
-            Some(Token::SingleQuotedString(ref s)) => Ok(s.clone()),
+            Some(Token::String(ref s)) => Ok(s.clone()),
             other => self.expected(self.peek_prev_range(), "literal string", other),
         }
     }

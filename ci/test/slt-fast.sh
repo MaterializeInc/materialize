@@ -141,7 +141,7 @@ tests=(
     # test/sqllogictest/cockroach/time.slt
     test/sqllogictest/cockroach/timestamp.slt
     test/sqllogictest/cockroach/truncate.slt
-    test/sqllogictest/cockroach/tuple.slt
+    # test/sqllogictest/cockroach/tuple.slt
     # test/sqllogictest/cockroach/typing.slt
     # test/sqllogictest/cockroach/union-opt.slt
     test/sqllogictest/cockroach/union.slt

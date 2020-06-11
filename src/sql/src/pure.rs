@@ -58,7 +58,7 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, failure::Error> {
                     let schema = serde_json::to_string(r.writer_schema()).unwrap();
                     with_options.push(sql_parser::ast::SqlOption {
                         name: sql_parser::ast::Ident::new("reader_schema"),
-                        value: sql_parser::ast::Value::SingleQuotedString(schema),
+                        value: sql_parser::ast::Value::String(schema),
                     });
                 }
             }

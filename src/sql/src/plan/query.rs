@@ -28,9 +28,9 @@ use std::rc::Rc;
 use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    BinaryOperator, DataType, Expr, ExtractField, Function, FunctionArgs, Ident, JoinConstraint,
-    JoinOperator, ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
-    TableAlias, TableFactor, TableWithJoins, TrimSide, UnaryOperator, Value, Values,
+    BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
+    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
+    TableFactor, TableWithJoins, TrimSide, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -115,7 +115,7 @@ pub fn plan_show_where(
                         names[0].clone().unwrap(),
                     )])),
                     op: BinaryOperator::Like,
-                    right: Box::new(Expr::Value(Value::SingleQuotedString(s.into()))),
+                    right: Box::new(Expr::Value(Value::String(s.into()))),
                 };
                 &owned
             }
@@ -917,7 +917,7 @@ fn plan_table_function(
                 bail!("Datum to search must be a string");
             }
             let regex = match &regex {
-                Expr::Value(Value::SingleQuotedString(s)) => s,
+                Expr::Value(Value::String(s)) => s,
                 _ => bail!("Regex must be a string literal."),
             };
 
@@ -1586,6 +1586,7 @@ pub fn plan_coercible_expr<'a>(
                     )
                 }
             }
+            Expr::Row { .. } => bail!("ROW constructors are not supported yet"),
             Expr::Trim { side, exprs } => {
                 let ident = match side {
                     TrimSide::Both => "btrim",
@@ -1614,17 +1615,15 @@ pub fn plan_coercible_expr<'a>(
                     typ = ecx.scalar_type(&expr);
                 }
                 let func = match &typ {
-                    ScalarType::Interval => match field {
-                        ExtractField::Year => UnaryFunc::ExtractIntervalYear,
-                        ExtractField::Month => UnaryFunc::ExtractIntervalMonth,
-                        ExtractField::Day => UnaryFunc::ExtractIntervalDay,
-                        ExtractField::Hour => UnaryFunc::ExtractIntervalHour,
-                        ExtractField::Minute => UnaryFunc::ExtractIntervalMinute,
-                        ExtractField::Second => UnaryFunc::ExtractIntervalSecond,
-                        ExtractField::Epoch => UnaryFunc::ExtractIntervalEpoch,
-                        ExtractField::DayOfWeek
-                        | ExtractField::IsoDayOfWeek
-                        | ExtractField::Quarter => {
+                    ScalarType::Interval => match field.as_str() {
+                        "year" => UnaryFunc::ExtractIntervalYear,
+                        "month" => UnaryFunc::ExtractIntervalMonth,
+                        "day" => UnaryFunc::ExtractIntervalDay,
+                        "hour" => UnaryFunc::ExtractIntervalHour,
+                        "minute" => UnaryFunc::ExtractIntervalMinute,
+                        "second" => UnaryFunc::ExtractIntervalSecond,
+                        "epoch" => UnaryFunc::ExtractIntervalEpoch,
+                        "dow" | "isodow" | "quarter" => {
                             failure::bail!("invalid extract field for INTERVAL: {}", field)
                         }
                         _ => failure::bail!(
@@ -1632,37 +1631,37 @@ pub fn plan_coercible_expr<'a>(
                             field
                         ),
                     },
-                    ScalarType::Timestamp => match field {
-                        ExtractField::Year => UnaryFunc::ExtractTimestampYear,
-                        ExtractField::Quarter => UnaryFunc::ExtractTimestampQuarter,
-                        ExtractField::Month => UnaryFunc::ExtractTimestampMonth,
-                        ExtractField::Day => UnaryFunc::ExtractTimestampDay,
-                        ExtractField::Hour => UnaryFunc::ExtractTimestampHour,
-                        ExtractField::Minute => UnaryFunc::ExtractTimestampMinute,
-                        ExtractField::Second => UnaryFunc::ExtractTimestampSecond,
-                        ExtractField::WeekOfYear => UnaryFunc::ExtractTimestampWeek,
-                        ExtractField::DayOfYear => UnaryFunc::ExtractTimestampDayOfYear,
-                        ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampDayOfWeek,
-                        ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampIsoDayOfWeek,
-                        ExtractField::Epoch => UnaryFunc::ExtractTimestampEpoch,
+                    ScalarType::Timestamp => match field.as_str() {
+                        "year" => UnaryFunc::ExtractTimestampYear,
+                        "quarter" => UnaryFunc::ExtractTimestampQuarter,
+                        "month" => UnaryFunc::ExtractTimestampMonth,
+                        "day" => UnaryFunc::ExtractTimestampDay,
+                        "hour" => UnaryFunc::ExtractTimestampHour,
+                        "minute" => UnaryFunc::ExtractTimestampMinute,
+                        "second" => UnaryFunc::ExtractTimestampSecond,
+                        "week" => UnaryFunc::ExtractTimestampWeek,
+                        "doy" => UnaryFunc::ExtractTimestampDayOfYear,
+                        "dow" => UnaryFunc::ExtractTimestampDayOfWeek,
+                        "isodow" => UnaryFunc::ExtractTimestampIsoDayOfWeek,
+                        "epoch" => UnaryFunc::ExtractTimestampEpoch,
                         _ => failure::bail!(
                             "EXTRACT({} ..) for timestamp is not yet implemented",
                             field
                         ),
                     },
-                    ScalarType::TimestampTz => match field {
-                        ExtractField::Year => UnaryFunc::ExtractTimestampTzYear,
-                        ExtractField::Quarter => UnaryFunc::ExtractTimestampTzQuarter,
-                        ExtractField::Month => UnaryFunc::ExtractTimestampTzMonth,
-                        ExtractField::Day => UnaryFunc::ExtractTimestampTzDay,
-                        ExtractField::Hour => UnaryFunc::ExtractTimestampTzHour,
-                        ExtractField::Minute => UnaryFunc::ExtractTimestampTzMinute,
-                        ExtractField::Second => UnaryFunc::ExtractTimestampTzSecond,
-                        ExtractField::WeekOfYear => UnaryFunc::ExtractTimestampTzWeek,
-                        ExtractField::DayOfYear => UnaryFunc::ExtractTimestampTzDayOfYear,
-                        ExtractField::DayOfWeek => UnaryFunc::ExtractTimestampTzDayOfWeek,
-                        ExtractField::IsoDayOfWeek => UnaryFunc::ExtractTimestampTzIsoDayOfWeek,
-                        ExtractField::Epoch => UnaryFunc::ExtractTimestampTzEpoch,
+                    ScalarType::TimestampTz => match field.as_str() {
+                        "year" => UnaryFunc::ExtractTimestampTzYear,
+                        "quarter" => UnaryFunc::ExtractTimestampTzQuarter,
+                        "month" => UnaryFunc::ExtractTimestampTzMonth,
+                        "day" => UnaryFunc::ExtractTimestampTzDay,
+                        "hour" => UnaryFunc::ExtractTimestampTzHour,
+                        "minute" => UnaryFunc::ExtractTimestampTzMinute,
+                        "second" => UnaryFunc::ExtractTimestampTzSecond,
+                        "week" => UnaryFunc::ExtractTimestampTzWeek,
+                        "doy" => UnaryFunc::ExtractTimestampTzDayOfYear,
+                        "dow" => UnaryFunc::ExtractTimestampTzDayOfWeek,
+                        "isodow" => UnaryFunc::ExtractTimestampTzIsoDayOfWeek,
+                        "epoch" => UnaryFunc::ExtractTimestampTzEpoch,
                         _ => failure::bail!(
                             "EXTRACT({} ..) for timestamp tz is not yet implemented",
                             field
@@ -2267,7 +2266,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error>
                 )
             }
         }
-        Value::HexStringLiteral(_) => unsupported!(3114, "hex string literals"),
+        Value::HexString(_) => unsupported!(3114, "hex string literals"),
         Value::Boolean(b) => match b {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
@@ -2278,7 +2277,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error>
             i.truncate_low_fields(iv.precision_low, iv.fsec_max_precision)?;
             (Datum::Interval(i), ScalarType::Interval)
         }
-        Value::SingleQuotedString(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
+        Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
     };
     let nullable = datum == Datum::Null;
