@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str;
 use std::time::Duration;
 
 use md5::{Digest, Md5};
@@ -101,9 +102,9 @@ async fn generate_and_push_records(
     message_count: usize,
 ) -> Result<String, anyhow::Error> {
     log::info!("pushing {} records to Kafka", message_count);
-    let mut hasher = Md5::new();
     let ten_percent = message_count / 10;
     let mut sent = 0;
+    let mut records = Vec::new();
     while sent < message_count {
         if sent % ten_percent == 0 {
             log::info!("have sent {} records...", sent);
@@ -113,13 +114,20 @@ async fn generate_and_push_records(
         match kafka_client.send(&record).await {
             Ok(()) => {
                 sent += 1;
-                hasher.input(&record);
+                records.push(record);
             }
             Err(e) => {
                 log::error!("failed to send bytes to Kafka: {}", e);
             }
         }
     }
+
+    records.sort();
+    let mut hasher = Md5::new();
+    for r in records {
+        hasher.input(&r);
+    }
+
     Ok(format!("{:x}", hasher.result()))
 }
 
@@ -169,7 +177,7 @@ async fn query_materialize(
                     message_count
                 );
 
-                let query = "SELECT data, mz_offset FROM all ORDER BY mz_offset;";
+                let query = "SELECT data FROM all;";
                 let rows = mz_client::try_query(&mz_client, query, Duration::from_secs(1)).await?;
                 if message_count != rows.len() {
                     return Err(anyhow::Error::msg(format!(
@@ -179,10 +187,15 @@ async fn query_materialize(
                     )));
                 }
 
-                assert_eq!(message_count, rows.len());
-                let mut hasher = Md5::new();
+                let mut vals = Vec::new();
                 for row in rows {
                     let val: &[u8] = row.get("data");
+                    vals.push(val.to_owned());
+                }
+
+                vals.sort();
+                let mut hasher = Md5::new();
+                for val in vals {
                     hasher.input(&val);
                 }
                 return Ok(format!("{:x}", hasher.result()));
