@@ -486,7 +486,7 @@ class ResolvedImage:
         Creates a container from the image and runs the command described by
         `args` in the image.
         """
-        spawn.runv(["docker", "run", "-it", "--rm", "--init", self.spec(), *args])
+        spawn.runv(["docker", "run", "--tty", "--rm", "--init", self.spec(), *args])
 
     def list_dependencies(self, transitive: bool = False) -> Set[str]:
         out = set()
