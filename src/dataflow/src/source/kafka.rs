@@ -761,17 +761,8 @@ where
                             out,
                             Some(Into::<KafkaOffset>::into(offset).offset),
                         ));
-
                         partition_metrics.offset_ingested.set(offset.offset);
                         partition_metrics.messages_ingested.inc();
-
-                        downgrade_capability(
-                            &id,
-                            cap,
-                            &mut cp_info,
-                            &mut dp_info,
-                            &timestamp_histories,
-                        );
                     }
                 }
 
@@ -784,6 +775,14 @@ where
                     if bytes_read > 0 {
                         KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                     }
+                    // Downgrade capability before exiting
+                    downgrade_capability(
+                        &id,
+                        cap,
+                        &mut cp_info,
+                        &mut dp_info,
+                        &timestamp_histories,
+                    );
                     activator.activate();
                     return SourceStatus::Alive;
                 }
@@ -791,6 +790,14 @@ where
             if bytes_read > 0 {
                 KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
             }
+            //Downgrade capability before exiting
+            downgrade_capability(
+                &id,
+                cap,
+                &mut cp_info,
+                &mut dp_info,
+                &timestamp_histories,
+            );
             // Ensure that we poll kafka more often than the eviction timeout
             activator.activate_after(Duration::from_secs(60));
             SourceStatus::Alive
@@ -861,9 +868,9 @@ fn can_close_timestamp(
                     .map(|el| el.offset().to_raw() - 1),
                 Err(_) => Some(-1),
             }
-                .unwrap_or(-1),
+            .unwrap_or(-1),
         }
-            .into();
+        .into();
 
         // If a message has been buffered (but not timestamped), the consumer will already have
         // moved ahead.
@@ -871,7 +878,7 @@ fn can_close_timestamp(
             current_consumer_position.offset -= 1;
         }
         current_consumer_position >= offset
-    }
+    };
 }
 
 /// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
