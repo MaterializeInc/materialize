@@ -685,7 +685,7 @@ SELECT avg(a) FROM abc
 query error Unimplemented
 SELECT avg(c) FROM abc
 
-query error Unimplemented
+query error ROW constructors are not supported yet
 SELECT avg((a,c)) FROM abc
 
 query error Unimplemented
@@ -694,7 +694,7 @@ SELECT sum(a) FROM abc
 query error Unimplemented
 SELECT sum(c) FROM abc
 
-query error Unimplemented
+query error ROW constructors are not supported yet
 SELECT sum((a,c)) FROM abc
 
 statement ok

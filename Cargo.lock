@@ -3270,6 +3270,7 @@ dependencies = [
  "lazy_static",
  "log",
  "matches",
+ "ore",
  "repr",
  "walkabout",
 ]

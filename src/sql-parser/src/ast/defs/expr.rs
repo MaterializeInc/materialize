@@ -98,6 +98,10 @@ pub enum Expr {
     },
     /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr>),
+    /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
+    Row {
+        exprs: Vec<Expr>
+    },
     /// A literal value, such as string, number, date or NULL
     Value(Value),
     /// Scalar function call e.g. `LEFT(foo, 5)`
@@ -271,6 +275,11 @@ impl AstDisplay for Expr {
             Expr::Nested(ast) => {
                 f.write_str("(");
                 f.write_node(&ast);
+                f.write_str(")");
+            }
+            Expr::Row { exprs } => {
+                f.write_str("ROW(");
+                f.write_node(&display::comma_separated(&exprs));
                 f.write_str(")");
             }
             Expr::Value(v) => {

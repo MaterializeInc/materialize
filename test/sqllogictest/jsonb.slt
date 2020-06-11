@@ -1857,5 +1857,5 @@ query error jsonb_agg function requires exactly one non-star argument
 SELECT jsonb_agg(1, 2)
 
 # todo@jldlaughlin: Fix test when #2414 is implemented
-query error parse error
+query error ROW constructors are not supported yet
 SELECT jsonb_agg((1, 2))

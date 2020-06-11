@@ -26,6 +26,7 @@ use std::ops::Range;
 
 use log::debug;
 
+use ore::collections::CollectionExt;
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::*;
@@ -307,6 +308,7 @@ impl Parser {
                     op: UnaryOperator::Not,
                     expr: Box::new(self.parse_subexpr(Precedence::UnaryNot)?),
                 }),
+                "ROW" => self.parse_row_expr(),
                 "TRIM" => self.parse_trim_expr(),
                 // Here `w` is a word, check if it's a part of a multi-part
                 // identifier, a function call, or a simple identifier:
@@ -379,7 +381,12 @@ impl Parser {
                     self.prev_token();
                     Expr::Subquery(Box::new(self.parse_query()?))
                 } else {
-                    Expr::Nested(Box::new(self.parse_expr()?))
+                    let exprs = self.parse_comma_separated(Parser::parse_expr)?;
+                    if exprs.len() == 1 {
+                        Expr::Nested(Box::new(exprs.into_element()))
+                    } else {
+                        Expr::Row { exprs }
+                    }
                 };
                 self.expect_token(&Token::RParen)?;
                 Ok(expr)
@@ -580,6 +587,17 @@ impl Parser {
         })
     }
 
+    fn parse_row_expr(&mut self) -> Result<Expr, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        if self.consume_token(&Token::RParen) {
+            Ok(Expr::Row { exprs: vec![] })
+        } else {
+            let exprs = self.parse_comma_separated(Parser::parse_expr)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(Expr::Row { exprs })
+        }
+    }
+
     // Parse calls to trim(), which can take the form:
     // - trim(side 'chars' from 'string')
     // - trim('chars' from 'string')
@@ -587,7 +605,7 @@ impl Parser {
     // - trim(from 'string')
     // - trim('string')
     // - trim(side 'string')
-    pub fn parse_trim_expr(&mut self) -> Result<Expr, ParserError> {
+    fn parse_trim_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
         let side = match self.parse_one_of_keywords(&["BOTH", "LEADING", "TRAILING"]) {
             Some(d) => match d {

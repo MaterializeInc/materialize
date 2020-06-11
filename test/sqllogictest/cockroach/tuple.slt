@@ -17,9 +17,6 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
 
 statement ok
@@ -35,15 +32,18 @@ SELECT 1 IN (SELECT * FROM tb LIMIT 0)
 ----
 false
 
-query B
-SELECT 1 IN ()
-----
-false
-
-query B
-SELECT 1 = ANY ()
-----
-false
+# NOTE(benesch): empty IN and ANY lists are a CockroachDB-ism that we are not
+# current planning to support.
+#
+# query B
+# SELECT 1 IN ()
+# ----
+# false
+#
+# query B
+# SELECT 1 = ANY ()
+# ----
+# false
 
 subtest unlabeled_tuple
 
@@ -336,16 +336,24 @@ CREATE TABLE uvw (
   u INT,
   v INT,
   w INT,
-  INDEX (u,v,w)
 )
+
+statement ok
+CREATE INDEX uvw_idx ON uvw (u, v, w)
 
 statement ok
 INSERT INTO uvw SELECT u, v, w FROM
   generate_series(0, 3) AS u,
   generate_series(0, 3) AS v,
-  generate_series(0, 3) AS w;
-UPDATE uvw SET u = NULL WHERE u = 0;
-UPDATE uvw SET v = NULL WHERE v = 0;
+  generate_series(0, 3) AS w
+
+statement ok
+UPDATE uvw SET u = NULL WHERE u = 0
+
+statement ok
+UPDATE uvw SET v = NULL WHERE v = 0
+
+statement ok
 UPDATE uvw SET w = NULL WHERE w = 0
 
 query III colnames

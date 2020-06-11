@@ -1586,6 +1586,7 @@ pub fn plan_coercible_expr<'a>(
                     )
                 }
             }
+            Expr::Row { .. } => bail!("ROW constructors are not supported yet"),
             Expr::Trim { side, exprs } => {
                 let ident = match side {
                     TrimSide::Both => "btrim",
