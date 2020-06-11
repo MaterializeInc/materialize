@@ -142,7 +142,6 @@ lazy_static! {
 
         casts! {
             // BOOL
-            (Bool, Implicit(String)) => CastBoolToStringImplicit,
             (Bool, Explicit(String)) => CastBoolToStringExplicit,
             (Bool, Explicit(Jsonb)) => CastJsonbOrNullToJsonb,
             (Bool, JsonbAny) => CastJsonbOrNullToJsonb,
