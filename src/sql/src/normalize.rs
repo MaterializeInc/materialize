@@ -14,10 +14,10 @@ use failure::bail;
 use ore::collections::CollectionExt;
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
-use sql_parser::ast::visit_mut::VisitMut;
+use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement,
-    TableAlias, Value,
+    Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement, TableFactor,
+    Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -108,51 +108,57 @@ pub fn create_statement(
     }
 
     impl<'a, 'ast> VisitMut<'ast> for QueryNormalizer<'a> {
-        fn visit_function(&mut self, func: &'ast mut Function) {
+        fn visit_function_mut(&mut self, func: &'ast mut Function) {
             // Don't visit the function name, because function names are not
             // (yet) object names we can resolve.
             match &mut func.args {
                 FunctionArgs::Star => (),
                 FunctionArgs::Args(args) => {
                     for arg in args {
-                        self.visit_expr(arg);
+                        self.visit_expr_mut(arg);
                     }
                 }
             }
             if let Some(over) = &mut func.over {
-                self.visit_window_spec(over);
+                self.visit_window_spec_mut(over);
             }
         }
 
-        fn visit_table_table_factor(
-            &mut self,
-            name: &'ast mut ObjectName,
-            alias: Option<&'ast mut TableAlias>,
-            args: Option<&'ast mut FunctionArgs>,
-            with_hints: &'ast mut [Expr],
-        ) {
-            // Only attempt to resolve the name if it is not a table function
-            // (i.e., there are no arguments).
-            if args.is_none() {
-                self.visit_object_name(name)
-            }
-            match args {
-                None | Some(FunctionArgs::Star) => (),
-                Some(FunctionArgs::Args(args)) => {
-                    for expr in args {
-                        self.visit_expr(expr);
+        fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor) {
+            match table_factor {
+                TableFactor::Table {
+                    name,
+                    args,
+                    alias,
+                    with_hints,
+                } => {
+                    // Only attempt to resolve the name if it is not a table
+                    // function (i.e., there are no arguments).
+                    if args.is_none() {
+                        self.visit_object_name_mut(name)
+                    }
+                    match args {
+                        None | Some(FunctionArgs::Star) => (),
+                        Some(FunctionArgs::Args(args)) => {
+                            for expr in args {
+                                self.visit_expr_mut(expr);
+                            }
+                        }
+                    }
+                    if let Some(alias) = alias {
+                        self.visit_table_alias_mut(alias);
+                    }
+                    for expr in with_hints {
+                        self.visit_expr_mut(expr);
                     }
                 }
-            }
-            if let Some(alias) = alias {
-                self.visit_table_alias(alias);
-            }
-            for expr in with_hints {
-                self.visit_expr(expr);
+                // We only need special behavior for `TableFactor::Table`. Just
+                // visit the other types of table factors like normal.
+                _ => visit_mut::visit_table_factor_mut(self, table_factor),
             }
         }
 
-        fn visit_object_name(&mut self, object_name: &'ast mut ObjectName) {
+        fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
             match self.scx.resolve_item(object_name.clone()) {
                 Ok(full_name) => *object_name = unresolve(full_name),
                 Err(e) => self.err = Some(e),
@@ -215,7 +221,7 @@ pub fn create_statement(
             };
             {
                 let mut normalizer = QueryNormalizer { scx, err: None };
-                normalizer.visit_query(query);
+                normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);
                 }
@@ -233,7 +239,7 @@ pub fn create_statement(
             *on_name = resolve_item(on_name)?;
             let mut normalizer = QueryNormalizer { scx, err: None };
             for key_part in key_parts {
-                normalizer.visit_expr(key_part);
+                normalizer.visit_expr_mut(key_part);
                 if let Some(err) = normalizer.err {
                     return Err(err);
                 }

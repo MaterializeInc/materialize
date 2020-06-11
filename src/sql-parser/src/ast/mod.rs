@@ -27,31 +27,11 @@ mod ddl;
 mod operator;
 mod query;
 mod value;
-#[macro_use]
-mod visit_macro;
-
-pub mod visit {
-    // Visiting an enum struct variant with many arguments forces our hand here.
-    // If, over time, we convert these large variants to dedicated structs, we
-    // can remove this escape hatch.
-    #![allow(clippy::too_many_arguments)]
-    // Disable lints that want us to rewrite `&Ident` as `&str`, as `&str` is not as
-    // self-documenting as &Ident.
-    #![allow(clippy::ptr_arg)]
-    make_visitor!(Visit: &);
-}
-
-pub mod visit_mut {
-    // See justification for these attributes in the `visit` module.
-    #![allow(clippy::too_many_arguments)]
-    #![allow(clippy::ptr_arg)]
-    make_visitor!(VisitMut: &mut);
-}
+pub mod visit;
+pub mod visit_mut;
 
 use std::fmt;
 use std::str::FromStr;
-
-use repr::adt::datetime::DateTimeField;
 
 pub use self::data_type::DataType;
 pub use self::ddl::{
@@ -974,11 +954,11 @@ pub enum Statement {
         /// View name
         name: ObjectName,
         columns: Vec<Ident>,
+        with_options: Vec<SqlOption>,
         query: Box<Query>,
         if_exists: IfExistsBehavior,
         temporary: bool,
         materialized: bool,
-        with_options: Vec<SqlOption>,
     },
     /// `CREATE TABLE`
     CreateTable {

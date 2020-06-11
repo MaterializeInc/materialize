@@ -21,8 +21,8 @@ use sql_parser::ast::{
 use crate::normalize;
 
 pub fn transform(query: &mut Query) {
-    AggFuncRewriter.visit_query(query);
-    IdentFuncRewriter.visit_query(query);
+    AggFuncRewriter.visit_query_mut(query);
+    IdentFuncRewriter.visit_query_mut(query);
 }
 
 // Rewrites `avg(col)` to `sum(col) / count(col)`, so that we can pretend the
@@ -177,19 +177,19 @@ impl AggFuncRewriter {
 }
 
 impl<'ast> VisitMut<'ast> for AggFuncRewriter {
-    fn visit_select_item(&mut self, item: &'ast mut SelectItem) {
+    fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem) {
         if let SelectItem::UnnamedExpr(expr) = item {
-            visit_mut::visit_expr(self, expr);
+            visit_mut::visit_expr_mut(self, expr);
             if let Some((alias, expr)) = Self::rewrite_expr(expr) {
                 *item = SelectItem::ExprWithAlias { expr, alias }
             }
         } else {
-            visit_mut::visit_select_item(self, item);
+            visit_mut::visit_select_item_mut(self, item);
         }
     }
 
-    fn visit_expr(&mut self, expr: &'ast mut Expr) {
-        visit_mut::visit_expr(self, expr);
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
+        visit_mut::visit_expr_mut(self, expr);
         if let Some((_name, new_expr)) = Self::rewrite_expr(expr) {
             *expr = new_expr;
         }
@@ -202,8 +202,8 @@ impl<'ast> VisitMut<'ast> for AggFuncRewriter {
 struct IdentFuncRewriter;
 
 impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
-    fn visit_expr(&mut self, expr: &'ast mut Expr) {
-        visit_mut::visit_expr(self, expr);
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
+        visit_mut::visit_expr_mut(self, expr);
         if let Expr::Identifier(ident) = expr {
             if ident.len() != 1 {
                 return;

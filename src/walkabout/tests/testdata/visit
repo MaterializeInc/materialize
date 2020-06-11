@@ -1,0 +1,166 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+visit
+enum Expr {
+    Function(Function),
+    BinOp {
+        lhs: Box<Expr>,
+        op: BinOp,
+        rhs: Box<Expr>,
+    }
+}
+enum BinOp {
+    Add,
+    Sub,
+}
+struct Function {
+    name: String,
+    args: Vec<Expr>,
+    filter: Option<Expr>,
+}
+----
+pub trait Visit<'ast> {
+    fn visit_bin_op(&mut self, node: &'ast BinOp) {
+        visit_bin_op(self, node)
+    }
+    fn visit_expr(&mut self, node: &'ast Expr) {
+        visit_expr(self, node)
+    }
+    fn visit_function(&mut self, node: &'ast Function) {
+        visit_function(self, node)
+    }
+}
+pub fn visit_bin_op<'ast, V>(visitor: &mut V, node: &'ast BinOp)
+where
+    V: Visit<'ast> + ?Sized,
+{
+    match node {
+        BinOp::Add {
+        } => {
+        }
+        BinOp::Sub {
+        } => {
+        }
+    }
+}
+pub fn visit_expr<'ast, V>(visitor: &mut V, node: &'ast Expr)
+where
+    V: Visit<'ast> + ?Sized,
+{
+    match node {
+        Expr::Function {
+            0: binding0,
+        } => {
+            visitor.visit_function(binding0);
+        }
+        Expr::BinOp {
+            lhs: binding0,
+            op: binding1,
+            rhs: binding2,
+        } => {
+            visitor.visit_expr(&*binding0);
+            visitor.visit_bin_op(binding1);
+            visitor.visit_expr(&*binding2);
+        }
+    }
+}
+pub fn visit_function<'ast, V>(visitor: &mut V, node: &'ast Function)
+where
+    V: Visit<'ast> + ?Sized,
+{
+    for v in &node.args {
+        visitor.visit_expr(v);
+    }
+    if let Some(v) = &node.filter {
+        visitor.visit_expr(v);
+    }
+}
+
+visit-mut
+enum Expr {
+    Function(Function),
+    BinOp {
+        lhs: Box<Expr>,
+        op: BinOp,
+        rhs: Box<Expr>,
+    }
+}
+enum BinOp {
+    Add,
+    Sub,
+}
+struct Function {
+    name: String,
+    args: Vec<Expr>,
+    filter: Option<Expr>,
+}
+----
+pub trait VisitMut<'ast> {
+    fn visit_bin_op_mut(&mut self, node: &'ast mut BinOp) {
+        visit_bin_op_mut(self, node)
+    }
+    fn visit_expr_mut(&mut self, node: &'ast mut Expr) {
+        visit_expr_mut(self, node)
+    }
+    fn visit_function_mut(&mut self, node: &'ast mut Function) {
+        visit_function_mut(self, node)
+    }
+}
+pub fn visit_bin_op_mut<'ast, V>(visitor: &mut V, node: &'ast mut BinOp)
+where
+    V: VisitMut<'ast> + ?Sized,
+{
+    match node {
+        BinOp::Add {
+        } => {
+        }
+        BinOp::Sub {
+        } => {
+        }
+    }
+}
+pub fn visit_expr_mut<'ast, V>(visitor: &mut V, node: &'ast mut Expr)
+where
+    V: VisitMut<'ast> + ?Sized,
+{
+    match node {
+        Expr::Function {
+            0: binding0,
+        } => {
+            visitor.visit_function_mut(binding0);
+        }
+        Expr::BinOp {
+            lhs: binding0,
+            op: binding1,
+            rhs: binding2,
+        } => {
+            visitor.visit_expr_mut(&mut *binding0);
+            visitor.visit_bin_op_mut(binding1);
+            visitor.visit_expr_mut(&mut *binding2);
+        }
+    }
+}
+pub fn visit_function_mut<'ast, V>(visitor: &mut V, node: &'ast mut Function)
+where
+    V: VisitMut<'ast> + ?Sized,
+{
+    for v in &mut node.args {
+        visitor.visit_expr_mut(v);
+    }
+    if let Some(v) = &mut node.filter {
+        visitor.visit_expr_mut(v);
+    }
+}
