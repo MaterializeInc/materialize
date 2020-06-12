@@ -1070,14 +1070,14 @@ SELECT to_jsonb(1.234::FLOAT)
 ## jsonb_array_elements
 
 query T rowsort
-SELECT * FROM jsonb_array_elements('[1,2,3]'::JSONB)
+SELECT * FROM jsonb_array_elements('[1,2,3]')
 ----
 1.0
 2.0
 3.0
 
 query T rowsort
-SELECT * FROM jsonb_array_elements('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]'::JSONB)
+SELECT * FROM jsonb_array_elements('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]')
 ----
 1.0
 true
@@ -1088,38 +1088,38 @@ null
 [1.0,2.0,3.0]
 
 query T rowsort
-SELECT js.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]'::JSONB) js
+SELECT js.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]') js
 ----
 1.0
 2.0
 3.0
 
 query T
-SELECT * FROM jsonb_array_elements('[]'::JSONB)
+SELECT * FROM jsonb_array_elements('[]')
 ----
 
 query T
-SELECT * FROM jsonb_array_elements('{"1":2}'::JSONB)
+SELECT * FROM jsonb_array_elements('{"1":2}')
 ----
 
 ## jsonb_array_elements_text
 
 query T rowsort
-SELECT * FROM jsonb_array_elements_text('[1,2,3]'::JSONB)
+SELECT * FROM jsonb_array_elements_text('[1,2,3]')
 ----
 1.0
 2.0
 3.0
 
 query T rowsort
-SELECT * FROM jsonb_array_elements_text('[1,2,3]'::JSONB)
+SELECT * FROM jsonb_array_elements_text('[1,2,3]')
 ----
 1.0
 2.0
 3.0
 
 query T rowsort
-SELECT * FROM jsonb_array_elements_text('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]'::JSONB)
+SELECT * FROM jsonb_array_elements_text('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]')
 ----
 1.0
 true
@@ -1130,54 +1130,54 @@ text
 [1.0,2.0,3.0]
 
 query T
-SELECT * FROM jsonb_array_elements('[]'::JSONB)
+SELECT * FROM jsonb_array_elements('[]')
 ----
 
 query T
-SELECT * FROM jsonb_array_elements_text('{"1":2}'::JSONB)
+SELECT * FROM jsonb_array_elements_text('{"1":2}')
 ----
 
 query T
-SELECT * FROM jsonb_array_elements_text('{"1":2}'::JSONB)
+SELECT * FROM jsonb_array_elements_text('{"1":2}')
 ----
 
 ## jsonb_object_keys
 
 query T
-SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB)
+SELECT * FROM jsonb_object_keys('{"1":2,"3":4}')
 ----
 1
 3
 
 query T
-SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB)
+SELECT * FROM jsonb_object_keys('{"1":2,"3":4}')
 ----
 1
 3
 
 query T
-SELECT * FROM jsonb_object_keys('{}'::JSONB)
+SELECT * FROM jsonb_object_keys('{}')
 ----
 
 query T
-SELECT * FROM jsonb_object_keys('{"\"1\"":2}'::JSONB)
+SELECT * FROM jsonb_object_keys('{"\"1\"":2}')
 ----
 "1"
 
 # Keys are sorted.
 query T
-SELECT * FROM jsonb_object_keys('{"a":1,"1":2,"3":{"4":5,"6":7}}'::JSONB)
+SELECT * FROM jsonb_object_keys('{"a":1,"1":2,"3":{"4":5,"6":7}}')
 ----
 1
 3
 a
 
 query T
-SELECT * FROM jsonb_object_keys('null'::JSONB)
+SELECT * FROM jsonb_object_keys('null')
 ----
 
 query T
-SELECT * FROM jsonb_object_keys('[1,2,3]'::JSONB)
+SELECT * FROM jsonb_object_keys('[1,2,3]')
 ----
 
 ## jsonb_build_object
@@ -1310,6 +1310,13 @@ query T
 SELECT '{"a":1,"b":2}'::JSONB || '"c"'::JSONB
 ----
 NULL
+
+# Test that concatenating a jsonb value with a string literal uses
+# jsonb-specific concatenation.
+query T
+SELECT '[1,2,3]'::jsonb || '[4,5,6]'
+----
+[1.0,2.0,3.0,4.0,5.0,6.0]
 
 query T
 SELECT jsonb_build_array()
@@ -1461,15 +1468,15 @@ f5   99.0
 f6   "stringy"
 
 query TT
-SELECT * FROM jsonb_each('[1]'::JSONB)
+SELECT * FROM jsonb_each('[1]')
 ----
 
 query TT
-SELECT * FROM jsonb_each('null'::JSONB)
+SELECT * FROM jsonb_each('null')
 ----
 
 query TT
-SELECT * from jsonb_each('{}'::JSONB) q
+SELECT * from jsonb_each('{}') q
 ----
 
 query TT colnames,rowsort
@@ -1483,23 +1490,23 @@ f5   99.0
 f6   "stringy"
 
 query TT
-SELECT * FROM jsonb_each_text('[1]'::JSONB)
+SELECT * FROM jsonb_each_text('[1]')
 ----
 
 query TT
-SELECT * FROM jsonb_each_text('null'::JSONB)
+SELECT * FROM jsonb_each_text('null')
 ----
 
 query TT
-SELECT * from jsonb_each_text('{}'::JSONB) q
+SELECT * from jsonb_each_text('{}') q
 ----
 
 query TT
-SELECT * from jsonb_each_text('{}'::JSONB) q
+SELECT * from jsonb_each_text('{}') q
 ----
 
 query TT colnames,rowsort
-SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
+SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}') q
 ----
 key  value
 f1   [1.0,2.0,3.0]
@@ -1509,23 +1516,23 @@ f5   99.0
 f6   stringy
 
 query TT
-SELECT * FROM jsonb_each_text('[1]'::JSONB)
+SELECT * FROM jsonb_each_text('[1]')
 ----
 
 query TT
-SELECT * FROM jsonb_each_text('null'::JSONB)
+SELECT * FROM jsonb_each_text('null')
 ----
 
 query TT
-SELECT * from jsonb_each_text('{}'::JSONB) q
+SELECT * from jsonb_each_text('{}') q
 ----
 
 query TT
-SELECT * from jsonb_each_text('{}'::JSONB) q
+SELECT * from jsonb_each_text('{}') q
 ----
 
 query TT colnames,rowsort
-SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
+SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}') q
 ----
 key  value
 f1   [1.0,2.0,3.0]
