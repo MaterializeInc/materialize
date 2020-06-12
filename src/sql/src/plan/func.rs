@@ -324,26 +324,16 @@ impl<'a> ArgImplementationMatcher<'a> {
         ident: &'a str,
         ecx: &'a ExprContext<'a>,
         impls: &[FuncImpl],
-        args: &[Expr],
+        exprs: Vec<CoercibleScalarExpr>,
+        types: &[Option<ScalarType>],
     ) -> Result<ScalarExpr, failure::Error> {
         // Immediately remove all `impls` we know are invalid.
-        let l = args.len();
+        let l = exprs.len();
         let impls = impls
             .iter()
             .filter(|i| i.params.validate_arg_len(l))
             .collect();
         let mut m = Self { ident, ecx };
-
-        let mut exprs = Vec::new();
-        for arg in args {
-            let expr = query::plan_coercible_expr(ecx, arg)?.0;
-            exprs.push(expr);
-        }
-
-        let types: Vec<_> = exprs
-            .iter()
-            .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
-            .collect();
 
         let mut f = m.find_match(&types, impls)?;
 
@@ -869,7 +859,18 @@ pub fn select_scalar_func(
         None => unsupported!(ident),
     };
 
-    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
+    let mut exprs = Vec::new();
+    for arg in args {
+        let expr = query::plan_coercible_expr(ecx, arg)?.0;
+        exprs.push(expr);
+    }
+
+    let types: Vec<_> = exprs
+        .iter()
+        .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
+        .collect();
+
+    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, exprs, &types) {
         Ok(expr) => Ok(expr),
         Err(e) => bail!("Cannot call function '{}': {}", ident, e),
     }
@@ -1180,21 +1181,37 @@ pub fn plan_binary_op<'a>(
         None => unsupported!(op),
     };
 
-    let args = vec![left.clone(), right.clone()];
+    let exprs = vec![
+        query::plan_coercible_expr(ecx, left)?.0,
+        query::plan_coercible_expr(ecx, right)?.0,
+    ];
 
-    match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, &args) {
+    let types: Vec<_> = exprs
+        .iter()
+        .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
+        .collect();
+
+    match ArgImplementationMatcher::select_implementation(
+        &op.to_string(),
+        ecx,
+        impls,
+        exprs,
+        &types,
+    ) {
         Ok(expr) => Ok(expr),
-        Err(e) => {
-            let lexpr = query::plan_expr(ecx, left, None)?;
-            let rexpr = query::plan_expr(ecx, right, None)?;
-            bail!(
-                "no overload for {} {} {}: {}",
-                ecx.scalar_type(&lexpr),
-                op,
-                ecx.scalar_type(&rexpr),
-                e
-            )
-        }
+        Err(e) => bail!(
+            "no overload for {} {} {}: {}",
+            match &types[0] {
+                Some(t) => format!("{}", t),
+                None => "unknown".to_string(),
+            },
+            op,
+            match &types[1] {
+                Some(t) => format!("{}", t),
+                None => "unknown".to_string(),
+            },
+            e
+        ),
     }
 }
 
@@ -1237,16 +1254,25 @@ pub fn plan_unary_op<'a>(
         None => unsupported!(op),
     };
 
+    let exprs = vec![query::plan_coercible_expr(ecx, expr)?.0];
+    let types = vec![ecx.column_type(&exprs[0]).map(|t| t.scalar_type)];
+
     match ArgImplementationMatcher::select_implementation(
         &op.to_string(),
         ecx,
         impls,
-        &[expr.clone()],
+        exprs,
+        &types,
     ) {
         Ok(expr) => Ok(expr),
-        Err(e) => {
-            let lexpr = query::plan_expr(ecx, expr, None)?;
-            bail!("no overload for {} {}: {}", op, ecx.scalar_type(&lexpr), e)
-        }
+        Err(e) => bail!(
+            "no overload for {} {}: {}",
+            op,
+            match &types[0] {
+                Some(t) => format!("{}", t),
+                None => "unknown".to_string(),
+            },
+            e
+        ),
     }
 }
