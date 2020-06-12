@@ -186,6 +186,12 @@ impl PartialEq<ParamType> for ScalarType {
     }
 }
 
+impl From<ScalarType> for ParamType {
+    fn from(s: ScalarType) -> ParamType {
+        ParamType::Plain(s)
+    }
+}
+
 impl From<&ParamType> for ScalarType {
     fn from(p: &ParamType) -> ScalarType {
         match p {
@@ -193,18 +199,6 @@ impl From<&ParamType> for ScalarType {
             ParamType::StringAny => ScalarType::String,
             ParamType::JsonbAny => ScalarType::Jsonb,
         }
-    }
-}
-
-pub trait Params {
-    fn into_params(self) -> Vec<ParamType>;
-}
-
-/// Provides a shorthand for converting a `Vec<ScalarType>` to `Vec<ParamType>`.
-/// Note that this moves the values out of `self` and into the resultant `Vec<ParamType>`.
-impl Params for Vec<ScalarType> {
-    fn into_params(self) -> Vec<ParamType> {
-        self.into_iter().map(ParamType::Plain).collect()
     }
 }
 
@@ -686,14 +680,13 @@ impl<'a> ArgImplementationMatcher<'a> {
 }
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
-macro_rules! params(
-    ( $($p:expr),* ) => {
-        vec![$($p,)+].into_params()
-    };
-);
+macro_rules! params {
+    (($($p:expr),*)...) => { ParamList::Repeat(vec![$($p.into(),)*]) };
+    ($($p:expr),*)      => { ParamList::Exact(vec![$($p.into(),)*]) };
+}
 
 /// Provides shorthand for inserting [`FuncImpl`]s into arbitrary `HashMap`s.
-macro_rules! insert_impl(
+macro_rules! insert_impl {
     ($hashmap:ident, $key:expr, $($params:expr => $op:expr),+) => {
         let impls = vec![
             $(FuncImpl {
@@ -704,11 +697,11 @@ macro_rules! insert_impl(
 
         $hashmap.entry($key).or_default().extend(impls);
     };
-);
+}
 
 /// Provides a macro to write HashMap "literals" for matching some key to
 /// `Vec<FuncImpl>`.
-macro_rules! impls(
+macro_rules! impls {
     {
         $(
             $name:expr => {
@@ -718,17 +711,16 @@ macro_rules! impls(
     } => {{
         let mut m: HashMap<_, Vec<FuncImpl>> = HashMap::new();
         $(
-            insert_impl!{m, $name, $($params => $op),+}
+            insert_impl!(m, $name, $($params => $op),+);
         )+
         m
     }};
-);
+}
 
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
     static ref BUILTIN_IMPLS: HashMap<&'static str, Vec<FuncImpl>> = {
         use OperationType::*;
-        use ParamList::*;
         use ParamType::*;
         use ScalarType::*;
         impls! {
@@ -759,7 +751,7 @@ lazy_static! {
                 params!(String) => Unary(UnaryFunc::CharLength)
             },
             "concat" => {
-                Repeat(vec![StringAny]) => VClosure(|_ecx, mut exprs| {
+                 params!((StringAny)...) => VClosure(|_ecx, mut exprs| {
                     // Unlike all other `StringAny` casts, `concat` uses an
                     // implicit behavior for converting bools to strings.
                     for e in &mut exprs {
@@ -789,12 +781,12 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
             "jsonb_build_array" => {
-                Exact(vec![]) => VariadicFunc::JsonbBuildArray,
-                Repeat(vec![JsonbAny]) => VariadicFunc::JsonbBuildArray
+                params!() => VariadicFunc::JsonbBuildArray,
+                params!((JsonbAny)...) => VariadicFunc::JsonbBuildArray
             },
             "jsonb_build_object" => {
-                Exact(vec![]) => VariadicFunc::JsonbBuildObject,
-                Repeat(vec![StringAny, JsonbAny]) =>
+                params!() => VariadicFunc::JsonbBuildObject,
+                params!((StringAny, JsonbAny)...) =>
                     VariadicFunc::JsonbBuildObject
             },
             "jsonb_pretty" => {
@@ -860,7 +852,7 @@ lazy_static! {
             //
             // https://www.postgresql.org/docs/current/functions-json.html
             "to_jsonb" => {
-                vec![JsonbAny] => ExprOnly
+                params!(JsonbAny) => ExprOnly
             },
             "to_timestamp" => {
                 params!(Float64) => UnaryFunc::ToTimestamp
