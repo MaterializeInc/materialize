@@ -83,6 +83,7 @@ impl SourceMetrics {
 pub struct PartitionMetrics {
     offset_ingested: IntGauge,
     offset_received: IntGauge,
+    max_offset: IntGauge,
     closed_ts: UIntGauge,
     messages_ingested: IntCounter,
 }
@@ -115,11 +116,18 @@ impl PartitionMetrics {
                 &["topic", "source_id", "partition_id"]
             )
             .unwrap();
+            static ref MAX_AVAILABLE_OFFSET: IntGaugeVec = register_int_gauge_vec!(
+                "mz_kafka_partition_offset_max",
+                "The high watermark for a partition, the maximum offset that we could hope to ingest",
+                &["topic", "source_id", "partition_id"]
+            )
+            .unwrap();
         }
         let labels = &[topic_name, source_id, partition_id];
         PartitionMetrics {
             offset_ingested: OFFSET_INGESTED.with_label_values(labels),
             offset_received: OFFSET_RECEIVED.with_label_values(labels),
+            max_offset: MAX_AVAILABLE_OFFSET.with_label_values(labels),
             closed_ts: CLOSED_TS.with_label_values(labels),
             messages_ingested: MESSAGES_INGESTED.with_label_values(labels),
         }
@@ -302,7 +310,7 @@ struct DataPlaneInfo {
     /// Per-source metrics.
     source_metrics: SourceMetrics,
     /// Per-partition metrics.
-    partition_metrics: HashMap<i32, PartitionMetrics>,
+    partition_metrics: Arc<Mutex<HashMap<i32, PartitionMetrics>>>,
     /// Worker ID
     worker_id: i32,
     /// Worker Count
@@ -325,7 +333,7 @@ impl DataPlaneInfo {
             .expect("Failed to create Kafka Consumer");
         DataPlaneInfo {
             source_metrics: SourceMetrics::new(&topic_name, &source_id, &worker_id.to_string()),
-            partition_metrics: HashMap::new(),
+            partition_metrics: Arc::new(Mutex::new(HashMap::new())),
             buffered_metadata: HashSet::new(),
             topic_name: topic_name.clone(),
             source_name,
@@ -344,7 +352,6 @@ impl DataPlaneInfo {
     // the main Kafka threads. We only trigger metadata requests for Real time sources
     fn start_metadata_fetch_thread(
         &mut self,
-        cp_info: &ControlPlaneInfo,
         metadata_refresh_frequency: Duration,
         timestamping_stopped: Arc<AtomicBool>,
     ) {
@@ -352,18 +359,18 @@ impl DataPlaneInfo {
         let refresh = self.refresh_metadata_info.clone();
         let id = self.source_id.clone();
         let topic = self.topic_name.clone();
-        if let Consistency::RealTime = cp_info.source_type {
-            thread::spawn(move || {
-                metadata_fetch(
-                    timestamping_stopped,
-                    consumer,
-                    refresh,
-                    &id,
-                    &topic,
-                    metadata_refresh_frequency,
-                )
-            });
-        }
+        let partition_metrics = self.partition_metrics.clone();
+        thread::spawn(move || {
+            metadata_fetch(
+                timestamping_stopped,
+                consumer,
+                refresh,
+                &id,
+                &topic,
+                partition_metrics,
+                metadata_refresh_frequency,
+            )
+        });
     }
     /// Update metadata information as refreshed by the metadata thread
     fn refresh_metadata(&mut self, cp_info: &mut ControlPlaneInfo) {
@@ -373,7 +380,6 @@ impl DataPlaneInfo {
             .expect("lock poisoned")
             .take();
         if let Some(new_partition_count) = new_partition_count {
-            assert_eq!(cp_info.source_type, Consistency::RealTime);
             match self.known_partitions.cmp(&new_partition_count) {
                 cmp::Ordering::Greater => {
                     error!(
@@ -509,10 +515,13 @@ impl DataPlaneInfo {
                 .len(),
             self.partition_consumers.len()
         );
-        self.partition_metrics.insert(
-            partition_id,
-            PartitionMetrics::new(&self.topic_name, &self.source_id, &partition_id.to_string()),
-        );
+        self.partition_metrics
+            .lock()
+            .expect("lock poisoned")
+            .insert(
+                partition_id,
+                PartitionMetrics::new(&self.topic_name, &self.source_id, &partition_id.to_string()),
+            );
     }
 
     /// This function checks whether any messages have been buffered. If yes, returns the buffered
@@ -682,10 +691,7 @@ impl ControlPlaneInfo {
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
     /// This may require multiple calls to the underlying now() system method, which is not
     /// guaranteed to increase monotonically
-    fn generate_next_timestamp(&mut self) -> u64 {
-        // TODO(ncrooks) - If someone does something silly like sets their
-        // system clock backward by an hour while mz is running,
-        // we will hang here for an hour.
+    fn generate_next_timestamp(&mut self) -> Option<u64> {
         let mut new_ts = 0;
         while new_ts <= self.last_closed_ts {
             let start = SystemTime::now();
@@ -693,10 +699,19 @@ impl ControlPlaneInfo {
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards")
                 .as_millis() as u64;
+            if new_ts < self.last_closed_ts && self.last_closed_ts - new_ts > 1000 {
+                // If someone resets their system clock to be too far in the past, this could cause
+                // Materialize to block and not give control to other operators. We thus give up
+                // on timestamping this message
+                error!("The new timestamp is more than 1 second behind the last assigned timestamp. To\
+                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please\
+                consider resetting your system time.");
+                return None;
+            }
         }
         assert!(new_ts > self.last_closed_ts);
         self.last_closed_ts = new_ts;
-        new_ts
+        Some(new_ts)
     }
 }
 
@@ -735,6 +750,7 @@ fn metadata_fetch(
     partition_count: Arc<Mutex<Option<i32>>>,
     id: &str,
     topic: &str,
+    partition_metrics: Arc<Mutex<HashMap<i32, PartitionMetrics>>>,
     wait: Duration,
 ) {
     debug!(
@@ -774,6 +790,27 @@ fn metadata_fetch(
                 error!("Failed to obtain Kafka Metadata Information {}", e);
             }
         }
+
+        // Upgrade partition metrics
+        for p in 0..new_partition_count {
+            let pid = p.try_into().unwrap();
+            match consumer.fetch_watermarks(&topic, pid, Duration::from_secs(1)) {
+                Ok((_, high)) => {
+                    if let Some(metrics) = partition_metrics
+                        .lock()
+                        .expect("lock poisoned")
+                        .get_mut(&pid)
+                    {
+                        metrics.max_offset.set(high);
+                    }
+                }
+                Err(e) => warn!(
+                    "error loading watermarks topic={} partition={} error={}",
+                    topic, p, e
+                ),
+            }
+        }
+
         if new_partition_count > 0 {
             thread::sleep(wait);
         } else {
@@ -858,11 +895,7 @@ where
                     .parse()
                     .unwrap(),
             );
-            dp_info.start_metadata_fetch_thread(
-                &cp_info,
-                metadata_refresh_frequency,
-                timestamping_stopped,
-            );
+            dp_info.start_metadata_fetch_thread(metadata_refresh_frequency, timestamping_stopped);
 
             move |cap, output| {
                 let timer = Instant::now();
@@ -898,10 +931,15 @@ where
 
                 while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                     let partition = message.partition;
-                    let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
                     let offset = MzOffset::from(message.offset);
 
-                    partition_metrics.offset_received.set(offset.offset);
+                    // Update ingestion metrics
+                    {
+                        let metrics = &mut dp_info.partition_metrics.lock().expect("lock poisoned");
+                        // Entry is guaranteed to exist as it gets created when we initialise the partition.
+                        let partition_metrics = metrics.get_mut(&partition).unwrap();
+                        partition_metrics.offset_received.set(offset.offset);
+                    }
 
                     // Determine the timestamp to which we need to assign this message
                     let ts = find_matching_timestamp(
@@ -948,8 +986,15 @@ where
                                 Some(Into::<KafkaOffset>::into(offset).offset),
                             ));
 
-                            partition_metrics.offset_ingested.set(offset.offset);
-                            partition_metrics.messages_ingested.inc();
+                            // Update ingestion metrics
+                            {
+                                let metrics =
+                                    &mut dp_info.partition_metrics.lock().expect("lock poisoned");
+                                // Entry is guaranteed to exist as it gets created when we initialise the partition
+                                let partition_metrics = metrics.get_mut(&partition).unwrap();
+                                partition_metrics.offset_ingested.set(offset.offset);
+                                partition_metrics.messages_ingested.inc();
+                            }
 
                             downgrade_capability(
                                 &id,
@@ -1144,7 +1189,12 @@ fn downgrade_capability(
                     // that we should have partitions up to N-1.
                     dp_info.ensure_partition(cp_info, partition_count - 1);
 
-                    if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
+                    if let Some(pmetrics) = dp_info
+                        .partition_metrics
+                        .lock()
+                        .expect("lock poisoned")
+                        .get_mut(&pid)
+                    {
                         pmetrics
                             .closed_ts
                             .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
@@ -1187,8 +1237,10 @@ fn downgrade_capability(
         // This a RT source. It is always possible to close the timestamp and downgrade the
         // capability
         let ts = cp_info.generate_next_timestamp();
-        dp_info.source_metrics.capability.set(ts);
-        cap.downgrade(&(&ts + 1));
+        if let Some(ts) = ts {
+            dp_info.source_metrics.capability.set(ts);
+            cap.downgrade(&(&ts + 1));
+        }
     }
 }
 
