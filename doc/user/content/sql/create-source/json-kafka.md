@@ -1,12 +1,9 @@
 ---
-title: "CREATE SOURCE: JSON over Kinesis"
-description: "Learn how to connect Materialize to JSON-formatted Kinesis streams"
+title: "CREATE SOURCE: JSON over Kafka"
+description: "Learn how to connect Materialize to JSON-formatted Kafka topics"
 menu:
   main:
     parent: 'create-source'
-aliases:
-    - /sql/create-source/kinesis
-    - /sql/create-source/kinesis-source
 ---
 
 {{% create-source/intro %}}
@@ -19,18 +16,15 @@ streams.
 
 ## Syntax
 
-{{< diagram "create-source-json-kinesis.svg" >}}
+{{< diagram "create-source-json-kafka.svg" >}}
 
-{{% create-source/syntax-details connector="kinesis" formats="json-bytes" envelopes="append-only" %}}
+{{% create-source/syntax-details connector="kafka" formats="json-bytes" envelopes="append-only" %}}
 
 ## Examples
 
 ```sql
-CREATE SOURCE kinesis_source
-FROM KINESIS ARN ... WITH (
-    access_key_id = ...,
-    secret_access_key = ...
-)
+CREATE SOURCE json_kafka
+KAFKA BROKER 'localhost:9092' TOPIC 'json'
 FORMAT BYTES;
 ```
 
@@ -43,11 +37,11 @@ To use this data in views, you can decode its bytes into
 [`jsonb`](/sql/types/jsonb). For example:
 
 ```sql
-CREATE MATERIALIZED VIEW jsonified_kinesis_source AS
+CREATE MATERIALIZED VIEW jsonified_kafka_source AS
   SELECT CAST(data AS jsonb) AS data
   FROM (
       SELECT convert_from(data, 'utf8') AS data
-      FROM kinesis_source
+      FROM json_kafka
   )
 ```
 

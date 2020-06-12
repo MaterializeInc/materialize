@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: Text or bytes over Kafka"
-description: "Learn how to connect Materialize to an Avro-formatted Kafka topic"
+description: "Learn how to connect Materialize to an text- or byte-formatted Kafka topic"
 menu:
   main:
     parent: 'create-source'
