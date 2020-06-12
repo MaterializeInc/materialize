@@ -718,11 +718,6 @@ where
                 }
             }
 
-            // Check if the capability can be downgraded (this is independent of whether
-            // there are new messages that can be processed) as timestamps can become
-            // closed in the absence of messages
-            // downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
-
             while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                 let partition = message.partition;
                 let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
@@ -861,7 +856,7 @@ fn can_close_timestamp(
 
     // We separate these two cases, has consumer.position() is an expensive call that should
     // be avoided if possible. Case 1 and 2.a
-    return if !dp_info.has_partition(pid) || last_offset >= offset {
+    if !dp_info.has_partition(pid) || last_offset >= offset {
         true
     } else {
         let mut current_consumer_position: MzOffset = KafkaOffset {
@@ -882,7 +877,7 @@ fn can_close_timestamp(
             current_consumer_position.offset -= 1;
         }
         current_consumer_position >= offset
-    };
+    }
 }
 
 /// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
