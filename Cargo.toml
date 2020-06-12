@@ -42,10 +42,3 @@ members = [
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
 debug = 1
-
-[patch.crates-io]
-# Waiting on a release with this commit:
-# https://github.com/sfackler/rust-postgres/commit/dd0c39e0414e30e98271836b99ef289d04b7d569
-postgres = { git = "https://github.com/sfackler/rust-postgres.git" }
-postgres-types = { git = "https://github.com/sfackler/rust-postgres.git" }
-tokio-postgres = { git = "https://github.com/sfackler/rust-postgres.git" }
