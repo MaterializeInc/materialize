@@ -18,9 +18,9 @@ use lazy_static::lazy_static;
 use repr::ScalarType;
 use sql_parser::ast::{BinaryOperator, Expr};
 
-use super::cast::{rescale_decimal, CastTo};
+use super::cast::{self, rescale_decimal, CastTo};
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
-use super::query::{CoerceTo, ExprContext};
+use super::query::{self, CoerceTo, ExprContext};
 use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -343,7 +343,7 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         let mut exprs = Vec::new();
         for arg in args {
-            let expr = super::query::plan_coercible_expr(ecx, arg)?.0;
+            let expr = query::plan_coercible_expr(ecx, arg)?.0;
             exprs.push(expr);
         }
 
@@ -631,7 +631,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::StringAny => Explicit(ScalarType::String),
         };
 
-        super::cast::get_cast(arg_type, &cast_to).is_some()
+        cast::get_cast(arg_type, &cast_to).is_some()
     }
 
     /// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
@@ -647,14 +647,14 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::JsonbAny => CoerceTo::JsonbAny,
             ParamType::StringAny => CoerceTo::Plain(ScalarType::String),
         };
-        let arg = super::query::plan_coerce(self.ecx, arg, coerce_to)?;
+        let arg = query::plan_coerce(self.ecx, arg, coerce_to)?;
 
         let cast_to = match typ {
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::JsonbAny => CastTo::JsonbAny,
             ParamType::StringAny => CastTo::Explicit(ScalarType::String),
         };
-        super::query::plan_cast_internal(self.ident, self.ecx, arg, cast_to)
+        query::plan_cast_internal(self.ident, self.ecx, arg, cast_to)
     }
 }
 
@@ -877,7 +877,7 @@ lazy_static! {
     static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
         use ScalarType::*;
         use BinaryOperator::*;
-        use super::expr::BinaryFunc::*;
+        use BinaryFunc::*;
         use OperationType::*;
         use ParamType::*;
         let mut m = impls! {
@@ -1182,8 +1182,8 @@ pub fn plan_binary_op<'a>(
     match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, &args) {
         Ok(expr) => Ok(expr),
         Err(e) => {
-            let lexpr = super::query::plan_expr(ecx, left, None)?;
-            let rexpr = super::query::plan_expr(ecx, right, None)?;
+            let lexpr = query::plan_expr(ecx, left, None)?;
+            let rexpr = query::plan_expr(ecx, right, None)?;
             bail!(
                 "no overload for {} {} {}: {}",
                 ecx.scalar_type(&lexpr),
