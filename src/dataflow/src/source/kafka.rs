@@ -335,7 +335,7 @@ impl DataPlaneInfo {
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
             worker_count: worker_count.try_into().unwrap(),
-            refresh_metadata_info: Arc::new(Mutex::new((false, 0))),
+            refresh_metadata_info: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -348,7 +348,7 @@ impl DataPlaneInfo {
         metadata_refresh_frequency: Duration,
         timestamping_stopped: Arc<AtomicBool>,
     ) {
-       let consumer = self.consumer.clone();
+        let consumer = self.consumer.clone();
         let refresh = self.refresh_metadata_info.clone();
         let id = self.source_id.clone();
         let topic = self.topic_name.clone();
@@ -367,7 +367,11 @@ impl DataPlaneInfo {
     }
     /// Update metadata information as refreshed by the metadata thread
     fn refresh_metadata(&mut self, cp_info: &mut ControlPlaneInfo) {
-        let new_partition_count = self.refresh_metadata_info.lock().expect("lock poisoned").take();
+        let new_partition_count = self
+            .refresh_metadata_info
+            .lock()
+            .expect("lock poisoned")
+            .take();
         if let Some(new_partition_count) = new_partition_count {
             assert_eq!(cp_info.source_type, Consistency::RealTime);
             match self.known_partitions.cmp(&new_partition_count) {
@@ -892,11 +896,6 @@ where
                 // Update any metadata changes triggered by the metadata thread
                 dp_info.refresh_metadata(&mut cp_info);
 
-                // Check if the capability can be downgraded (this is independent of whether
-                // there are new messages that can be processed) as timestamps can become
-                // closed in the absence of messages
-                downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
-
                 while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                     let partition = message.partition;
                     let partition_metrics = &dp_info.partition_metrics.get(&partition).unwrap();
@@ -917,6 +916,13 @@ where
                             // We have not yet decided on a timestamp for this message,
                             // we need to buffer the message
                             dp_info.buffer_message(message);
+                            downgrade_capability(
+                                &id,
+                                cap,
+                                &mut cp_info,
+                                &mut dp_info,
+                                &timestamp_histories,
+                            );
                             activator.activate();
                             return SourceStatus::Alive;
                         }
@@ -964,6 +970,14 @@ where
                         if bytes_read > 0 {
                             KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                         }
+                        // Downgrade capability (if possible) before exiting
+                        downgrade_capability(
+                            &id,
+                            cap,
+                            &mut cp_info,
+                            &mut dp_info,
+                            &timestamp_histories,
+                        );
                         activator.activate();
                         return SourceStatus::Alive;
                     }
@@ -971,6 +985,10 @@ where
                 if bytes_read > 0 {
                     KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
                 }
+
+                // Downgrade capability (if possible) before exiting
+                downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
+
                 // Ensure that we activate the source frequently enough to keep downgrading
                 // capabilities, even when no data has arrived
                 // TODO(ncrooks): make this configurable
@@ -996,9 +1014,8 @@ fn find_matching_timestamp(
     timestamp_histories: &TimestampHistories,
 ) -> Option<Timestamp> {
     if let Consistency::RealTime = cp_info.source_type {
-        // In Real-Time consistency,
-        cp_info.generate_next_timestamp();
-        Some(cp_info.last_closed_ts)
+        // Simply assign to this message the next timestamp that is not closed
+        Some(cp_info.last_closed_ts + 1)
     } else {
         // The source is a BYO source, we must check the TimestampHistories to obtain a
         match timestamp_histories.borrow().get(id) {
