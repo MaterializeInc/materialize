@@ -1488,7 +1488,7 @@ pub fn plan_coercible_expr<'a>(
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
             Expr::IsNull(expr) => (plan_is_null_expr(ecx, expr, false)?.into(), None),
             Expr::IsNotNull(expr) => (plan_is_null_expr(ecx, expr, true)?.into(), None),
-            Expr::UnaryOp { op, expr } => (plan_unary_op(ecx, op, expr)?.into(), None),
+            Expr::UnaryOp { op, expr } => (func::plan_unary_op(ecx, op, expr)?.into(), None),
             Expr::BinaryOp { op, left, right } => {
                 (func::plan_binary_op(ecx, op, left, right)?.into(), None)
             }
@@ -2097,43 +2097,6 @@ fn plan_is_null_expr<'a>(
             expr: Box::new(expr),
         }
     }
-    Ok(expr)
-}
-
-fn plan_unary_op<'a>(
-    ecx: &ExprContext,
-    op: &'a UnaryOperator,
-    expr: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
-    let type_hint = match op {
-        UnaryOperator::Not => ScalarType::Bool,
-        UnaryOperator::Plus | UnaryOperator::Minus => ScalarType::Float64,
-    };
-    let expr = plan_expr(ecx, expr, Some(type_hint))?;
-    let typ = ecx.column_type(&expr);
-    let func = match op {
-        UnaryOperator::Not => match typ.scalar_type {
-            ScalarType::Bool => UnaryFunc::Not,
-            _ => bail!(
-                "Cannot apply operator Not to non-boolean type {:?}",
-                typ.scalar_type
-            ),
-        },
-        UnaryOperator::Plus => return Ok(expr), // no-op
-        UnaryOperator::Minus => match typ.scalar_type {
-            ScalarType::Int32 => UnaryFunc::NegInt32,
-            ScalarType::Int64 => UnaryFunc::NegInt64,
-            ScalarType::Float32 => UnaryFunc::NegFloat32,
-            ScalarType::Float64 => UnaryFunc::NegFloat64,
-            ScalarType::Decimal(_, _) => UnaryFunc::NegDecimal,
-            ScalarType::Interval => UnaryFunc::NegInterval,
-            _ => bail!("cannot negate {:?}", typ.scalar_type),
-        },
-    };
-    let expr = ScalarExpr::CallUnary {
-        func,
-        expr: Box::new(expr),
-    };
     Ok(expr)
 }
 

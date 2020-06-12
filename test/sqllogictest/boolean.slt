@@ -48,7 +48,7 @@ TRUE              true
 query error invalid input syntax for bool: "blah"
 SELECT 'blah'::bool
 
-query error Cannot apply operator Not to non-boolean type Int32
+query error no overload for NOT i32
 SELECT NOT 1
 
 query error no overload for i32 AND i32

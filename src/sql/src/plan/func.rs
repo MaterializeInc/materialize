@@ -15,12 +15,13 @@ use std::fmt;
 
 use failure::bail;
 use lazy_static::lazy_static;
-use repr::ScalarType;
-use sql_parser::ast::{BinaryOperator, Expr};
 
-use super::cast::{rescale_decimal, CastTo};
+use repr::ScalarType;
+use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
+
+use super::cast::{self, rescale_decimal, CastTo};
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
-use super::query::{CoerceTo, ExprContext};
+use super::query::{self, CoerceTo, ExprContext};
 use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,7 +75,7 @@ impl TypeCategory {
     fn from_param(param: &ParamType) -> Self {
         match param {
             ParamType::Plain(t) => Self::from_type(t),
-            ParamType::StringAny | ParamType::JsonbAny => Self::Pseudo,
+            ParamType::Any | ParamType::StringAny | ParamType::JsonbAny => Self::Pseudo,
         }
     }
 
@@ -177,6 +178,8 @@ impl From<Vec<ParamType>> for ParamList {
 /// added flexibility.
 pub enum ParamType {
     Plain(ScalarType),
+    /// A psuedotype permitting any type.
+    Any,
     /// A pseudotype permitting any type, but requires it to be cast to a `ScalarType::String`.
     StringAny,
     /// A pseudotype permitting any type, but requires it to be cast to a
@@ -189,7 +192,7 @@ impl ParamType {
     fn accepts_type(&self, t: &ScalarType) -> bool {
         match (self, t) {
             (ParamType::Plain(s), o) => *s == o.desaturate(),
-            (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
+            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
         }
     }
 
@@ -197,7 +200,7 @@ impl ParamType {
     fn accepts_cat(&self, c: &TypeCategory) -> bool {
         match (self, c) {
             (ParamType::Plain(_), c) => TypeCategory::from_param(&self) == *c,
-            (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
+            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
         }
     }
 
@@ -226,7 +229,7 @@ impl PartialEq<ScalarType> for ParamType {
         match (self, other) {
             (ParamType::Plain(s), o) => *s == o.desaturate(),
             // Pseudotypes do not equal concrete types.
-            (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => false,
+            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => false,
         }
     }
 }
@@ -240,16 +243,6 @@ impl PartialEq<ParamType> for ScalarType {
 impl From<ScalarType> for ParamType {
     fn from(s: ScalarType) -> ParamType {
         ParamType::Plain(s)
-    }
-}
-
-impl From<&ParamType> for ScalarType {
-    fn from(p: &ParamType) -> ScalarType {
-        match p {
-            ParamType::Plain(s) => s.clone(),
-            ParamType::StringAny => ScalarType::String,
-            ParamType::JsonbAny => ScalarType::Jsonb,
-        }
     }
 }
 
@@ -343,7 +336,7 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         let mut exprs = Vec::new();
         for arg in args {
-            let expr = super::query::plan_coercible_expr(ecx, arg)?.0;
+            let expr = query::plan_coercible_expr(ecx, arg)?.0;
             exprs.push(expr);
         }
 
@@ -627,11 +620,12 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         let cast_to = match to_typ {
             ParamType::Plain(s) => Implicit(s.clone()),
+            ParamType::Any => return true,
             ParamType::JsonbAny => JsonbAny,
             ParamType::StringAny => Explicit(ScalarType::String),
         };
 
-        super::cast::get_cast(arg_type, &cast_to).is_some()
+        cast::get_cast(arg_type, &cast_to).is_some()
     }
 
     /// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
@@ -644,17 +638,26 @@ impl<'a> ArgImplementationMatcher<'a> {
     ) -> Result<ScalarExpr, failure::Error> {
         let coerce_to = match typ {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
+            ParamType::Any => {
+                // `CoerceTo::Nothing` might seem more appropriate here, but
+                // that would reject literal NULLs. Since coercions are not
+                // binding, coercing to a string has no effect on values that
+                // have a different natural type (e.g., list literals), so this
+                // is correct.
+                CoerceTo::Plain(ScalarType::String)
+            }
             ParamType::JsonbAny => CoerceTo::JsonbAny,
             ParamType::StringAny => CoerceTo::Plain(ScalarType::String),
         };
-        let arg = super::query::plan_coerce(self.ecx, arg, coerce_to)?;
+        let arg = query::plan_coerce(self.ecx, arg, coerce_to)?;
 
         let cast_to = match typ {
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
+            ParamType::Any => return Ok(arg),
             ParamType::JsonbAny => CastTo::JsonbAny,
             ParamType::StringAny => CastTo::Explicit(ScalarType::String),
         };
-        super::query::plan_cast_internal(self.ident, self.ecx, arg, cast_to)
+        query::plan_cast_internal(self.ident, self.ecx, arg, cast_to)
     }
 }
 
@@ -877,7 +880,7 @@ lazy_static! {
     static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
         use ScalarType::*;
         use BinaryOperator::*;
-        use super::expr::BinaryFunc::*;
+        use BinaryFunc::*;
         use OperationType::*;
         use ParamType::*;
         let mut m = impls! {
@@ -1182,8 +1185,8 @@ pub fn plan_binary_op<'a>(
     match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, &args) {
         Ok(expr) => Ok(expr),
         Err(e) => {
-            let lexpr = super::query::plan_expr(ecx, left, None)?;
-            let rexpr = super::query::plan_expr(ecx, right, None)?;
+            let lexpr = query::plan_expr(ecx, left, None)?;
+            let rexpr = query::plan_expr(ecx, right, None)?;
             bail!(
                 "no overload for {} {} {}: {}",
                 ecx.scalar_type(&lexpr),
@@ -1191,6 +1194,59 @@ pub fn plan_binary_op<'a>(
                 ecx.scalar_type(&rexpr),
                 e
             )
+        }
+    }
+}
+
+lazy_static! {
+    /// Correlates a `UnaryOperator` with all of its implementations.
+    static ref UNARY_OP_IMPLS: HashMap<UnaryOperator, Vec<FuncImpl>> = {
+        use OperationType::*;
+        use ParamType::*;
+        use ScalarType::*;
+        use UnaryOperator::*;
+        impls! {
+            Not => {
+                params!(Bool) => UnaryFunc::Not
+            },
+
+            Plus => {
+                params!(Any) => ExprOnly
+            },
+
+            Minus => {
+                params!(Int32) => UnaryFunc::NegInt32,
+                params!(Int64) => UnaryFunc::NegInt64,
+                params!(Float32) => UnaryFunc::NegFloat32,
+                params!(Float64) => UnaryFunc::NegFloat64,
+                params!(ScalarType::Decimal(0, 0)) => UnaryFunc::NegDecimal,
+                params!(Interval) => UnaryFunc::NegInterval
+            }
+        }
+    };
+}
+
+/// Plans a function compatible with the `UnaryOperator`.
+pub fn plan_unary_op<'a>(
+    ecx: &ExprContext,
+    op: &'a UnaryOperator,
+    expr: &'a Expr,
+) -> Result<ScalarExpr, failure::Error> {
+    let impls = match UNARY_OP_IMPLS.get(&op) {
+        Some(i) => i,
+        None => unsupported!(op),
+    };
+
+    match ArgImplementationMatcher::select_implementation(
+        &op.to_string(),
+        ecx,
+        impls,
+        &[expr.clone()],
+    ) {
+        Ok(expr) => Ok(expr),
+        Err(e) => {
+            let lexpr = query::plan_expr(ecx, expr, None)?;
+            bail!("no overload for {} {}: {}", op, ecx.scalar_type(&lexpr), e)
         }
     }
 }
