@@ -721,7 +721,7 @@ where
             // Check if the capability can be downgraded (this is independent of whether
             // there are new messages that can be processed) as timestamps can become
             // closed in the absence of messages
-            downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
+            // downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
 
             while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                 let partition = message.partition;
@@ -738,6 +738,14 @@ where
                         // we need to buffer the message
                         dp_info.buffer_message(message);
                         activator.activate();
+                        // Downgrade capability before exiting
+                        downgrade_capability(
+                            &id,
+                            cap,
+                            &mut cp_info,
+                            &mut dp_info,
+                            &timestamp_histories,
+                        );
                         return SourceStatus::Alive;
                     }
                     Some(ts) => {
@@ -787,9 +795,11 @@ where
                     return SourceStatus::Alive;
                 }
             }
+
             if bytes_read > 0 {
                 KAFKA_BYTES_READ_COUNTER.inc_by(bytes_read);
             }
+
             //Downgrade capability before exiting
             downgrade_capability(
                 &id,
