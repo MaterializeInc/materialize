@@ -33,16 +33,22 @@ pub enum Value {
     Bool(bool),
     /// A byte array, i.e., a variable-length binary string.
     Bytea(Vec<u8>),
-    /// A 4-byte signed integer.
-    Int4(i32),
-    /// An 8-byte signed integer.
-    Int8(i64),
+    /// A date.
+    Date(NaiveDate),
     /// A 4-byte floating point number.
     Float4(f32),
     /// An 8-byte floating point number.
     Float8(f64),
-    /// A date.
-    Date(NaiveDate),
+    /// A 4-byte signed integer.
+    Int4(i32),
+    /// An 8-byte signed integer.
+    Int8(i64),
+    /// A binary JSON blob.
+    Jsonb(Jsonb),
+    /// A sequence of homogeneous values.
+    List(Vec<Option<Value>>),
+    /// An arbitrary precision number.
+    Numeric(Numeric),
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
@@ -53,12 +59,6 @@ pub enum Value {
     Interval(Interval),
     /// A variable-length string.
     Text(String),
-    /// An arbitrary precision number.
-    Numeric(Numeric),
-    /// A binary JSON blob.
-    Jsonb(Jsonb),
-    /// An 1d array of values (distinct from postgres Nd arrays)
-    List(Vec<Option<Value>>),
 }
 
 impl Value {

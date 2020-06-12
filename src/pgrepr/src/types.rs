@@ -31,6 +31,8 @@ pub enum Type {
     Interval,
     /// A binary JSON blob.
     Jsonb,
+    /// A sequence of homogeneous values.
+    List(Box<Type>),
     /// An arbitrary precision number.
     Numeric,
     /// A variable-length string.
@@ -41,8 +43,6 @@ pub enum Type {
     Timestamp,
     /// A date and time, with a timezone.
     TimestampTz,
-    /// A list
-    List(Box<Type>),
 }
 
 lazy_static! {
