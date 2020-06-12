@@ -841,12 +841,18 @@ fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::Time(time)
 }
 
-fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() * b.unwrap_int32())
+fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_int32()
+        .checked_mul(b.unwrap_int32())
+        .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
 }
 
-fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() * b.unwrap_int64())
+fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_int64()
+        .checked_mul(b.unwrap_int64())
+        .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
 }
 
 fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1946,8 +1952,8 @@ impl BinaryFunc {
             BinaryFunc::SubTime => Ok(eager!(sub_time)),
             BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
             BinaryFunc::SubDecimal => Ok(eager!(sub_decimal)),
-            BinaryFunc::MulInt32 => Ok(eager!(mul_int32)),
-            BinaryFunc::MulInt64 => Ok(eager!(mul_int64)),
+            BinaryFunc::MulInt32 => eager!(mul_int32),
+            BinaryFunc::MulInt64 => eager!(mul_int64),
             BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
             BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
             BinaryFunc::MulDecimal => Ok(eager!(mul_decimal)),

@@ -504,6 +504,9 @@ SELECT 2147483646+1
 statement error numeric field overflow
 SELECT 2147483647+1
 
+statement error numeric field overflow
+SELECT 1073741824*2
+
 query I
 SELECT 9223372036854775806::bigint+1::bigint
 ----
