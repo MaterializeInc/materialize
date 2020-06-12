@@ -670,6 +670,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 // put together tokens that belong to the export
                 let mut needed_source_tokens = Vec::new();
                 let mut needed_index_tokens = Vec::new();
+                let mut needed_sink_tokens = Vec::new();
                 for import_id in dataflow.get_imports(&sink.from.0) {
                     if let Some(index_token) = index_tokens.get(&import_id) {
                         needed_index_tokens.push(index_token.clone());
@@ -677,7 +678,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         needed_source_tokens.push(source_token.clone());
                     }
                 }
-                let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
                 let (collection, _err_collection) = context
                     .collection(&RelationExpr::global_get(
                         sink.from.0,
@@ -694,15 +694,30 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 // TODO(benesch): errors should stream out through the sink,
                 // if we figure out a protocol for that.
 
-                match sink.connector {
+                let sink_shutdown = match sink.connector {
                     SinkConnector::Kafka(c) => {
-                        sink::kafka(&collection.inner, sink_id, c, sink.from.1)
+                        let button = sink::kafka(&collection.inner, sink_id, c, sink.from.1);
+                        Some(button)
                     }
-                    SinkConnector::Tail(c) => sink::tail(&collection.inner, sink_id, c),
+                    SinkConnector::Tail(c) => {
+                        sink::tail(&collection.inner, sink_id, c);
+                        None
+                    }
                     SinkConnector::AvroOcf(c) => {
-                        sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1)
+                        sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1);
+                        None
                     }
+                };
+
+                if let Some(sink_token) = sink_shutdown {
+                    needed_sink_tokens.push(sink_token);
                 }
+
+                let tokens = Rc::new((
+                    needed_sink_tokens,
+                    needed_source_tokens,
+                    needed_index_tokens,
+                ));
                 dataflow_drops.insert(sink_id, Box::new(tokens));
             }
         });
