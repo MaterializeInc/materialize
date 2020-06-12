@@ -16,12 +16,14 @@ use std::fmt;
 use failure::bail;
 use lazy_static::lazy_static;
 
-use repr::ScalarType;
+use repr::{ColumnType, Datum, ScalarType};
 use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
 
 use super::cast::{self, rescale_decimal, CastTo};
-use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc, VariadicFunc};
-use super::query::{self, CoerceTo, ExprContext};
+use super::expr::{
+    BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, UnaryFunc, VariadicFunc,
+};
+use super::query::{self, CoerceTo, ExprContext, QueryLifetime};
 use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,6 +254,7 @@ pub enum OperationType {
     /// Returns the `ScalarExpr` that is output from
     /// `ArgImplementationMatcher::generate_param_exprs`.
     ExprOnly,
+    NClosure(fn(&ExprContext) -> Result<ScalarExpr, failure::Error>),
     UFunc(UnaryFunc),
     UClosure(fn(&ExprContext, ScalarExpr) -> Result<ScalarExpr, failure::Error>),
     BFunc(BinaryFunc),
@@ -264,6 +267,7 @@ impl fmt::Debug for OperationType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OperationType::ExprOnly => f.write_str("ExprOnly"),
+            OperationType::NClosure(_) => f.write_str("NClosure"),
             OperationType::UFunc(func) => write!(f, "UFunc({:?})", func),
             OperationType::UClosure(_) => write!(f, "UClosure"),
             OperationType::BFunc(func) => write!(f, "BFunc({:?})", func),
@@ -353,6 +357,7 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         Ok(match f.op {
             OperationType::ExprOnly => exprs.remove(0),
+            OperationType::NClosure(f) => f(ecx)?,
             OperationType::UFunc(func) => ScalarExpr::CallUnary {
                 func,
                 expr: Box::new(exprs.remove(0)),
@@ -753,6 +758,9 @@ lazy_static! {
             "convert_from" => {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom
             },
+            "current_timestamp" => {
+                params!() => NClosure(|ecx| plan_current_timestamp(ecx, "current_timestamp"))
+            },
             "date_trunc" => {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp,
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz
@@ -815,6 +823,19 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimLeadingWhitespace,
                 params!(String, String) => BinaryFunc::TrimLeading
             },
+            "mz_logical_timestamp" => {
+                params!() => NClosure(|ecx| {
+                    match ecx.qcx.lifetime {
+                        QueryLifetime::OneShot => {
+                            Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
+                        }
+                        QueryLifetime::Static => bail!("mz_logical_timestamp cannot be used in static queries"),
+                    }
+                })
+            },
+            "now" => {
+                params!() => NClosure(|ecx| plan_current_timestamp(ecx, "now"))
+            },
             "replace" => {
                 params!(String, String, String) => VariadicFunc::Replace
             },
@@ -872,6 +893,16 @@ lazy_static! {
             }
         }
     };
+}
+
+fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, failure::Error> {
+    match ecx.qcx.lifetime {
+        QueryLifetime::OneShot => Ok(ScalarExpr::literal(
+            Datum::from(ecx.qcx.scx.pcx.wall_time),
+            ColumnType::new(ScalarType::TimestampTz),
+        )),
+        QueryLifetime::Static => bail!("{} cannot be used in static queries", name),
+    }
 }
 
 /// Gets a built-in scalar function and the `ScalarExpr`s required to invoke it.

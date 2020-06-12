@@ -45,8 +45,7 @@ use crate::names::PartialName;
 use crate::plan::cast;
 use crate::plan::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
-    JoinKind, NullaryFunc, RelationExpr, ScalarExpr, ScalarTypeable, TableFunc, UnaryFunc,
-    VariadicFunc,
+    JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, TableFunc, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -1993,32 +1992,7 @@ fn plan_function<'a>(
     // The functions matched here on string literals do not yet
     // work with our generalized function selection (`sql::func::select_scalar_func`).
     match ident {
-        "current_timestamp" | "now" => {
-            if !args.is_empty() {
-                bail!("{} does not take any arguments", ident);
-            }
-            match ecx.qcx.lifetime {
-                QueryLifetime::OneShot => Ok(ScalarExpr::literal(
-                    Datum::from(ecx.qcx.scx.pcx.wall_time),
-                    ColumnType::new(ScalarType::TimestampTz),
-                )),
-                QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
-            }
-        }
-
         "mod" => func::plan_binary_op(ecx, &BinaryOperator::Modulus, &args[0], &args[1]),
-
-        "mz_logical_timestamp" => {
-            if !args.is_empty() {
-                bail!("mz_logical_timestamp does not take any arguments");
-            }
-            match ecx.qcx.lifetime {
-                QueryLifetime::OneShot => {
-                    Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
-                }
-                QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
-            }
-        }
 
         "nullif" => {
             if args.len() != 2 {
@@ -2423,18 +2397,18 @@ pub enum QueryLifetime {
 
 /// The state required when planning a `Query`.
 #[derive(Debug)]
-struct QueryContext<'a> {
+pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
-    scx: &'a StatementContext<'a>,
+    pub scx: &'a StatementContext<'a>,
     /// The lifetime that the planned query will have.
-    lifetime: QueryLifetime,
+    pub lifetime: QueryLifetime,
     /// The scope of the outer relation expression.
-    outer_scope: Scope,
+    pub outer_scope: Scope,
     /// The type of the outer relation expressions.
-    outer_relation_types: Vec<RelationType>,
+    pub outer_relation_types: Vec<RelationType>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
-    param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+    pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -2460,19 +2434,19 @@ impl<'a> QueryContext<'a> {
 /// A bundle of unrelated things that we need for planning `Expr`s.
 #[derive(Debug, Clone)]
 pub struct ExprContext<'a> {
-    qcx: &'a QueryContext<'a>,
+    pub qcx: &'a QueryContext<'a>,
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
-    name: &'static str,
+    pub name: &'static str,
     /// The context for the `Query` that contains this `Expr`.
     /// The current scope.
-    scope: &'a Scope,
+    pub scope: &'a Scope,
     /// The type of the current relation expression upon which this scalar
     /// expression will be evaluated.
-    relation_type: &'a RelationType,
+    pub relation_type: &'a RelationType,
     /// Are aggregate functions allowed in this context
-    allow_aggregates: bool,
+    pub allow_aggregates: bool,
     /// Are subqueries allowed in this context
-    allow_subqueries: bool,
+    pub allow_subqueries: bool,
 }
 
 impl<'a> ExprContext<'a> {
