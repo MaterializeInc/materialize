@@ -12,4 +12,4 @@ itertools = "0.9"
 log = "0.4.8"
 ore = { path = "../../../src/ore" }
 tokio = "0.2"
-tokio-postgres = "0.5.2"
+tokio-postgres = "0.5.4"

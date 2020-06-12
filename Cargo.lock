@@ -2325,8 +2325,9 @@ dependencies = [
 
 [[package]]
 name = "postgres"
-version = "0.17.2"
-source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
+version = "0.17.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a08e48317fe57088aa1ff4a84a88a8401aee565f4ae5c201aa18d11c573ce350"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -2353,7 +2354,8 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.5.1"
-source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f611afe4d1407ebe7f3ced1ffc66f730fac1b1c13085e230a8cdcb921e97710"
 dependencies = [
  "base64 0.12.1",
  "byteorder",
@@ -2370,7 +2372,8 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.1.1"
-source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e634590e8812c500088d88db721195979223dabb05149f43cb50931d0ff5865d"
 dependencies = [
  "bytes",
  "chrono",
@@ -3778,8 +3781,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.5.3"
-source = "git+https://github.com/sfackler/rust-postgres.git#e3d3c6d5cdfc23509e81c6bf65130fb42fa87a09"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56010a704311361b7c9e870aaa4ddffaf9f2db89cbcf3e14773ac8a14469c9c"
 dependencies = [
  "async-trait",
  "byteorder",

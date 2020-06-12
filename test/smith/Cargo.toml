@@ -17,6 +17,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.53"
 structopt = "0.3.14"
 tokio = { version = "0.2.21", features = ["full"] }
-tokio-postgres = "0.5.2"
+tokio-postgres = "0.5.4"
 url = "2.1.1"
 urlencoding = "1.0.0"
