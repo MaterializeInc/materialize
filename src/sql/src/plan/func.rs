@@ -135,6 +135,23 @@ impl ParamList {
                 .all(|(i, t)| p[i % p.len()].accepts(t)),
         }
     }
+
+    /// Rewrite any `Decimal` values in `self` to use the users' arguments'
+    /// scale, rather than the default values we use for matching implementations.
+    fn saturate_decimals(&mut self, types: &[Option<ScalarType>]) {
+        use ParamType::*;
+        use ScalarType::*;
+
+        if let Self::Exact(ref mut param_list) = self {
+            for (i, param) in param_list.iter_mut().enumerate() {
+                if let Plain(Decimal(..)) = param {
+                    if let Some(Decimal(p, s)) = types[i] {
+                        *param = Plain(ScalarType::Decimal(p, s))
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl std::ops::Index<usize> for ParamList {
@@ -289,14 +306,10 @@ pub struct Candidate<'a> {
     preferred_types: usize,
 }
 
-// Returns last candidate with saturated parameters.
 macro_rules! maybe_get_last_candidate {
-    ($candidates:expr, $types:expr ) => {
+    ($candidates:expr) => {
         if $candidates.len() == 1 {
-            return Ok(ArgImplementationMatcher::saturate_decimals(
-                $candidates[0].fimpl,
-                $types,
-            ));
+            return Ok($candidates[0].fimpl.clone());
         }
     };
 }
@@ -340,7 +353,14 @@ impl<'a> ArgImplementationMatcher<'a> {
             exprs.push(expr);
         }
 
-        let f = m.find_match(&exprs, impls)?;
+        let types: Vec<_> = exprs
+            .iter()
+            .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
+            .collect();
+
+        let mut f = m.find_match(&types, impls)?;
+
+        f.params.saturate_decimals(&types);
 
         let mut exprs = m.generate_param_exprs(exprs, f.params)?;
 
@@ -372,13 +392,9 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
     fn find_match(
         &mut self,
-        exprs: &[CoercibleScalarExpr],
+        types: &[Option<ScalarType>],
         impls: Vec<&FuncImpl>,
     ) -> Result<FuncImpl, failure::Error> {
-        let types: Vec<_> = exprs
-            .iter()
-            .map(|e| self.ecx.column_type(e).map(|t| t.scalar_type))
-            .collect();
         let all_types_known = types.iter().all(|t| t.is_some());
 
         // Check for exact match.
@@ -391,8 +407,7 @@ impl<'a> ArgImplementationMatcher<'a> {
                 .collect();
 
             if matching_impls.len() == 1 {
-                let func = Self::saturate_decimals(matching_impls[0], &types);
-                return Ok(func);
+                return Ok(matching_impls[0].clone());
             }
         }
 
@@ -455,13 +470,13 @@ impl<'a> ArgImplementationMatcher<'a> {
             )
         }
 
-        maybe_get_last_candidate!(&candidates, &types);
+        maybe_get_last_candidate!(&candidates);
 
         // 4.c. Run through all candidates and keep those with the most exact matches on
         // input types. Keep all candidates if none have exact matches.
         candidates.retain(|c| c.exact_matches >= max_exact_matches);
 
-        maybe_get_last_candidate!(&candidates, &types);
+        maybe_get_last_candidate!(&candidates);
 
         // 4.d. Run through all candidates and keep those that accept preferred types
         // (of the input data type's type category) at the most positions where
@@ -472,7 +487,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         }
         candidates.retain(|c| c.preferred_types >= max_preferred_types);
 
-        maybe_get_last_candidate!(&candidates, &types);
+        maybe_get_last_candidate!(&candidates);
 
         if all_types_known {
             bail!(
@@ -481,7 +496,6 @@ impl<'a> ArgImplementationMatcher<'a> {
             )
         }
 
-        let mut found_unknown = false;
         let mut found_known = false;
         let mut types_match = true;
         let mut common_type: Option<ScalarType> = None;
@@ -495,8 +509,6 @@ impl<'a> ArgImplementationMatcher<'a> {
                 // 4.e. If any input arguments are unknown, check the type categories accepted
                 // at those argument positions by the remaining candidates.
                 None => {
-                    found_unknown = true;
-
                     for c in candidates.iter() {
                         // 4.e. cont: At each  position, select the string category if
                         // any candidate accepts that category. (This bias
@@ -563,13 +575,14 @@ impl<'a> ArgImplementationMatcher<'a> {
             }
         }
 
-        maybe_get_last_candidate!(&candidates, &types);
+        maybe_get_last_candidate!(&candidates);
 
         // 4.f. If there are both unknown and known-type arguments, and all the
         // known-type arguments have the same type, assume that the unknown
         // arguments are also of that type, and check which candidates can
         // accept that type at the unknown-argument positions.
-        if found_known && found_unknown && types_match {
+        // (ed: We know unknown argument exists if we're in this part of the code.)
+        if found_known && types_match {
             let common_type = common_type.unwrap();
             for (i, raw_arg_type) in types.iter().enumerate() {
                 if raw_arg_type.is_none() {
@@ -577,35 +590,13 @@ impl<'a> ArgImplementationMatcher<'a> {
                 }
             }
 
-            maybe_get_last_candidate!(&candidates, &types);
+            maybe_get_last_candidate!(&candidates);
         }
 
         bail!(
             "unable to determine which implementation to use; try providing \
              explicit casts to match parameter types"
         )
-    }
-
-    /// Rewrite any `Decimal` values in `FuncImpl` to use the users' arguments'
-    /// scale, rather than the default value we use for matching implementations.
-    fn saturate_decimals(f: &FuncImpl, types: &[Option<ScalarType>]) -> FuncImpl {
-        use ParamType::*;
-        use ScalarType::*;
-
-        let mut f = f.clone();
-        // TODO(sploiselle): Add support for saturating decimals in other
-        // contexts.
-        if let ParamList::Exact(ref mut param_list) = f.params {
-            for (i, param) in param_list.iter_mut().enumerate() {
-                if let Plain(Decimal(..)) = param {
-                    if let Some(Decimal(p, s)) = types[i] {
-                        *param = Plain(ScalarType::Decimal(p, s))
-                    }
-                }
-            }
-        }
-
-        f
     }
 
     /// Plans `args` as `ScalarExprs` of that match the `ParamList`'s specified types.
