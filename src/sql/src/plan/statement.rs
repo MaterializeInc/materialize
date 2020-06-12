@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use aws_arn::{Resource, ARN};
 use failure::{bail, format_err};
@@ -912,6 +912,19 @@ fn extract_batch_size_option(
     }
 }
 
+fn extract_timestamp_frequency_option(
+    with_options: &mut HashMap<String, Value>,
+) -> Result<Duration, failure::Error> {
+    match with_options.remove("timestamp_frequency") {
+        None => Ok(Duration::from_secs(1)),
+        Some(Value::Number(n)) => match n.parse::<u64>() {
+            Ok(n) => Ok(Duration::from_millis(n)),
+            _ => bail!("timestamp_frequency must be an u64"),
+        },
+        Some(_) => bail!("timestamp_frequency must be an u64"),
+    }
+}
+
 fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     match &stmt {
         Statement::CreateSource {
@@ -1027,6 +1040,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
             let mut consistency = Consistency::RealTime;
             let mut max_ts_batch = 0;
+            let mut ts_frequency = Duration::from_secs(1);
 
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
@@ -1045,6 +1059,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
 
                     max_ts_batch = extract_batch_size_option(&mut with_options)?;
+                    ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
                     // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
                     // until we have had time to think about what the right UX/design is on a non-urgent timeline!
@@ -1157,6 +1172,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(_) => bail!("consistency must be a string"),
                     };
                     max_ts_batch = extract_batch_size_option(&mut with_options)?;
+                    ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
                     let connector = ExternalSourceConnector::File(FileSourceConnector {
                         path: path.clone().into(),
@@ -1178,6 +1194,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
 
                     max_ts_batch = extract_batch_size_option(&mut with_options)?;
+                    ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
                     let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                         path: path.clone().into(),
@@ -1298,6 +1315,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     envelope,
                     consistency,
                     max_ts_batch,
+                    ts_frequency,
                 },
                 desc,
             };

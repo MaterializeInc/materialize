@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{
@@ -60,6 +61,9 @@ pub struct SourceConfig<'a, G> {
     pub timestamp_tx: TimestampChanges,
     /// A source can use Real-Time consistency timestamping or BYO consistency information.
     pub consistency: Consistency,
+    /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
+    /// downgraded)
+    pub timestamp_frequency: Duration,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -15,6 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::time::Duration;
 
 use timely::progress::frontier::Antichain;
 
@@ -449,6 +450,7 @@ pub enum SourceConnector {
         envelope: Envelope,
         consistency: Consistency,
         max_ts_batch: i64,
+        ts_frequency: Duration,
     },
     Local,
 }
