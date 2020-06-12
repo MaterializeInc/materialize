@@ -1970,6 +1970,11 @@ fn plan_function<'a>(
         } else {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
+    } else if is_table_func(&name) {
+        unsupported!(
+            1546,
+            format!("table function ({}) in scalar position", ident)
+        );
     }
 
     if sql_func.over.is_some() {
@@ -1989,41 +1994,7 @@ fn plan_function<'a>(
         FunctionArgs::Args(args) => args,
     };
 
-    // The functions matched here on string literals do not yet
-    // work with our generalized function selection (`sql::func::select_scalar_func`).
-    match ident {
-        "mod" => func::plan_binary_op(ecx, &BinaryOperator::Modulus, &args[0], &args[1]),
-
-        "nullif" => {
-            if args.len() != 2 {
-                bail!("nullif requires exactly two arguments");
-            }
-            let cond = Expr::BinaryOp {
-                left: Box::new(args[0].clone()),
-                op: BinaryOperator::Eq,
-                right: Box::new(args[1].clone()),
-            };
-            let cond_expr = plan_expr(ecx, &cond, None)?;
-            let else_expr = plan_expr(ecx, &args[0], None)?;
-            let expr = ScalarExpr::If {
-                cond: Box::new(cond_expr),
-                then: Box::new(ScalarExpr::literal_null(ecx.scalar_type(&else_expr))),
-                els: Box::new(else_expr),
-            };
-            Ok(expr)
-        }
-
-        _ => {
-            if is_table_func(&name) {
-                unsupported!(
-                    1546,
-                    format!("table function ({}) in scalar position", ident)
-                );
-            } else {
-                func::select_scalar_func(ecx, ident, args)
-            }
-        }
-    }
+    func::select_scalar_func(ecx, ident, args)
 }
 
 fn plan_is_null_expr<'a>(

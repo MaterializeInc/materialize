@@ -21,33 +21,44 @@ use sql_parser::ast::{
 use crate::normalize;
 
 pub fn transform(query: &mut Query) {
-    AggFuncRewriter.visit_query_mut(query);
+    FuncRewriter.visit_query_mut(query);
     IdentFuncRewriter.visit_query_mut(query);
 }
 
-// Rewrites `avg(col)` to `sum(col) / count(col)`, so that we can pretend the
-// `avg` aggregate function doesn't exist from here on out. This also has the
-// nice side effect of reusing the division planning logic, which is not trivial
-// for some types, like decimals.
-struct AggFuncRewriter;
+// Transforms various functions to forms that are more easily handled by the
+// planner.
+//
+// Specifically:
+//
+//   * Rewrites the `mod` function to the `%` binary operator, so the modulus
+//     code only needs to handle the operator form.
+//
+//   * Rewrites the `nullif` function to a `CASE` statement, to reuse the code
+//     for planning equality of datums.
+//
+//   * Rewrites `avg(col)` to `sum(col) / count(col)`, so that we can pretend
+//     the `avg` aggregate function doesn't exist from here on out. This also
+//     has the nice side effect of reusing the division planning logic, which
+//     is not trivial for some types, like decimals.
+//
+//   * Rewrites the suite of standard deviation and variance functions in a
+//     manner similar to `avg`.
+struct FuncRewriter;
 
-impl AggFuncRewriter {
+impl FuncRewriter {
     // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL.
     fn plan_divide(lhs: Expr, rhs: Expr) -> Expr {
         Expr::BinaryOp {
             left: Box::new(lhs),
             op: BinaryOperator::Divide,
-            right: Box::new(Expr::Function(Function {
-                name: ObjectName(vec!["nullif".into()]),
-                args: FunctionArgs::Args(vec![rhs, Expr::Value(Value::Number("0".into()))]),
-                filter: None,
-                over: None,
-                distinct: false,
-            })),
+            right: Box::new(Self::plan_null_if(
+                &rhs,
+                &Expr::Value(Value::Number("0".into())),
+            )),
         }
     }
 
-    fn plan_avg(expr: Expr, filter: Option<&Expr>, distinct: bool) -> Expr {
+    fn plan_avg(expr: &Expr, filter: Option<&Expr>, distinct: bool) -> Expr {
         let sum = Expr::Function(Function {
             name: ObjectName(vec!["sum".into()]),
             args: FunctionArgs::Args(vec![expr.clone()]),
@@ -64,7 +75,7 @@ impl AggFuncRewriter {
         });
         let count = Expr::Function(Function {
             name: ObjectName(vec!["count".into()]),
-            args: FunctionArgs::Args(vec![expr]),
+            args: FunctionArgs::Args(vec![expr.clone()]),
             filter: filter.map(|e| Box::new(e.clone())),
             over: None,
             distinct,
@@ -72,7 +83,7 @@ impl AggFuncRewriter {
         Self::plan_divide(sum, count)
     }
 
-    fn plan_variance(expr: Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
+    fn plan_variance(expr: &Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
         // N.B. this variance calculation uses the "textbook" algorithm, which
         // is known to accumulate problematic amounts of error. The numerically
         // stable variants, the most well-known of which is Welford's, are
@@ -89,7 +100,7 @@ impl AggFuncRewriter {
         //
         let expr = Expr::Function(Function {
             name: ObjectName(vec!["internal_avg_promotion".into()]),
-            args: FunctionArgs::Args(vec![expr]),
+            args: FunctionArgs::Args(vec![expr.clone()]),
             filter: None,
             over: None,
             distinct: false,
@@ -142,7 +153,7 @@ impl AggFuncRewriter {
         )
     }
 
-    fn plan_stddev(expr: Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
+    fn plan_stddev(expr: &Expr, filter: Option<&Expr>, distinct: bool, sample: bool) -> Expr {
         Expr::Function(Function {
             name: ObjectName(vec!["sqrt".into()]),
             args: FunctionArgs::Args(vec![Self::plan_variance(expr, filter, distinct, sample)]),
@@ -152,31 +163,58 @@ impl AggFuncRewriter {
         })
     }
 
+    fn plan_mod(left: &Expr, right: &Expr) -> Expr {
+        Expr::BinaryOp {
+            left: Box::new(left.clone()),
+            op: BinaryOperator::Modulus,
+            right: Box::new(right.clone()),
+        }
+    }
+
+    fn plan_null_if(left: &Expr, right: &Expr) -> Expr {
+        let condition = Expr::BinaryOp {
+            left: Box::new(left.clone()),
+            op: BinaryOperator::Eq,
+            right: Box::new(right.clone()),
+        };
+        Expr::Case {
+            operand: None,
+            conditions: vec![condition],
+            results: vec![Expr::Value(Value::Null)],
+            else_result: Some(Box::new(left.clone())),
+        }
+    }
+
     fn rewrite_expr(expr: &Expr) -> Option<(Ident, Expr)> {
         let func = match expr {
             Expr::Function(func) => func,
             _ => return None,
         };
         let name = normalize::function_name(func.name.clone()).ok()?;
-        let arg = match &func.args {
+        let args = match &func.args {
             FunctionArgs::Star => return None,
-            FunctionArgs::Args(args) if args.len() != 1 => return None,
-            FunctionArgs::Args(args) => args[0].clone(),
+            FunctionArgs::Args(args) => args,
         };
         let filter = func.filter.as_deref();
-        let expr = match name.as_str() {
-            "avg" => Some(Self::plan_avg(arg, filter, func.distinct)),
-            "variance" | "var_samp" => Some(Self::plan_variance(arg, filter, func.distinct, true)),
-            "var_pop" => Some(Self::plan_variance(arg, filter, func.distinct, false)),
-            "stddev" | "stddev_samp" => Some(Self::plan_stddev(arg, filter, func.distinct, true)),
-            "stddev_pop" => Some(Self::plan_stddev(arg, filter, func.distinct, false)),
+        let expr = match (name.as_str(), args.as_slice()) {
+            ("avg", [arg]) => Some(Self::plan_avg(arg, filter, func.distinct)),
+            ("mod", [lhs, rhs]) => Some(Self::plan_mod(lhs, rhs)),
+            ("nullif", [lhs, rhs]) => Some(Self::plan_null_if(lhs, rhs)),
+            ("variance", [arg]) | ("var_samp", [arg]) => {
+                Some(Self::plan_variance(arg, filter, func.distinct, true))
+            }
+            ("var_pop", [arg]) => Some(Self::plan_variance(arg, filter, func.distinct, false)),
+            ("stddev", [arg]) | ("stddev_samp", [arg]) => {
+                Some(Self::plan_stddev(arg, filter, func.distinct, true))
+            }
+            ("stddev_pop", [arg]) => Some(Self::plan_stddev(arg, filter, func.distinct, false)),
             _ => None,
         };
         expr.map(|expr| (func.name.0[0].clone(), expr))
     }
 }
 
-impl<'ast> VisitMut<'ast> for AggFuncRewriter {
+impl<'ast> VisitMut<'ast> for FuncRewriter {
     fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem) {
         if let SelectItem::UnnamedExpr(expr) = item {
             visit_mut::visit_expr_mut(self, expr);
