@@ -801,13 +801,7 @@ where
             }
 
             //Downgrade capability before exiting
-            downgrade_capability(
-                &id,
-                cap,
-                &mut cp_info,
-                &mut dp_info,
-                &timestamp_histories,
-            );
+            downgrade_capability(&id, cap, &mut cp_info, &mut dp_info, &timestamp_histories);
             // Ensure that we poll kafka more often than the eviction timeout
             activator.activate_after(Duration::from_secs(60));
             SourceStatus::Alive
