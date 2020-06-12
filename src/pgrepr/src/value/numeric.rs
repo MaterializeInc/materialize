@@ -17,8 +17,9 @@ use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 use repr::adt::decimal::{Decimal, Significand};
 
-/// A wrapper for [`repr::decimal::Decimal`] that can be serialized and
-/// deserialized to the PostgreSQL binary format.
+/// A wrapper for the `repr` crate's [`Decimal`](repr::adt::decimal::Decimal)
+/// type that can be serialized to and deserialized from the PostgreSQL binasry
+/// format.
 #[derive(Debug)]
 pub struct Numeric(pub Decimal);
 

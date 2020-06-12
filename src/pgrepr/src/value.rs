@@ -33,16 +33,22 @@ pub enum Value {
     Bool(bool),
     /// A byte array, i.e., a variable-length binary string.
     Bytea(Vec<u8>),
-    /// A 4-byte signed integer.
-    Int4(i32),
-    /// An 8-byte signed integer.
-    Int8(i64),
+    /// A date.
+    Date(NaiveDate),
     /// A 4-byte floating point number.
     Float4(f32),
     /// An 8-byte floating point number.
     Float8(f64),
-    /// A date.
-    Date(NaiveDate),
+    /// A 4-byte signed integer.
+    Int4(i32),
+    /// An 8-byte signed integer.
+    Int8(i64),
+    /// A binary JSON blob.
+    Jsonb(Jsonb),
+    /// A sequence of homogeneous values.
+    List(Vec<Option<Value>>),
+    /// An arbitrary precision number.
+    Numeric(Numeric),
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
@@ -53,12 +59,6 @@ pub enum Value {
     Interval(Interval),
     /// A variable-length string.
     Text(String),
-    /// An arbitrary precision number.
-    Numeric(Numeric),
-    /// A binary JSON blob.
-    Jsonb(Jsonb),
-    /// An 1d array of values (distinct from postgres Nd arrays)
-    List(Vec<Option<Value>>),
 }
 
 impl Value {
@@ -273,6 +273,27 @@ impl Value {
     }
 }
 
+fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
+where
+    F: FormatBuffer,
+{
+    strconv::format_list(buf, elems, |buf, elem| match elem {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+    })
+}
+
+fn decode_list(
+    elem_type: &Type,
+    raw: &str,
+) -> Result<Vec<Option<Value>>, Box<dyn Error + Sync + Send>> {
+    Ok(strconv::parse_list(
+        raw,
+        || None,
+        |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
+    )?)
+}
+
 /// Constructs a null datum of the specified type.
 pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
     let ty = match ty {
@@ -307,25 +328,4 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .zip(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
-}
-
-pub fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
-where
-    F: FormatBuffer,
-{
-    strconv::format_list(buf, elems, |buf, elem| match elem {
-        None => buf.write_null(),
-        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-    })
-}
-
-pub fn decode_list(
-    elem_type: &Type,
-    raw: &str,
-) -> Result<Vec<Option<Value>>, Box<dyn Error + Sync + Send>> {
-    Ok(strconv::parse_list(
-        raw,
-        || None,
-        |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
-    )?)
 }

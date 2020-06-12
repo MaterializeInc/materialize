@@ -31,6 +31,8 @@ pub enum Type {
     Interval,
     /// A binary JSON blob.
     Jsonb,
+    /// A sequence of homogeneous values.
+    List(Box<Type>),
     /// An arbitrary precision number.
     Numeric,
     /// A variable-length string.
@@ -41,15 +43,16 @@ pub enum Type {
     Timestamp,
     /// A date and time, with a timezone.
     TimestampTz,
-    /// A list
-    List(Box<Type>),
 }
 
 lazy_static! {
     pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
         "LIST".to_owned(),
-        // OID chosen at random
-        72_794_149,
+        // OID chosen to be in the first OID not considered stable by
+        // PostgreSQL. See the "OID Assignment" section of the PostgreSQL
+        // documentation for details:
+        // https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
+        16_384,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
