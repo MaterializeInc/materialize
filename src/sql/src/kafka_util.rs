@@ -145,7 +145,7 @@ pub fn extract_config(
             "topic_metadata_refresh_interval_ms",
             // The range of values comes from `topic.metadata.refresh.interval.ms` in
             // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-            ValType::Number(0, 3600000),
+            ValType::Number(0, 3_600_000),
         ),
     ];
 
