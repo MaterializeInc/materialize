@@ -297,7 +297,7 @@ struct DataPlaneInfo {
     /// The number of known partitions.
     known_partitions: i32,
     /// Information about new partitions (obtained by the metadata thread)
-    refresh_metadata_info: Arc<Mutex<(bool, i32)>>,
+    refresh_metadata_info: Arc<Mutex<Option<i32>>>,
     /// (RT only: if true, the metadata thread has detected new partitions)
     /// Per-source metrics.
     source_metrics: SourceMetrics,
@@ -339,22 +339,22 @@ impl DataPlaneInfo {
         }
     }
 
-    fn start_metadata_fetch(
+    // Metadata fetch requests on production Kafka clusters can take
+    // more than 1s to complete. This makes it far too expensive to run on
+    // the main Kafka threads. We only trigger metadata requests for Real time sources
+    fn start_metadata_fetch_thread(
         &mut self,
         cp_info: &ControlPlaneInfo,
         metadata_refresh_frequency: Duration,
         timestamping_stopped: Arc<AtomicBool>,
     ) {
-        // Metadata fetch requests on production Kafka clusters can take
-        // more than 1s to complete. This makes it far too expensive to run on
-        // the main Kafka threads. We only trigger metadata requests for Real time sources
-        let consumer = self.consumer.clone();
+       let consumer = self.consumer.clone();
         let refresh = self.refresh_metadata_info.clone();
         let id = self.source_id.clone();
         let topic = self.topic_name.clone();
         if let Consistency::RealTime = cp_info.source_type {
             thread::spawn(move || {
-                metadata_fetch_thread(
+                metadata_fetch(
                     timestamping_stopped,
                     consumer,
                     refresh,
@@ -367,15 +367,8 @@ impl DataPlaneInfo {
     }
     /// Update metadata information as refreshed by the metadata thread
     fn refresh_metadata(&mut self, cp_info: &mut ControlPlaneInfo) {
-        let refresh;
-        let new_partition_count;
-        {
-            let mut refresh_data = self.refresh_metadata_info.lock().expect("lock poisoned");
-            refresh = refresh_data.0;
-            refresh_data.0 = false;
-            new_partition_count = refresh_data.1;
-        }
-        if refresh {
+        let new_partition_count = self.refresh_metadata_info.lock().expect("lock poisoned").take();
+        if let Some(new_partition_count) = new_partition_count {
             assert_eq!(cp_info.source_type, Consistency::RealTime);
             match self.known_partitions.cmp(&new_partition_count) {
                 cmp::Ordering::Greater => {
@@ -730,13 +723,12 @@ fn activate_source_timestamping<G>(
     None
 }
 
-/// This function spawns a new thread responsible for periodically polling Kafka metadata
-/// and refreshing the number of known partitions. It marks the source has needing to be
-/// refreshed if new partitions are detected.
-fn metadata_fetch_thread(
+/// This function is responsible for refreshing the number of known partitions. It marks the source
+/// has needing to be refreshed if new partitions are detected.
+fn metadata_fetch(
     timestamping_stopped: Arc<AtomicBool>,
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
-    partition_count: Arc<Mutex<(bool, i32)>>,
+    partition_count: Arc<Mutex<Option<i32>>>,
     id: &str,
     topic: &str,
     wait: Duration,
@@ -769,10 +761,9 @@ fn metadata_fetch_thread(
                 }
                 new_partition_count = metadata_topic.partitions().len();
                 let mut refresh_data = partition_count.lock().expect("lock poisoned");
-                refresh_data.0 = true;
                 // Kafka partition are i32, and Kafka consequently cannot support more than i32
                 // partitions
-                refresh_data.1 = new_partition_count.try_into().unwrap();
+                *refresh_data = Some(new_partition_count.try_into().unwrap());
             }
             Err(e) => {
                 new_partition_count = 0;
@@ -863,7 +854,7 @@ where
                     .parse()
                     .unwrap(),
             );
-            dp_info.start_metadata_fetch(
+            dp_info.start_metadata_fetch_thread(
                 &cp_info,
                 metadata_refresh_frequency,
                 timestamping_stopped,
@@ -983,7 +974,7 @@ where
                 // Ensure that we activate the source frequently enough to keep downgrading
                 // capabilities, even when no data has arrived
                 // TODO(ncrooks): make this configurable
-                activator.activate_after(Duration::from_millis(1));
+                activator.activate_after(Duration::from_secs(1));
                 SourceStatus::Alive
             }
         },
