@@ -2223,7 +2223,6 @@ dependencies = [
  "ore",
  "postgres-types",
  "repr",
- "serde_json",
 ]
 
 [[package]]
