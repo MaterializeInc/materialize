@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
@@ -34,6 +33,7 @@ use repr::{RelationDesc, Row};
 use super::util::sink_reschedule;
 
 /// Per-Kafka sink metrics.
+#[derive(Clone)]
 pub struct SinkMetrics {
     messages_sent_counter: IntCounter,
     message_send_errors_counter: IntCounter,
@@ -90,11 +90,11 @@ impl SinkMetrics {
 
 #[derive(Clone)]
 pub struct SinkProducerContext {
-    metrics: Arc<SinkMetrics>,
+    metrics: SinkMetrics,
 }
 
 impl SinkProducerContext {
-    pub fn new(metrics: &Arc<SinkMetrics>) -> Self {
+    pub fn new(metrics: &SinkMetrics) -> Self {
         SinkProducerContext {
             metrics: metrics.clone(),
         }
@@ -157,11 +157,11 @@ pub fn kafka<G>(
     // TODO(rkhaitan): experiment with different settings for this value to see
     // if it makes a big difference
     config.set("queue.buffering.max.ms", &format!("{}", 10));
-    let sink_metrics = Arc::new(SinkMetrics::new(
+    let sink_metrics = SinkMetrics::new(
         &connector.topic,
         &id.to_string(),
         &stream.scope().index().to_string(),
-    ));
+    );
     let producer: ThreadedProducer<_> = config
         .create_with_context(SinkProducerContext::new(&sink_metrics))
         .expect("creating kafka producer for kafka sinks failed");
