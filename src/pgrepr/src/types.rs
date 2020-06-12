@@ -48,8 +48,11 @@ pub enum Type {
 lazy_static! {
     pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
         "LIST".to_owned(),
-        // OID chosen at random
-        72_794_149,
+        // OID chosen to be in the first OID not considered stable by
+        // PostgreSQL. See the "OID Assignment" section of the PostgreSQL
+        // documentation for details:
+        // https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
+        16_384,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
     );
