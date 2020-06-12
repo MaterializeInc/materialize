@@ -273,6 +273,27 @@ impl Value {
     }
 }
 
+fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
+where
+    F: FormatBuffer,
+{
+    strconv::format_list(buf, elems, |buf, elem| match elem {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+    })
+}
+
+fn decode_list(
+    elem_type: &Type,
+    raw: &str,
+) -> Result<Vec<Option<Value>>, Box<dyn Error + Sync + Send>> {
+    Ok(strconv::parse_list(
+        raw,
+        || None,
+        |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
+    )?)
+}
+
 /// Constructs a null datum of the specified type.
 pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
     let ty = match ty {
@@ -307,25 +328,4 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .zip(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
-}
-
-pub fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
-where
-    F: FormatBuffer,
-{
-    strconv::format_list(buf, elems, |buf, elem| match elem {
-        None => buf.write_null(),
-        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
-    })
-}
-
-pub fn decode_list(
-    elem_type: &Type,
-    raw: &str,
-) -> Result<Vec<Option<Value>>, Box<dyn Error + Sync + Send>> {
-    Ok(strconv::parse_list(
-        raw,
-        || None,
-        |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
-    )?)
 }
