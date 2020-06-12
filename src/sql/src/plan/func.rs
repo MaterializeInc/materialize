@@ -253,11 +253,11 @@ pub enum OperationType {
     /// `ArgImplementationMatcher::generate_param_exprs`.
     ExprOnly,
     UFunc(UnaryFunc),
-    UClosure(fn(&ExprContext, ScalarExpr) -> ScalarExpr),
+    UClosure(fn(&ExprContext, ScalarExpr) -> Result<ScalarExpr, failure::Error>),
     BFunc(BinaryFunc),
-    BClosure(fn(&ExprContext, ScalarExpr, ScalarExpr) -> ScalarExpr),
+    BClosure(fn(&ExprContext, ScalarExpr, ScalarExpr) -> Result<ScalarExpr, failure::Error>),
     VFunc(VariadicFunc),
-    VClosure(fn(&ExprContext, Vec<ScalarExpr>) -> ScalarExpr),
+    VClosure(fn(&ExprContext, Vec<ScalarExpr>) -> Result<ScalarExpr, failure::Error>),
 }
 
 impl fmt::Debug for OperationType {
@@ -357,15 +357,15 @@ impl<'a> ArgImplementationMatcher<'a> {
                 func,
                 expr: Box::new(exprs.remove(0)),
             },
-            OperationType::UClosure(f) => f(ecx, exprs.remove(0)),
+            OperationType::UClosure(f) => f(ecx, exprs.remove(0))?,
             OperationType::BFunc(func) => ScalarExpr::CallBinary {
                 func,
                 expr1: Box::new(exprs.remove(0)),
                 expr2: Box::new(exprs.remove(0)),
             },
-            OperationType::BClosure(f) => f(ecx, exprs.remove(0), exprs.remove(0)),
+            OperationType::BClosure(f) => f(ecx, exprs.remove(0), exprs.remove(0))?,
             OperationType::VFunc(func) => ScalarExpr::CallVariadic { func, exprs },
-            OperationType::VClosure(f) => f(ecx, exprs),
+            OperationType::VClosure(f) => f(ecx, exprs)?,
         })
     }
 
@@ -729,7 +729,7 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::CeilFloat64,
                 params!(Decimal(0, 0)) => UClosure(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    e.call_unary(UnaryFunc::CeilDecimal(s))
+                    Ok(e.call_unary(UnaryFunc::CeilDecimal(s)))
                 })
             },
             "char_length" => {
@@ -747,7 +747,7 @@ lazy_static! {
                             *func = UnaryFunc::CastBoolToStringImplicit;
                         }
                     }
-                    ScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs }
+                    Ok(ScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
                 })
             },
             "convert_from" => {
@@ -762,7 +762,23 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::FloorFloat64,
                 params!(Decimal(0, 0)) => UClosure(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    e.call_unary(UnaryFunc::FloorDecimal(s))
+                    Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
+                })
+            },
+            "internal_avg_promotion" => {
+                // Promotes a numeric type to the smallest fractional type that
+                // can represent it. This is primarily useful for the avg
+                // aggregate function, so that the avg of an integer column does
+                // not get truncated to an integer, which would be surprising to
+                // users (#549).
+                params!(Float32) => ExprOnly,
+                params!(Float64) => ExprOnly,
+                params!(Decimal(0, 0)) => ExprOnly,
+                params!(Int32) => UClosure(|ecx, e| {
+                      super::query::plan_cast_internal(
+                          "internal.avg_promotion", ecx, e,
+                          CastTo::Explicit(ScalarType::Decimal(10, 0)),
+                      )
                 })
             },
             "jsonb_array_length" => {
@@ -807,11 +823,11 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::RoundFloat64,
                 params!(Decimal(0,0)) => UClosure(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    e.call_unary(UnaryFunc::RoundDecimal(s))
+                    Ok(e.call_unary(UnaryFunc::RoundDecimal(s)))
                 }),
                 params!(Decimal(0,0), Int64) => BClosure(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
-                    lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s))
+                    Ok(lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s)))
                 })
             },
             "rtrim" => {
@@ -831,7 +847,7 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::SqrtFloat64,
                 params!(Decimal(0,0)) => UClosure(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    e.call_unary(UnaryFunc::SqrtDec(s))
+                    Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 })
             },
             "to_char" => {
@@ -893,29 +909,29 @@ lazy_static! {
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        lexpr.call_binary(rexpr, AddDecimal)
+                        Ok(lexpr.call_binary(rexpr, AddDecimal))
                     })
                 },
                 params!(Interval, Interval) => AddInterval,
                 params!(Timestamp, Interval) => AddTimestampInterval,
                 params!(Interval, Timestamp) => {
-                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddTimestampInterval))
+                    BClosure(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
                 },
                 params!(TimestampTz, Interval) => AddTimestampTzInterval,
                 params!(Interval, TimestampTz) => {
-                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddTimestampTzInterval))
+                    BClosure(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
                 },
                 params!(Date, Interval) => AddDateInterval,
                 params!(Interval, Date) => {
-                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddDateInterval))
+                    BClosure(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateInterval)))
                 },
                 params!(Date, Time) => AddDateTime,
                 params!(Time, Date) => {
-                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddDateTime))
+                    BClosure(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateTime)))
                 },
                 params!(Time, Interval) => AddTimeInterval,
                 params!(Interval, Time) => {
-                    BClosure(|_ecx, lhs, rhs| rhs.call_binary(lhs, AddTimeInterval))
+                    BClosure(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }
             },
             Minus => {
@@ -925,7 +941,7 @@ lazy_static! {
                 params!(Float64, Float64) => SubFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                    lexpr.call_binary(rexpr, SubDecimal)
+                    Ok(lexpr.call_binary(rexpr, SubDecimal))
                 }),
                 params!(Interval, Interval) => SubInterval,
                 params!(Timestamp, Timestamp) => SubTimestamp,
@@ -953,7 +969,7 @@ lazy_static! {
                     let so = max(max(min(s1 + s2, 12), s1), s2);
                     let si = s1 + s2;
                     let expr = lhs.call_binary(rhs, MulDecimal);
-                    rescale_decimal(expr, si, so)
+                    Ok(rescale_decimal(expr, si, so))
                 })
             },
             Divide => {
@@ -972,7 +988,7 @@ lazy_static! {
                     let si = max(s + 1, s2);
                     let lhs = rescale_decimal(lhs, s1, si);
                     let expr = lhs.call_binary(rhs, DivDecimal);
-                    rescale_decimal(expr, si - s2, s)
+                    Ok(rescale_decimal(expr, si - s2, s))
                 })
             },
             Modulus => {
@@ -982,7 +998,7 @@ lazy_static! {
                 params!(Float64, Float64) => ModFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => BClosure(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                    lexpr.call_binary(rexpr, ModDecimal)
+                    Ok(lexpr.call_binary(rexpr, ModDecimal))
                 })
             },
 
@@ -1000,9 +1016,9 @@ lazy_static! {
             },
             NotLike => {
                 params!(String, String) => BClosure(|_ecx, lhs, rhs| {
-                    lhs
+                    Ok(lhs
                         .call_binary(rhs, MatchLikePattern)
-                        .call_unary(UnaryFunc::Not)
+                        .call_unary(UnaryFunc::Not))
                 })
             },
 
@@ -1021,43 +1037,43 @@ lazy_static! {
             },
             JsonGetAsText => {
                 params!(Jsonb, Int64) => BClosure(|_ecx, lhs, rhs| {
-                    lhs.call_binary(rhs, BinaryFunc::JsonbGetInt64)
-                        .call_unary(UnaryFunc::JsonbStringifyUnlessString)
+                    Ok(lhs.call_binary(rhs, BinaryFunc::JsonbGetInt64)
+                          .call_unary(UnaryFunc::JsonbStringifyUnlessString))
                 }),
                 params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
-                    lhs.call_binary(rhs, BinaryFunc::JsonbGetString)
-                        .call_unary(UnaryFunc::JsonbStringifyUnlessString)
+                    Ok(lhs.call_binary(rhs, BinaryFunc::JsonbGetString)
+                        .call_unary(UnaryFunc::JsonbStringifyUnlessString))
                 })
             },
             JsonContainsJson => {
                 params!(Jsonb, Jsonb) => JsonbContainsJsonb,
                 params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
-                    lhs.call_binary(
+                    Ok(lhs.call_binary(
                         rhs.call_unary(UnaryFunc::CastStringToJsonb),
                         JsonbContainsJsonb,
-                    )
+                    ))
                 }),
                 params!(String, Jsonb) => BClosure(|_ecx, lhs, rhs| {
-                    lhs.call_unary(UnaryFunc::CastStringToJsonb)
-                        .call_binary(rhs, JsonbContainsJsonb)
+                    Ok(lhs.call_unary(UnaryFunc::CastStringToJsonb)
+                          .call_binary(rhs, JsonbContainsJsonb))
                 })
             },
             JsonContainedInJson => {
                 params!(Jsonb, Jsonb) =>  BClosure(|_ecx, lhs, rhs| {
-                    rhs.call_binary(
+                    Ok(rhs.call_binary(
                         lhs,
                         JsonbContainsJsonb
-                    )
+                    ))
                 }),
                 params!(Jsonb, String) => BClosure(|_ecx, lhs, rhs| {
-                    rhs.call_unary(UnaryFunc::CastStringToJsonb)
-                        .call_binary(lhs, BinaryFunc::JsonbContainsJsonb)
+                    Ok(rhs.call_unary(UnaryFunc::CastStringToJsonb)
+                          .call_binary(lhs, BinaryFunc::JsonbContainsJsonb))
                 }),
                 params!(String, Jsonb) => BClosure(|_ecx, lhs, rhs| {
-                    rhs.call_binary(
+                    Ok(rhs.call_binary(
                         lhs.call_unary(UnaryFunc::CastStringToJsonb),
                         BinaryFunc::JsonbContainsJsonb,
-                    )
+                    ))
                 })
             },
             JsonContainsField => {
@@ -1070,7 +1086,7 @@ lazy_static! {
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        lexpr.call_binary(rexpr, BinaryFunc::Lt)
+                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Lt))
                     })
                 }
             },
@@ -1078,7 +1094,7 @@ lazy_static! {
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        lexpr.call_binary(rexpr, BinaryFunc::Lte)
+                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Lte))
                     })
                 }
             },
@@ -1086,7 +1102,7 @@ lazy_static! {
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        lexpr.call_binary(rexpr, BinaryFunc::Gt)
+                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Gt))
                     })
                 }
             },
@@ -1094,7 +1110,7 @@ lazy_static! {
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        lexpr.call_binary(rexpr, BinaryFunc::Gte)
+                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Gte))
                     })
                 }
             },
@@ -1102,7 +1118,7 @@ lazy_static! {
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        lexpr.call_binary(rexpr, BinaryFunc::Eq)
+                        Ok(lexpr.call_binary(rexpr, BinaryFunc::Eq))
                     })
                 }
             },
@@ -1110,7 +1126,7 @@ lazy_static! {
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     BClosure(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
-                        lexpr.call_binary(rexpr, BinaryFunc::NotEq)
+                        Ok(lexpr.call_binary(rexpr, BinaryFunc::NotEq))
                     })
                 }
             }

@@ -2005,31 +2005,6 @@ fn plan_function<'a>(
                 QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
             }
         }
-        // Promotes a numeric type to the smallest fractional type that
-        // can represent it. This is primarily useful for the avg
-        // aggregate function, so that the avg of an integer column does
-        // not get truncated to an integer, which would be surprising to
-        // users (#549).
-        "internal_avg_promotion" => {
-            if args.len() != 1 {
-                bail!("internal.avg_promotion requires exactly one argument");
-            }
-            let expr = plan_expr(ecx, &args[0], None)?;
-            let typ = ecx.column_type(&expr);
-            let output_type = match &typ.scalar_type {
-                ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
-                ScalarType::Decimal(p, s) => ScalarType::Decimal(*p, *s),
-                ScalarType::Int32 => ScalarType::Decimal(10, 0),
-                ScalarType::Int64 => ScalarType::Decimal(19, 0),
-                _ => bail!("internal.avg_promotion called with unexpected argument"),
-            };
-            plan_cast_internal(
-                "internal.avg_promotion",
-                ecx,
-                expr,
-                cast::CastTo::Explicit(output_type),
-            )
-        }
 
         "mod" => func::plan_binary_op(ecx, &BinaryOperator::Modulus, &args[0], &args[1]),
 
