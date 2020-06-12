@@ -43,6 +43,10 @@ members = [
 # production installations, but we still want useful crash reports.
 debug = 1
 
+[profile.dev.package]
+backtrace = { opt-level = 3 }
+backtrace-sys = { opt-level = 3 }
+
 [patch.crates-io]
 # Waiting on a release with this commit:
 # https://github.com/sfackler/rust-postgres/commit/dd0c39e0414e30e98271836b99ef289d04b7d569
