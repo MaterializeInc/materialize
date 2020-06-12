@@ -2219,7 +2219,6 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "failure",
  "lazy_static",
  "ore",
  "postgres-types",

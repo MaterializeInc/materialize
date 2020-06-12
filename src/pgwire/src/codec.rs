@@ -14,7 +14,6 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
-use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::str;
@@ -472,8 +471,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
 
     let mut param_formats = Vec::new();
     for _ in 0..buf.read_i16()? {
-        let fmt = pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?;
-        param_formats.push(fmt);
+        param_formats.push(buf.read_format()?);
     }
 
     let mut raw_params = Vec::new();
@@ -493,8 +491,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
 
     let mut result_formats = Vec::new();
     for _ in 0..buf.read_i16()? {
-        let fmt = pgrepr::Format::try_from(buf.read_i16()?).map_err(input_err)?;
-        result_formats.push(fmt);
+        result_formats.push(buf.read_format()?);
     }
 
     Ok(FrontendMessage::Bind {
@@ -614,6 +611,15 @@ impl<'a> Cursor<'a> {
         let val = NetworkEndian::read_u32(self.buf);
         self.advance(4);
         Ok(val)
+    }
+
+    /// Reads the next 16-bit format code, advancing the cursor by two bytes.
+    fn read_format(&mut self) -> Result<pgrepr::Format, io::Error> {
+        match self.read_i16()? {
+            0 => Ok(pgrepr::Format::Text),
+            1 => Ok(pgrepr::Format::Binary),
+            n => Err(input_err(format!("unknown format code: {}", n))),
+        }
     }
 
     /// Advances the cursor by `n` bytes.

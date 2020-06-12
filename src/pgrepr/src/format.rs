@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::convert::TryFrom;
-
 /// The encoding format for a [`Value`](crate::Value).
 ///
 /// PostgreSQL documentation: https://www.postgresql.org/docs/12/protocol-overview.html#PROTOCOL-FORMAT-CODES
@@ -24,7 +22,7 @@ pub enum Format {
     /// > null character; the frontend must add one to received values if it
     /// > wants to process them as C strings. (The text format does not allow
     /// > embedded nulls, by the way.)
-    Text = 0,
+    Text,
     /// Binary encoding.
     ///
     /// From the PostgreSQL docs:
@@ -35,17 +33,5 @@ pub enum Format {
     /// > Keep in mind that binary representations for complex data types might
     /// > change across server versions; the text format is usually the more
     /// > portable choice.
-    Binary = 1,
-}
-
-impl TryFrom<i16> for Format {
-    type Error = failure::Error;
-
-    fn try_from(n: i16) -> Result<Format, Self::Error> {
-        match n {
-            0 => Ok(Format::Text),
-            1 => Ok(Format::Binary),
-            _ => failure::bail!("invalid format code: {}", n),
-        }
-    }
+    Binary,
 }
