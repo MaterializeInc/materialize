@@ -35,6 +35,7 @@ pub enum TypeCategory {
     Bool,
     DateTime,
     Numeric,
+    Pseudo,
     String,
     Timespan,
     UserDefined,
@@ -52,23 +53,28 @@ impl TypeCategory {
     /// GROUP BY typcategory
     /// ORDER BY typcategory;
     /// ```
-    fn from_type(typ: &ScalarType) -> TypeCategory {
+    fn from_type(typ: &ScalarType) -> Self {
         match typ {
-            ScalarType::Bool => TypeCategory::Bool,
-            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::List(_) => {
-                TypeCategory::UserDefined
-            }
+            ScalarType::Bool => Self::Bool,
+            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::List(_) => Self::UserDefined,
             ScalarType::Date
             | ScalarType::Time
             | ScalarType::Timestamp
-            | ScalarType::TimestampTz => TypeCategory::DateTime,
+            | ScalarType::TimestampTz => Self::DateTime,
             ScalarType::Decimal(..)
             | ScalarType::Float32
             | ScalarType::Float64
             | ScalarType::Int32
-            | ScalarType::Int64 => TypeCategory::Numeric,
-            ScalarType::Interval => TypeCategory::Timespan,
-            ScalarType::String => TypeCategory::String,
+            | ScalarType::Int64 => Self::Numeric,
+            ScalarType::Interval => Self::Timespan,
+            ScalarType::String => Self::String,
+        }
+    }
+
+    fn from_param(param: &ParamType) -> Self {
+        match param {
+            ParamType::Plain(t) => Self::from_type(t),
+            ParamType::StringAny | ParamType::JsonbAny => Self::Pseudo,
         }
     }
 
@@ -81,12 +87,12 @@ impl TypeCategory {
     /// ```
     fn preferred_type(&self) -> Option<ScalarType> {
         match self {
-            TypeCategory::Bool => Some(ScalarType::Bool),
-            TypeCategory::DateTime => Some(ScalarType::TimestampTz),
-            TypeCategory::Numeric => Some(ScalarType::Float64),
-            TypeCategory::String => Some(ScalarType::String),
-            TypeCategory::Timespan => Some(ScalarType::Interval),
-            TypeCategory::UserDefined => None,
+            Self::Bool => Some(ScalarType::Bool),
+            Self::DateTime => Some(ScalarType::TimestampTz),
+            Self::Numeric => Some(ScalarType::Float64),
+            Self::String => Some(ScalarType::String),
+            Self::Timespan => Some(ScalarType::Interval),
+            Self::Pseudo | Self::UserDefined => None,
         }
     }
 }
@@ -119,7 +125,7 @@ impl ParamList {
 
     /// Matches a `&[ScalarType]` derived from the user's function argument
     /// against this `ParamList`'s permitted arguments.
-    fn match_scalartypes(&self, types: &[ScalarType]) -> bool {
+    fn match_scalartypes(&self, types: &[&ScalarType]) -> bool {
         use ParamList::*;
         match self {
             Exact(p) => p.iter().zip(types.iter()).all(|(p, t)| p.accepts(t)),
@@ -127,6 +133,17 @@ impl ParamList {
                 .iter()
                 .enumerate()
                 .all(|(i, t)| p[i % p.len()].accepts(t)),
+        }
+    }
+}
+
+impl std::ops::Index<usize> for ParamList {
+    type Output = ParamType;
+
+    fn index(&self, i: usize) -> &Self::Output {
+        match self {
+            Self::Exact(p) => &p[i],
+            Self::Repeat(p) => &p[i % p.len()],
         }
     }
 }
@@ -163,6 +180,15 @@ impl ParamType {
     // more sense with the understanding that pseudotypes are never preferred.
     fn is_preferred_by(&self, t: &ScalarType) -> bool {
         if let Some(pt) = TypeCategory::from_type(t).preferred_type() {
+            *self == pt
+        } else {
+            false
+        }
+    }
+
+    // Is `self` the preferred parameter type for its `TypeCategory`?
+    fn prefers_self(&self) -> bool {
+        if let Some(pt) = TypeCategory::from_param(self).preferred_type() {
             *self == pt
         } else {
             false
@@ -214,10 +240,9 @@ pub enum OperationType {
     /// Returns the `ScalarExpr` that is output from
     /// `ArgImplementationMatcher::generate_param_exprs`.
     ExprOnly,
-    Unary(UnaryFunc),
-    /// Embeds a [`BinaryFunc`]
+    UFunc(UnaryFunc),
+    UClosure(fn(&ExprContext, ScalarExpr) -> ScalarExpr),
     BFunc(BinaryFunc),
-    /// Embeds a binary-operator-like function pointer.
     BClosure(fn(&ExprContext, ScalarExpr, ScalarExpr) -> ScalarExpr),
     VFunc(VariadicFunc),
     VClosure(fn(&ExprContext, Vec<ScalarExpr>) -> ScalarExpr),
@@ -227,7 +252,8 @@ impl fmt::Debug for OperationType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             OperationType::ExprOnly => f.write_str("ExprOnly"),
-            OperationType::Unary(func) => write!(f, "Unary({:?})", func),
+            OperationType::UFunc(func) => write!(f, "UFunc({:?})", func),
+            OperationType::UClosure(_) => write!(f, "UClosure"),
             OperationType::BFunc(func) => write!(f, "BFunc({:?})", func),
             OperationType::BClosure(_) => f.write_str("BClosure"),
             OperationType::VFunc(func) => write!(f, "VFunc({:?}", func),
@@ -238,7 +264,7 @@ impl fmt::Debug for OperationType {
 
 impl From<UnaryFunc> for OperationType {
     fn from(u: UnaryFunc) -> OperationType {
-        OperationType::Unary(u)
+        OperationType::UFunc(u)
     }
 }
 
@@ -256,13 +282,23 @@ impl From<VariadicFunc> for OperationType {
 
 #[derive(Debug, Clone)]
 /// Tracks candidate implementations.
-pub struct Candidate {
+pub struct Candidate<'a> {
     /// The implementation under consideration.
-    fimpl: FuncImpl,
-    /// The argument types that will be used if we we choose `fimpl`.
-    arg_types: Vec<ScalarType>,
+    fimpl: &'a FuncImpl,
     exact_matches: usize,
     preferred_types: usize,
+}
+
+// Returns last candidate with saturated parameters.
+macro_rules! maybe_get_last_candidate {
+    ($candidates:expr, $types:expr ) => {
+        if $candidates.len() == 1 {
+            return Ok(ArgImplementationMatcher::saturate_decimals(
+                $candidates[0].fimpl,
+                $types,
+            ));
+        }
+    };
 }
 
 #[derive(Clone, Debug)]
@@ -295,7 +331,6 @@ impl<'a> ArgImplementationMatcher<'a> {
         let impls = impls
             .iter()
             .filter(|i| i.params.validate_arg_len(l))
-            .cloned()
             .collect();
         let mut m = Self { ident, ecx };
 
@@ -311,10 +346,11 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         Ok(match f.op {
             OperationType::ExprOnly => exprs.remove(0),
-            OperationType::Unary(func) => ScalarExpr::CallUnary {
+            OperationType::UFunc(func) => ScalarExpr::CallUnary {
                 func,
                 expr: Box::new(exprs.remove(0)),
             },
+            OperationType::UClosure(f) => f(ecx, exprs.remove(0)),
             OperationType::BFunc(func) => ScalarExpr::CallBinary {
                 func,
                 expr1: Box::new(exprs.remove(0)),
@@ -337,7 +373,7 @@ impl<'a> ArgImplementationMatcher<'a> {
     fn find_match(
         &mut self,
         exprs: &[CoercibleScalarExpr],
-        impls: Vec<FuncImpl>,
+        impls: Vec<&FuncImpl>,
     ) -> Result<FuncImpl, failure::Error> {
         let types: Vec<_> = exprs
             .iter()
@@ -347,10 +383,11 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         // Check for exact match.
         if all_types_known {
-            let types: Vec<_> = types.iter().map(|t| t.clone().unwrap()).collect();
+            let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).collect();
             let matching_impls: Vec<&FuncImpl> = impls
                 .iter()
-                .filter(|i| i.params.match_scalartypes(&types))
+                .filter(|i| i.params.match_scalartypes(&known_types))
+                .cloned()
                 .collect();
 
             if matching_impls.len() == 1 {
@@ -367,7 +404,6 @@ impl<'a> ArgImplementationMatcher<'a> {
         let mut candidates: Vec<Candidate> = Vec::new();
         for fimpl in impls {
             let mut valid_candidate = true;
-            let mut arg_types = Vec::new();
             let mut exact_matches = 0;
             let mut preferred_types = 0;
 
@@ -377,10 +413,9 @@ impl<'a> ArgImplementationMatcher<'a> {
                     ParamList::Repeat(p) => &p[i % p.len()],
                 };
 
-                let arg_type = match raw_arg_type {
+                match raw_arg_type {
                     Some(raw_arg_type) if param_type == raw_arg_type => {
                         exact_matches += 1;
-                        raw_arg_type.clone()
                     }
                     Some(raw_arg_type) => {
                         if !self.is_coercion_possible(raw_arg_type, &param_type) {
@@ -390,17 +425,13 @@ impl<'a> ArgImplementationMatcher<'a> {
                         if param_type.is_preferred_by(raw_arg_type) {
                             preferred_types += 1;
                         }
-                        param_type.into()
                     }
                     None => {
-                        let s: ScalarType = param_type.into();
-                        if param_type.is_preferred_by(&s) {
+                        if param_type.prefers_self() {
                             preferred_types += 1;
                         }
-                        s
                     }
-                };
-                arg_types.push(arg_type);
+                }
             }
 
             // 4.a. Discard candidate functions for which the input types do not match
@@ -411,7 +442,6 @@ impl<'a> ArgImplementationMatcher<'a> {
                 max_exact_matches = std::cmp::max(max_exact_matches, exact_matches);
                 candidates.push(Candidate {
                     fimpl,
-                    arg_types,
                     exact_matches,
                     preferred_types,
                 });
@@ -425,17 +455,13 @@ impl<'a> ArgImplementationMatcher<'a> {
             )
         }
 
-        if let Some(func) = self.maybe_get_last_candidate(&candidates) {
-            return Ok(func);
-        }
+        maybe_get_last_candidate!(&candidates, &types);
 
         // 4.c. Run through all candidates and keep those with the most exact matches on
         // input types. Keep all candidates if none have exact matches.
         candidates.retain(|c| c.exact_matches >= max_exact_matches);
 
-        if let Some(func) = self.maybe_get_last_candidate(&candidates) {
-            return Ok(func);
-        }
+        maybe_get_last_candidate!(&candidates, &types);
 
         // 4.d. Run through all candidates and keep those that accept preferred types
         // (of the input data type's type category) at the most positions where
@@ -446,9 +472,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         }
         candidates.retain(|c| c.preferred_types >= max_preferred_types);
 
-        if let Some(func) = self.maybe_get_last_candidate(&candidates) {
-            return Ok(func);
-        }
+        maybe_get_last_candidate!(&candidates, &types);
 
         if all_types_known {
             bail!(
@@ -474,19 +498,19 @@ impl<'a> ArgImplementationMatcher<'a> {
                     found_unknown = true;
 
                     for c in candidates.iter() {
-                        let this_category = TypeCategory::from_type(&c.arg_types[i]);
+                        // 4.e. cont: At each  position, select the string category if
+                        // any candidate accepts that category. (This bias
+                        // towards string is appropriate since an
+                        // unknown-type literal looks like a string.)
+                        if c.fimpl.params[i].accepts(&ScalarType::String) {
+                            found_string_candidate = true;
+                            selected_category = Some(TypeCategory::String);
+                            break;
+                        }
+                        // 4.e. cont: Otherwise, if all the remaining candidates accept
+                        // the same type category, select that category.
+                        let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
                         match (&selected_category, &this_category) {
-                            // 4.e. cont: At each  position, select the string category if
-                            // any candidate accepts that category. (This bias
-                            // towards string is appropriate since an
-                            // unknown-type literal looks like a string.)
-                            (Some(TypeCategory::String), _) => {}
-                            (_, TypeCategory::String) => {
-                                found_string_candidate = true;
-                                selected_category = Some(TypeCategory::String);
-                            }
-                            // 4.e. cont: Otherwise, if all the remaining candidates accept
-                            // the same type category, select that category.
                             (Some(selected_category), this_category) => {
                                 categories_match =
                                     *selected_category == *this_category && categories_match
@@ -517,14 +541,14 @@ impl<'a> ArgImplementationMatcher<'a> {
                     candidates.retain(|c| {
                         if let Some(typ) = &preferred_type {
                             found_preferred_type_candidate =
-                                c.arg_types[i] == *typ || found_preferred_type_candidate;
+                                c.fimpl.params[i].accepts(typ) || found_preferred_type_candidate;
                         }
-                        selected_category == TypeCategory::from_type(&c.arg_types[i])
+                        selected_category == TypeCategory::from_param(&c.fimpl.params[i])
                     });
 
                     if found_preferred_type_candidate {
                         let preferred_type = preferred_type.unwrap();
-                        candidates.retain(|c| c.arg_types[i] == preferred_type);
+                        candidates.retain(|c| c.fimpl.params[i].accepts(&preferred_type));
                     }
                 }
                 Some(typ) => {
@@ -539,9 +563,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             }
         }
 
-        if let Some(func) = self.maybe_get_last_candidate(&candidates) {
-            return Ok(func);
-        }
+        maybe_get_last_candidate!(&candidates, &types);
 
         // 4.f. If there are both unknown and known-type arguments, and all the
         // known-type arguments have the same type, assume that the unknown
@@ -551,13 +573,11 @@ impl<'a> ArgImplementationMatcher<'a> {
             let common_type = common_type.unwrap();
             for (i, raw_arg_type) in types.iter().enumerate() {
                 if raw_arg_type.is_none() {
-                    candidates.retain(|c| common_type == c.arg_types[i]);
+                    candidates.retain(|c| c.fimpl.params[i].accepts(&common_type));
                 }
             }
 
-            if let Some(func) = self.maybe_get_last_candidate(&candidates) {
-                return Ok(func);
-            }
+            maybe_get_last_candidate!(&candidates, &types);
         }
 
         bail!(
@@ -566,55 +586,21 @@ impl<'a> ArgImplementationMatcher<'a> {
         )
     }
 
-    fn maybe_get_last_candidate(&self, candidates: &[Candidate]) -> Option<FuncImpl> {
-        if candidates.len() == 1 {
-            Some(Self::saturate_decimals(
-                &candidates[0].fimpl,
-                &candidates[0].arg_types,
-            ))
-        } else {
-            None
-        }
-    }
-
     /// Rewrite any `Decimal` values in `FuncImpl` to use the users' arguments'
     /// scale, rather than the default value we use for matching implementations.
-    fn saturate_decimals(f: &FuncImpl, types: &[ScalarType]) -> FuncImpl {
-        use OperationType::*;
+    fn saturate_decimals(f: &FuncImpl, types: &[Option<ScalarType>]) -> FuncImpl {
         use ParamType::*;
         use ScalarType::*;
 
         let mut f = f.clone();
-
-        f.op = match f.op {
-            Unary(UnaryFunc::CeilDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::CeilDecimal(s)),
-                _ => unreachable!(),
-            },
-            Unary(UnaryFunc::FloorDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::FloorDecimal(s)),
-                _ => unreachable!(),
-            },
-            Unary(UnaryFunc::RoundDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::RoundDecimal(s)),
-                _ => unreachable!(),
-            },
-            BFunc(BinaryFunc::RoundDecimal(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => BFunc(BinaryFunc::RoundDecimal(s)),
-                _ => unreachable!(),
-            },
-            Unary(UnaryFunc::SqrtDec(_)) => match types[0] {
-                ScalarType::Decimal(_, s) => Unary(UnaryFunc::SqrtDec(s)),
-                _ => unreachable!(),
-            },
-            other => other,
-        };
         // TODO(sploiselle): Add support for saturating decimals in other
         // contexts.
         if let ParamList::Exact(ref mut param_list) = f.params {
             for (i, param) in param_list.iter_mut().enumerate() {
                 if let Plain(Decimal(..)) = param {
-                    *param = Plain(types[i].clone());
+                    if let Some(Decimal(p, s)) = types[i] {
+                        *param = Plain(ScalarType::Decimal(p, s))
+                    }
                 }
             }
         }
@@ -668,20 +654,19 @@ impl<'a> ArgImplementationMatcher<'a> {
         arg: CoercibleScalarExpr,
         typ: &ParamType,
     ) -> Result<ScalarExpr, failure::Error> {
-        use CastTo::*;
         let coerce_to = match typ {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
             ParamType::JsonbAny => CoerceTo::JsonbAny,
             ParamType::StringAny => CoerceTo::Plain(ScalarType::String),
         };
-
         let arg = super::query::plan_coerce(self.ecx, arg, coerce_to)?;
-        let to_typ = match typ {
-            ParamType::Plain(s) => Implicit(s.clone()),
-            ParamType::JsonbAny => JsonbAny,
-            ParamType::StringAny => Explicit(ScalarType::String),
+
+        let cast_to = match typ {
+            ParamType::Plain(s) => CastTo::Implicit(s.clone()),
+            ParamType::JsonbAny => CastTo::JsonbAny,
+            ParamType::StringAny => CastTo::Explicit(ScalarType::String),
         };
-        super::query::plan_cast_internal(self.ident, self.ecx, arg, to_typ)
+        super::query::plan_cast_internal(self.ident, self.ecx, arg, cast_to)
     }
 }
 
@@ -747,16 +732,23 @@ lazy_static! {
                 params!(String, String) => BinaryFunc::Trim
             },
             "bit_length" => {
-                params!(Bytes) => Unary(UnaryFunc::BitLengthBytes),
-                params!(String) => Unary(UnaryFunc::BitLengthString)
+                params!(Bytes) => UnaryFunc::BitLengthBytes,
+                params!(String) => UnaryFunc::BitLengthString
             },
             "ceil" => {
                 params!(Float32) => UnaryFunc::CeilFloat32,
                 params!(Float64) => UnaryFunc::CeilFloat64,
-                params!(Decimal(0, 0)) => UnaryFunc::CeilDecimal(0)
+                params!(Decimal(0, 0)) => UClosure(|ecx, e| {
+                    match ecx.scalar_type(&e) {
+                        Decimal(_, s) => {
+                            e.call_unary(UnaryFunc::CeilDecimal(s))
+                        },
+                        _ => unreachable!()
+                    }
+                })
             },
             "char_length" => {
-                params!(String) => Unary(UnaryFunc::CharLength)
+                params!(String) => UnaryFunc::CharLength
             },
             "concat" => {
                 Repeat(vec![StringAny]) => VClosure(|_ecx, mut exprs| {
@@ -783,7 +775,14 @@ lazy_static! {
             "floor" => {
                 params!(Float32) => UnaryFunc::FloorFloat32,
                 params!(Float64) => UnaryFunc::FloorFloat64,
-                params!(Decimal(0, 0)) => UnaryFunc::FloorDecimal(0)
+                params!(Decimal(0, 0)) => UClosure(|ecx, e| {
+                    match ecx.scalar_type(&e) {
+                        Decimal(_, s) => {
+                            e.call_unary(UnaryFunc::FloorDecimal(s))
+                        },
+                        _ => unreachable!()
+                    }
+                })
             },
             "jsonb_array_length" => {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
@@ -807,13 +806,13 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbTypeof
             },
             "length" => {
-                params!(Bytes) => Unary(UnaryFunc::ByteLengthBytes),
-                params!(String) => Unary(UnaryFunc::CharLength),
+                params!(Bytes) => UnaryFunc::ByteLengthBytes,
+                params!(String) => UnaryFunc::CharLength,
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength
             },
             "octet_length" => {
-                params!(Bytes) => Unary(UnaryFunc::ByteLengthBytes),
-                params!(String) => Unary(UnaryFunc::ByteLengthString)
+                params!(Bytes) => UnaryFunc::ByteLengthBytes,
+                params!(String) => UnaryFunc::ByteLengthString
             },
             "ltrim" => {
                 params!(String) => UnaryFunc::TrimLeadingWhitespace,
@@ -825,8 +824,22 @@ lazy_static! {
             "round" => {
                 params!(Float32) => UnaryFunc::RoundFloat32,
                 params!(Float64) => UnaryFunc::RoundFloat64,
-                params!(Decimal(0,0)) => UnaryFunc::RoundDecimal(0),
-                params!(Decimal(0,0), Int64) => BinaryFunc::RoundDecimal(0)
+                params!(Decimal(0,0)) => UClosure(|ecx, e| {
+                    match ecx.scalar_type(&e) {
+                        Decimal(_, s) => {
+                            e.call_unary(UnaryFunc::RoundDecimal(s))
+                        },
+                        _ => unreachable!()
+                    }
+                }),
+                params!(Decimal(0,0), Int64) => BClosure(|ecx, lhs, rhs| {
+                    match ecx.scalar_type(&lhs) {
+                        Decimal(_, s) => {
+                            lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s))
+                        },
+                        _ => unreachable!()
+                    }
+                })
             },
             "rtrim" => {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace,
@@ -843,7 +856,14 @@ lazy_static! {
             "sqrt" => {
                 params!(Float32) => UnaryFunc::SqrtFloat32,
                 params!(Float64) => UnaryFunc::SqrtFloat64,
-                params!(Decimal(0,0)) => UnaryFunc::SqrtDec(0)
+                params!(Decimal(0,0)) => UClosure(|ecx, e| {
+                    match ecx.scalar_type(&e) {
+                        Decimal(_, s) => {
+                            e.call_unary(UnaryFunc::SqrtDec(s))
+                        },
+                        _ => unreachable!()
+                    }
+                })
             },
             "to_char" => {
                 params!(Timestamp, String) => BinaryFunc::ToCharTimestamp,
