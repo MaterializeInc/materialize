@@ -100,7 +100,7 @@ impl TypeCategory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Describes a single function's implementation.
 pub struct FuncImpl {
     params: ParamList,
@@ -136,23 +136,6 @@ impl ParamList {
                 .iter()
                 .enumerate()
                 .all(|(i, t)| p[i % p.len()].accepts_type(t)),
-        }
-    }
-
-    /// Rewrite any `Decimal` values in `self` to use the users' arguments'
-    /// scale, rather than the default values we use for matching implementations.
-    fn saturate_decimals(&mut self, types: &[Option<ScalarType>]) {
-        use ParamType::*;
-        use ScalarType::*;
-
-        if let Self::Exact(ref mut param_list) = self {
-            for (i, param) in param_list.iter_mut().enumerate() {
-                if let Plain(Decimal(..)) = param {
-                    if let Some(Decimal(p, s)) = types[i] {
-                        *param = Plain(ScalarType::Decimal(p, s))
-                    }
-                }
-            }
         }
     }
 }
@@ -349,27 +332,28 @@ impl<'a> ArgImplementationMatcher<'a> {
             .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
             .collect();
 
-        let mut f = m.find_match(&types, impls)?;
+        let f = m.find_match(&types, impls)?;
 
-        f.params.saturate_decimals(&types);
+        let mut exprs = m.generate_param_exprs(exprs, &f.params)?;
 
-        let mut exprs = m.generate_param_exprs(exprs, f.params)?;
-
-        Ok(match f.op {
+        Ok(match &f.op {
             OperationType::ExprOnly => exprs.remove(0),
             OperationType::NClosure(f) => f(ecx)?,
             OperationType::UFunc(func) => ScalarExpr::CallUnary {
-                func,
+                func: func.clone(),
                 expr: Box::new(exprs.remove(0)),
             },
             OperationType::UClosure(f) => f(ecx, exprs.remove(0))?,
             OperationType::BFunc(func) => ScalarExpr::CallBinary {
-                func,
+                func: func.clone(),
                 expr1: Box::new(exprs.remove(0)),
                 expr2: Box::new(exprs.remove(0)),
             },
             OperationType::BClosure(f) => f(ecx, exprs.remove(0), exprs.remove(0))?,
-            OperationType::VFunc(func) => ScalarExpr::CallVariadic { func, exprs },
+            OperationType::VFunc(func) => ScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs,
+            },
             OperationType::VClosure(f) => f(ecx, exprs)?,
         })
     }
@@ -382,11 +366,11 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// Resolution" section of the aforelinked page.
     ///
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
-    fn find_match(
+    fn find_match<'b>(
         &mut self,
         types: &[Option<ScalarType>],
-        impls: Vec<&FuncImpl>,
-    ) -> Result<FuncImpl, failure::Error> {
+        impls: Vec<&'b FuncImpl>,
+    ) -> Result<&'b FuncImpl, failure::Error> {
         let all_types_known = types.iter().all(|t| t.is_some());
 
         // Check for exact match.
@@ -399,7 +383,7 @@ impl<'a> ArgImplementationMatcher<'a> {
                 .collect();
 
             if matching_impls.len() == 1 {
-                return Ok(matching_impls[0].clone());
+                return Ok(&matching_impls[0]);
             }
         }
 
@@ -410,7 +394,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         macro_rules! maybe_get_last_candidate {
             () => {
                 if candidates.len() == 1 {
-                    return Ok(candidates[0].fimpl.clone());
+                    return Ok(&candidates[0].fimpl);
                 }
             };
         }
@@ -598,7 +582,7 @@ impl<'a> ArgImplementationMatcher<'a> {
     fn generate_param_exprs(
         &self,
         args: Vec<CoercibleScalarExpr>,
-        params: ParamList,
+        params: &ParamList,
     ) -> Result<Vec<ScalarExpr>, failure::Error> {
         match params {
             ParamList::Exact(p) => {
@@ -641,6 +625,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         arg: CoercibleScalarExpr,
         typ: &ParamType,
     ) -> Result<ScalarExpr, failure::Error> {
+        use ScalarType::*;
         let coerce_to = match typ {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
             ParamType::Any => {
@@ -649,18 +634,19 @@ impl<'a> ArgImplementationMatcher<'a> {
                 // binding, coercing to a string has no effect on values that
                 // have a different natural type (e.g., list literals), so this
                 // is correct.
-                CoerceTo::Plain(ScalarType::String)
+                CoerceTo::Plain(String)
             }
             ParamType::JsonbAny => CoerceTo::JsonbAny,
-            ParamType::StringAny => CoerceTo::Plain(ScalarType::String),
+            ParamType::StringAny => CoerceTo::Plain(String),
         };
         let arg = query::plan_coerce(self.ecx, arg, coerce_to)?;
-
+        let arg_type = self.ecx.scalar_type(&arg);
         let cast_to = match typ {
+            ParamType::Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => return Ok(arg),
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any => return Ok(arg),
             ParamType::JsonbAny => CastTo::JsonbAny,
-            ParamType::StringAny => CastTo::Explicit(ScalarType::String),
+            ParamType::StringAny => CastTo::Explicit(String),
         };
         query::plan_cast_internal(self.ident, self.ecx, arg, cast_to)
     }
