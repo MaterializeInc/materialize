@@ -101,16 +101,16 @@ impl TypeCategory {
     }
 }
 
-type Operation =
-    Box<dyn Fn(&ExprContext, Vec<ScalarExpr>) -> Result<ScalarExpr, failure::Error> + Send + Sync>;
+type Operation<R> =
+    Box<dyn Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, failure::Error> + Send + Sync>;
 
 /// Describes a single function's implementation.
-pub struct FuncImpl {
+pub struct FuncImpl<R> {
     params: ParamList,
-    op: Operation,
+    op: Operation<R>,
 }
 
-impl fmt::Debug for FuncImpl {
+impl<R> fmt::Debug for FuncImpl<R> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("FuncImpl")
             .field("params", &self.params)
@@ -119,9 +119,9 @@ impl fmt::Debug for FuncImpl {
     }
 }
 
-fn nullary_op<F>(f: F) -> Operation
+fn nullary_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext) -> Result<ScalarExpr, failure::Error> + Send + Sync + 'static,
+    F: Fn(&ExprContext) -> Result<R, failure::Error> + Send + Sync + 'static,
 {
     Box::new(move |ecx, exprs| {
         assert!(exprs.is_empty());
@@ -129,24 +129,24 @@ where
     })
 }
 
-fn identity_op() -> Operation {
+fn identity_op() -> Operation<ScalarExpr> {
     unary_op(|_ecx, e| Ok(e))
 }
 
-fn unary_op<F>(f: F) -> Operation
+fn unary_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext, ScalarExpr) -> Result<ScalarExpr, failure::Error> + Send + Sync + 'static,
+    F: Fn(&ExprContext, ScalarExpr) -> Result<R, failure::Error> + Send + Sync + 'static,
 {
     Box::new(move |ecx, exprs| f(ecx, exprs.into_element()))
 }
 
-fn unary_func_op(f: UnaryFunc) -> Operation {
+fn unary_func_op(f: UnaryFunc) -> Operation<ScalarExpr> {
     unary_op(move |_ecx, e| Ok(e.call_unary(f.clone())))
 }
 
-fn binary_op<F>(f: F) -> Operation
+fn binary_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext, ScalarExpr, ScalarExpr) -> Result<ScalarExpr, failure::Error>
+    F: Fn(&ExprContext, ScalarExpr, ScalarExpr) -> Result<R, failure::Error>
         + Send
         + Sync
         + 'static,
@@ -160,21 +160,18 @@ where
     })
 }
 
-fn binary_func_op(f: BinaryFunc) -> Operation {
+fn binary_func_op(f: BinaryFunc) -> Operation<ScalarExpr> {
     binary_op(move |_ecx, left, right| Ok(left.call_binary(right, f.clone())))
 }
 
-fn variadic_op<F>(f: F) -> Operation
+fn variadic_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<ScalarExpr, failure::Error>
-        + Send
-        + Sync
-        + 'static,
+    F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, failure::Error> + Send + Sync + 'static,
 {
     Box::new(f)
 }
 
-fn variadic_func_op(f: VariadicFunc) -> Operation {
+fn variadic_func_op(f: VariadicFunc) -> Operation<ScalarExpr> {
     variadic_op(move |_ecx, exprs| {
         Ok(ScalarExpr::CallVariadic {
             func: f.clone(),
@@ -309,9 +306,9 @@ impl From<ScalarType> for ParamType {
 
 #[derive(Debug, Clone)]
 /// Tracks candidate implementations.
-pub struct Candidate<'a> {
+pub struct Candidate<'a, R> {
     /// The implementation under consideration.
-    fimpl: &'a FuncImpl,
+    fimpl: &'a FuncImpl<R>,
     exact_matches: usize,
     preferred_types: usize,
 }
@@ -335,12 +332,12 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// - When all implementations are equally valid.
     ///
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-oper.html
-    pub fn select_implementation(
+    pub fn select_implementation<R>(
         ident: &'a str,
         ecx: &'a ExprContext<'a>,
-        impls: &[FuncImpl],
+        impls: &[FuncImpl<R>],
         args: &[Expr],
-    ) -> Result<ScalarExpr, failure::Error> {
+    ) -> Result<R, failure::Error> {
         // Immediately remove all `impls` we know are invalid.
         let l = args.len();
         let impls = impls
@@ -373,17 +370,17 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// Resolution" section of the aforelinked page.
     ///
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
-    fn find_match<'b>(
+    fn find_match<'b, R>(
         &mut self,
         types: &[Option<ScalarType>],
-        impls: Vec<&'b FuncImpl>,
-    ) -> Result<&'b FuncImpl, failure::Error> {
+        impls: Vec<&'b FuncImpl<R>>,
+    ) -> Result<&'b FuncImpl<R>, failure::Error> {
         let all_types_known = types.iter().all(|t| t.is_some());
 
         // Check for exact match.
         if all_types_known {
             let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).collect();
-            let matching_impls: Vec<&FuncImpl> = impls
+            let matching_impls: Vec<&FuncImpl<_>> = impls
                 .iter()
                 .filter(|i| i.params.match_scalartypes(&known_types))
                 .cloned()
@@ -397,7 +394,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         // No exact match. Apply PostgreSQL's best match algorithm.
         // Generate candidates by assessing their compatibility with each
         // implementation's parameters.
-        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut candidates: Vec<Candidate<_>> = Vec::new();
         macro_rules! maybe_get_last_candidate {
             () => {
                 if candidates.len() == 1 {
@@ -689,7 +686,7 @@ macro_rules! impls {
             }
         ),+
     } => {{
-        let mut m: HashMap<_, Vec<FuncImpl>> = HashMap::new();
+        let mut m: HashMap<_, Vec<FuncImpl<_>>> = HashMap::new();
         $(
             insert_impl!(m, $name, $($params => $op),+);
         )+
@@ -699,7 +696,7 @@ macro_rules! impls {
 
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
-    static ref BUILTIN_IMPLS: HashMap<&'static str, Vec<FuncImpl>> = {
+    static ref BUILTIN_IMPLS: HashMap<&'static str, Vec<FuncImpl<ScalarExpr>>> = {
         use ParamType::*;
         use ScalarType::*;
         impls! {
@@ -916,7 +913,7 @@ pub fn select_scalar_func(
 
 lazy_static! {
     /// Correlates a `BinaryOperator` with all of its implementations.
-    static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl>> = {
+    static ref BINARY_OP_IMPLS: HashMap<BinaryOperator, Vec<FuncImpl<ScalarExpr>>> = {
         use ScalarType::*;
         use BinaryOperator::*;
         use BinaryFunc::*;
@@ -1238,7 +1235,7 @@ pub fn plan_binary_op<'a>(
 
 lazy_static! {
     /// Correlates a `UnaryOperator` with all of its implementations.
-    static ref UNARY_OP_IMPLS: HashMap<UnaryOperator, Vec<FuncImpl>> = {
+    static ref UNARY_OP_IMPLS: HashMap<UnaryOperator, Vec<FuncImpl<ScalarExpr>>> = {
         use ParamType::*;
         use ScalarType::*;
         use UnaryOperator::*;
