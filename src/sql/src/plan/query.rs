@@ -45,8 +45,7 @@ use crate::names::PartialName;
 use crate::plan::cast;
 use crate::plan::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
-    JoinKind, NullaryFunc, RelationExpr, ScalarExpr, ScalarTypeable, TableFunc, UnaryFunc,
-    VariadicFunc,
+    JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, TableFunc, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -1971,6 +1970,11 @@ fn plan_function<'a>(
         } else {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
+    } else if is_table_func(&name) {
+        unsupported!(
+            1546,
+            format!("table function ({}) in scalar position", ident)
+        );
     }
 
     if sql_func.over.is_some() {
@@ -1990,91 +1994,7 @@ fn plan_function<'a>(
         FunctionArgs::Args(args) => args,
     };
 
-    // The functions matched here on string literals do not yet
-    // work with our generalized function selection (`sql::func::select_scalar_func`).
-    match ident {
-        "current_timestamp" | "now" => {
-            if !args.is_empty() {
-                bail!("{} does not take any arguments", ident);
-            }
-            match ecx.qcx.lifetime {
-                QueryLifetime::OneShot => Ok(ScalarExpr::literal(
-                    Datum::from(ecx.qcx.scx.pcx.wall_time),
-                    ColumnType::new(ScalarType::TimestampTz),
-                )),
-                QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
-            }
-        }
-        // Promotes a numeric type to the smallest fractional type that
-        // can represent it. This is primarily useful for the avg
-        // aggregate function, so that the avg of an integer column does
-        // not get truncated to an integer, which would be surprising to
-        // users (#549).
-        "internal_avg_promotion" => {
-            if args.len() != 1 {
-                bail!("internal.avg_promotion requires exactly one argument");
-            }
-            let expr = plan_expr(ecx, &args[0], None)?;
-            let typ = ecx.column_type(&expr);
-            let output_type = match &typ.scalar_type {
-                ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
-                ScalarType::Decimal(p, s) => ScalarType::Decimal(*p, *s),
-                ScalarType::Int32 => ScalarType::Decimal(10, 0),
-                ScalarType::Int64 => ScalarType::Decimal(19, 0),
-                _ => bail!("internal.avg_promotion called with unexpected argument"),
-            };
-            plan_cast_internal(
-                "internal.avg_promotion",
-                ecx,
-                expr,
-                cast::CastTo::Explicit(output_type),
-            )
-        }
-
-        "mod" => func::plan_binary_op(ecx, &BinaryOperator::Modulus, &args[0], &args[1]),
-
-        "mz_logical_timestamp" => {
-            if !args.is_empty() {
-                bail!("mz_logical_timestamp does not take any arguments");
-            }
-            match ecx.qcx.lifetime {
-                QueryLifetime::OneShot => {
-                    Ok(ScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp))
-                }
-                QueryLifetime::Static => bail!("{} cannot be used in static queries", ident),
-            }
-        }
-
-        "nullif" => {
-            if args.len() != 2 {
-                bail!("nullif requires exactly two arguments");
-            }
-            let cond = Expr::BinaryOp {
-                left: Box::new(args[0].clone()),
-                op: BinaryOperator::Eq,
-                right: Box::new(args[1].clone()),
-            };
-            let cond_expr = plan_expr(ecx, &cond, None)?;
-            let else_expr = plan_expr(ecx, &args[0], None)?;
-            let expr = ScalarExpr::If {
-                cond: Box::new(cond_expr),
-                then: Box::new(ScalarExpr::literal_null(ecx.scalar_type(&else_expr))),
-                els: Box::new(else_expr),
-            };
-            Ok(expr)
-        }
-
-        _ => {
-            if is_table_func(&name) {
-                unsupported!(
-                    1546,
-                    format!("table function ({}) in scalar position", ident)
-                );
-            } else {
-                func::select_scalar_func(ecx, ident, args)
-            }
-        }
-    }
+    func::select_scalar_func(ecx, ident, args)
 }
 
 fn plan_is_null_expr<'a>(
@@ -2448,18 +2368,18 @@ pub enum QueryLifetime {
 
 /// The state required when planning a `Query`.
 #[derive(Debug)]
-struct QueryContext<'a> {
+pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
-    scx: &'a StatementContext<'a>,
+    pub scx: &'a StatementContext<'a>,
     /// The lifetime that the planned query will have.
-    lifetime: QueryLifetime,
+    pub lifetime: QueryLifetime,
     /// The scope of the outer relation expression.
-    outer_scope: Scope,
+    pub outer_scope: Scope,
     /// The type of the outer relation expressions.
-    outer_relation_types: Vec<RelationType>,
+    pub outer_relation_types: Vec<RelationType>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
-    param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
+    pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -2485,19 +2405,19 @@ impl<'a> QueryContext<'a> {
 /// A bundle of unrelated things that we need for planning `Expr`s.
 #[derive(Debug, Clone)]
 pub struct ExprContext<'a> {
-    qcx: &'a QueryContext<'a>,
+    pub qcx: &'a QueryContext<'a>,
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
-    name: &'static str,
+    pub name: &'static str,
     /// The context for the `Query` that contains this `Expr`.
     /// The current scope.
-    scope: &'a Scope,
+    pub scope: &'a Scope,
     /// The type of the current relation expression upon which this scalar
     /// expression will be evaluated.
-    relation_type: &'a RelationType,
+    pub relation_type: &'a RelationType,
     /// Are aggregate functions allowed in this context
-    allow_aggregates: bool,
+    pub allow_aggregates: bool,
     /// Are subqueries allowed in this context
-    allow_subqueries: bool,
+    pub allow_subqueries: bool,
 }
 
 impl<'a> ExprContext<'a> {
