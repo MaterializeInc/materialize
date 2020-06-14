@@ -23,7 +23,8 @@ use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
 
 use super::cast::{self, rescale_decimal, CastTo};
 use super::expr::{
-    BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
+    VariadicFunc,
 };
 use super::query::{self, CoerceTo, ExprContext, QueryLifetime};
 use crate::unsupported;
@@ -179,6 +180,10 @@ fn variadic_func_op(f: VariadicFunc) -> Operation<ScalarExpr> {
             exprs,
         })
     })
+}
+
+fn aggregate_func_op(f: AggregateFunc) -> Operation<(ScalarExpr, AggregateFunc)> {
+    unary_op(move |_ecx, e| Ok((e, f.clone())))
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -1404,6 +1409,91 @@ pub fn select_table_func(
 
     match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
         Ok(expr) => Ok(expr),
+        Err(e) => bail!("Cannot call function '{}': {}", ident, e),
+    }
+}
+
+lazy_static! {
+    /// Correlates a built-in function name to its implementations.
+    static ref BUILTIN_AGGREGATE_IMPLS: HashMap<&'static str, Vec<FuncImpl<(ScalarExpr, AggregateFunc)>>> = {
+        use ParamType::*;
+        use ScalarType::*;
+        impls! {
+            "count" => {
+                params!() => nullary_op(|_ecx| {
+                    // We have to return *some* expr, even though `CountAll`'s
+                    // implementation won't look at it, so we just provide
+                    // a literal `true`.
+                    //
+                    // TODO(benesch): it would be nice if `CountAll` didn't
+                    // exist, and `count(true)` was physically optimized to be
+                    // as efficient as the current `CountALl` implementation.
+                    Ok((ScalarExpr::literal_true(), AggregateFunc::CountAll))
+                }),
+                params!(Any) => aggregate_func_op(AggregateFunc::Count)
+            },
+            "max" => {
+                params!(Int32) => aggregate_func_op(AggregateFunc::MaxInt32),
+                params!(Int64) => aggregate_func_op(AggregateFunc::MaxInt64),
+                params!(Float32) => aggregate_func_op(AggregateFunc::MaxFloat32),
+                params!(Float64) => aggregate_func_op(AggregateFunc::MaxFloat64),
+                params!(Decimal(0, 0)) => aggregate_func_op(AggregateFunc::MaxDecimal),
+                params!(Bool) => aggregate_func_op(AggregateFunc::MaxBool),
+                params!(String) => aggregate_func_op(AggregateFunc::MaxString),
+                params!(Date) => aggregate_func_op(AggregateFunc::MaxDate),
+                params!(Timestamp) => aggregate_func_op(AggregateFunc::MaxTimestamp),
+                params!(TimestampTz) => aggregate_func_op(AggregateFunc::MaxTimestampTz)
+            },
+            "min" => {
+                params!(Int32) => aggregate_func_op(AggregateFunc::MinInt32),
+                params!(Int64) => aggregate_func_op(AggregateFunc::MinInt64),
+                params!(Float32) => aggregate_func_op(AggregateFunc::MinFloat32),
+                params!(Float64) => aggregate_func_op(AggregateFunc::MinFloat64),
+                params!(Decimal(0, 0)) => aggregate_func_op(AggregateFunc::MinDecimal),
+                params!(Bool) => aggregate_func_op(AggregateFunc::MinBool),
+                params!(String) => aggregate_func_op(AggregateFunc::MinString),
+                params!(Date) => aggregate_func_op(AggregateFunc::MinDate),
+                params!(Timestamp) => aggregate_func_op(AggregateFunc::MinTimestamp),
+                params!(TimestampTz) => aggregate_func_op(AggregateFunc::MinTimestampTz)
+            },
+            "jsonb_agg" => {
+                params!(JsonbAny) => aggregate_func_op(AggregateFunc::JsonbAgg)
+            },
+            "sum" => {
+                params!(Int32) => aggregate_func_op(AggregateFunc::SumInt32),
+                params!(Int64) => aggregate_func_op(AggregateFunc::SumInt64),
+                params!(Float32) => aggregate_func_op(AggregateFunc::SumFloat32),
+                params!(Float64) => aggregate_func_op(AggregateFunc::SumFloat64),
+                params!(Decimal(0, 0)) => aggregate_func_op(AggregateFunc::SumDecimal),
+                params!(Interval) => unary_op(|_ecx, _e| {
+                    // Explicitly providing this unsupported overload
+                    // prevents `sum(NULL)` from choosing the `Float64`
+                    // implementation, so that we match PostgreSQL's behavior.
+                    // Plus we will one day want to support this overload.
+                    unsupported!("sum(interval)");
+                })
+            }
+        }
+    };
+}
+
+pub fn is_aggregate_func(ident: &str) -> bool {
+    BUILTIN_AGGREGATE_IMPLS.get(ident).is_some()
+}
+
+/// Plans a built-in aggregate function.
+pub fn select_aggregate_func(
+    ecx: &ExprContext,
+    ident: &str,
+    args: &[Expr],
+) -> Result<(ScalarExpr, AggregateFunc), failure::Error> {
+    let impls = match BUILTIN_AGGREGATE_IMPLS.get(ident) {
+        Some(i) => i,
+        None => unsupported!(ident),
+    };
+
+    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
+        Ok(val) => Ok(val),
         Err(e) => bail!("Cannot call function '{}': {}", ident, e),
     }
 }

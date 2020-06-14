@@ -1704,42 +1704,31 @@ fn plan_cast<'a>(
 
 fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, failure::Error> {
     let name = normalize::function_name(sql_func.name.clone())?;
-    assert!(is_aggregate_func(&name));
+    assert!(func::is_aggregate_func(&name));
 
     if sql_func.over.is_some() {
         unsupported!(213, "window functions");
     }
 
-    let (mut expr, mut func) = match (name.as_str(), &sql_func.args) {
-        // COUNT(*) is a special case that doesn't compose well
-        ("count", FunctionArgs::Star) => (
-            // The scalar type of the null doesn't matter because this
-            // expression can't escape the surrounding reduce.
-            ScalarExpr::literal_null(ScalarType::String),
-            AggregateFunc::CountAll,
-        ),
-        (_, FunctionArgs::Args(args)) if args.len() == 1 => {
-            let arg = &args[0];
-            // TODO(benesch, sploiselle): hook up the generalized function
-            // selection mechanism.
-            let type_hint = match &*name {
-                "min" | "max" | "count" => Some(ScalarType::String),
-                _ => None,
-            };
-            let expr = plan_expr(ecx, arg, type_hint)?;
-            let typ = ecx.column_type(&expr);
-            match find_agg_func(&name, typ.scalar_type)? {
-                AggregateFunc::JsonbAgg => {
-                    // We need to transform input into jsonb in order to
-                    // match Postgres' behavior here.
-                    let expr = plan_cast_internal("jsonb_agg", ecx, expr, cast::CastTo::JsonbAny)?;
-                    (expr, AggregateFunc::JsonbAgg)
-                }
-                func => (expr, func),
-            }
+    // We follow PostgreSQL's rule here for mapping `count(*)` into the
+    // generalized function selection framework. The rule is simple: the user
+    // must type `count(*)`, but the function selection framework sees an empty
+    // parameter list, as if the user had typed `count()`. But if the user types
+    // `count()` directly, that is an error. Like PostgreSQL, we apply these
+    // rules to all aggregates, not just `count`, since we may one day support
+    // user-defined aggregates, including user-defined aggregates that take no
+    // parameters.
+    let args = match &sql_func.args {
+        FunctionArgs::Star => &[][..],
+        FunctionArgs::Args(args) if args.is_empty() => {
+            bail!(
+                "{}(*) must be used to call a parameterless aggregate function",
+                name
+            );
         }
-        _ => bail!("{} function requires exactly one non-star argument", name),
+        FunctionArgs::Args(args) => args,
     };
+    let (mut expr, mut func) = func::select_aggregate_func(ecx, &name, args)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -1789,7 +1778,7 @@ fn plan_function<'a>(
     let name = normalize::function_name(sql_func.name.clone())?;
     let ident = &*name.to_string();
 
-    if is_aggregate_func(&name) {
+    if func::is_aggregate_func(&name) {
         if ecx.allow_aggregates {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
@@ -2153,7 +2142,7 @@ impl<'ast> AggregateFuncVisitor<'ast> {
 impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
         if let Ok(name) = normalize::function_name(func.name.clone()) {
-            if is_aggregate_func(&name) {
+            if func::is_aggregate_func(&name) {
                 if self.within_aggregate {
                     self.err = Some(format_err!("nested aggregate functions are not allowed"));
                     return;
@@ -2286,45 +2275,4 @@ impl<'a> ExprContext<'a> {
             param_types: self.qcx.param_types.clone(),
         }
     }
-}
-
-fn is_aggregate_func(name: &str) -> bool {
-    match name {
-        // avg is handled by transform::AvgFuncRewriter.
-        "max" | "min" | "sum" | "count" | "jsonb_agg" => true,
-        _ => false,
-    }
-}
-
-fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, failure::Error> {
-    Ok(match (name, scalar_type) {
-        ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
-        ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
-        ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
-        ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
-        ("max", ScalarType::Decimal(_, _)) => AggregateFunc::MaxDecimal,
-        ("max", ScalarType::Bool) => AggregateFunc::MaxBool,
-        ("max", ScalarType::String) => AggregateFunc::MaxString,
-        ("max", ScalarType::Date) => AggregateFunc::MaxDate,
-        ("max", ScalarType::Timestamp) => AggregateFunc::MaxTimestamp,
-        ("max", ScalarType::TimestampTz) => AggregateFunc::MaxTimestampTz,
-        ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
-        ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
-        ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
-        ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
-        ("min", ScalarType::Decimal(_, _)) => AggregateFunc::MinDecimal,
-        ("min", ScalarType::Bool) => AggregateFunc::MinBool,
-        ("min", ScalarType::String) => AggregateFunc::MinString,
-        ("min", ScalarType::Date) => AggregateFunc::MinDate,
-        ("min", ScalarType::Timestamp) => AggregateFunc::MinTimestamp,
-        ("min", ScalarType::TimestampTz) => AggregateFunc::MinTimestampTz,
-        ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
-        ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
-        ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
-        ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
-        ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
-        ("count", _) => AggregateFunc::Count,
-        ("jsonb_agg", _) => AggregateFunc::JsonbAgg,
-        other => bail!("Unimplemented function/type combo: {:?}", other),
-    })
 }
