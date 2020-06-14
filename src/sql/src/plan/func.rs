@@ -11,6 +11,7 @@
 //! built-in functions (for most built-in functions, at least).
 
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 
 use failure::bail;
@@ -22,7 +23,7 @@ use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
 
 use super::cast::{self, rescale_decimal, CastTo};
 use super::expr::{
-    BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, UnaryFunc, VariadicFunc,
+    BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc, VariadicFunc,
 };
 use super::query::{self, CoerceTo, ExprContext, QueryLifetime};
 use crate::unsupported;
@@ -1051,18 +1052,12 @@ lazy_static! {
 
             //JSON
             JsonGet => {
-                params!(Jsonb, Int64) => binary_func_op(JsonbGetInt64),
-                params!(Jsonb, String) => binary_func_op(JsonbGetString)
+                params!(Jsonb, Int64) => binary_func_op(JsonbGetInt64 { stringify: false }),
+                params!(Jsonb, String) => binary_func_op(JsonbGetString { stringify: false })
             },
             JsonGetAsText => {
-                params!(Jsonb, Int64) => binary_op(|_ecx, lhs, rhs| {
-                    Ok(lhs.call_binary(rhs, BinaryFunc::JsonbGetInt64)
-                          .call_unary(UnaryFunc::JsonbStringifyUnlessString))
-                }),
-                params!(Jsonb, String) => binary_op(|_ecx, lhs, rhs| {
-                    Ok(lhs.call_binary(rhs, BinaryFunc::JsonbGetString)
-                        .call_unary(UnaryFunc::JsonbStringifyUnlessString))
-                })
+                params!(Jsonb, Int64) => binary_func_op(JsonbGetInt64 { stringify: true }),
+                params!(Jsonb, String) => binary_func_op(JsonbGetString { stringify: true })
             },
             JsonContainsJson => {
                 params!(Jsonb, Jsonb) => binary_func_op(JsonbContainsJsonb),
@@ -1282,5 +1277,133 @@ pub fn plan_unary_op<'a>(
             let lexpr = query::plan_expr(ecx, expr, None)?;
             bail!("no overload for {} {}: {}", op, ecx.scalar_type(&lexpr), e)
         }
+    }
+}
+
+pub struct TableFuncPlan {
+    pub func: TableFunc,
+    pub exprs: Vec<ScalarExpr>,
+    pub column_names: Vec<String>,
+}
+
+lazy_static! {
+    /// Correlates a built-in function name to its implementations.
+    static ref BUILTIN_TABLE_IMPLS: HashMap<&'static str, Vec<FuncImpl<TableFuncPlan>>> = {
+        use ScalarType::*;
+        impls! {
+            "csv_extract" => {
+                params!(Int64, String) => binary_op(move |_ecx, ncols, input| {
+                    let ncols = match ncols.into_literal_int64() {
+                        None | Some(i64::MIN..=0) => {
+                            bail!("csv_extract number of columns must be a positive integer literal");
+                        },
+                        Some(ncols) => ncols,
+                    };
+                    let ncols = usize::try_from(ncols).expect("known to be greater than zero");
+                    Ok(TableFuncPlan {
+                        func: TableFunc::CsvExtract(ncols),
+                        exprs: vec![input],
+                        column_names: (1..=ncols).map(|i| format!("column{}", i)).collect(),
+                    })
+                })
+            },
+            "generate_series" => {
+                params!(Int32, Int32) => plan_generate_series(Int32),
+                params!(Int64, Int64) => plan_generate_series(Int64)
+            },
+            "jsonb_array_elements" => {
+                params!(Jsonb) => unary_op(move |_ecx, jsonb| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::JsonbArrayElements { stringify: false },
+                        exprs: vec![jsonb],
+                        column_names: vec!["value".into()],
+                    })
+                })
+            },
+            "jsonb_array_elements_text" => {
+                params!(Jsonb) => unary_op(move |_ecx, jsonb| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::JsonbArrayElements { stringify: true },
+                        exprs: vec![jsonb],
+                        column_names: vec!["value".into()],
+                    })
+                })
+            },
+            "jsonb_each" => {
+                params!(Jsonb) => unary_op(move |_ecx, jsonb| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::JsonbEach { stringify: false },
+                        exprs: vec![jsonb],
+                        column_names: vec!["key".into(), "value".into()],
+                    })
+                })
+            },
+            "jsonb_each_text" => {
+                params!(Jsonb) => unary_op(move |_ecx, jsonb| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::JsonbEach { stringify: true },
+                        exprs: vec![jsonb],
+                        column_names: vec!["key".into(), "value".into()],
+                    })
+                })
+            },
+            "jsonb_object_keys" => {
+                params!(Jsonb) => unary_op(move |_ecx, jsonb| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::JsonbObjectKeys,
+                        exprs: vec![jsonb],
+                        column_names: vec!["jsonb_object_keys".into()],
+                    })
+                })
+            },
+            "regexp_extract" => {
+                params!(String, String) => binary_op(move |_ecx, regex, haystack| {
+                    let regex = match regex.into_literal_string() {
+                        None => bail!("regex_extract requires a string literal as its first argument"),
+                        Some(regex) => expr::AnalyzedRegex::new(&regex)?,
+                    };
+                    let column_names = regex
+                        .capture_groups_iter()
+                        .map(|cg| cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)))
+                        .collect();
+                    Ok(TableFuncPlan {
+                        func: TableFunc::RegexpExtract(regex),
+                        exprs: vec![haystack],
+                        column_names,
+                    })
+                })
+            }
+        }
+    };
+}
+
+fn plan_generate_series(ty: ScalarType) -> Operation<TableFuncPlan> {
+    variadic_op(move |_ecx, exprs| {
+        Ok(TableFuncPlan {
+            func: TableFunc::GenerateSeries(ty.clone()),
+            exprs,
+            column_names: vec!["generate_series".into()],
+        })
+    })
+}
+
+pub fn is_table_func(ident: &str) -> bool {
+    BUILTIN_TABLE_IMPLS.get(ident).is_some()
+}
+
+/// Plans a built-in table function.
+pub fn select_table_func(
+    ecx: &ExprContext,
+    ident: &str,
+    args: &[Expr],
+) -> Result<TableFuncPlan, failure::Error> {
+    let impls = match BUILTIN_TABLE_IMPLS.get(ident) {
+        Some(i) => i,
+        None => unsupported!(ident),
+    };
+
+    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
+        Ok(expr) => Ok(expr),
+        Err(e) => bail!("Cannot call function '{}': {}", ident, e),
     }
 }

@@ -719,6 +719,53 @@ impl ScalarExpr {
             Exists(..) | Select(..) => (),
         }
     }
+
+    fn simplify_to_literal(self) -> Option<Row> {
+        let mut expr = self.lower_uncorrelated().ok()?;
+        expr.reduce(&repr::RelationType::empty());
+        match expr {
+            expr::ScalarExpr::Literal(Ok(row), _) => Some(row),
+            _ => None,
+        }
+    }
+
+    /// Attempts to simplify this expression to a literal 64-bit integer.
+    ///
+    /// Returns `None` if this expression cannot be simplified, e.g. because it
+    /// contains non-literal values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this expression does not have type [`ScalarType::Int64`].
+    pub fn into_literal_int64(self) -> Option<i64> {
+        self.simplify_to_literal().and_then(|row| {
+            let datum = row.unpack_first();
+            if datum.is_null() {
+                None
+            } else {
+                Some(datum.unwrap_int64())
+            }
+        })
+    }
+
+    /// Attempts to simplify this expression to a literal string.
+    ///
+    /// Returns `None` if this expression cannot be simplified, e.g. because it
+    /// contains non-literal values.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this expression does not have type [`ScalarType::String`].
+    pub fn into_literal_string(self) -> Option<String> {
+        self.simplify_to_literal().and_then(|row| {
+            let datum = row.unpack_first();
+            if datum.is_null() {
+                None
+            } else {
+                Some(datum.unwrap_str().to_owned())
+            }
+        })
+    }
 }
 
 impl ScalarTypeable for ScalarExpr {
@@ -816,6 +863,8 @@ pub mod decorrelation {
 
     use std::collections::{BTreeSet, HashMap};
     use std::mem;
+
+    use failure::bail;
 
     use ore::collections::CollectionExt;
     use repr::RelationType;
@@ -1438,41 +1487,40 @@ pub mod decorrelation {
             }
         }
 
-        /// Rewrite `self` into a `expr::ScalarExpr`.
-        /// Assumes there are no subqueries in need of decorrelating
-        pub fn lower_uncorrelated(self) -> expr::ScalarExpr {
+        /// Rewrites `self` into a `expr::ScalarExpr`.
+        pub fn lower_uncorrelated(self) -> Result<expr::ScalarExpr, failure::Error> {
             use self::ScalarExpr::*;
             use expr::ScalarExpr as SS;
 
-            match self {
+            Ok(match self {
                 Column(ColumnRef { level: 0, column }) => SS::Column(column),
                 Literal(datum, typ) => SS::Literal(Ok(datum), typ),
                 CallNullary(func) => SS::CallNullary(func),
                 CallUnary { func, expr } => SS::CallUnary {
                     func,
-                    expr: Box::new(expr.lower_uncorrelated()),
+                    expr: Box::new(expr.lower_uncorrelated()?),
                 },
                 CallBinary { func, expr1, expr2 } => SS::CallBinary {
                     func,
-                    expr1: Box::new(expr1.lower_uncorrelated()),
-                    expr2: Box::new(expr2.lower_uncorrelated()),
+                    expr1: Box::new(expr1.lower_uncorrelated()?),
+                    expr2: Box::new(expr2.lower_uncorrelated()?),
                 },
                 CallVariadic { func, exprs } => SS::CallVariadic {
                     func,
                     exprs: exprs
                         .into_iter()
                         .map(|expr| expr.lower_uncorrelated())
-                        .collect(),
+                        .collect::<Result<_, _>>()?,
                 },
                 If { cond, then, els } => SS::If {
-                    cond: Box::new(cond.lower_uncorrelated()),
-                    then: Box::new(then.lower_uncorrelated()),
-                    els: Box::new(els.lower_uncorrelated()),
+                    cond: Box::new(cond.lower_uncorrelated()?),
+                    then: Box::new(then.lower_uncorrelated()?),
+                    els: Box::new(els.lower_uncorrelated()?),
                 },
                 Select { .. } | Exists { .. } | Parameter(..) | Column(..) => {
-                    panic!("unexpected ScalarExpr in index plan: {:?}", self)
+                    bail!("unexpected ScalarExpr in uncorrelated plan: {:?}", self);
                 }
-            }
+            })
         }
 
         /// Visits the column references in this scalar expression.

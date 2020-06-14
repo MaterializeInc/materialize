@@ -112,9 +112,9 @@ impl NonNullRequirements {
             } => {
                 match func {
                     // outputs zero rows if input is null
-                    TableFunc::JsonbEach
+                    TableFunc::JsonbEach { .. }
                     | TableFunc::JsonbObjectKeys
-                    | TableFunc::JsonbArrayElements
+                    | TableFunc::JsonbArrayElements { .. }
                     | TableFunc::GenerateSeries(_)
                     | TableFunc::RegexpExtract(_)
                     | TableFunc::CsvExtract(_) => {

@@ -462,19 +462,17 @@ fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
     }
 }
 
-// TODO(jamii): it would be much more efficient to skip the intermediate
-// repr::jsonb::Jsonb.
-fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     strconv::format_jsonb(&mut buf, JsonbRef::from_datum(a));
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn jsonb_stringify_unless_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
     match a {
         Datum::JsonNull => Datum::Null,
         Datum::String(_) => a,
-        _ => jsonb_stringify(a, temp_storage),
+        _ => cast_jsonb_to_string(a, temp_storage),
     }
 }
 
@@ -493,13 +491,6 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
             }
         }
         _ => a,
-    }
-}
-
-fn cast_jsonb_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::String(_) => a,
-        _ => Datum::Null,
     }
 }
 
@@ -1054,7 +1045,12 @@ fn to_char_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamptz())))
 }
 
-fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn jsonb_get_int64<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+    stringify: bool,
+) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
@@ -1064,13 +1060,21 @@ fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
                 // index backwards from the end
                 (list.iter().count() as i64) + i
             };
-            list.iter().nth(i as usize).unwrap_or(Datum::Null)
+            match list.iter().nth(i as usize) {
+                Some(d) if stringify => jsonb_stringify(d, temp_storage),
+                Some(d) => d,
+                None => Datum::Null,
+            }
         }
         Datum::Dict(_) => Datum::Null,
         _ => {
             if i == 0 || i == -1 {
                 // I have no idea why postgres does this, but we're stuck with it
-                a
+                if stringify {
+                    jsonb_stringify(a, temp_storage)
+                } else {
+                    a
+                }
             } else {
                 Datum::Null
             }
@@ -1078,10 +1082,16 @@ fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn jsonb_get_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn jsonb_get_string<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+    stringify: bool,
+) -> Datum<'a> {
     let k = b.unwrap_str();
     match a {
         Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
+            Some((_k, v)) if stringify => jsonb_stringify(v, temp_storage),
             Some((_k, v)) => v,
             None => Datum::Null,
         },
@@ -1844,8 +1854,8 @@ pub enum BinaryFunc {
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
     TextConcat,
-    JsonbGetInt64,
-    JsonbGetString,
+    JsonbGetInt64 { stringify: bool },
+    JsonbGetString { stringify: bool },
     JsonbContainsString,
     JsonbConcat,
     JsonbContainsJsonb,
@@ -2012,8 +2022,12 @@ impl BinaryFunc {
             BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
             BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
-            BinaryFunc::JsonbGetInt64 => Ok(eager!(jsonb_get_int64)),
-            BinaryFunc::JsonbGetString => Ok(eager!(jsonb_get_string)),
+            BinaryFunc::JsonbGetInt64 { stringify } => {
+                Ok(eager!(jsonb_get_int64, temp_storage, *stringify))
+            }
+            BinaryFunc::JsonbGetString { stringify } => {
+                Ok(eager!(jsonb_get_string, temp_storage, *stringify))
+            }
             BinaryFunc::JsonbContainsString => Ok(eager!(jsonb_contains_string)),
             BinaryFunc::JsonbConcat => Ok(eager!(jsonb_concat, temp_storage)),
             BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
@@ -2130,9 +2144,15 @@ impl BinaryFunc {
 
             TextConcat => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
-            JsonbGetInt64 | JsonbGetString | JsonbConcat | JsonbDeleteInt64 | JsonbDeleteString => {
-                ColumnType::new(ScalarType::Jsonb).nullable(true)
+            JsonbGetInt64 { stringify: true } | JsonbGetString { stringify: true } => {
+                ColumnType::new(ScalarType::String).nullable(true)
             }
+
+            JsonbGetInt64 { stringify: false }
+            | JsonbGetString { stringify: false }
+            | JsonbConcat
+            | JsonbDeleteInt64
+            | JsonbDeleteString => ColumnType::new(ScalarType::Jsonb).nullable(true),
 
             JsonbContainsString | JsonbContainsJsonb => {
                 ColumnType::new(ScalarType::Bool).nullable(in_nullable)
@@ -2201,8 +2221,8 @@ impl BinaryFunc {
             | Gte
             | JsonbConcat
             | JsonbContainsJsonb
-            | JsonbGetInt64
-            | JsonbGetString
+            | JsonbGetInt64 { .. }
+            | JsonbGetString { .. }
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
@@ -2283,8 +2303,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
-            BinaryFunc::JsonbGetInt64 => f.write_str("->"),
-            BinaryFunc::JsonbGetString => f.write_str("->"),
+            BinaryFunc::JsonbGetInt64 { .. } => f.write_str("->"),
+            BinaryFunc::JsonbGetString { .. } => f.write_str("->"),
             BinaryFunc::JsonbContainsString => f.write_str("?"),
             BinaryFunc::JsonbConcat => f.write_str("||"),
             BinaryFunc::JsonbContainsJsonb => f.write_str("@>"),
@@ -2374,10 +2394,8 @@ pub enum UnaryFunc {
     CastIntervalToTime,
     CastBytesToString,
     CastStringToJsonb,
-    JsonbStringify,
-    JsonbStringifyUnlessString,
-    CastJsonbOrNullToJsonb,
     CastJsonbToString,
+    CastJsonbOrNullToJsonb,
     CastJsonbToFloat64,
     CastJsonbToBool,
     CeilFloat32,
@@ -2519,12 +2537,8 @@ impl UnaryFunc {
             UnaryFunc::CastIntervalToTime => Ok(cast_interval_to_time(a)),
             UnaryFunc::CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
             UnaryFunc::CastStringToJsonb => Ok(cast_string_to_jsonb(a, temp_storage)),
-            UnaryFunc::JsonbStringify => Ok(jsonb_stringify(a, temp_storage)),
-            UnaryFunc::JsonbStringifyUnlessString => {
-                Ok(jsonb_stringify_unless_string(a, temp_storage))
-            }
             UnaryFunc::CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
-            UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a)),
+            UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
             UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
@@ -2699,11 +2713,6 @@ impl UnaryFunc {
 
             // can return null for invalid json
             CastStringToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
-
-            JsonbStringify => ColumnType::new(ScalarType::String).nullable(in_nullable),
-
-            // converts jsonnull to null
-            JsonbStringifyUnlessString => ColumnType::new(ScalarType::String).nullable(true),
 
             // converts null to jsonnull
             CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(false),
@@ -2885,8 +2894,6 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastIntervalToTime => f.write_str("ivtotime"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
-            UnaryFunc::JsonbStringify => f.write_str("jsonbtostr"),
-            UnaryFunc::JsonbStringifyUnlessString => f.write_str("jsonbtostr?"),
             UnaryFunc::CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
             UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),

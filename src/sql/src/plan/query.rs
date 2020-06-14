@@ -45,7 +45,7 @@ use crate::names::PartialName;
 use crate::plan::cast;
 use crate::plan::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
-    JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, TableFunc, UnaryFunc, VariadicFunc,
+    JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -175,7 +175,7 @@ pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp
         allow_subqueries: false,
     };
 
-    let ex = plan_expr(ecx, &expr, None)?.lower_uncorrelated();
+    let ex = plan_expr(ecx, &expr, None)?.lower_uncorrelated()?;
     let temp_storage = &RowArena::new();
     let evaled = ex.eval(&[], temp_storage)?;
 
@@ -211,7 +211,7 @@ pub fn plan_index_exprs<'a>(
     for expr in exprs {
         let (expr, _) =
             plan_expr_or_col_index(ecx, expr, Some(ScalarType::String), "CREATE INDEX")?;
-        out.push(expr.lower_uncorrelated());
+        out.push(expr.lower_uncorrelated()?);
     }
     Ok(out)
 }
@@ -784,195 +784,24 @@ fn plan_table_function(
     args: &FunctionArgs,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     let ident = &*normalize::function_name(name.clone())?;
-    if !is_table_func(ident) {
-        // so we don't forget to add names over there
-        bail!("{} is not a table function", ident);
-    }
     let args = match args {
         FunctionArgs::Star => bail!("{} does not accept * as an argument", ident),
         FunctionArgs::Args(args) => args,
     };
-    match (ident, args.as_slice()) {
-        ("generate_series", [start, stop]) => {
-            // If both start and stop are Int32s, we use the Int32 version. Otherwise, promote both
-            // arguments.
-            let mut start = plan_expr(ecx, start, Some(ScalarType::Int64))?;
-            let mut stop = plan_expr(ecx, stop, Some(ScalarType::Int64))?;
-            let typ = match (
-                ecx.column_type(&start).scalar_type,
-                ecx.column_type(&stop).scalar_type,
-            ) {
-                (ScalarType::Int32, ScalarType::Int32) => ScalarType::Int32,
-                _ => {
-                    start = plan_cast_internal(
-                        "first generate_series argument",
-                        ecx,
-                        start,
-                        cast::CastTo::Explicit(ScalarType::Int64),
-                    )?;
-                    stop = plan_cast_internal(
-                        "second generate_series argument",
-                        ecx,
-                        stop,
-                        cast::CastTo::Explicit(ScalarType::Int64),
-                    )?;
-                    ScalarType::Int64
-                }
-            };
-
-            let call = RelationExpr::FlatMap {
-                input: Box::new(left),
-                func: TableFunc::GenerateSeries(typ),
-                exprs: vec![start, stop],
-            };
-
-            let scope = Scope::from_source(
-                alias,
-                vec![Some("generate_series")],
-                Some(ecx.qcx.outer_scope.clone()),
-            );
-
-            Ok((call, ecx.scope.clone().product(scope)))
-        }
-        ("jsonb_each", [expr])
-        | ("jsonb_object_keys", [expr])
-        | ("jsonb_array_elements", [expr])
-        | ("jsonb_each_text", [expr])
-        | ("jsonb_array_elements_text", [expr]) => {
-            let expr = plan_expr(ecx, expr, Some(ScalarType::Jsonb))?;
-            match ecx.column_type(&expr).scalar_type {
-                ScalarType::Jsonb => {
-                    let func = match ident {
-                        "jsonb_each" | "jsonb_each_text" => TableFunc::JsonbEach,
-                        "jsonb_object_keys" => TableFunc::JsonbObjectKeys,
-                        "jsonb_array_elements" | "jsonb_array_elements_text" => {
-                            TableFunc::JsonbArrayElements
-                        }
-                        _ => unreachable!(),
-                    };
-                    let mut call = RelationExpr::FlatMap {
-                        input: Box::new(left),
-                        func,
-                        exprs: vec![expr],
-                    };
-
-                    if let "jsonb_each_text" = ident {
-                        // convert value column to text, leave key column as is
-                        let num_old_columns = ecx.scope.len();
-                        call = call
-                            .map(vec![ScalarExpr::Column(ColumnRef {
-                                level: 0,
-                                column: num_old_columns + 1,
-                            })
-                            .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
-                            .project(
-                                (0..num_old_columns)
-                                    .chain(vec![num_old_columns, num_old_columns + 2])
-                                    .collect(),
-                            );
-                    }
-                    if let "jsonb_array_elements_text" = ident {
-                        // convert value column to text
-                        let num_old_columns = ecx.scope.len();
-                        call = call
-                            .map(vec![ScalarExpr::Column(ColumnRef {
-                                level: 0,
-                                column: num_old_columns,
-                            })
-                            .call_unary(UnaryFunc::JsonbStringifyUnlessString)])
-                            .project(
-                                (0..num_old_columns)
-                                    .chain(vec![num_old_columns + 1])
-                                    .collect(),
-                            );
-                    }
-
-                    let column_names: &[&str] = match ident {
-                        "jsonb_each" | "jsonb_each_text" => &["key", "value"],
-                        "jsonb_object_keys" => &["jsonb_object_keys"],
-                        "jsonb_array_elements" | "jsonb_array_elements_text" => &["value"],
-                        _ => unreachable!(),
-                    };
-                    let scope = Scope::from_source(
-                        alias,
-                        column_names
-                            .iter()
-                            .map(|name| Some(ColumnName::from(&**name))),
-                        Some(ecx.qcx.outer_scope.clone()),
-                    );
-                    Ok((call, ecx.scope.clone().product(scope)))
-                }
-                other => bail!("No overload of {} for {}", ident, other),
-            }
-        }
-        ("jsonb_each", _)
-        | ("jsonb_object_keys", _)
-        | ("jsonb_array_elements", _)
-        | ("jsonb_each_text", _)
-        | ("jsonb_array_elements_text", _) => bail!("{}() requires exactly one argument", ident),
-        ("regexp_extract", [regex, haystack]) => {
-            let expr = plan_expr(ecx, haystack, None)?;
-            if ecx.column_type(&expr).scalar_type != ScalarType::String {
-                bail!("Datum to search must be a string");
-            }
-            let regex = match &regex {
-                Expr::Value(Value::String(s)) => s,
-                _ => bail!("Regex must be a string literal."),
-            };
-
-            let ar = expr::AnalyzedRegex::new(regex)?;
-            let colnames: Vec<_> = ar
-                .capture_groups_iter()
-                .map(|cgd| {
-                    cgd.name
-                        .clone()
-                        .unwrap_or_else(|| format!("column{}", cgd.index))
-                })
-                .collect();
-            let call = RelationExpr::FlatMap {
-                input: Box::new(left),
-                func: TableFunc::RegexpExtract(ar),
-                exprs: vec![expr],
-            };
-            let scope = Scope::from_source(
-                alias,
-                colnames.iter().map(|name| Some(ColumnName::from(&**name))),
-                Some(ecx.qcx.outer_scope.clone()),
-            );
-            Ok((call, ecx.scope.clone().product(scope)))
-        }
-        ("csv_extract", [n_cols, expr]) => {
-            let bad_ncols_bail = "csv_extract number of columns must be a positive integer literal";
-            let n_cols: usize = match n_cols {
-                Expr::Value(Value::Number(s)) => s.parse()?,
-                _ => bail!(bad_ncols_bail),
-            };
-            if n_cols == 0 {
-                bail!(bad_ncols_bail);
-            }
-            let expr = plan_expr(ecx, expr, None)?;
-            let st = ecx.column_type(&expr).scalar_type;
-            if st != ScalarType::Bytes && st != ScalarType::String {
-                bail!("Datum to decode as CSV must be a string")
-            }
-            let colnames: Vec<_> = (1..=n_cols).map(|i| format!("column{}", i)).collect();
-            let call = RelationExpr::FlatMap {
-                input: Box::new(left),
-                func: TableFunc::CsvExtract(n_cols),
-                exprs: vec![expr],
-            };
-            let scope = Scope::from_source(
-                alias,
-                colnames.iter().map(|name| Some(ColumnName::from(&**name))),
-                Some(ecx.qcx.outer_scope.clone()),
-            );
-            Ok((call, ecx.scope.clone().product(scope)))
-        }
-        ("regexp_extract", _) | ("csv_extract", _) | ("generate_series", _) => {
-            bail!("{}() requires exactly two arguments", ident)
-        }
-        _ => bail!("unsupported table function: {}", ident),
-    }
+    let tf = func::select_table_func(ecx, ident, args)?;
+    let call = RelationExpr::FlatMap {
+        input: Box::new(left),
+        func: tf.func,
+        exprs: tf.exprs,
+    };
+    let scope = Scope::from_source(
+        alias,
+        tf.column_names
+            .iter()
+            .map(|name| Some(ColumnName::from(&**name))),
+        Some(ecx.qcx.outer_scope.clone()),
+    );
+    Ok((call, ecx.scope.clone().product(scope)))
 }
 
 fn plan_select_item<'a>(
@@ -1970,7 +1799,7 @@ fn plan_function<'a>(
         } else {
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
-    } else if is_table_func(&name) {
+    } else if func::is_table_func(&name) {
         unsupported!(
             1546,
             format!("table function ({}) in scalar position", ident)
@@ -2456,20 +2285,6 @@ impl<'a> ExprContext<'a> {
                 .collect(),
             param_types: self.qcx.param_types.clone(),
         }
-    }
-}
-
-fn is_table_func(name: &str) -> bool {
-    match name {
-        "csv_extract"
-        | "generate_series"
-        | "jsonb_array_elements"
-        | "jsonb_array_elements_text"
-        | "jsonb_each"
-        | "jsonb_each_text"
-        | "jsonb_object_keys"
-        | "regexp_extract" => true,
-        _ => false,
     }
 }
 

@@ -295,7 +295,7 @@ lazy_static! {
             (Jsonb, Explicit(Float32)) => CastOp::F(from_jsonb_f64_cast),
             (Jsonb, Explicit(Float64)) => CastJsonbToFloat64,
             (Jsonb, Explicit(Decimal(0, 0))) => CastOp::F(from_jsonb_f64_cast),
-            (Jsonb, Explicit(String)) => JsonbStringify,
+            (Jsonb, Explicit(String)) => CastJsonbToString,
             (Jsonb, JsonbAny) => CastJsonbOrNullToJsonb
         }
     };
