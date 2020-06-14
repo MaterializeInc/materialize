@@ -48,23 +48,14 @@ do_cargo() {
             die "xcompile: fatal: run \`bin/xcompile bootstrap\` first"
         fi
 
-        sysroot=$root/target/sysroot/x86_64-unknown-linux-gnu
-
-        export AR=x86_64-unknown-linux-gnu-ar
-        export LD=x86_64-unknown-linux-gnu-ld
-        export RANLIB=x86_64-unknown-linux-gnu-ranlib
-        export CPP=x86_64-unknown-linux-gnu-cpp
-        export CC=x86_64-unknown-linux-gnu-cc
-        export CXX=x86_64-unknown-linux-gnu-c++
-        export CFLAGS="-I$sysroot/usr/include/x86_64-linux-gnu -isystem$sysroot/usr/include"
         export CMAKE_SYSTEM_NAME=Linux
-        export CXXFLAGS=$CFLAGS
-        export LDFLAGS="-L$sysroot/usr/lib/x86_64-linux-gnu -L$sysroot/lib/x86_64-linux-gnu"
-        export TARGET_CC=$CC
-        export TARGET_CXX=$CXX
-        export TARGET_CFLAGS=$CFLAGS
-        export TARGET_CXXFLAGS=$CXXFLAGS
-        export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$CC
+        export TARGET_AR=x86_64-unknown-linux-gnu-ar
+        export TARGET_CC=x86_64-unknown-linux-gnu-cc
+        export TARGET_CXX=x86_64-unknown-linux-gnu-c++
+        export TARGET_RANLIB=x86_64-unknown-linux-gnu-ranlib
+        export TARGET_CPP=x86_64-unknown-linux-gnu-cpp
+        export TARGET_LD=x86_64-unknown-linux-gnu-ld
+        export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$TARGET_CC
         # Explicitly tell libkrb5 about features available in the cross
         # toolchain that its configure script cannot auto-detect when cross
         # compiling.
@@ -83,8 +74,6 @@ do_cargo() {
     "${command[@]}"
 }
 
-pkg_url=http://archive.ubuntu.com/ubuntu/ubuntu
-
 bootstrap() {
     if [[ "$(uname)" = Linux ]]; then
         exit 0
@@ -98,21 +87,6 @@ bootstrap() {
     run rustup target add x86_64-unknown-linux-gnu
 
     mkdir -p target/sysroot/x86_64-unknown-linux-gnu
-    cd target/sysroot/x86_64-unknown-linux-gnu
-
-    curl -fsSLO "$pkg_url"/dists/bionic/main/binary-amd64/Packages.gz
-    gunzip Packages.gz
-
-    install_pkg zlib1g
-    install_pkg zlib1g-dev
-}
-
-# install_pkg PACKAGE
-install_pkg() {
-    echo "installing $1" >&2
-    path=$(grep-dctrl --no-field-names --field=Package --exact-match --show-field=Filename "$1" Packages)
-    curl -fsSL "$pkg_url/$path" > "$1.deb"
-    ar -p "$1.deb" data.tar.xz | tar xvf -
 }
 
 clean() {

@@ -20,7 +20,7 @@ futures = "0.3"
 getopts = "0.2"
 interchange = { path = "../interchange" }
 itertools = "0.9"
-krb5-src = { version = "0.2.1", features = ["binaries"] }
+krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 md-5 = "0.8"
 ore = { path = "../ore" }
