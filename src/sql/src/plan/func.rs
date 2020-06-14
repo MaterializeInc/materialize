@@ -103,8 +103,9 @@ impl TypeCategory {
     }
 }
 
-type Operation<R> =
-    Box<dyn Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, failure::Error> + Send + Sync>;
+struct Operation<R>(
+    Box<dyn Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, failure::Error> + Send + Sync>,
+);
 
 /// Describes a single function's implementation.
 pub struct FuncImpl<R> {
@@ -125,10 +126,10 @@ fn nullary_op<F, R>(f: F) -> Operation<R>
 where
     F: Fn(&ExprContext) -> Result<R, failure::Error> + Send + Sync + 'static,
 {
-    Box::new(move |ecx, exprs| {
+    Operation(Box::new(move |ecx, exprs| {
         assert!(exprs.is_empty());
         f(ecx)
-    })
+    }))
 }
 
 fn identity_op() -> Operation<ScalarExpr> {
@@ -139,11 +140,7 @@ fn unary_op<F, R>(f: F) -> Operation<R>
 where
     F: Fn(&ExprContext, ScalarExpr) -> Result<R, failure::Error> + Send + Sync + 'static,
 {
-    Box::new(move |ecx, exprs| f(ecx, exprs.into_element()))
-}
-
-fn unary_func_op(f: UnaryFunc) -> Operation<ScalarExpr> {
-    unary_op(move |_ecx, e| Ok(e.call_unary(f.clone())))
+    Operation(Box::new(move |ecx, exprs| f(ecx, exprs.into_element())))
 }
 
 fn binary_op<F, R>(f: F) -> Operation<R>
@@ -153,37 +150,49 @@ where
         + Sync
         + 'static,
 {
-    Box::new(move |ecx, exprs| {
+    Operation(Box::new(move |ecx, exprs| {
         assert_eq!(exprs.len(), 2);
         let mut exprs = exprs.into_iter();
         let left = exprs.next().unwrap();
         let right = exprs.next().unwrap();
         f(ecx, left, right)
-    })
-}
-
-fn binary_func_op(f: BinaryFunc) -> Operation<ScalarExpr> {
-    binary_op(move |_ecx, left, right| Ok(left.call_binary(right, f.clone())))
+    }))
 }
 
 fn variadic_op<F, R>(f: F) -> Operation<R>
 where
     F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, failure::Error> + Send + Sync + 'static,
 {
-    Box::new(f)
+    Operation(Box::new(f))
 }
 
-fn variadic_func_op(f: VariadicFunc) -> Operation<ScalarExpr> {
-    variadic_op(move |_ecx, exprs| {
-        Ok(ScalarExpr::CallVariadic {
-            func: f.clone(),
-            exprs,
+impl Into<Operation<ScalarExpr>> for UnaryFunc {
+    fn into(self) -> Operation<ScalarExpr> {
+        unary_op(move |_ecx, e| Ok(e.call_unary(self.clone())))
+    }
+}
+
+impl Into<Operation<ScalarExpr>> for BinaryFunc {
+    fn into(self) -> Operation<ScalarExpr> {
+        binary_op(move |_ecx, left, right| Ok(left.call_binary(right, self.clone())))
+    }
+}
+
+impl Into<Operation<ScalarExpr>> for VariadicFunc {
+    fn into(self) -> Operation<ScalarExpr> {
+        variadic_op(move |_ecx, exprs| {
+            Ok(ScalarExpr::CallVariadic {
+                func: self.clone(),
+                exprs,
+            })
         })
-    })
+    }
 }
 
-fn aggregate_func_op(f: AggregateFunc) -> Operation<(ScalarExpr, AggregateFunc)> {
-    unary_op(move |_ecx, e| Ok((e, f.clone())))
+impl Into<Operation<(ScalarExpr, AggregateFunc)>> for AggregateFunc {
+    fn into(self) -> Operation<(ScalarExpr, AggregateFunc)> {
+        unary_op(move |_ecx, e| Ok((e, self.clone())))
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -365,7 +374,7 @@ impl<'a> ArgImplementationMatcher<'a> {
 
         let f = m.find_match(&types, impls)?;
         let exprs = m.generate_param_exprs(exprs, &f.params)?;
-        (f.op)(ecx, exprs)
+        (f.op.0)(ecx, exprs)
     }
 
     /// Finds an exact match based on the arguments, or, if no exact match,
@@ -674,7 +683,7 @@ macro_rules! insert_impl {
         let impls = vec![
             $(FuncImpl {
                 params: $params.into(),
-                op: $op,
+                op: $op.into(),
             },)+
         ];
 
@@ -707,33 +716,33 @@ lazy_static! {
         use ScalarType::*;
         impls! {
             "abs" => {
-                params!(Int32) => unary_func_op(UnaryFunc::AbsInt32),
-                params!(Int64) => unary_func_op(UnaryFunc::AbsInt64),
-                params!(Decimal(0, 0)) => unary_func_op(UnaryFunc::AbsDecimal),
-                params!(Float32) => unary_func_op(UnaryFunc::AbsFloat32),
-                params!(Float64) => unary_func_op(UnaryFunc::AbsFloat64)
+                params!(Int32) => UnaryFunc::AbsInt32,
+                params!(Int64) => UnaryFunc::AbsInt64,
+                params!(Decimal(0, 0)) => UnaryFunc::AbsDecimal,
+                params!(Float32) => UnaryFunc::AbsFloat32,
+                params!(Float64) => UnaryFunc::AbsFloat64
             },
             "ascii" => {
-                params!(String) => unary_func_op(UnaryFunc::Ascii)
+                params!(String) => UnaryFunc::Ascii
             },
             "btrim" => {
-                params!(String) => unary_func_op(UnaryFunc::TrimWhitespace),
-                params!(String, String) => binary_func_op(BinaryFunc::Trim)
+                params!(String) => UnaryFunc::TrimWhitespace,
+                params!(String, String) => BinaryFunc::Trim
             },
             "bit_length" => {
-                params!(Bytes) => unary_func_op(UnaryFunc::BitLengthBytes),
-                params!(String) => unary_func_op(UnaryFunc::BitLengthString)
+                params!(Bytes) => UnaryFunc::BitLengthBytes,
+                params!(String) => UnaryFunc::BitLengthString
             },
             "ceil" => {
-                params!(Float32) => unary_func_op(UnaryFunc::CeilFloat32),
-                params!(Float64) => unary_func_op(UnaryFunc::CeilFloat64),
+                params!(Float32) => UnaryFunc::CeilFloat32,
+                params!(Float64) => UnaryFunc::CeilFloat64,
                 params!(Decimal(0, 0)) => unary_op(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::CeilDecimal(s)))
                 })
             },
             "char_length" => {
-                params!(String) => unary_func_op(UnaryFunc::CharLength)
+                params!(String) => UnaryFunc::CharLength
             },
             "concat" => {
                  params!((StringAny)...) => variadic_op(|_ecx, mut exprs| {
@@ -751,18 +760,18 @@ lazy_static! {
                 })
             },
             "convert_from" => {
-                params!(Bytes, String) => binary_func_op(BinaryFunc::ConvertFrom)
+                params!(Bytes, String) => BinaryFunc::ConvertFrom
             },
             "current_timestamp" => {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "current_timestamp"))
             },
             "date_trunc" => {
-                params!(String, Timestamp) => binary_func_op(BinaryFunc::DateTruncTimestamp),
-                params!(String, TimestampTz) => binary_func_op(BinaryFunc::DateTruncTimestampTz)
+                params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp,
+                params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz
             },
             "floor" => {
-                params!(Float32) => unary_func_op(UnaryFunc::FloorFloat32),
-                params!(Float64) => unary_func_op(UnaryFunc::FloorFloat64),
+                params!(Float32) => UnaryFunc::FloorFloat32,
+                params!(Float64) => UnaryFunc::FloorFloat64,
                 params!(Decimal(0, 0)) => unary_op(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
@@ -785,38 +794,38 @@ lazy_static! {
                 })
             },
             "jsonb_array_length" => {
-                params!(Jsonb) => unary_func_op(UnaryFunc::JsonbArrayLength)
+                params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
             "jsonb_build_array" => {
-                params!() => variadic_func_op(VariadicFunc::JsonbBuildArray),
-                params!((JsonbAny)...) => variadic_func_op(VariadicFunc::JsonbBuildArray)
+                params!() => VariadicFunc::JsonbBuildArray,
+                params!((JsonbAny)...) => VariadicFunc::JsonbBuildArray
             },
             "jsonb_build_object" => {
-                params!() => variadic_func_op(VariadicFunc::JsonbBuildObject),
+                params!() => VariadicFunc::JsonbBuildObject,
                 params!((StringAny, JsonbAny)...) =>
-                    variadic_func_op(VariadicFunc::JsonbBuildObject)
+                    VariadicFunc::JsonbBuildObject
             },
             "jsonb_pretty" => {
-                params!(Jsonb) => unary_func_op(UnaryFunc::JsonbPretty)
+                params!(Jsonb) => UnaryFunc::JsonbPretty
             },
             "jsonb_strip_nulls" => {
-                params!(Jsonb) => unary_func_op(UnaryFunc::JsonbStripNulls)
+                params!(Jsonb) => UnaryFunc::JsonbStripNulls
             },
             "jsonb_typeof" => {
-                params!(Jsonb) => unary_func_op(UnaryFunc::JsonbTypeof)
+                params!(Jsonb) => UnaryFunc::JsonbTypeof
             },
             "length" => {
-                params!(Bytes) => unary_func_op(UnaryFunc::ByteLengthBytes),
-                params!(String) => unary_func_op(UnaryFunc::CharLength),
-                params!(Bytes, String) => binary_func_op(BinaryFunc::EncodedBytesCharLength)
+                params!(Bytes) => UnaryFunc::ByteLengthBytes,
+                params!(String) => UnaryFunc::CharLength,
+                params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength
             },
             "octet_length" => {
-                params!(Bytes) => unary_func_op(UnaryFunc::ByteLengthBytes),
-                params!(String) => unary_func_op(UnaryFunc::ByteLengthString)
+                params!(Bytes) => UnaryFunc::ByteLengthBytes,
+                params!(String) => UnaryFunc::ByteLengthString
             },
             "ltrim" => {
-                params!(String) => unary_func_op(UnaryFunc::TrimLeadingWhitespace),
-                params!(String, String) => binary_func_op(BinaryFunc::TrimLeading)
+                params!(String) => UnaryFunc::TrimLeadingWhitespace,
+                params!(String, String) => BinaryFunc::TrimLeading
             },
             "mz_logical_timestamp" => {
                 params!() => nullary_op(|ecx| {
@@ -832,11 +841,11 @@ lazy_static! {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "now"))
             },
             "replace" => {
-                params!(String, String, String) => variadic_func_op(VariadicFunc::Replace)
+                params!(String, String, String) => VariadicFunc::Replace
             },
             "round" => {
-                params!(Float32) => unary_func_op(UnaryFunc::RoundFloat32),
-                params!(Float64) => unary_func_op(UnaryFunc::RoundFloat64),
+                params!(Float32) => UnaryFunc::RoundFloat32,
+                params!(Float64) => UnaryFunc::RoundFloat64,
                 params!(Decimal(0,0)) => unary_op(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::RoundDecimal(s)))
@@ -847,28 +856,28 @@ lazy_static! {
                 })
             },
             "rtrim" => {
-                params!(String) => unary_func_op(UnaryFunc::TrimTrailingWhitespace),
-                params!(String, String) => binary_func_op(BinaryFunc::TrimTrailing)
+                params!(String) => UnaryFunc::TrimTrailingWhitespace,
+                params!(String, String) => BinaryFunc::TrimTrailing
             },
             "substr" => {
-                params!(String, Int64) => variadic_func_op(VariadicFunc::Substr),
-                params!(String, Int64, Int64) => variadic_func_op(VariadicFunc::Substr)
+                params!(String, Int64) => VariadicFunc::Substr,
+                params!(String, Int64, Int64) => VariadicFunc::Substr
             },
             "substring" => {
-                params!(String, Int64) => variadic_func_op(VariadicFunc::Substr),
-                params!(String, Int64, Int64) => variadic_func_op(VariadicFunc::Substr)
+                params!(String, Int64) => VariadicFunc::Substr,
+                params!(String, Int64, Int64) => VariadicFunc::Substr
             },
             "sqrt" => {
-                params!(Float32) => unary_func_op(UnaryFunc::SqrtFloat32),
-                params!(Float64) => unary_func_op(UnaryFunc::SqrtFloat64),
+                params!(Float32) => UnaryFunc::SqrtFloat32,
+                params!(Float64) => UnaryFunc::SqrtFloat64,
                 params!(Decimal(0,0)) => unary_op(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 })
             },
             "to_char" => {
-                params!(Timestamp, String) => binary_func_op(BinaryFunc::ToCharTimestamp),
-                params!(TimestampTz, String) => binary_func_op(BinaryFunc::ToCharTimestampTz)
+                params!(Timestamp, String) => BinaryFunc::ToCharTimestamp,
+                params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz
             },
             // > Returns the value as json or jsonb. Arrays and composites
             // > are converted (recursively) to arrays and objects;
@@ -884,7 +893,7 @@ lazy_static! {
                 params!(JsonbAny) => identity_op()
             },
             "to_timestamp" => {
-                params!(Float64) => unary_func_op(UnaryFunc::ToTimestamp)
+                params!(Float64) => UnaryFunc::ToTimestamp
             }
         }
     };
@@ -927,66 +936,66 @@ lazy_static! {
         let mut m = impls! {
             // ARITHMETIC
             Plus => {
-                params!(Int32, Int32) => binary_func_op(AddInt32),
-                params!(Int64, Int64) => binary_func_op(AddInt64),
-                params!(Float32, Float32) => binary_func_op(AddFloat32),
-                params!(Float64, Float64) => binary_func_op(AddFloat64),
+                params!(Int32, Int32) => AddInt32,
+                params!(Int64, Int64) => AddInt64,
+                params!(Float32, Float32) => AddFloat32,
+                params!(Float64, Float64) => AddFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => {
                     binary_op(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, AddDecimal))
                     })
                 },
-                params!(Interval, Interval) => binary_func_op(AddInterval),
-                params!(Timestamp, Interval) => binary_func_op(AddTimestampInterval),
+                params!(Interval, Interval) => AddInterval,
+                params!(Timestamp, Interval) => AddTimestampInterval,
                 params!(Interval, Timestamp) => {
                     binary_op(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
                 },
-                params!(TimestampTz, Interval) => binary_func_op(AddTimestampTzInterval),
+                params!(TimestampTz, Interval) => AddTimestampTzInterval,
                 params!(Interval, TimestampTz) => {
                     binary_op(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
                 },
-                params!(Date, Interval) => binary_func_op(AddDateInterval),
+                params!(Date, Interval) => AddDateInterval,
                 params!(Interval, Date) => {
                     binary_op(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateInterval)))
                 },
-                params!(Date, Time) => binary_func_op(AddDateTime),
+                params!(Date, Time) => AddDateTime,
                 params!(Time, Date) => {
                     binary_op(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateTime)))
                 },
-                params!(Time, Interval) => binary_func_op(AddTimeInterval),
+                params!(Time, Interval) => AddTimeInterval,
                 params!(Interval, Time) => {
                     binary_op(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }
             },
             Minus => {
-                params!(Int32, Int32) => binary_func_op(SubInt32),
-                params!(Int64, Int64) => binary_func_op(SubInt64),
-                params!(Float32, Float32) => binary_func_op(SubFloat32),
-                params!(Float64, Float64) => binary_func_op(SubFloat64),
+                params!(Int32, Int32) => SubInt32,
+                params!(Int64, Int64) => SubInt64,
+                params!(Float32, Float32) => SubFloat32,
+                params!(Float64, Float64) => SubFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => binary_op(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, SubDecimal))
                 }),
-                params!(Interval, Interval) => binary_func_op(SubInterval),
-                params!(Timestamp, Timestamp) => binary_func_op(SubTimestamp),
-                params!(TimestampTz, TimestampTz) => binary_func_op(SubTimestampTz),
-                params!(Timestamp, Interval) => binary_func_op(SubTimestampInterval),
-                params!(TimestampTz, Interval) => binary_func_op(SubTimestampTzInterval),
-                params!(Date, Date) => binary_func_op(SubDate),
-                params!(Date, Interval) => binary_func_op(SubDateInterval),
-                params!(Time, Time) => binary_func_op(SubTime),
-                params!(Time, Interval) => binary_func_op(SubTimeInterval),
-                params!(Jsonb, Int64) => binary_func_op(JsonbDeleteInt64),
-                params!(Jsonb, String) => binary_func_op(JsonbDeleteString)
+                params!(Interval, Interval) => SubInterval,
+                params!(Timestamp, Timestamp) => SubTimestamp,
+                params!(TimestampTz, TimestampTz) => SubTimestampTz,
+                params!(Timestamp, Interval) => SubTimestampInterval,
+                params!(TimestampTz, Interval) => SubTimestampTzInterval,
+                params!(Date, Date) => SubDate,
+                params!(Date, Interval) => SubDateInterval,
+                params!(Time, Time) => SubTime,
+                params!(Time, Interval) => SubTimeInterval,
+                params!(Jsonb, Int64) => JsonbDeleteInt64,
+                params!(Jsonb, String) => JsonbDeleteString
                 // TODO(jamii) there should be corresponding overloads for
                 // Array(Int64) and Array(String)
             },
             Multiply => {
-                params!(Int32, Int32) => binary_func_op(MulInt32),
-                params!(Int64, Int64) => binary_func_op(MulInt64),
-                params!(Float32, Float32) => binary_func_op(MulFloat32),
-                params!(Float64, Float64) => binary_func_op(MulFloat64),
+                params!(Int32, Int32) => MulInt32,
+                params!(Int64, Int64) => MulInt64,
+                params!(Float32, Float32) => MulFloat32,
+                params!(Float64, Float64) => MulFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => binary_op(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
@@ -998,10 +1007,10 @@ lazy_static! {
                 })
             },
             Divide => {
-                params!(Int32, Int32) => binary_func_op(DivInt32),
-                params!(Int64, Int64) => binary_func_op(DivInt64),
-                params!(Float32, Float32) => binary_func_op(DivFloat32),
-                params!(Float64, Float64) => binary_func_op(DivFloat64),
+                params!(Int32, Int32) => DivInt32,
+                params!(Int64, Int64) => DivInt64,
+                params!(Float32, Float32) => DivFloat32,
+                params!(Float64, Float64) => DivFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => binary_op(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
@@ -1017,10 +1026,10 @@ lazy_static! {
                 })
             },
             Modulus => {
-                params!(Int32, Int32) => binary_func_op(ModInt32),
-                params!(Int64, Int64) => binary_func_op(ModInt64),
-                params!(Float32, Float32) => binary_func_op(ModFloat32),
-                params!(Float64, Float64) => binary_func_op(ModFloat64),
+                params!(Int32, Int32) => ModInt32,
+                params!(Int64, Int64) => ModInt64,
+                params!(Float32, Float32) => ModFloat32,
+                params!(Float64, Float64) => ModFloat64,
                 params!(Decimal(0, 0), Decimal(0, 0)) => binary_op(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, ModDecimal))
@@ -1029,15 +1038,15 @@ lazy_static! {
 
             // BOOLEAN OPS
             BinaryOperator::And => {
-                params!(Bool, Bool) => binary_func_op(BinaryFunc::And)
+                params!(Bool, Bool) => BinaryFunc::And
             },
             BinaryOperator::Or => {
-                params!(Bool, Bool) => binary_func_op(BinaryFunc::Or)
+                params!(Bool, Bool) => BinaryFunc::Or
             },
 
             // LIKE
             Like => {
-                params!(String, String) => binary_func_op(MatchLikePattern)
+                params!(String, String) => MatchLikePattern
             },
             NotLike => {
                 params!(String, String) => binary_op(|_ecx, lhs, rhs| {
@@ -1049,23 +1058,23 @@ lazy_static! {
 
             // CONCAT
             Concat => {
-                vec![Plain(String), StringAny] => binary_func_op(TextConcat),
-                vec![StringAny, Plain(String)] => binary_func_op(TextConcat),
-                params!(String, String) => binary_func_op(TextConcat),
-                params!(Jsonb, Jsonb) => binary_func_op(JsonbConcat)
+                vec![Plain(String), StringAny] => TextConcat,
+                vec![StringAny, Plain(String)] => TextConcat,
+                params!(String, String) => TextConcat,
+                params!(Jsonb, Jsonb) => JsonbConcat
             },
 
             //JSON
             JsonGet => {
-                params!(Jsonb, Int64) => binary_func_op(JsonbGetInt64 { stringify: false }),
-                params!(Jsonb, String) => binary_func_op(JsonbGetString { stringify: false })
+                params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false },
+                params!(Jsonb, String) => JsonbGetString { stringify: false }
             },
             JsonGetAsText => {
-                params!(Jsonb, Int64) => binary_func_op(JsonbGetInt64 { stringify: true }),
-                params!(Jsonb, String) => binary_func_op(JsonbGetString { stringify: true })
+                params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true },
+                params!(Jsonb, String) => JsonbGetString { stringify: true }
             },
             JsonContainsJson => {
-                params!(Jsonb, Jsonb) => binary_func_op(JsonbContainsJsonb),
+                params!(Jsonb, Jsonb) => JsonbContainsJsonb,
                 params!(Jsonb, String) => binary_op(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(
                         rhs.call_unary(UnaryFunc::CastStringToJsonb),
@@ -1096,7 +1105,7 @@ lazy_static! {
                 })
             },
             JsonContainsField => {
-                params!(Jsonb, String) => binary_func_op(JsonbContainsString)
+                params!(Jsonb, String) => JsonbContainsString
             },
             // COMPARISON OPS
             // n.b. Decimal impls are separated from other types because they
@@ -1160,19 +1169,19 @@ lazy_static! {
             (BinaryOperator::NotEq, BinaryFunc::NotEq)
         ] {
             insert_impl!(m, op,
-                params!(Bool, Bool) => binary_func_op(func.clone()),
-                params!(Int32, Int32) => binary_func_op(func.clone()),
-                params!(Int64, Int64) => binary_func_op(func.clone()),
-                params!(Float32, Float32) => binary_func_op(func.clone()),
-                params!(Float64, Float64) => binary_func_op(func.clone()),
-                params!(Date, Date) => binary_func_op(func.clone()),
-                params!(Time, Time) => binary_func_op(func.clone()),
-                params!(Timestamp, Timestamp) => binary_func_op(func.clone()),
-                params!(TimestampTz, TimestampTz) => binary_func_op(func.clone()),
-                params!(Interval, Interval) => binary_func_op(func.clone()),
-                params!(Bytes, Bytes) => binary_func_op(func.clone()),
-                params!(String, String) => binary_func_op(func.clone()),
-                params!(Jsonb, Jsonb) => binary_func_op(func.clone())
+                params!(Bool, Bool) => func.clone(),
+                params!(Int32, Int32) => func.clone(),
+                params!(Int64, Int64) => func.clone(),
+                params!(Float32, Float32) => func.clone(),
+                params!(Float64, Float64) => func.clone(),
+                params!(Date, Date) => func.clone(),
+                params!(Time, Time) => func.clone(),
+                params!(Timestamp, Timestamp) => func.clone(),
+                params!(TimestampTz, TimestampTz) => func.clone(),
+                params!(Interval, Interval) => func.clone(),
+                params!(Bytes, Bytes) => func.clone(),
+                params!(String, String) => func.clone(),
+                params!(Jsonb, Jsonb) => func.clone()
             );
         }
 
@@ -1241,7 +1250,7 @@ lazy_static! {
         use UnaryOperator::*;
         impls! {
             Not => {
-                params!(Bool) => unary_func_op(UnaryFunc::Not)
+                params!(Bool) => UnaryFunc::Not
             },
 
             Plus => {
@@ -1249,12 +1258,12 @@ lazy_static! {
             },
 
             Minus => {
-                params!(Int32) => unary_func_op(UnaryFunc::NegInt32),
-                params!(Int64) => unary_func_op(UnaryFunc::NegInt64),
-                params!(Float32) => unary_func_op(UnaryFunc::NegFloat32),
-                params!(Float64) => unary_func_op(UnaryFunc::NegFloat64),
-                params!(ScalarType::Decimal(0, 0)) => unary_func_op(UnaryFunc::NegDecimal),
-                params!(Interval) => unary_func_op(UnaryFunc::NegInterval)
+                params!(Int32) => UnaryFunc::NegInt32,
+                params!(Int64) => UnaryFunc::NegInt64,
+                params!(Float32) => UnaryFunc::NegFloat32,
+                params!(Float64) => UnaryFunc::NegFloat64,
+                params!(ScalarType::Decimal(0, 0)) => UnaryFunc::NegDecimal,
+                params!(Interval) => UnaryFunc::NegInterval
             }
         }
     };
@@ -1430,41 +1439,41 @@ lazy_static! {
                     // as efficient as the current `CountALl` implementation.
                     Ok((ScalarExpr::literal_true(), AggregateFunc::CountAll))
                 }),
-                params!(Any) => aggregate_func_op(AggregateFunc::Count)
+                params!(Any) => AggregateFunc::Count
             },
             "max" => {
-                params!(Int32) => aggregate_func_op(AggregateFunc::MaxInt32),
-                params!(Int64) => aggregate_func_op(AggregateFunc::MaxInt64),
-                params!(Float32) => aggregate_func_op(AggregateFunc::MaxFloat32),
-                params!(Float64) => aggregate_func_op(AggregateFunc::MaxFloat64),
-                params!(Decimal(0, 0)) => aggregate_func_op(AggregateFunc::MaxDecimal),
-                params!(Bool) => aggregate_func_op(AggregateFunc::MaxBool),
-                params!(String) => aggregate_func_op(AggregateFunc::MaxString),
-                params!(Date) => aggregate_func_op(AggregateFunc::MaxDate),
-                params!(Timestamp) => aggregate_func_op(AggregateFunc::MaxTimestamp),
-                params!(TimestampTz) => aggregate_func_op(AggregateFunc::MaxTimestampTz)
+                params!(Int32) => AggregateFunc::MaxInt32,
+                params!(Int64) => AggregateFunc::MaxInt64,
+                params!(Float32) => AggregateFunc::MaxFloat32,
+                params!(Float64) => AggregateFunc::MaxFloat64,
+                params!(Decimal(0, 0)) => AggregateFunc::MaxDecimal,
+                params!(Bool) => AggregateFunc::MaxBool,
+                params!(String) => AggregateFunc::MaxString,
+                params!(Date) => AggregateFunc::MaxDate,
+                params!(Timestamp) => AggregateFunc::MaxTimestamp,
+                params!(TimestampTz) => AggregateFunc::MaxTimestampTz
             },
             "min" => {
-                params!(Int32) => aggregate_func_op(AggregateFunc::MinInt32),
-                params!(Int64) => aggregate_func_op(AggregateFunc::MinInt64),
-                params!(Float32) => aggregate_func_op(AggregateFunc::MinFloat32),
-                params!(Float64) => aggregate_func_op(AggregateFunc::MinFloat64),
-                params!(Decimal(0, 0)) => aggregate_func_op(AggregateFunc::MinDecimal),
-                params!(Bool) => aggregate_func_op(AggregateFunc::MinBool),
-                params!(String) => aggregate_func_op(AggregateFunc::MinString),
-                params!(Date) => aggregate_func_op(AggregateFunc::MinDate),
-                params!(Timestamp) => aggregate_func_op(AggregateFunc::MinTimestamp),
-                params!(TimestampTz) => aggregate_func_op(AggregateFunc::MinTimestampTz)
+                params!(Int32) => AggregateFunc::MinInt32,
+                params!(Int64) => AggregateFunc::MinInt64,
+                params!(Float32) => AggregateFunc::MinFloat32,
+                params!(Float64) => AggregateFunc::MinFloat64,
+                params!(Decimal(0, 0)) => AggregateFunc::MinDecimal,
+                params!(Bool) => AggregateFunc::MinBool,
+                params!(String) => AggregateFunc::MinString,
+                params!(Date) => AggregateFunc::MinDate,
+                params!(Timestamp) => AggregateFunc::MinTimestamp,
+                params!(TimestampTz) => AggregateFunc::MinTimestampTz
             },
             "jsonb_agg" => {
-                params!(JsonbAny) => aggregate_func_op(AggregateFunc::JsonbAgg)
+                params!(JsonbAny) => AggregateFunc::JsonbAgg
             },
             "sum" => {
-                params!(Int32) => aggregate_func_op(AggregateFunc::SumInt32),
-                params!(Int64) => aggregate_func_op(AggregateFunc::SumInt64),
-                params!(Float32) => aggregate_func_op(AggregateFunc::SumFloat32),
-                params!(Float64) => aggregate_func_op(AggregateFunc::SumFloat64),
-                params!(Decimal(0, 0)) => aggregate_func_op(AggregateFunc::SumDecimal),
+                params!(Int32) => AggregateFunc::SumInt32,
+                params!(Int64) => AggregateFunc::SumInt64,
+                params!(Float32) => AggregateFunc::SumFloat32,
+                params!(Float64) => AggregateFunc::SumFloat64,
+                params!(Decimal(0, 0)) => AggregateFunc::SumDecimal,
                 params!(Interval) => unary_op(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
