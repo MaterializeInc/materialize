@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-async-trait = "0.1.33"
+async-trait = "0.1.35"
 atty = "0.2"
 avro = { path = "../avro" }
 aws-util = { path = "../aws-util" }
