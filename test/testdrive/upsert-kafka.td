@@ -278,21 +278,21 @@ $ set keyschema2={
     "name": "Key",
     "fields": [
         {"name": "f3", "type": ["null", "string"]},
-        {"name": "f4", "type": ["null", "string"]}
+        {"name": "f1", "type": ["null", "string"]}
     ]
   }
 
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
-{"f3": "fire", "f4": "yang"} {"f1": "dog", "f2": 42}
-{"f3": null, "f4": "yin"} {"f1": "sheep", "f2": 53}
-{"f3": "water", "f4": null} {"f1":"plesiosaur", "f2": 224}
-{"f3": "earth", "f4": "dao"} {"f1": "turtle", "f2": 34}
-{"f3": null, "f4": "yin"} {"f1": "sheep", "f2": 54}
-{"f3": "earth", "f4": "dao"} {"f1": "snake", "f2": 68}
-{"f3": "water", "f4": null} {"f1": "crocodile", "f2": 7}
-{"f3": "earth", "f4":"dao"}
+{"f3": "fire", "f1": "yang"} {"f1": "dog", "f2": 42}
+{"f3": null, "f1": "yin"} {"f1": "sheep", "f2": 53}
+{"f3": "water", "f1": null} {"f1":"plesiosaur", "f2": 224}
+{"f3": "earth", "f1": "dao"} {"f1": "turtle", "f2": 34}
+{"f3": null, "f1": "yin"} {"f1": "sheep", "f2": 54}
+{"f3": "earth", "f1": "dao"} {"f1": "snake", "f2": 68}
+{"f3": "water", "f1": null} {"f1": "crocodile", "f2": 7}
+{"f3": "earth", "f1":"dao"}
 
-> CREATE SOURCE realtimeavroavro
+> CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-realtimeavroavro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -300,7 +300,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 
 > CREATE MATERIALIZED VIEW realtimeavroavro_view as SELECT * from realtimeavroavro;
 
-> select * from realtimeavroavro_view
+> select f3, f4, f1, f2 from realtimeavroavro_view
 f3        f4      f1             f2
 -----------------------------------
 fire      yang    dog            42
@@ -323,14 +323,14 @@ water     <null>    crocodile    7
 
 # ensure that having deletion on a key that never existed does not break anything
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
-{"f3": "fire", "f4": "yin"}
-{"f3": "air", "f4":"qi"} {"f1": "pigeon", "f2": 10}
-{"f3": "air", "f4":"qi"} {"f1": "owl", "f2": 15}
-{"f3": "earth", "f4": "dao"} {"f1": "rhinoceros", "f2": 211}
-{"f3": "air", "f4":"qi"} {"f1": "chicken", "f2": 47}
-{"f3": null, "f4":"yin"}
-{"f3": null, "f4":"yin"} {"f1":"dog", "f2": 243}
-{"f3": "water", "f4": null}
+{"f3": "fire", "f1": "yin"}
+{"f3": "air", "f1":"qi"} {"f1": "pigeon", "f2": 10}
+{"f3": "air", "f1":"qi"} {"f1": "owl", "f2": 15}
+{"f3": "earth", "f1": "dao"} {"f1": "rhinoceros", "f2": 211}
+{"f3": "air", "f1":"qi"} {"f1": "chicken", "f2": 47}
+{"f3": null, "f1":"yin"}
+{"f3": null, "f1":"yin"} {"f1":"dog", "f2": 243}
+{"f3": "water", "f1": null}
 
 > select * from realtimeavroavro_view
 key        f4          f1             f2
