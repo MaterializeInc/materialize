@@ -802,12 +802,14 @@ class ChaosDockerWorkflowStep(WorkflowStep):
     Params:
         service: target Docker service, will be used to grep for container id
                  NOTE: service name must be unique to correctly match the container id
+
         other_service: if provided, run only as long as this service is running
         duration: if provided, run for this duration
+
         run_cmd: command to start the Docker container
-        running_time: seconds to spend running each loop (default: 60)
+        run_time: seconds to spend running each loop
         stop_cmd: command to stop the Docker container
-        stopped_time: seconds to spend stopped each loop (default: 10)
+        stopped_time: seconds to spend stopped each loop
     """
 
     def __init__(
@@ -817,31 +819,30 @@ class ChaosDockerWorkflowStep(WorkflowStep):
         duration: int,
         run_cmd: str,
         stop_cmd: str,
-        running_time: int = 60,
-        stopped_time: int = 10,
+        run_time: int,
+        stop_time: int,
     ):
+        if (
+            other_service == ""
+            and duration < 0
+            or other_service != ""
+            and duration >= 0
+        ):
+            raise BadSpec(
+                f"Need to specify either 'other_service' or 'duration' to run chaos Docker workflow step"
+            )
         self._service = service
         self._other_service = other_service
         self._duration = duration
         self._run_cmd = run_cmd
         self._stop_cmd = stop_cmd
-        self._running_time = running_time
-        self._stopped_time = stopped_time
+        self._run_time = run_time
+        self._stop_time = stop_time
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        if (
-            self._other_service == ""
-            and self._duration < 0
-            or self._other_service != ""
-            and self._duration >= 0
-        ):
-            raise Failed(
-                f"Need to specify either 'other_service' or 'duration' to run chaos Docker workflow step"
-            )
-
         container_id = comp.get_container_id(self._service)
         say(
-            f"{self._stop_cmd} and {self._run_cmd} {container_id}: running for {self._running_time} seconds, stopping for {self._stopped_time} seconds"
+            f"{self._stop_cmd} and {self._run_cmd} {container_id}: running for {self._run_time} seconds, stopping for {self._stop_time} seconds"
         )
         if self._other_service != "":
             other_container_id = comp.get_container_id(self._other_service)
@@ -861,13 +862,13 @@ class ChaosDockerWorkflowStep(WorkflowStep):
             spawn.runv(["docker", self._stop_cmd, container_id])
         except subprocess.CalledProcessError as e:
             raise Failed(f"Unable to {self._stop_cmd} container {container_id}: {e}")
-        time.sleep(self._stopped_time)
+        time.sleep(self._stop_time)
 
         try:
             spawn.runv(["docker", self._run_cmd, container_id])
         except subprocess.CalledProcessError as e:
             raise Failed(f"Unable to {self._run_cmd} container {container_id}: {e}")
-        time.sleep(self._running_time)
+        time.sleep(self._run_time)
 
 
 @Steps.register("chaos-pause-docker")
@@ -883,8 +884,8 @@ class ChaosPauseDockerStep(ChaosDockerWorkflowStep):
         service: str,
         other_service: str = "",
         duration: int = -1,
-        running_time: int = 60,
-        paused_time: int = 10,
+        run_time: int = 60,
+        pause_time: int = 10,
     ) -> None:
         super().__init__(
             service=service,
@@ -892,8 +893,8 @@ class ChaosPauseDockerStep(ChaosDockerWorkflowStep):
             duration=duration,
             run_cmd="unpause",
             stop_cmd="pause",
-            running_time=running_time,
-            stopped_time=paused_time,
+            run_time=run_time,
+            stop_time=pause_time,
         )
 
 
@@ -910,8 +911,8 @@ class ChaosStopDockerStep(ChaosDockerWorkflowStep):
         service: str,
         other_service: str = "",
         duration: int = -1,
-        running_time: int = 60,
-        stopped_time: int = 10,
+        run_time: int = 60,
+        stop_time: int = 10,
     ) -> None:
         super().__init__(
             service=service,
@@ -919,8 +920,8 @@ class ChaosStopDockerStep(ChaosDockerWorkflowStep):
             duration=duration,
             run_cmd="start",
             stop_cmd="stop",
-            running_time=running_time,
-            stopped_time=stopped_time,
+            run_time=run_time,
+            stop_time=stop_time,
         )
 
 
