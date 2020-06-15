@@ -52,18 +52,20 @@ This means that you will see any updates that occur up to and including the chos
 
 ## Example
 
+### Tailing to your terminal
+
 In this example, we'll assume `some_materialized_view` has one `text` column.
 
 ```sql
 TAIL some_materialized_view
 ```
 ```
-insert_key   Diff: 1 at 1585752182327
-will_delete  Diff: 1 at 1585752197827
-will_delete  Diff: -1 at 1585752335626
-will_update_old  Diff: 1 at 1585752351626
-will_update_old  Diff: -1 at 1585752356422
-will_update_new  Diff: 1 at 1585752356422
+insert_key   Diff: 1 at 1580000000000
+will_delete  Diff: 1 at 1580000000001
+will_delete  Diff: -1 at 1580000000003
+will_update_old  Diff: 1 at 1580000000005
+will_update_old  Diff: -1 at 1580000000007
+will_update_new  Diff: 1 at 1580000000007
 ````
 
 This represents:
@@ -77,3 +79,31 @@ If we wanted to see the updates that had occurred in the last 30 seconds, we cou
 ```sql
 TAIL some_materialized_view AS OF now() - '30s'::INTERVAL
 ```
+
+### Tailing through a driver
+
+In terms of the `pgwire` protocol, `TAIL` is handled as a non-standard `COPY TO`
+statement. As long as your driver lets you send your own `COPY` statement to the
+running Materialize node, you can `TAIL` updates from Materialize anywhere you'd
+like.
+
+```python
+#!/usr/bin/env python3
+
+import sys
+import psycopg2
+
+def main():
+
+    dsn = 'postgresql://localhost:6875/materialize?sslmode=disable'
+    conn = psycopg2.connect(dsn)
+
+    with conn.cursor() as cursor:
+        cursor.copy_expert("TAIL some_materialized_view", sys.stdout)
+
+if __name__ == '__main__':
+    main()
+```
+
+This will then stream the same output we saw above to `stdout`, though you could
+obviously do whatever you like with the output from this point.
