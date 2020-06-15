@@ -10,6 +10,7 @@
 #![allow(missing_docs)]
 
 use std::fmt;
+use std::iter;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
@@ -20,7 +21,7 @@ use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use std::iter;
+use crate::scalar::func::jsonb_stringify;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -491,12 +492,17 @@ impl AggregateFunc {
     }
 }
 
-fn jsonb_each<'a>(a: Datum<'a>) -> Vec<Row> {
+fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<Row> {
     let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::Dict(dict) => dict
             .iter()
-            .map(move |(k, v)| row_packer.pack(&[Datum::String(k), v]))
+            .map(move |(k, mut v)| {
+                if stringify {
+                    v = jsonb_stringify(v, temp_storage);
+                }
+                row_packer.pack(&[Datum::String(k), v])
+            })
             .collect(),
         _ => vec![],
     }
@@ -513,10 +519,18 @@ fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<Row> {
     }
 }
 
-fn jsonb_array_elements<'a>(a: Datum<'a>) -> Vec<Row> {
+fn jsonb_array_elements<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<Row> {
     let mut row_packer = repr::RowPacker::new();
     match a {
-        Datum::List(list) => list.iter().map(move |e| row_packer.pack(&[e])).collect(),
+        Datum::List(list) => list
+            .iter()
+            .map(move |mut e| {
+                if stringify {
+                    e = jsonb_stringify(e, temp_storage);
+                }
+                row_packer.pack(&[e])
+            })
+            .collect(),
         _ => vec![],
     }
 }
@@ -657,9 +671,9 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum TableFunc {
-    JsonbEach,
+    JsonbEach { stringify: bool },
     JsonbObjectKeys,
-    JsonbArrayElements,
+    JsonbArrayElements { stringify: bool },
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     // ScalarType is either Int32 or Int64.
@@ -668,11 +682,13 @@ pub enum TableFunc {
 }
 
 impl TableFunc {
-    pub fn eval<'a>(&'a self, datums: Vec<Datum<'a>>, _temp_storage: &'a RowArena) -> Vec<Row> {
+    pub fn eval<'a>(&'a self, datums: Vec<Datum<'a>>, temp_storage: &'a RowArena) -> Vec<Row> {
         match self {
-            TableFunc::JsonbEach => jsonb_each(datums[0]),
+            TableFunc::JsonbEach { stringify } => jsonb_each(datums[0], temp_storage, *stringify),
             TableFunc::JsonbObjectKeys => jsonb_object_keys(datums[0]),
-            TableFunc::JsonbArrayElements => jsonb_array_elements(datums[0]),
+            TableFunc::JsonbArrayElements { stringify } => {
+                jsonb_array_elements(datums[0], temp_storage, *stringify)
+            }
             TableFunc::RegexpExtract(a) => regexp_extract(datums[0], a).into_iter().collect(),
             TableFunc::CsvExtract(n_cols) => csv_extract(datums[0], *n_cols).into_iter().collect(),
             TableFunc::GenerateSeries(typ) => generate_series(typ, datums[0], datums[1]),
@@ -681,12 +697,21 @@ impl TableFunc {
 
     pub fn output_type(&self) -> RelationType {
         RelationType::new(match self {
-            TableFunc::JsonbEach => vec![
+            TableFunc::JsonbEach { stringify: true } => vec![
+                ColumnType::new(ScalarType::String),
+                ColumnType::new(ScalarType::String).nullable(true),
+            ],
+            TableFunc::JsonbEach { stringify: false } => vec![
                 ColumnType::new(ScalarType::String),
                 ColumnType::new(ScalarType::Jsonb),
             ],
             TableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
-            TableFunc::JsonbArrayElements => vec![ColumnType::new(ScalarType::Jsonb)],
+            TableFunc::JsonbArrayElements { stringify: true } => {
+                vec![ColumnType::new(ScalarType::String).nullable(true)]
+            }
+            TableFunc::JsonbArrayElements { stringify: false } => {
+                vec![ColumnType::new(ScalarType::Jsonb)]
+            }
             TableFunc::RegexpExtract(a) => a
                 .capture_groups_iter()
                 .map(|cg| ColumnType::new(ScalarType::String).nullable(cg.nullable))
@@ -700,9 +725,9 @@ impl TableFunc {
 
     pub fn output_arity(&self) -> usize {
         match self {
-            TableFunc::JsonbEach => 2,
+            TableFunc::JsonbEach { .. } => 2,
             TableFunc::JsonbObjectKeys => 1,
-            TableFunc::JsonbArrayElements => 1,
+            TableFunc::JsonbArrayElements { .. } => 1,
             TableFunc::RegexpExtract(a) => a.capture_groups_len(),
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeries(_) => 1,
@@ -713,9 +738,9 @@ impl TableFunc {
 impl fmt::Display for TableFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TableFunc::JsonbEach => f.write_str("jsonb_each"),
+            TableFunc::JsonbEach { .. } => f.write_str("jsonb_each"),
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
-            TableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
+            TableFunc::JsonbArrayElements { .. } => f.write_str("jsonb_array_elements"),
             TableFunc::RegexpExtract(a) => {
                 f.write_fmt(format_args!("regexp_extract({:?}, _)", a.0))
             }

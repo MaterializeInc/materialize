@@ -115,8 +115,10 @@ SELECT count(NULL)
 statement error supported
 SELECT json_agg(NULL)
 
-query error unable to infer type for NULL
+query T
 SELECT jsonb_agg(NULL)
+----
+[null]
 
 # This should ideally return {NULL}, but this is a pathological case, and
 # Postgres has the same behavior, so it's sufficient for now.
@@ -458,7 +460,7 @@ SELECT count(1) from kv
 ----
 6
 
-query error count function requires exactly one non-star argument
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT count(k, v) FROM kv
 
 query II
@@ -679,19 +681,19 @@ SELECT avg(b), sum(b) FROM abc
 # ----
 # 3 years 5 mons 7 days 00:00:19
 
-query error Unimplemented
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT avg(a) FROM abc
 
-query error Unimplemented
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT avg(c) FROM abc
 
 query error ROW constructors are not supported yet
 SELECT avg((a,c)) FROM abc
 
-query error Unimplemented
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT sum(a) FROM abc
 
-query error Unimplemented
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT sum(c) FROM abc
 
 query error ROW constructors are not supported yet

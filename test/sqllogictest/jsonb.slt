@@ -1860,7 +1860,7 @@ SELECT jsonb_agg(column1) FROM (VALUES (1), (2), (3))
 ----
 [1.0,2.0,3.0]
 
-query error jsonb_agg function requires exactly one non-star argument
+query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT jsonb_agg(1, 2)
 
 # todo@jldlaughlin: Fix test when #2414 is implemented

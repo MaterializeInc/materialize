@@ -234,7 +234,7 @@ ORDER BY ol_number
 %0 =
 | Get materialize.public.orderline (u19)
 | Filter (datetots(#6) > 2007-01-02 00:00:00)
-| Reduce group=(#3) sum(#7) sum(#8) count(#7) count(#8) countall(null)
+| Reduce group=(#3) sum(#7) sum(#8) count(#7) count(#8) countall(true)
 | Map (((i32todec(#1) * 10000000dec) / i64todec(if (#3 = 0) then {null} else {#3})) / 10dec), (((#2 * 10000000dec) / i64todec(if (#4 = 0) then {null} else {#4})) / 10dec)
 | Project (#0..#2, #6, #7, #5)
 
@@ -417,7 +417,7 @@ ORDER BY o_ol_cnt
 | Join %1 %4 (= #0 #8) (= #1 #9) (= #2 #10) (= #4 #11)
 | | implementation = Differential %1 %4.(#0, #1, #2, #3)
 | | demand = (#6)
-| Reduce group=(#6) countall(null)
+| Reduce group=(#6) countall(true)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
 
@@ -927,7 +927,7 @@ ORDER BY custdist DESC, c_count DESC
 %9 =
 | Union %3 %8
 | Reduce group=(#0) count(#22)
-| Reduce group=(#1) countall(null)
+| Reduce group=(#1) countall(true)
 
 Finish order_by=(#1 desc, #0 desc) limit=none offset=0 project=(#0, #1)
 
@@ -1480,7 +1480,7 @@ ORDER BY numwait DESC, su_name
 | Join %7 %12 %13 (= #7 #47 #51) (= #8 #48 #52) (= #9 #49 #53) (= #13 #50 #54)
 | | implementation = Differential %12 %13.(#0, #1, #2, #3) %7.(#7, #8, #9, #13)
 | | demand = (#1)
-| Reduce group=(#1) countall(null)
+| Reduce group=(#1) countall(true)
 
 Finish order_by=(#1 desc, #0 asc) limit=none offset=0 project=(#0, #1)
 
@@ -1556,7 +1556,7 @@ ORDER BY substr(c_state, 1, 1)
 | Join %3 %8 (= #0 #25) (= #1 #26) (= #2 #27)
 | | implementation = Differential %8 %3.(#0, #1, #2)
 | | demand = (#9, #16)
-| Reduce group=(substr(#9, 1, 1)) countall(null) sum(#16)
+| Reduce group=(substr(#9, 1, 1)) countall(true) sum(#16)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
 

@@ -66,7 +66,7 @@ SELECT avg(a) FROM t2
 
 # avg of an explicit NULL should return an error.
 
-query error unable to infer type for NULL
+query error unable to determine which implementation to use
 SELECT avg(NULL)
 
 statement error
@@ -163,3 +163,9 @@ query I rowsort
 select sum(distinct column1) from (values (1), (2), (1), (4)) _;
 ----
 7
+
+query error count\(\*\) must be used to call a parameterless aggregate function
+SELECT count()
+
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT sum(*)
