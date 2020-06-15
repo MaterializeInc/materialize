@@ -915,13 +915,13 @@ fn extract_batch_size_option(
 fn extract_timestamp_frequency_option(
     with_options: &mut HashMap<String, Value>,
 ) -> Result<Duration, failure::Error> {
-    match with_options.remove("timestamp_frequency") {
+    match with_options.remove("timestamp_frequency_ms") {
         None => Ok(Duration::from_secs(1)),
         Some(Value::Number(n)) => match n.parse::<u64>() {
             Ok(n) => Ok(Duration::from_millis(n)),
-            _ => bail!("timestamp_frequency must be an u64"),
+            _ => bail!("timestamp_frequency_ms must be an u64"),
         },
-        Some(_) => bail!("timestamp_frequency must be an u64"),
+        Some(_) => bail!("timestamp_frequency_ms must be an u64"),
     }
 }
 
