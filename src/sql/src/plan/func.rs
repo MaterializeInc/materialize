@@ -15,6 +15,7 @@ use std::convert::TryFrom;
 use std::fmt;
 
 use failure::bail;
+use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
@@ -267,10 +268,8 @@ impl ParamType {
 
     /// Does `self` accept arguments of type `t` with an implicitly allowed cast?
     fn accepts_type_implicitly(&self, from_type: &ScalarType) -> bool {
-        use CastTo::*;
-
         let cast_to = match self {
-            ParamType::Plain(s) => Implicit(s.clone()),
+            ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
         };
 
@@ -357,6 +356,7 @@ impl<'a> ArgImplementationMatcher<'a> {
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-oper.html
     pub fn select_implementation<R>(
         ident: &'a str,
+        err_string_gen: fn(&str, &[Option<ScalarType>], String) -> String,
         ecx: &'a ExprContext<'a>,
         impls: &[FuncImpl<R>],
         cexprs: Vec<CoercibleScalarExpr>,
@@ -367,21 +367,27 @@ impl<'a> ArgImplementationMatcher<'a> {
             .iter()
             .filter(|i| i.params.validate_arg_len(l))
             .collect();
-        let mut m = Self { ident, ecx };
+        let m = Self { ident, ecx };
 
         let types: Vec<_> = cexprs
             .iter()
             .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
             .collect();
 
-        let f = m.find_match(&types, impls)?;
+        // try-catch in Rust.
+        match || -> Result<R, failure::Error> {
+            let f = m.find_match(&types, impls)?;
 
-        let mut exprs = Vec::new();
-        for (i, cexpr) in cexprs.into_iter().enumerate() {
-            exprs.push(m.coerce_arg_to_type(cexpr, &f.params[i])?);
+            let mut exprs = Vec::new();
+            for (i, cexpr) in cexprs.into_iter().enumerate() {
+                exprs.push(m.coerce_arg_to_type(cexpr, &f.params[i])?);
+            }
+
+            (f.op.0)(ecx, exprs)
+        }() {
+            Ok(s) => Ok(s),
+            Err(e) => bail!(err_string_gen(ident, &types, e.to_string())),
         }
-
-        (f.op.0)(ecx, exprs)
     }
 
     /// Finds an exact match based on the arguments, or, if no exact match,
@@ -393,7 +399,7 @@ impl<'a> ArgImplementationMatcher<'a> {
     ///
     /// [pgparser]: https://www.postgresql.org/docs/current/typeconv-func.html
     fn find_match<'b, R>(
-        &mut self,
+        &self,
         types: &[Option<ScalarType>],
         impls: Vec<&'b FuncImpl<R>>,
     ) -> Result<&'b FuncImpl<R>, failure::Error> {
@@ -879,6 +885,22 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, f
     }
 }
 
+fn stringify_opt_scalartype(t: &Option<ScalarType>) -> String {
+    match t {
+        Some(t) => t.to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
+fn func_err_string(ident: &str, types: &[Option<ScalarType>], hint: String) -> String {
+    format!(
+        "Cannot call function {}({}): {}",
+        ident,
+        types.iter().map(|o| stringify_opt_scalartype(o)).join(", "),
+        hint,
+    )
+}
+
 /// Gets a built-in scalar function and the `ScalarExpr`s required to invoke it.
 pub fn select_scalar_func(
     ecx: &ExprContext,
@@ -896,10 +918,7 @@ pub fn select_scalar_func(
         cexprs.push(cexpr);
     }
 
-    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, cexprs) {
-        Ok(expr) => Ok(expr),
-        Err(e) => bail!("Cannot call function '{}': {}", ident, e),
-    }
+    ArgImplementationMatcher::select_implementation(ident, func_err_string, ecx, impls, cexprs)
 }
 
 lazy_static! {
@@ -1179,6 +1198,16 @@ fn rescale_decimals_to_same(
     (lexpr, rexpr)
 }
 
+fn binary_op_err_string(ident: &str, types: &[Option<ScalarType>], hint: String) -> String {
+    format!(
+        "no overload for {} {} {}: {}",
+        stringify_opt_scalartype(&types[0]),
+        ident,
+        stringify_opt_scalartype(&types[1]),
+        hint,
+    )
+}
+
 /// Plans a function compatible with the `BinaryOperator`.
 pub fn plan_binary_op<'a>(
     ecx: &ExprContext,
@@ -1205,20 +1234,13 @@ pub fn plan_binary_op<'a>(
         query::plan_coercible_expr(ecx, right)?.0,
     ];
 
-    match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, cexprs) {
-        Ok(expr) => Ok(expr),
-        Err(e) => {
-            let lexpr = query::plan_expr(ecx, left, None)?;
-            let rexpr = query::plan_expr(ecx, right, None)?;
-            bail!(
-                "no overload for {} {} {}: {}",
-                ecx.scalar_type(&lexpr),
-                op,
-                ecx.scalar_type(&rexpr),
-                e
-            )
-        }
-    }
+    ArgImplementationMatcher::select_implementation(
+        &op.to_string(),
+        binary_op_err_string,
+        ecx,
+        impls,
+        cexprs,
+    )
 }
 
 lazy_static! {
@@ -1248,6 +1270,15 @@ lazy_static! {
     };
 }
 
+fn unary_op_err_string(ident: &str, types: &[Option<ScalarType>], hint: String) -> String {
+    format!(
+        "no overload for {} {}: {}",
+        ident,
+        stringify_opt_scalartype(&types[0]),
+        hint,
+    )
+}
+
 /// Plans a function compatible with the `UnaryOperator`.
 pub fn plan_unary_op<'a>(
     ecx: &ExprContext,
@@ -1261,13 +1292,13 @@ pub fn plan_unary_op<'a>(
 
     let cexpr = vec![query::plan_coercible_expr(ecx, expr)?.0];
 
-    match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, cexpr) {
-        Ok(expr) => Ok(expr),
-        Err(e) => {
-            let lexpr = query::plan_expr(ecx, expr, None)?;
-            bail!("no overload for {} {}: {}", op, ecx.scalar_type(&lexpr), e)
-        }
-    }
+    ArgImplementationMatcher::select_implementation(
+        &op.to_string(),
+        unary_op_err_string,
+        ecx,
+        impls,
+        cexpr,
+    )
 }
 
 pub struct TableFuncPlan {
@@ -1398,10 +1429,7 @@ pub fn select_table_func(
         cexprs.push(cexpr);
     }
 
-    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, cexprs) {
-        Ok(expr) => Ok(expr),
-        Err(e) => bail!("Cannot call function '{}': {}", ident, e),
-    }
+    ArgImplementationMatcher::select_implementation(ident, func_err_string, ecx, impls, cexprs)
 }
 
 lazy_static! {
@@ -1489,8 +1517,5 @@ pub fn select_aggregate_func(
         cexprs.push(cexpr);
     }
 
-    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, cexprs) {
-        Ok(val) => Ok(val),
-        Err(e) => bail!("Cannot call function '{}': {}", ident, e),
-    }
+    ArgImplementationMatcher::select_implementation(ident, func_err_string, ecx, impls, cexprs)
 }
