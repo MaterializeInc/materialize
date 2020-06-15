@@ -19,11 +19,11 @@
 # limitations under the License.
 
 parse-statement
-EXPLAIN SQL FOR SELECT 665
+EXPLAIN SELECT 665
 ----
-EXPLAIN SQL FOR SELECT 665
+EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-Explain { stage: Sql, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } }
+Explain { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }), options: ExplainOptions { typed: false } }
 
 parse-statement
 EXPLAIN RAW PLAN FOR SELECT 665

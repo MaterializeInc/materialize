@@ -21,8 +21,6 @@ into Materialize's behavior for specific queries, e.g. performance.
 
 Field | Use
 ------|-----
-**SQL** | Display the original SQL string
-**PLAN** | Display the plan at some stage (defaults to **OPTIMIZED**)
 **TYPED** | Annotate the plan with column types and unique keys
 **RAW** | Display the raw plan
 **DECORRELATED** | Display the decorrelated plan

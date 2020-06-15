@@ -120,7 +120,6 @@ pub fn describe_statement(
         } => (
             Some(RelationDesc::empty().with_nonnull_column(
                 match stage {
-                    ExplainStage::Sql => "Sql",
                     ExplainStage::RawPlan => "Raw Plan",
                     ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
                     ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
@@ -1667,7 +1666,7 @@ fn handle_explain(
     } else {
         false
     };
-    let (scx, sql, query) = match explainee {
+    let (scx, query) = match explainee {
         Explainee::View(name) => {
             let full_name = scx.resolve_item(name.clone())?;
             let entry = scx.catalog.get_item(&full_name);
@@ -1688,9 +1687,9 @@ fn handle_explain(
                 pcx: entry.plan_cx(),
                 catalog: scx.catalog,
             };
-            (scx, entry.create_sql().to_owned(), *query)
+            (scx, *query)
         }
-        Explainee::Query(query) => (scx.clone(), query.to_string(), query),
+        Explainee::Query(query) => (scx.clone(), query),
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
@@ -1708,7 +1707,6 @@ fn handle_explain(
     sql_expr.bind_parameters(&params);
     let expr = sql_expr.clone().decorrelate();
     Ok(Plan::ExplainPlan {
-        sql,
         raw_plan: sql_expr,
         decorrelated_plan: expr,
         row_set_finishing: finishing,

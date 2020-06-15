@@ -243,7 +243,7 @@ pub enum Statement {
         with_snapshot: bool,
         as_of: Option<Expr>,
     },
-    /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
+    /// `EXPLAIN ...`
     Explain {
         stage: ExplainStage,
         explainee: Explainee,
@@ -888,8 +888,6 @@ impl_display!(Assignment);
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExplainStage {
-    /// The original sql string
-    Sql,
     /// The sql::RelationExpr after parsing
     RawPlan,
     /// The expr::RelationExpr after decorrelation
@@ -901,7 +899,6 @@ pub enum ExplainStage {
 impl AstDisplay for ExplainStage {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            ExplainStage::Sql => f.write_str("SQL"),
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),

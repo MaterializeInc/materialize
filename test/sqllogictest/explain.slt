@@ -10,12 +10,6 @@
 mode cockroach
 
 query T multiline
-EXPLAIN SQL FOR SELECT * FROM (SELECT 1)
-----
-SELECT * FROM (SELECT 1)
-EOF
-
-query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM (SELECT 1)
 ----
 %0 =
@@ -93,12 +87,6 @@ EOF
 
 statement ok
 CREATE VIEW foo AS SELECT * FROM (SELECT 1)
-
-query T multiline
-EXPLAIN SQL FOR VIEW foo
-----
-CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM (SELECT 1)
-EOF
 
 query T multiline
 EXPLAIN DECORRELATED PLAN FOR VIEW foo
