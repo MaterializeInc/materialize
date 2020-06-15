@@ -22,7 +22,7 @@ interchange = { path = "../interchange" }
 itertools = "0.9"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
-md-5 = "0.8"
+md-5 = "0.9"
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }

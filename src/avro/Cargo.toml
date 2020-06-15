@@ -28,6 +28,6 @@ sha2 = "0.8"
 snap = { version = "1", optional = true }
 
 [dev-dependencies]
-md-5 = "0.8"
+md-5 = "0.9"
 lazy_static = "^1.1"
 sha2 = "0.8"
