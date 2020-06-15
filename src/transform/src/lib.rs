@@ -27,7 +27,6 @@ use std::fmt;
 
 use expr::{EvalError, GlobalId, IdGen, OptimizedRelationExpr, RelationExpr, ScalarExpr};
 
-// pub mod binding;
 pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
@@ -194,9 +193,6 @@ impl Default for Optimizer {
             Box::new(crate::fusion::join::Join),
             Box::new(crate::join_elision::JoinElision),
             Box::new(crate::empty_map::EmptyMap),
-            // Unbinding risks exponential blow-up on queries with deep let bindings.
-            // Box::new(crate::binding::Unbind),
-            // Box::new(crate::binding::Deduplicate),
             // Early actions include "no-brainer" transformations that reduce complexity in linear passes.
             Box::new(crate::join_elision::JoinElision),
             Box::new(crate::reduction::FoldConstants),
