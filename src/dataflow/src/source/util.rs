@@ -9,6 +9,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use expr::SourceInstanceId;
 
@@ -49,9 +51,13 @@ use super::{SourceStatus, SourceToken};
 /// [`SourceToken`]. When the last clone of the `SourceToken` is dropped, the
 /// `tick` function will no longer be called, and the capability will eventually
 /// be dropped.
+///
+/// When the source token is dropped, the timestamping_flag is set to false
+/// to terminate any spawned threads in the source operator
 pub fn source<G, D, B, L>(
     id: SourceInstanceId,
-    timestamp: Option<TimestampChanges>,
+    timestamp_channel: Option<TimestampChanges>,
+    timestamping_flag: Arc<AtomicBool>,
     scope: &G,
     name: &str,
     construct: B,
@@ -75,7 +81,8 @@ where
             id,
             capability: cap.clone(),
             activator: scope.activator_for(&info.address[..]),
-            timestamp_drop: timestamp,
+            timestamp_drop: timestamp_channel,
+            stop_timestamping: timestamping_flag,
         });
 
         let mut tick = construct(info);

@@ -7,6 +7,34 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set consistency={
+     "name": "materialize.byo.consistency",
+     "type": "record",
+     "fields": [
+         {
+           "name": "source",
+           "type": "string"
+         },
+         {
+           "name": "partition_count",
+           "type": "int"
+         },
+         {
+           "name": "partition_id",
+           "type": ["int","string"]
+         },
+         {
+            "name": "timestamp",
+            "type": "long"
+         },
+         {
+           "name": "offset",
+           "type": "long"
+         }
+     ]
+  }
+
+
 $ set names-schema={
     "type": "record",
     "name": "envelope",
@@ -29,7 +57,13 @@ $ set names-schema={
     ]
   }
 
+$ kafka-create-topic topic=data-consistency
+
 $ kafka-create-topic topic=names
+
+$ kafka-ingest format=avro topic=data-consistency schema=${consistency}
+{"source": "names", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 3}
+
 
 $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
 {"before": null, "after": {"num": 1, "name": "one"}}
@@ -38,6 +72,7 @@ $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
 
 > CREATE MATERIALIZED SOURCE names
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-names-${testdrive.seed}'
+  with (consistency='data-consistency')
   FORMAT AVRO USING SCHEMA '${names-schema}'
   ENVELOPE DEBEZIUM
 

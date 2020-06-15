@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::executor::block_on;
@@ -87,52 +89,118 @@ where
 
     let SourceConfig { name, scope, .. } = config;
 
-    let (stream, capability) = source(config.id, ts, scope, &name.clone(), move |info| {
-        let activator = scope.activator_for(&info.address[..]);
+    let (stream, capability) = source(
+        config.id,
+        ts,
+        Arc::new(AtomicBool::new(false)),
+        scope,
+        &name.clone(),
+        move |info| {
+            let activator = scope.activator_for(&info.address[..]);
 
-        move |cap, output| {
-            let (client, stream_name, shard_set, shard_queue) = match &mut state {
-                Ok(state) => state,
-                Err(e) => {
-                    error!("failed to create Kinesis state: {:#?}", e);
-                    return SourceStatus::Done;
+            move |cap, output| {
+                let (client, stream_name, shard_set, shard_queue) = match &mut state {
+                    Ok(state) => state,
+                    Err(e) => {
+                        error!("failed to create Kinesis state: {:#?}", e);
+                        return SourceStatus::Done;
+                    }
+                };
+
+                if last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
+                    if let Err(e) = block_on(update_shard_information(
+                        &client,
+                        &stream_name,
+                        shard_set,
+                        shard_queue,
+                    )) {
+                        error!("{:#?}", e);
+                        return SourceStatus::Done;
+                    }
+                    last_checked_shards = std::time::Instant::now();
                 }
-            };
 
-            if last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
-                if let Err(e) = block_on(update_shard_information(
-                    &client,
-                    &stream_name,
-                    shard_set,
-                    shard_queue,
-                )) {
-                    error!("{:#?}", e);
-                    return SourceStatus::Done;
-                }
-                last_checked_shards = std::time::Instant::now();
-            }
-
-            let timer = std::time::Instant::now();
-            // Rotate through all of a stream's shards, start with a new shard on each activation.
-            while let Some((shard_id, mut shard_iterator)) = shard_queue.pop_front() {
-                // While the next_shard_iterator is Some(iterator), the shard is open
-                // and could return more data.
-                while let Some(iterator) = &shard_iterator {
-                    // Pushing back to the shard_queue will allow us to read from the
-                    // shard again.
-                    let get_records_output = match block_on(get_records(&client, &iterator)) {
-                        Ok(output) => {
-                            shard_iterator = output.next_shard_iterator.clone();
-                            if let Some(millis) = output.millis_behind_latest {
-                                let shard_metrics: IntGauge = MILLIS_BEHIND_LATEST
-                                    .with_label_values(&[&stream_name, &shard_id]);
-                                shard_metrics.set(millis);
+                let timer = std::time::Instant::now();
+                // Rotate through all of a stream's shards, start with a new shard on each activation.
+                while let Some((shard_id, mut shard_iterator)) = shard_queue.pop_front() {
+                    // While the next_shard_iterator is Some(iterator), the shard is open
+                    // and could return more data.
+                    while let Some(iterator) = &shard_iterator {
+                        // Pushing back to the shard_queue will allow us to read from the
+                        // shard again.
+                        let get_records_output = match block_on(get_records(&client, &iterator)) {
+                            Ok(output) => {
+                                shard_iterator = output.next_shard_iterator.clone();
+                                if let Some(millis) = output.millis_behind_latest {
+                                    let shard_metrics: IntGauge = MILLIS_BEHIND_LATEST
+                                        .with_label_values(&[&stream_name, &shard_id]);
+                                    shard_metrics.set(millis);
+                                }
+                                output
                             }
+                            Err(RusotoError::HttpDispatch(e)) => {
+                                // todo@jldlaughlin: Parse this to determine fatal/retriable?
+                                error!("{}", e);
+                                return reactivate_kinesis_source(
+                                    &activator,
+                                    shard_queue,
+                                    &shard_id,
+                                    shard_iterator,
+                                );
+                            }
+                            Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
+                                // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
+                                error!("{}", e);
+                                return SourceStatus::Done;
+                            }
+                            Err(RusotoError::Service(
+                                GetRecordsError::ProvisionedThroughputExceeded(_),
+                            )) => {
+                                return reactivate_kinesis_source(
+                                    &activator,
+                                    shard_queue,
+                                    &shard_id,
+                                    shard_iterator,
+                                );
+                            }
+                            Err(e) => {
+                                // Fatal service errors:
+                                //  - InvalidArgument
+                                //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
+                                //    KMSOptInRequired, KMSThrottling
+                                //  - ResourceNotFound
+                                //
+                                // Other fatal Rusoto errors:
+                                // - Credentials
+                                // - Validation
+                                // - ParseError
+                                // - Unknown (raw HTTP provided)
+                                // - Blocking
+                                error!("{}", e);
+                                return SourceStatus::Done;
+                            }
+                        };
+
+                        let mut events_success = 0;
+                        let mut bytes_read = 0;
+                        for record in get_records_output.records {
+                            let data = record.data.as_ref().to_vec();
+                            bytes_read += data.len() as i64;
+                            // We don't do anything with keys; just send vec![] for now.
+                            // Kinesis doesn't have "primary keys" but it does have "partition keys" and "sequence numbers"; maybe
+                            // one or both of those could be useful...
                             output
+                                .session(&cap)
+                                .give(SourceOutput::new(vec![], data, None));
+                            events_success += 1;
                         }
-                        Err(RusotoError::HttpDispatch(e)) => {
-                            // todo@jldlaughlin: Parse this to determine fatal/retriable?
-                            error!("{}", e);
+                        downgrade_capability(cap, &name);
+                        EVENTS_COUNTER.raw.success.inc_by(events_success);
+                        BYTES_READ_COUNTER.inc_by(bytes_read);
+
+                        if get_records_output.millis_behind_latest == Some(0)
+                            || timer.elapsed().as_millis() > 10
+                        {
                             return reactivate_kinesis_source(
                                 &activator,
                                 shard_queue,
@@ -140,78 +208,19 @@ where
                                 shard_iterator,
                             );
                         }
-                        Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
-                            // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
-                            error!("{}", e);
-                            return SourceStatus::Done;
-                        }
-                        Err(RusotoError::Service(
-                            GetRecordsError::ProvisionedThroughputExceeded(_),
-                        )) => {
-                            return reactivate_kinesis_source(
-                                &activator,
-                                shard_queue,
-                                &shard_id,
-                                shard_iterator,
-                            );
-                        }
-                        Err(e) => {
-                            // Fatal service errors:
-                            //  - InvalidArgument
-                            //  - KMSAccessDenied, KMSDisabled, KMSInvalidState, KMSNotFound,
-                            //    KMSOptInRequired, KMSThrottling
-                            //  - ResourceNotFound
-                            //
-                            // Other fatal Rusoto errors:
-                            // - Credentials
-                            // - Validation
-                            // - ParseError
-                            // - Unknown (raw HTTP provided)
-                            // - Blocking
-                            error!("{}", e);
-                            return SourceStatus::Done;
-                        }
-                    };
 
-                    let mut events_success = 0;
-                    let mut bytes_read = 0;
-                    for record in get_records_output.records {
-                        let data = record.data.as_ref().to_vec();
-                        bytes_read += data.len() as i64;
-                        // We don't do anything with keys; just send vec![] for now.
-                        // Kinesis doesn't have "primary keys" but it does have "partition keys" and "sequence numbers"; maybe
-                        // one or both of those could be useful...
-                        output
-                            .session(&cap)
-                            .give(SourceOutput::new(vec![], data, None));
-                        events_success += 1;
+                        // Each Kinesis shard can support up to 5 read requests per second.
+                        // This will throttle ourselves.
+                        activator.activate();
                     }
-                    downgrade_capability(cap, &name);
-                    EVENTS_COUNTER.raw.success.inc_by(events_success);
-                    BYTES_READ_COUNTER.inc_by(bytes_read);
-
-                    if get_records_output.millis_behind_latest == Some(0)
-                        || timer.elapsed().as_millis() > 10
-                    {
-                        return reactivate_kinesis_source(
-                            &activator,
-                            shard_queue,
-                            &shard_id,
-                            shard_iterator,
-                        );
-                    }
-
-                    // Each Kinesis shard can support up to 5 read requests per second.
-                    // This will throttle ourselves.
-                    activator.activate();
                 }
+                // todo@jdlaughlin: Revisit when Kinesis sources should be marked as done.
+                // Should switch to when we fail to get a stream description (the stream is
+                // closed)?
+                SourceStatus::Done
             }
-            // todo@jdlaughlin: Revisit when Kinesis sources should be marked as done.
-            // Should switch to when we fail to get a stream description (the stream is
-            // closed)?
-            SourceStatus::Done
-        }
-    });
+        },
+    );
 
     if config.active {
         (stream, Some(capability))
