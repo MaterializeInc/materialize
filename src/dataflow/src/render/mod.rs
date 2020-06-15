@@ -710,7 +710,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 };
 
                 if let Some(sink_token) = sink_shutdown {
-                    needed_sink_tokens.push(sink_token);
+                    needed_sink_tokens.push(sink_token.press_on_drop());
                 }
 
                 let tokens = Rc::new((
