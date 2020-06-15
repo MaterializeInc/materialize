@@ -96,10 +96,10 @@ foo1 foo2 c
 
 # Verify we can't resolve columns using overridden table or colum names.
 
-query error no data source matches prefix: abc
+query error column "abc.foo1" does not exist
 SELECT abc.foo1 FROM abc AS foo (foo1)
 
-query error no data source matches prefix: abc
+query error column "abc.b" does not exist
 SELECT abc.b FROM abc AS foo (foo1)
 
 query error column "foo.a" does not exist
@@ -108,7 +108,7 @@ SELECT foo.a FROM abc AS foo (foo1)
 
 # Verify error for too many column aliases.
 
-query error pgcode 42P10 source "foo" has 3 columns available but 4 columns specified
+query error pgcode 42P10 foo has 3 columns available but 4 columns specified
 SELECT * FROM abc AS foo (foo1, foo2, foo3, foo4)
 
 
@@ -128,23 +128,27 @@ foo1 foo2
 1 3
 2 5
 
-statement ok
-SELECT rowid, foo.rowid FROM ab AS foo (foo1, foo2)
+# NOTE(benesch): rowid is a CockroachDB-ism that we are unlikely to support.
+#
+# statement ok
+# SELECT rowid, foo.rowid FROM ab AS foo (foo1, foo2)
+#
+# query error no data source matches prefix: ab
+# SELECT ab.rowid FROM ab AS foo (foo1)
 
-query error no data source matches prefix: ab
-SELECT ab.rowid FROM ab AS foo (foo1)
-
-query error source "foo" has 2 columns available but 3 columns specified
+query error foo has 2 columns available but 3 columns specified
 SELECT * FROM ab AS foo (foo1, foo2, foo3)
 
-query T colnames
-SELECT * FROM to_english(3) AS x
-----
-x
-three
-
-query T colnames
-TABLE ROWS FROM (to_english(3)) AS x;
-----
-x
-three
+# TODO(benesch): support scalar functions in table position.
+#
+# query T colnames
+# SELECT * FROM length('abc') AS x
+# ----
+# x
+# 3
+#
+# query T colnames
+# TABLE ROWS FROM length('abc') AS x
+# ----
+# x
+# 3

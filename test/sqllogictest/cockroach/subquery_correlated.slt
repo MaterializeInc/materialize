@@ -915,10 +915,13 @@ ORDER BY (SELECT count(*) FROM o WHERE o.c_id=c.c_id) DESC
 1  1
 0  2
 
-statement error supported
+# Subquery in VALUES clause.
+query III
 SELECT c_cnt, o_cnt, c_cnt + o_cnt AS total
 FROM (VALUES ((SELECT count(*) FROM c), (SELECT count(*) FROM o))) AS v(c_cnt, o_cnt)
 WHERE c_cnt > 0 AND o_cnt > 0;
+----
+6  9  15
 
 # Subquery in JOIN condition.
 query II rowsort

@@ -126,7 +126,7 @@ tests=(
     # test/sqllogictest/cockroach/select_index_span_ranges.slt
     # test/sqllogictest/cockroach/select_index.slt
     test/sqllogictest/cockroach/select_search_path.slt
-    # test/sqllogictest/cockroach/select_table_alias.slt
+    test/sqllogictest/cockroach/select_table_alias.slt
     # test/sqllogictest/cockroach/select.slt
     test/sqllogictest/cockroach/shift.slt
     # test/sqllogictest/cockroach/sqlsmith.slt
@@ -148,7 +148,7 @@ tests=(
     test/sqllogictest/cockroach/update.slt
     test/sqllogictest/cockroach/upsert.slt
     test/sqllogictest/cockroach/uuid.slt
-    # test/sqllogictest/cockroach/values.slt
+    test/sqllogictest/cockroach/values.slt
     # test/sqllogictest/cockroach/views.slt
     # test/sqllogictest/cockroach/where.slt
     test/sqllogictest/cockroach/window.slt
