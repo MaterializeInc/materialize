@@ -1,5 +1,5 @@
 ---
-title: "CREATE SOURCE: Protobuf"
+title: "CREATE SOURCE: Protobuf over Kafka"
 description: "Learn how to connect Materialize to a Protobuf-formatted Kafka topic"
 menu:
   main:

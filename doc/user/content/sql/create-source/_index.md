@@ -24,15 +24,17 @@ Materialize can connect to many different external sources of data, each with
 their own requirements. For details about creating sources, view the
 documentation for the type of data you are trying to load into Materialize:
 
-- [Avro over Kafka](./avro-kafka)
-- [Text or bytes over Kafka](./text-kafka)
-- [Avro from local file](./avro-file)
-- [Protobuf over Kafka](./protobuf-kafka)
-- [JSON over Kinesis](./json-kinesis) (Beta)
-- [Local CSV files](./csv-file)
-- [Other local files (e.g. text, JSON)](./text-file)
+Data format | Kafka | Kinesis (Alpha) | Local files
+----------------|-------|---------|-------------
+Avro | [Avro + Kafka](./avro-kafka) | - | [Avro + file](./avro-file)
+Text/bytes | [Text/bytes + Kafka](./text-kafka) | [Text/bytes + Kinesis](./text-kinesis) | [Text/bytes + file](./text-file)
+Protobuf | [Protobuf + Kafka](./protobuf-kafka) | [Protobuf + Kinesis](./protobuf-kinesis) | -
+CSV | [CSV + Kafka](./csv-kafka) |  [CSV + Kinesis](./csv-kinesis) | [CSV + files](./csv-file)
+JSON | [JSON + Kafka](./json-kafka) | [JSON + Kinesis](./json-kinesis) | [JSON + file](./text-file)
 
 Don't see what you're looking for? [Let us know on GitHub](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md).
+
+{{< kinesis-alpha >}}
 
 ## Related pages
 

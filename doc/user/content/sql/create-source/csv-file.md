@@ -1,6 +1,6 @@
 ---
-title: "CREATE SOURCE: CSV"
-description: "Learn how to connect Materialize to a Protobuf-formatted Kafka topic"
+title: "CREATE SOURCE: CSV from local file"
+description: "Learn how to connect Materialize to local CSV files"
 menu:
   main:
     parent: 'create-source'
@@ -15,7 +15,7 @@ This document details how to connect Materialize to local CSV files.
 
 ## Syntax
 
-{{< diagram "create-source-csv.svg" >}}
+{{< diagram "create-source-csv-file.svg" >}}
 
 {{% create-source/syntax-details connector="file" formats="csv" envelopes="append-only" %}}
 
@@ -32,8 +32,8 @@ FORMAT CSV WITH HEADER;
 This creates a source that...
 
 - Is append-only.
-- Has as many columns as the first row, and uses that row to name the columns.
 - Materialize reads once during source creation.
+- Has as many columns as the first row of the CSV file, and uses that row to name the columns.
 
 ### Creating a source from a dynamic CSV
 

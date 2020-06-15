@@ -1,5 +1,5 @@
 ---
-title: "CREATE SOURCE: Text or bytes"
+title: "CREATE SOURCE: Text or bytes from local file"
 description: "Learn how to connect Materialize to a text file"
 menu:
   main:

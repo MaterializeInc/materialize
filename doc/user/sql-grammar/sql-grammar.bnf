@@ -39,22 +39,47 @@ create_source ::=
   'FROM' connector_spec
   'FORMAT' format_spec
   ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
-create_source_csv ::=
+create_source_csv_file ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
-create_source_kinesis ::=
+create_source_csv_kafka ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
+  ('DELIMITED BY' char)?
+create_source_csv_kinesis ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
+  ('DELIMITED BY' char)?
+create_source_json_kinesis ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' 'BYTES'
+create_source_json_kafka ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
+  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'BYTES'
 create_source_protobuf_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' 'PROTOBUF MESSAGE' message_name
+  'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
+create_source_protobuf_kinesis ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'PROTOBUF MESSAGE' message_name
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
 create_source_text ::=
@@ -71,6 +96,17 @@ create_source_text_kafka ::=
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' ('BYTES' | 'TEXT')
+  ('ENVELOPE'
+    (
+      'NONE' |
+      ('UPSERT' ('FORMAT' ('BYTES' | 'TEXT'))?)
+    )
+  )?
+create_source_text_kinesis ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' ('BYTES' | 'TEXT')
   ('ENVELOPE'
     (
