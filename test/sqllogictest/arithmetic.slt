@@ -464,13 +464,13 @@ SELECT round((SELECT * FROM nums));
 ----
 NULL
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(f64, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round((SELECT * FROM nums), 2)
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(f64, f64\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round((SELECT * FROM nums), (SELECT * FROM nums))
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(decimal\(38, 1\), f64\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(5.0, (SELECT * FROM nums))
 
 query R
@@ -478,22 +478,22 @@ SELECT round(5.0, CAST ((SELECT * FROM nums) AS integer))
 ----
 NULL
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(f64, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS double precision), 3)
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(f64, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), 3)
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(bool, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(true, 3)
 
 query error
 SELECT round(true)
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(f64, decimal\(38, 1\)\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), 3.0)
 
-query error Cannot call function 'round': arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+query error Cannot call function round\(f64, f64\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT round(CAST (5.0 AS float), CAST (3.0 AS float))
 
 query I
