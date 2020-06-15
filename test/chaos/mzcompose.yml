@@ -91,7 +91,7 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 5
-            --message-count 10000
+            --message-count 1000000
         - step: chaos-confirm
           service: materialized
           running: true
@@ -121,9 +121,7 @@ mzconduct:
             --message-count 10000
         - step: chaos-pause-docker
           service: kafka
-          loop: true
-          running_time: 60
-          paused_time: 30
+          other_service: chaos_run
 
     # This test is designed to stop and start the running Kafka broker
     # (chaos-kill-container sends a SIGTERM, then SIGKILL signal to the
@@ -145,12 +143,10 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 5
-            --message-count 10000
+            --message-count 1000000
         - step: chaos-stop-docker
           service: kafka
-          loop: true
-          running_time: 60
-          stopped_time: 30
+          other_service: chaos_run
 
     # This test is designed to kill the running Kafka broker
     # (chaos-kill-container sends a SIGKILL signal to the container).
@@ -171,7 +167,7 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 5
-            --message-count 10000
+            --message-count 1000000
         - step: chaos-kill-docker
           service: kafka
         - step: chaos-confirm
