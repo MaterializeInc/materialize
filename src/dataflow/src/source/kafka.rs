@@ -20,10 +20,11 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
+use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{
     register_int_counter, register_int_counter_vec, register_int_gauge_vec,
-    register_uint_gauge_vec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, UIntGauge,
-    UIntGaugeVec,
+    register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
+    IntGauge, IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -81,10 +82,10 @@ impl SourceMetrics {
 
 /// Per-Kafka source partition metrics.
 pub struct PartitionMetrics {
-    offset_ingested: IntGauge,
-    offset_received: IntGauge,
-    closed_ts: UIntGauge,
-    messages_ingested: IntCounter,
+    offset_ingested: DeleteOnDropGauge<'static, AtomicI64>,
+    offset_received: DeleteOnDropGauge<'static, AtomicI64>,
+    closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
+    messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
 }
 
 impl PartitionMetrics {
@@ -119,10 +120,26 @@ impl PartitionMetrics {
         }
         let labels = &[topic_name, source_id, partition_id];
         PartitionMetrics {
-            offset_ingested: OFFSET_INGESTED.with_label_values(labels),
-            offset_received: OFFSET_RECEIVED.with_label_values(labels),
-            closed_ts: CLOSED_TS.with_label_values(labels),
-            messages_ingested: MESSAGES_INGESTED.with_label_values(labels),
+            offset_ingested: DeleteOnDropGauge::new_with_error_handler(
+                OFFSET_INGESTED.with_label_values(labels),
+                &OFFSET_INGESTED,
+                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+            ),
+            offset_received: DeleteOnDropGauge::new_with_error_handler(
+                OFFSET_RECEIVED.with_label_values(labels),
+                &OFFSET_RECEIVED,
+                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+            ),
+            closed_ts: DeleteOnDropGauge::new_with_error_handler(
+                CLOSED_TS.with_label_values(labels),
+                &CLOSED_TS,
+                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+            ),
+            messages_ingested: DeleteOnDropCounter::new_with_error_handler(
+                MESSAGES_INGESTED.with_label_values(labels),
+                &MESSAGES_INGESTED,
+                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+            ),
         }
     }
 }
