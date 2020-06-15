@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{cmp, thread};
 
 use dataflow_types::{
-    Consistency, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
+    Consistency, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
 };
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
@@ -37,6 +37,7 @@ use url::Url;
 
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
+use crate::server::TimestampMetadataChange::StartTimestamping;
 use crate::server::{TimestampChanges, TimestampHistories};
 use ore::collections::CollectionExt;
 
@@ -719,8 +720,7 @@ impl ControlPlaneInfo {
 /// 2) for a RT source, take no steps
 //
 fn activate_source_timestamping<G>(
-    config: &SourceConfig<G>,
-    connector: KafkaSourceConnector,
+    config: &SourceConfig<G>
 ) -> Option<TimestampChanges> {
     if let Consistency::BringYourOwn(_) = config.consistency {
         let prev = config
@@ -729,13 +729,11 @@ fn activate_source_timestamping<G>(
             .insert(config.id.clone(), HashMap::new());
         // Check that this is the first time this source id is registered
         assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::Kafka(connector),
-                config.consistency.clone(),
-            )),
-        ));
+        config
+            .timestamp_tx
+            .as_ref()
+            .borrow_mut()
+            .push(StartTimestamping(config.id));
         return Some(config.timestamp_tx.clone());
     }
     None
@@ -856,9 +854,9 @@ where
         config_options,
         start_offset,
         group_id_prefix,
-    } = connector.clone();
+    } = connector;
 
-    let timestamp_channel = activate_source_timestamping(&config, connector);
+    let timestamp_channel = activate_source_timestamping(&config);
     let timestamping_stopped = Arc::new(AtomicBool::new(false));
 
     let SourceConfig {

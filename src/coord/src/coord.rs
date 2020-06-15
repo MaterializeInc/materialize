@@ -471,7 +471,7 @@ where
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
-                    message: WorkerFeedback::CreateSource(source_id, _sc),
+                    message: WorkerFeedback::CreateSource(source_id),
                 }) => {
                     if let Some(entry) = self.catalog.try_get_by_id(source_id.sid) {
                         if let CatalogItem::Source(s) = entry.item() {

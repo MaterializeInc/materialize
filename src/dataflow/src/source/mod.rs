@@ -25,7 +25,7 @@ use timely::{scheduling::Activator, Data};
 use dataflow_types::{Consistency, Timestamp};
 use expr::SourceInstanceId;
 
-use crate::server::{TimestampChanges, TimestampHistories};
+use crate::server::{TimestampChanges, TimestampHistories, TimestampMetadataChange};
 
 mod file;
 mod kafka;
@@ -157,7 +157,7 @@ impl Drop for SourceToken {
                 .as_ref()
                 .unwrap()
                 .borrow_mut()
-                .push((self.id, None));
+                .push(TimestampMetadataChange::StopTimestamping(self.id));
         }
         self.stop_timestamping.store(true, Ordering::SeqCst);
     }

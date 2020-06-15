@@ -20,7 +20,7 @@ use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 
 use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
-use dataflow_types::{ExternalSourceConnector, KinesisSourceConnector, Timestamp};
+use dataflow_types::{KinesisSourceConnector,Timestamp};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
@@ -28,6 +28,7 @@ use timely::scheduling::Activator;
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
 use crate::metrics::EVENTS_COUNTER;
+use crate::server::TimestampMetadataChange::StartTimestamping;
 
 lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
@@ -72,13 +73,11 @@ where
             .borrow_mut()
             .insert(config.id.clone(), HashMap::new());
         assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::Kinesis(connector.clone()),
-                config.consistency,
-            )),
-        ));
+        config
+            .timestamp_tx
+            .as_ref()
+            .borrow_mut()
+            .push(StartTimestamping(config.id));
         Some(config.timestamp_tx)
     } else {
         None
