@@ -31,7 +31,7 @@ serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git",
 serde-value = "0.7.0"
 serde_json = "1.0.56"
 smallvec = "1.4.1"
-sha2 = "0.8"
+sha2 = "0.9.1"
 url = "2.1.1"
 base64 = "0.12.3"
 
