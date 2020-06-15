@@ -359,21 +359,15 @@ impl<'a> ArgImplementationMatcher<'a> {
         ident: &'a str,
         ecx: &'a ExprContext<'a>,
         impls: &[FuncImpl<R>],
-        args: &[Expr],
+        cexprs: Vec<CoercibleScalarExpr>,
     ) -> Result<R, failure::Error> {
         // Immediately remove all `impls` we know are invalid.
-        let l = args.len();
+        let l = cexprs.len();
         let impls = impls
             .iter()
             .filter(|i| i.params.validate_arg_len(l))
             .collect();
         let mut m = Self { ident, ecx };
-
-        let mut cexprs = Vec::new();
-        for arg in args {
-            let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
-            cexprs.push(cexpr);
-        }
 
         let types: Vec<_> = cexprs
             .iter()
@@ -896,7 +890,13 @@ pub fn select_scalar_func(
         None => unsupported!(ident),
     };
 
-    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
+    let mut cexprs = Vec::new();
+    for arg in args {
+        let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
+        cexprs.push(cexpr);
+    }
+
+    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, cexprs) {
         Ok(expr) => Ok(expr),
         Err(e) => bail!("Cannot call function '{}': {}", ident, e),
     }
@@ -1200,9 +1200,12 @@ pub fn plan_binary_op<'a>(
         None => unsupported!(op),
     };
 
-    let args = vec![left.clone(), right.clone()];
+    let cexprs = vec![
+        query::plan_coercible_expr(ecx, left)?.0,
+        query::plan_coercible_expr(ecx, right)?.0,
+    ];
 
-    match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, &args) {
+    match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, cexprs) {
         Ok(expr) => Ok(expr),
         Err(e) => {
             let lexpr = query::plan_expr(ecx, left, None)?;
@@ -1256,12 +1259,9 @@ pub fn plan_unary_op<'a>(
         None => unsupported!(op),
     };
 
-    match ArgImplementationMatcher::select_implementation(
-        &op.to_string(),
-        ecx,
-        impls,
-        &[expr.clone()],
-    ) {
+    let cexpr = vec![query::plan_coercible_expr(ecx, expr)?.0];
+
+    match ArgImplementationMatcher::select_implementation(&op.to_string(), ecx, impls, cexpr) {
         Ok(expr) => Ok(expr),
         Err(e) => {
             let lexpr = query::plan_expr(ecx, expr, None)?;
@@ -1392,7 +1392,13 @@ pub fn select_table_func(
         None => unsupported!(ident),
     };
 
-    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
+    let mut cexprs = Vec::new();
+    for arg in args {
+        let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
+        cexprs.push(cexpr);
+    }
+
+    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, cexprs) {
         Ok(expr) => Ok(expr),
         Err(e) => bail!("Cannot call function '{}': {}", ident, e),
     }
@@ -1477,7 +1483,13 @@ pub fn select_aggregate_func(
         None => unsupported!(ident),
     };
 
-    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, args) {
+    let mut cexprs = Vec::new();
+    for arg in args {
+        let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
+        cexprs.push(cexpr);
+    }
+
+    match ArgImplementationMatcher::select_implementation(ident, ecx, impls, cexprs) {
         Ok(val) => Ok(val),
         Err(e) => bail!("Cannot call function '{}': {}", ident, e),
     }
