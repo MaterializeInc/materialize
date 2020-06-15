@@ -166,32 +166,32 @@ where
     Operation(Box::new(f))
 }
 
-impl Into<Operation<ScalarExpr>> for UnaryFunc {
-    fn into(self) -> Operation<ScalarExpr> {
-        unary_op(move |_ecx, e| Ok(e.call_unary(self.clone())))
+impl From<UnaryFunc> for Operation<ScalarExpr> {
+    fn from(u: UnaryFunc) -> Operation<ScalarExpr> {
+        unary_op(move |_ecx, e| Ok(e.call_unary(u.clone())))
     }
 }
 
-impl Into<Operation<ScalarExpr>> for BinaryFunc {
-    fn into(self) -> Operation<ScalarExpr> {
-        binary_op(move |_ecx, left, right| Ok(left.call_binary(right, self.clone())))
+impl From<BinaryFunc> for Operation<ScalarExpr> {
+    fn from(b: BinaryFunc) -> Operation<ScalarExpr> {
+        binary_op(move |_ecx, left, right| Ok(left.call_binary(right, b.clone())))
     }
 }
 
-impl Into<Operation<ScalarExpr>> for VariadicFunc {
-    fn into(self) -> Operation<ScalarExpr> {
+impl From<VariadicFunc> for Operation<ScalarExpr> {
+    fn from(v: VariadicFunc) -> Operation<ScalarExpr> {
         variadic_op(move |_ecx, exprs| {
             Ok(ScalarExpr::CallVariadic {
-                func: self.clone(),
+                func: v.clone(),
                 exprs,
             })
         })
     }
 }
 
-impl Into<Operation<(ScalarExpr, AggregateFunc)>> for AggregateFunc {
-    fn into(self) -> Operation<(ScalarExpr, AggregateFunc)> {
-        unary_op(move |_ecx, e| Ok((e, self.clone())))
+impl From<AggregateFunc> for Operation<(ScalarExpr, AggregateFunc)> {
+    fn from(a: AggregateFunc) -> Operation<(ScalarExpr, AggregateFunc)> {
+        unary_op(move |_ecx, e| Ok((e, a.clone())))
     }
 }
 
@@ -217,14 +217,10 @@ impl ParamList {
     /// Matches a `&[ScalarType]` derived from the user's function argument
     /// against this `ParamList`'s permitted arguments.
     fn match_scalartypes(&self, types: &[&ScalarType]) -> bool {
-        use ParamList::*;
-        match self {
-            Exact(p) => p.iter().zip(types.iter()).all(|(p, t)| p.accepts_type(t)),
-            Repeat(p) => types
-                .iter()
-                .enumerate()
-                .all(|(i, t)| p[i % p.len()].accepts_type(t)),
-        }
+        types
+            .iter()
+            .enumerate()
+            .all(|(i, t)| self[i].accepts_type_directly(t))
     }
 }
 
@@ -261,15 +257,27 @@ pub enum ParamType {
 }
 
 impl ParamType {
-    // Does `self` accept arguments of type `t`?
-    fn accepts_type(&self, t: &ScalarType) -> bool {
+    /// Does `self` accept arguments of type `t` without casting?
+    fn accepts_type_directly(&self, t: &ScalarType) -> bool {
         match (self, t) {
             (ParamType::Plain(s), o) => *s == o.desaturate(),
             (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
         }
     }
 
-    // Does `self` accept arguments of category `c`?
+    /// Does `self` accept arguments of type `t` with an implicitly allowed cast?
+    fn accepts_type_implicitly(&self, from_type: &ScalarType) -> bool {
+        use CastTo::*;
+
+        let cast_to = match self {
+            ParamType::Plain(s) => Implicit(s.clone()),
+            ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
+        };
+
+        cast::get_cast(from_type, &cast_to).is_some()
+    }
+
+    /// Does `self` accept arguments of category `c`?
     fn accepts_cat(&self, c: &TypeCategory) -> bool {
         match (self, c) {
             (ParamType::Plain(_), c) => TypeCategory::from_param(&self) == *c,
@@ -277,8 +285,8 @@ impl ParamType {
         }
     }
 
-    // Does `t`'s [`TypeCategory`] prefer `self`? This question can make
-    // more sense with the understanding that pseudotypes are never preferred.
+    /// Does `t`'s [`TypeCategory`] prefer `self`? This question can make
+    /// more sense with the understanding that pseudotypes are never preferred.
     fn is_preferred_by(&self, t: &ScalarType) -> bool {
         if let Some(pt) = TypeCategory::from_type(t).preferred_type() {
             *self == pt
@@ -287,7 +295,7 @@ impl ParamType {
         }
     }
 
-    // Is `self` the preferred parameter type for its `TypeCategory`?
+    /// Is `self` the preferred parameter type for its `TypeCategory`?
     fn prefers_self(&self) -> bool {
         if let Some(pt) = TypeCategory::from_param(self).preferred_type() {
             *self == pt
@@ -361,19 +369,24 @@ impl<'a> ArgImplementationMatcher<'a> {
             .collect();
         let mut m = Self { ident, ecx };
 
-        let mut exprs = Vec::new();
+        let mut cexprs = Vec::new();
         for arg in args {
-            let expr = query::plan_coercible_expr(ecx, arg)?.0;
-            exprs.push(expr);
+            let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
+            cexprs.push(cexpr);
         }
 
-        let types: Vec<_> = exprs
+        let types: Vec<_> = cexprs
             .iter()
             .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
             .collect();
 
         let f = m.find_match(&types, impls)?;
-        let exprs = m.generate_param_exprs(exprs, &f.params)?;
+
+        let mut exprs = Vec::new();
+        for (i, cexpr) in cexprs.into_iter().enumerate() {
+            exprs.push(m.coerce_arg_to_type(cexpr, &f.params[i])?);
+        }
+
         (f.op.0)(ecx, exprs)
     }
 
@@ -431,7 +444,7 @@ impl<'a> ArgImplementationMatcher<'a> {
                         exact_matches += 1;
                     }
                     Some(arg_type) => {
-                        if !self.is_coercion_possible(arg_type, &param_type) {
+                        if !param_type.accepts_type_implicitly(arg_type) {
                             valid_candidate = false;
                             break;
                         }
@@ -512,7 +525,7 @@ impl<'a> ArgImplementationMatcher<'a> {
                         // any candidate accepts that category. (This bias
                         // towards string is appropriate since an
                         // unknown-type literal looks like a string.)
-                        if c.fimpl.params[i].accepts_type(&ScalarType::String) {
+                        if c.fimpl.params[i].accepts_type_directly(&ScalarType::String) {
                             found_string_candidate = true;
                             selected_category = Some(TypeCategory::String);
                             break;
@@ -550,7 +563,8 @@ impl<'a> ArgImplementationMatcher<'a> {
                     let mut found_preferred_type_candidate = false;
                     candidates.retain(|c| {
                         if let Some(typ) = &preferred_type {
-                            found_preferred_type_candidate = c.fimpl.params[i].accepts_type(typ)
+                            found_preferred_type_candidate = c.fimpl.params[i]
+                                .accepts_type_directly(typ)
                                 || found_preferred_type_candidate;
                         }
                         c.fimpl.params[i].accepts_cat(&selected_category)
@@ -558,7 +572,8 @@ impl<'a> ArgImplementationMatcher<'a> {
 
                     if found_preferred_type_candidate {
                         let preferred_type = preferred_type.unwrap();
-                        candidates.retain(|c| c.fimpl.params[i].accepts_type(&preferred_type));
+                        candidates
+                            .retain(|c| c.fimpl.params[i].accepts_type_directly(&preferred_type));
                     }
                 }
                 Some(typ) => {
@@ -584,7 +599,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             let common_type = common_type.unwrap();
             for (i, raw_arg_type) in types.iter().enumerate() {
                 if raw_arg_type.is_none() {
-                    candidates.retain(|c| c.fimpl.params[i].accepts_type(&common_type));
+                    candidates.retain(|c| c.fimpl.params[i].accepts_type_directly(&common_type));
                 }
             }
 
@@ -595,45 +610,6 @@ impl<'a> ArgImplementationMatcher<'a> {
             "unable to determine which implementation to use; try providing \
              explicit casts to match parameter types"
         )
-    }
-
-    /// Plans `args` as `ScalarExprs` of that match the `ParamList`'s specified types.
-    fn generate_param_exprs(
-        &self,
-        args: Vec<CoercibleScalarExpr>,
-        params: &ParamList,
-    ) -> Result<Vec<ScalarExpr>, failure::Error> {
-        match params {
-            ParamList::Exact(p) => {
-                let mut exprs = Vec::new();
-                for (arg, param) in args.into_iter().zip(p.iter()) {
-                    exprs.push(self.coerce_arg_to_type(arg, param)?);
-                }
-                Ok(exprs)
-            }
-            ParamList::Repeat(p) => {
-                let mut exprs = Vec::new();
-                for (i, arg) in args.into_iter().enumerate() {
-                    exprs.push(self.coerce_arg_to_type(arg, &p[i % p.len()])?);
-                }
-                Ok(exprs)
-            }
-        }
-    }
-
-    /// Checks that `arg_type` is coercible to the parameter type without
-    /// actually planning the coercion.
-    fn is_coercion_possible(&self, arg_type: &ScalarType, to_typ: &ParamType) -> bool {
-        use CastTo::*;
-
-        let cast_to = match to_typ {
-            ParamType::Plain(s) => Implicit(s.clone()),
-            ParamType::Any => return true,
-            ParamType::JsonbAny => JsonbAny,
-            ParamType::StringAny => Explicit(ScalarType::String),
-        };
-
-        cast::get_cast(arg_type, &cast_to).is_some()
     }
 
     /// Generates `ScalarExpr` necessary to coerce `Expr` into the `ScalarType`
