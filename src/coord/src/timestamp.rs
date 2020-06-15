@@ -9,7 +9,6 @@
 
 use std::cmp;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::io::BufRead;
 use std::ops::Deref;
@@ -18,9 +17,9 @@ use std::path::PathBuf;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use avro::schema::Schema;
 use avro::types::Value;
@@ -28,22 +27,21 @@ use failure::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
+use prometheus::{register_int_gauge_vec, IntGaugeVec};
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use rusoto_kinesis::KinesisClient;
-use rusqlite::{params, NO_PARAMS};
 
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
     Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
-    KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
+    KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector, TimestampSourceUpdate,
 };
 use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
 
-use crate::catalog::storage::{self, SqlVal};
 use crate::coord;
 
 lazy_static! {
@@ -148,9 +146,17 @@ lazy_static! {
 
 }
 
+lazy_static! {
+    static ref MAX_AVAILABLE_OFFSET: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_max",
+        "The high watermark for a partition, the maximum offset that we could hope to ingest",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+}
+
 pub struct TimestampConfig {
     pub frequency: Duration,
-    pub persist_ts: bool,
 }
 
 #[derive(Debug)]
@@ -164,15 +170,13 @@ pub enum TimestampMessage {
 /// about topics and offset for real-time consistency
 struct RtTimestampConsumer {
     connector: RtTimestampConnector,
-    last_partition_offset: HashMap<PartitionId, MzOffset>,
-    start_offset: MzOffset,
-    max_ts_batch: i64,
+    _max_ts_batch: i64,
 }
 
 enum RtTimestampConnector {
     Kafka(RtKafkaConnector),
-    File(RtFileConnector<Vec<u8>, failure::Error>),
-    Ocf(RtFileConnector<Value, failure::Error>),
+    File(RtFileConnector),
+    Ocf(RtFileConnector),
     Kinesis(RtKinesisConnector),
 }
 
@@ -236,11 +240,13 @@ impl ByoTimestampConsumer {
             // This can only happen for Kafka sources
             tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
                 id: sid,
-                partition_count, // The new partition count
-                pid: PartitionId::Kafka(partition_count - 1), // the ID of the new partition
-                timestamp: self.last_ts,
-                offset: MzOffset { offset: 0 }, // An offset of 0 will "fast-forward" the stream, it denotes
-                                                // the empty interval
+                update: TimestampSourceUpdate::BringYourOwn(
+                    partition_count,                         // The new partition count
+                    PartitionId::Kafka(partition_count - 1), // the ID of the new partition
+                    self.last_ts,
+                    MzOffset { offset: 0 }, // An offset of 0 will "fast-forward" the stream, it denotes
+                                            // the empty interval
+                ),
             })
             .expect("Failed to send update to coordinator");
         }
@@ -249,10 +255,12 @@ impl ByoTimestampConsumer {
         self.last_partition_ts.insert(partition.clone(), timestamp);
         tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
             id: sid,
-            partition_count,
-            pid: partition,
-            timestamp,
-            offset,
+            update: TimestampSourceUpdate::BringYourOwn(
+                partition_count,
+                partition,
+                timestamp,
+                offset,
+            ),
         })
         .expect("Failed to send update to coordinator");
     }
@@ -280,14 +288,17 @@ enum ConsistencyFormatting {
 /// Data consumer for Kafka source with RT consistency
 #[derive(Clone)]
 struct RtKafkaConnector {
-    state: Arc<RtKafkaState>,
+    coordination_state: Arc<TimestampingState>,
     id: SourceInstanceId,
     topic: String,
 }
 
-struct RtKafkaState {
+/// Coordination structure for individual timestamping threads
+struct TimestampingState {
+    /// Flag is set when timestamping for this source has been dropped
     stop: AtomicBool,
-    high_watermarks: Mutex<Vec<i64>>,
+    /// Channel through which messages can be sent to the coordinator
+    coordinator_channel: futures::channel::mpsc::UnboundedSender<coord::Message>,
 }
 
 use std::fmt::Display;
@@ -316,9 +327,7 @@ struct RtKinesisConnector {
 struct ByoKinesisConnector {}
 
 /// Data consumer stub for File source with RT consistency
-struct RtFileConnector<Out, Err> {
-    stream: Receiver<Result<Out, Err>>,
-}
+struct RtFileConnector {}
 
 /// Data consumer stub for File source with BYO consistency
 struct ByoFileConnector<Out, Err> {
@@ -505,20 +514,14 @@ pub struct Timestamper {
     /// Current list of up to date sources that use a BYO consistency model
     byo_sources: HashMap<SourceInstanceId, ByoTimestampConsumer>,
 
-    /// Connection to the underlying SQL lite instance
-    storage: Arc<Mutex<storage::Connection>>,
-
+    /// Channel through which timestamp data updates are communicated through the coordinator
     tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
+    /// Channel through which to timestamp metadata updates are received from the coordinator
+    /// (to add or remove the timestamping of a source)
     rx: std::sync::mpsc::Receiver<TimestampMessage>,
-
-    /// Last Timestamp (necessary because not necessarily increasing otherwise)
-    current_timestamp: u64,
 
     /// Frequency at which thread should run
     timestamp_frequency: Duration,
-
-    /// Persist consistency information
-    persist_ts: bool,
 }
 
 /// A byo record contains a single timestamp update for a given source
@@ -728,31 +731,9 @@ fn identify_consistency_format(enc: DataEncoding, env: Envelope) -> ConsistencyF
 impl Timestamper {
     pub fn new(
         config: &TimestampConfig,
-        storage: Arc<Mutex<storage::Connection>>,
         tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
     ) -> Self {
-        // Recover existing data by running max on the timestamp count. This will ensure that
-        // there will never be two duplicate entries and that there is a continuous stream
-        // of timestamp updates across reboots
-        let max_ts = if config.persist_ts {
-            storage
-                .lock()
-                .expect("lock poisoned")
-                .prepare("SELECT MAX(timestamp) FROM timestamps")
-                .expect("Failed to prepare statement")
-                .query_row(NO_PARAMS, |row| {
-                    let res: Result<SqlVal<u64>, _> = row.get(2);
-                    match res {
-                        Ok(res) => Ok(res.0),
-                        _ => Ok(0),
-                    }
-                })
-                .expect("Failure to parse timestamp")
-        } else {
-            0
-        };
-
         info!(
             "Starting Timestamping Thread. Frequency: {} ms.",
             config.frequency.as_millis()
@@ -761,21 +742,15 @@ impl Timestamper {
         Self {
             rt_sources: HashMap::new(),
             byo_sources: HashMap::new(),
-            storage,
             tx,
             rx,
-            current_timestamp: max_ts,
             timestamp_frequency: config.frequency,
-            persist_ts: config.persist_ts,
         }
     }
 
-    fn storage(&self) -> MutexGuard<storage::Connection> {
-        self.storage.lock().expect("lock poisoned")
-    }
-
     /// Run the update function in a loop at the specified frequency. Acquires timestamps using
-    /// either 1) the Kafka topic ground truth 2) real-time
+    /// either the Kafka topic ground truth
+    /// TODO(ncrooks): move to thread local BYO implementation
     pub fn update(&mut self) {
         loop {
             thread::sleep(self.timestamp_frequency);
@@ -783,29 +758,8 @@ impl Timestamper {
             if shutdown {
                 break;
             } else {
-                self.update_rt_timestamp();
                 self.update_byo_timestamp();
             }
-        }
-    }
-
-    /// Implements the real-time timestamping logic
-    fn update_rt_timestamp(&mut self) {
-        let watermarks = self.rt_query_sources();
-        self.rt_generate_next_timestamp();
-        if self.persist_ts {
-            self.rt_persist_timestamp(&watermarks);
-        }
-        for (id, partition_count, pid, offset) in watermarks {
-            self.tx
-                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                    id,
-                    partition_count,
-                    pid,
-                    timestamp: self.current_timestamp,
-                    offset,
-                })
-                .expect("Failed to send timestamp update to coordinator");
         }
     }
 
@@ -818,8 +772,6 @@ impl Timestamper {
         // First check if there are some new source that we should
         // start checking
         while let Ok(update) = self.rx.try_recv() {
-            // TODO: Add metric creation in here so we don't create label strings every
-            // time we update
             match update {
                 TimestampMessage::Add(id, sc) => {
                     let (sc, enc, env, cons, max_ts_batch) = if let SourceConnector::External {
@@ -840,43 +792,7 @@ impl Timestamper {
                         match cons {
                             Consistency::RealTime => {
                                 info!("Timestamping Source {} with Real Time Consistency. Max Timestamp Batch {}", id, max_ts_batch);
-                                let start_offset = match sc {
-                                    ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                                        start_offset,
-                                        ..
-                                    }) => MzOffset {
-                                        offset: start_offset,
-                                    },
-                                    _ => MzOffset { offset: 0 },
-                                };
-                                // Obtain the last offsets that were recorded for this source.
-                                // If start_offset is specified, make sure to always start from
-                                // last_offset and never earlier
-                                let last_offsets = if self.persist_ts {
-                                    self.rt_recover_source(id)
-                                        .iter()
-                                        .map(|(pid, offs)| {
-                                            (
-                                                pid.clone(),
-                                                MzOffset {
-                                                    offset: std::cmp::max(
-                                                        start_offset.offset,
-                                                        offs.offset,
-                                                    ),
-                                                },
-                                            )
-                                        })
-                                        .collect()
-                                } else {
-                                    HashMap::new()
-                                };
-                                let consumer = self.create_rt_connector(
-                                    id,
-                                    sc,
-                                    last_offsets,
-                                    start_offset,
-                                    max_ts_batch,
-                                );
+                                let consumer = self.create_rt_connector(id, sc, max_ts_batch);
                                 if let Some(consumer) = consumer {
                                     self.rt_sources.insert(id, consumer);
                                 }
@@ -900,17 +816,15 @@ impl Timestamper {
                 }
                 TimestampMessage::DropInstance(id) => {
                     info!("Dropping Timestamping for Source {}.", id);
-                    self.storage()
-                        .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND vid = ?")
-                        .expect("Failed to prepare delete statement")
-                        .execute(params![SqlVal(&id.sid), SqlVal(&id.vid)])
-                        .expect("Failed to execute delete statement");
                     if let Some(RtTimestampConsumer {
-                        connector: RtTimestampConnector::Kafka(RtKafkaConnector { state, .. }),
+                        connector:
+                            RtTimestampConnector::Kafka(RtKafkaConnector {
+                                coordination_state, ..
+                            }),
                         ..
                     }) = self.rt_sources.remove(&id)
                     {
-                        state.stop.store(true, Ordering::SeqCst);
+                        coordination_state.stop.store(true, Ordering::SeqCst);
                     }
                     self.byo_sources.remove(&id);
                 }
@@ -961,11 +875,13 @@ impl Timestamper {
                                             .unbounded_send(
                                                 coord::Message::AdvanceSourceTimestamp {
                                                     id: *id,
-                                                    partition_count, // The new partition count
-                                                    pid: PartitionId::Kafka(partition_count - 1), // the ID of the new partition
-                                                    timestamp: byo_consumer.last_ts,
-                                                    offset: MzOffset { offset: 0 }, // An offset of 0 will "fast-forward" the stream, it denotes
-                                                                                    // the empty interval
+                                                    update: TimestampSourceUpdate::BringYourOwn(
+                                                        partition_count,                         // The new partition count
+                                                        PartitionId::Kafka(partition_count - 1), // the ID of the new partition
+                                                        byo_consumer.last_ts,
+                                                        MzOffset { offset: 0 }, // An offset of 0 will "fast-forward" the stream, it denotes
+                                                                                // the empty interval
+                                                    ),
                                                 },
                                             )
                                             .expect("Failed to send update to coordinator");
@@ -978,10 +894,12 @@ impl Timestamper {
                                     self.tx
                                         .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                                             id: *id,
-                                            partition_count,
-                                            pid: partition,
-                                            timestamp,
-                                            offset,
+                                            update: TimestampSourceUpdate::BringYourOwn(
+                                                partition_count,
+                                                partition,
+                                                timestamp,
+                                                offset,
+                                            ),
                                         })
                                         .expect("Failed to send update to coordinator");
                                 }
@@ -1029,19 +947,23 @@ impl Timestamper {
                                 self.tx
                                     .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                                         id: *id,
-                                        partition_count: 1,
-                                        pid: match byo_consumer.connector {
-                                            ByoTimestampConnector::File(_)
-                                            | ByoTimestampConnector::Ocf(_) => PartitionId::File,
-                                            ByoTimestampConnector::Kafka(_) => {
-                                                PartitionId::Kafka(0)
-                                            }
-                                            ByoTimestampConnector::Kinesis(_) => {
-                                                PartitionId::Kinesis(String::new())
-                                            }
-                                        },
-                                        timestamp: byo_consumer.last_ts,
-                                        offset: byo_consumer.last_offset,
+                                        update: TimestampSourceUpdate::BringYourOwn(
+                                            1,
+                                            match byo_consumer.connector {
+                                                ByoTimestampConnector::File(_)
+                                                | ByoTimestampConnector::Ocf(_) => {
+                                                    PartitionId::File
+                                                }
+                                                ByoTimestampConnector::Kafka(_) => {
+                                                    PartitionId::Kafka(0)
+                                                }
+                                                ByoTimestampConnector::Kinesis(_) => {
+                                                    PartitionId::Kinesis(String::new())
+                                                }
+                                            },
+                                            byo_consumer.last_ts,
+                                            byo_consumer.last_offset,
+                                        ),
                                     })
                                     .expect("Failed to send update to coordinator");
                             }
@@ -1070,19 +992,23 @@ impl Timestamper {
                                 self.tx
                                     .unbounded_send(coord::Message::AdvanceSourceTimestamp {
                                         id: *id,
-                                        partition_count: 1,
-                                        pid: match byo_consumer.connector {
-                                            ByoTimestampConnector::File(_)
-                                            | ByoTimestampConnector::Ocf(_) => PartitionId::File,
-                                            ByoTimestampConnector::Kafka(_) => {
-                                                PartitionId::Kafka(0)
-                                            }
-                                            ByoTimestampConnector::Kinesis(_) => {
-                                                PartitionId::Kinesis(String::new())
-                                            }
-                                        },
-                                        timestamp: byo_consumer.last_ts,
-                                        offset: byo_consumer.last_offset,
+                                        update: TimestampSourceUpdate::BringYourOwn(
+                                            1,
+                                            match byo_consumer.connector {
+                                                ByoTimestampConnector::File(_)
+                                                | ByoTimestampConnector::Ocf(_) => {
+                                                    PartitionId::File
+                                                }
+                                                ByoTimestampConnector::Kafka(_) => {
+                                                    PartitionId::Kafka(0)
+                                                }
+                                                ByoTimestampConnector::Kinesis(_) => {
+                                                    PartitionId::Kinesis(String::new())
+                                                }
+                                            },
+                                            byo_consumer.last_ts,
+                                            byo_consumer.last_offset,
+                                        ),
                                     })
                                     .expect("Failed to send update to coordinator");
                             }
@@ -1186,8 +1112,6 @@ impl Timestamper {
         &self,
         id: SourceInstanceId,
         sc: ExternalSourceConnector,
-        last_partition_offset: HashMap<PartitionId, MzOffset>,
-        start_offset: MzOffset,
         max_ts_batch: i64,
     ) -> Option<RtTimestampConsumer> {
         match sc {
@@ -1195,47 +1119,27 @@ impl Timestamper {
                 self.create_rt_kafka_connector(id, kc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
-                        last_partition_offset,
-                        start_offset,
-                        max_ts_batch,
+                        _max_ts_batch: max_ts_batch,
                     })
             }
-            ExternalSourceConnector::File(fc) => {
-                if start_offset.offset > 0 {
-                    warn!("Start Offset is not supported for file sources. Ignoring");
-                }
-                self.create_rt_file_connector(id, fc, max_ts_batch)
-                    .map(|connector| RtTimestampConsumer {
-                        connector: RtTimestampConnector::File(connector),
-                        last_partition_offset,
-                        start_offset: MzOffset { offset: 0 },
-                        max_ts_batch,
-                    })
-            }
-            ExternalSourceConnector::AvroOcf(fc) => {
-                if start_offset.offset > 0 {
-                    warn!("Start Offset is not supported for Avro OCF sources. Ignoring");
-                }
-                self.create_rt_ocf_connector(id, fc, max_ts_batch)
-                    .map(|connector| RtTimestampConsumer {
-                        connector: RtTimestampConnector::Ocf(connector),
-                        last_partition_offset,
-                        start_offset: MzOffset { offset: 0 },
-                        max_ts_batch,
-                    })
-            }
-            ExternalSourceConnector::Kinesis(kinc) => {
-                if start_offset.offset > 0 {
-                    warn!("Start Offset is not supported for Kinesis sources. Ignoring");
-                }
-                self.create_rt_kinesis_connector(id, kinc)
-                    .map(|connector| RtTimestampConsumer {
-                        connector: RtTimestampConnector::Kinesis(connector),
-                        last_partition_offset,
-                        start_offset: MzOffset { offset: 0 },
-                        max_ts_batch,
-                    })
-            }
+            ExternalSourceConnector::File(fc) => self
+                .create_rt_file_connector(id, fc, max_ts_batch)
+                .map(|connector| RtTimestampConsumer {
+                    connector: RtTimestampConnector::File(connector),
+                    _max_ts_batch: max_ts_batch,
+                }),
+            ExternalSourceConnector::AvroOcf(fc) => self
+                .create_rt_ocf_connector(id, fc, max_ts_batch)
+                .map(|connector| RtTimestampConsumer {
+                    connector: RtTimestampConnector::Ocf(connector),
+                    _max_ts_batch: max_ts_batch,
+                }),
+            ExternalSourceConnector::Kinesis(kinc) => self
+                .create_rt_kinesis_connector(id, kinc)
+                .map(|connector| RtTimestampConsumer {
+                    connector: RtTimestampConnector::Kinesis(connector),
+                    _max_ts_batch: max_ts_batch,
+                }),
         }
     }
 
@@ -1298,6 +1202,9 @@ impl Timestamper {
             }
         };
 
+        // TODO(ncrooks): add option to create a separate metadata thread for updating
+        // metadata such as metrics or total number of records
+
         Some(RtKinesisConnector {
             stream_name: kinc.stream_name,
             kinesis_client,
@@ -1331,21 +1238,29 @@ impl Timestamper {
         };
 
         let connector = RtKafkaConnector {
-            state: Arc::new(RtKafkaState {
+            coordination_state: Arc::new(TimestampingState {
                 stop: AtomicBool::new(false),
-                high_watermarks: Mutex::new(vec![]),
+                coordinator_channel: self.tx.clone(),
             }),
             id,
             topic: kc.topic,
         };
 
-        // Metadata fetch requests on production Kafka clusters can take
-        // more than 1s to complete. This makes it far too expensive to run on
-        // the main timestamping thread.
+        // Start metadata refresh thread
+        // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+        let metadata_refresh_frequency = Duration::from_millis(
+            kc.config_options
+                .get("topic_metadata_refresh_interval_ms")
+                // Safe conversion: statement::extract_config enforces that option is a value
+                // between 0 and 3600000
+                .unwrap_or(&"30000".to_owned())
+                .parse()
+                .unwrap(),
+        );
+
         thread::spawn({
             let connector = connector.clone();
-            let timestamp_frequency = self.timestamp_frequency;
-            move || rt_kafka_metadata_fetch_loop(connector, consumer, timestamp_frequency)
+            move || rt_kafka_metadata_fetch_loop(connector, consumer, metadata_refresh_frequency)
         });
 
         Some(connector)
@@ -1354,49 +1269,19 @@ impl Timestamper {
     fn create_rt_ocf_connector(
         &self,
         _id: SourceInstanceId,
-        fc: FileSourceConnector,
-        max_ts_batch: i64,
-    ) -> Option<RtFileConnector<avro::types::Value, failure::Error>> {
-        let ctor = move |file| avro::Reader::new(file);
-        let (tx, rx) = if max_ts_batch > 0 {
-            std::sync::mpsc::sync_channel(max_ts_batch as usize)
-        } else {
-            std::sync::mpsc::sync_channel(10000)
-        };
-        let tail = if fc.tail {
-            FileReadStyle::TailFollowFd
-        } else {
-            FileReadStyle::ReadOnce
-        };
-        std::thread::spawn(move || {
-            read_file_task(fc.path, tx, None, tail, ctor);
-        });
-
-        Some(RtFileConnector { stream: rx })
+        _fc: FileSourceConnector,
+        _max_ts_batch: i64,
+    ) -> Option<RtFileConnector> {
+        Some(RtFileConnector {})
     }
 
     fn create_rt_file_connector(
         &self,
         _id: SourceInstanceId,
-        fc: FileSourceConnector,
-        max_ts_batch: i64,
-    ) -> Option<RtFileConnector<std::vec::Vec<u8>, failure::Error>> {
-        let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
-        let (tx, rx) = if max_ts_batch > 0 {
-            std::sync::mpsc::sync_channel(max_ts_batch as usize)
-        } else {
-            std::sync::mpsc::sync_channel(10000)
-        };
-        let tail = if fc.tail {
-            FileReadStyle::TailFollowFd
-        } else {
-            FileReadStyle::ReadOnce
-        };
-        std::thread::spawn(move || {
-            read_file_task(fc.path, tx, None, tail, ctor);
-        });
-
-        Some(RtFileConnector { stream: rx })
+        _fc: FileSourceConnector,
+        _max_ts_batch: i64,
+    ) -> Option<RtFileConnector> {
+        Some(RtFileConnector {})
     }
 
     fn create_byo_ocf_connector(
@@ -1582,249 +1467,6 @@ impl Timestamper {
             }
         }
     }
-
-    /// Recovers any existing timestamp updates for that (SourceId,ViewId) pair from the underlying
-    /// SQL database. Notifies the coordinator of these updates
-    fn rt_recover_source(&mut self, id: SourceInstanceId) -> HashMap<PartitionId, MzOffset> {
-        let ts_updates: Vec<_> = self
-            .storage()
-            .prepare("SELECT pcount, pid, timestamp, offset FROM timestamps WHERE sid = ? AND vid = ? ORDER BY timestamp")
-            .expect("Failed to execute select statement")
-            .query_and_then(params![SqlVal(&id.sid), SqlVal(&id.vid)], |row| -> Result<_, failure::Error> {
-                let pcount: SqlVal<i32> = row.get(0)?;
-                let pid: SqlVal<PartitionId> = match row.get(1) {
-                    Ok(val) => val,
-                    Err(_err) => {
-                        // Historically, pid was an i32 value. If the found value is not of type
-                        // PartitionId, try to read an i32.
-                        let pid: SqlVal<i32> = row.get(1)?;
-                        SqlVal(PartitionId::Kafka(pid.0))
-                    },
-                };
-                let timestamp: SqlVal<u64> = row.get(2)?;
-                let offset: SqlVal<i64> = row.get(3)?;
-                Ok((pcount.0, pid.0, timestamp.0, offset.0))
-            })
-            .expect("Failed to parse SQL result")
-            .collect();
-
-        let mut max_offset = HashMap::new();
-        for row in ts_updates {
-            let (partition_count, pid, timestamp, offset) =
-                row.expect("Failed to parse SQL result");
-            if offset
-                > max_offset
-                    .entry(pid.clone())
-                    .or_insert(MzOffset { offset: 0 })
-                    .offset
-            {
-                max_offset.insert(pid.clone(), MzOffset { offset });
-            }
-            self.tx
-                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                    id,
-                    partition_count,
-                    pid,
-                    timestamp,
-                    offset: MzOffset { offset },
-                })
-                .expect("Failed to send timestamp update to coordinator");
-        }
-        max_offset
-    }
-
-    /// Query real-time sources for the current max offset that has been generated for that source
-    ///
-    /// Set the new timestamped offset to min(max_offset, last_offset + increment_size): this ensures
-    /// that we never create an overly large batch of messages for the same timestamp (which would
-    /// prevent views from becoming visible in a timely fashion)
-    fn rt_query_sources(&mut self) -> Vec<(SourceInstanceId, i32, PartitionId, MzOffset)> {
-        let mut result = vec![];
-        for (id, cons) in self.rt_sources.iter_mut() {
-            match &mut cons.connector {
-                RtTimestampConnector::Kafka(_kc) => {
-                    unreachable!("Kafka real-time sources no longer use the timestamper");
-                    /* let high_watermarks = kc.state.high_watermarks.lock().expect("lock poisoned");
-                     let partition_count: i32 = high_watermarks
-                         .len()
-                         .try_into()
-                         .expect("invalid partition count");
-                     for (p, high_watermark) in high_watermarks.iter().enumerate() {
-                         let p: i32 = p.try_into().expect("invalid partition id");
-                         let current_p_offset = cons
-                             .last_partition_offset
-                             .entry(PartitionId::Kafka(p))
-                             .or_insert(cons.start_offset);
-                         let old_offset = *current_p_offset;
-                         // high here corresponds to the next available Kafka offset.
-                         // Ex: a stream with 0 records will return a high of 0
-                         // a stream with one record (written at offset 0) will return a high of 1
-                         // high - 1 corresponds the Kafka Offset of the last *currently* available
-                         // message
-                         let current_max_kafka_offset = KafkaOffset {
-                             offset: high_watermark - 1,
-                         };
-                         *current_p_offset = determine_next_offset(
-                             *current_p_offset,
-                             current_max_kafka_offset.into(),
-                             cons.max_ts_batch,
-                         );
-                         result.push((
-                             *id,
-                             partition_count,
-                             PartitionId::Kafka(p),
-                             *current_p_offset,
-                         ));
-                         KAFKA_PARTITION_OFFSET_MAX
-                             .with_label_values(&[&kc.topic, &id.to_string(), &p.to_string()])
-                             .set(*high_watermark);
-                         assert!(*current_p_offset >= old_offset);
-                     }
-                    */
-                }
-                RtTimestampConnector::File(ref mut fc) => {
-                    let mut count = 0;
-                    let last_offset = cons
-                        .last_partition_offset
-                        .entry(PartitionId::File)
-                        .or_insert(cons.start_offset);
-                    while cons.max_ts_batch == 0 || count < cons.max_ts_batch {
-                        match fc.stream.try_recv() {
-                            Ok(Ok(_)) => {
-                                count += 1;
-                            }
-                            Ok(Err(e)) => {
-                                error!("Failed to read file for timestamping: {}", e);
-                                break;
-                            }
-                            Err(TryRecvError::Empty) => break,
-                            Err(TryRecvError::Disconnected) => break,
-                        }
-                    }
-                    last_offset.offset += count;
-                    result.push((*id, 1, PartitionId::File, *last_offset))
-                }
-                RtTimestampConnector::Ocf(ref mut fc) => {
-                    let last_offset = cons
-                        .last_partition_offset
-                        .entry(PartitionId::File)
-                        .or_insert(cons.start_offset);
-                    let mut count = 0;
-                    while cons.max_ts_batch == 0 || count < cons.max_ts_batch {
-                        match fc.stream.try_recv() {
-                            Ok(Ok(_)) => {
-                                count += 1;
-                            }
-                            Ok(Err(e)) => {
-                                error!("Failed to read file for timestamping: {}", e);
-                                break;
-                            }
-                            Err(TryRecvError::Empty) => break,
-                            Err(TryRecvError::Disconnected) => break,
-                        }
-                    }
-                    last_offset.offset += count;
-                    result.push((*id, 1, PartitionId::File, *last_offset))
-                }
-                RtTimestampConnector::Kinesis(kc) => {
-                    // The Kinesis ListShards API is rate limited to 100 transactions per second
-                    // per stream. Only hit the ListShards API every 100 Timestamper iterations to update
-                    // our cached Shard ids.
-                    match &kc.kinesis_client {
-                        None => {
-                            // KinesisClient was not initialized, skip update.
-                            continue;
-                        }
-                        Some(kinesis_client) => {
-                            if kc.timestamper_iteration_count % 100 == 0 {
-                                match block_on(aws_util::kinesis::get_shard_ids(kinesis_client, &kc.stream_name)) {
-                                    Ok(shard_ids) => {
-                                        kc.cached_shard_ids = Some(shard_ids);
-                                    }
-                                    Err(e) => error!(
-                                        "Error listing Shard ids for Kinesis stream {}, using cached Shard ids: {:#?}",
-                                        kc.stream_name,
-                                        e
-                                    ),
-                                };
-                            }
-                            kc.timestamper_iteration_count += 1;
-                        }
-                    }
-
-                    if let Some(shard_ids) = &kc.cached_shard_ids {
-                        let num_shards = i32::try_from(shard_ids.len()).unwrap_or_else(|_| {
-                            error!("Unable to convert number of Kinesis shards ({}) for stream {} into i32", shard_ids.len(), kc.stream_name);
-                            0
-                        });
-                        for shard_id in shard_ids {
-                            // For now, always just push the current system timestamp.
-                            // todo@jldlaughlin #2219
-                            result.push((
-                                *id,
-                                num_shards,
-                                PartitionId::Kinesis(shard_id.clone()),
-                                MzOffset {
-                                    offset: self.current_timestamp as i64,
-                                },
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        result
-    }
-
-    /// Persist timestamp updates to the underlying storage when using the
-    /// real-time timestamping logic.
-    fn rt_persist_timestamp(&self, ts_updates: &[(SourceInstanceId, i32, PartitionId, MzOffset)]) {
-        let storage = self.storage();
-        for (id, pcount, pid, offset) in ts_updates {
-            let mut stmt = storage
-                .prepare_cached(
-                    "INSERT INTO timestamps (sid, vid, pcount, pid, timestamp, offset) VALUES (?, ?, ?, ?, ?, ?)",
-                )
-                .expect(
-                    "Failed to prepare insert statement into persistent store. \
-                     Hint: increase the system file descriptor limit.",
-                );
-            while let Err(e) = stmt.execute(params![
-                SqlVal(&id.sid),
-                SqlVal(&id.vid),
-                SqlVal(&pcount),
-                SqlVal(&pid),
-                SqlVal(&self.current_timestamp),
-                SqlVal(&offset.offset)
-            ]) {
-                error!(
-                    "Failed to insert statement into persistent store: {}. \
-                     Hint: increase the system file descriptor limit.",
-                    e
-                );
-                std::thread::sleep(Duration::from_secs(1));
-            }
-        }
-    }
-
-    /// Generates a timestamp that is guaranteed to be monotonically increasing.
-    /// This may require multiple calls to the underlying now() system method, which is not
-    /// guaranteed to increase monotonically
-    fn rt_generate_next_timestamp(&mut self) {
-        // TODO[reliability] (brennan) - If someone does something silly like sets their
-        // system clock backward by an hour while mz is running,
-        // we will hang here for an hour.
-        let mut new_ts = 0;
-        while new_ts <= self.current_timestamp {
-            let start = SystemTime::now();
-            new_ts = start
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_millis() as u64;
-        }
-        assert!(new_ts > self.current_timestamp);
-        self.current_timestamp = new_ts;
-    }
 }
 
 fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wait: Duration) {
@@ -1833,38 +1475,43 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
         &c.topic, &c.id
     );
 
-    let mut high_watermarks = vec![]; // high watermarks for each partition, in order
-    let mut i: usize = 0;
-    while !c.state.stop.load(Ordering::SeqCst) {
-        // Fetch metadata to check for new partitions. We do this less
-        // frequently than every tick because partitions are added very
-        // infrequently in production. We do this a bit more frequently than is
-        // ideal in order to speed up tests that dynamically add partitions.
-        if high_watermarks.len() == 0 || i % 10 == 0 {
-            match get_kafka_partitions(&consumer, &c.topic, Duration::from_secs(15)) {
-                Ok(partitions) => match partitions.len().cmp(&high_watermarks.len()) {
+    let mut current_partition_count = 0;
+
+    while !c.coordination_state.stop.load(Ordering::SeqCst) {
+        match get_kafka_partitions(&consumer, &c.topic, Duration::from_secs(30)) {
+            Ok(partitions) => {
+                // There cannot be more than i32 partitions
+                let new_partition_count: i32 = partitions.len().try_into().unwrap();
+                match new_partition_count.cmp(&current_partition_count) {
                     cmp::Ordering::Greater => {
-                        let diff = partitions.len() - high_watermarks.len();
+                        let diff = new_partition_count - current_partition_count;
                         info!(
                             "Discovered {} new ({} total) kafka partitions for topic {} (source {})",
-                            diff, partitions.len(), c.topic, c.id,
+                            diff, new_partition_count, c.topic, c.id,
                         );
-                        high_watermarks.resize(partitions.len(), 0);
+                        current_partition_count = new_partition_count;
+                        c.coordination_state
+                            .coordinator_channel
+                            .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                                id: c.id,
+                                update: TimestampSourceUpdate::RealTime(current_partition_count),
+                            })
+                            .expect("Failed to send update to coordinator. This should not happen");
                     }
                     cmp::Ordering::Less => {
                         error!(
                             "Ignoring decrease in partitions (from {} to {}) for topic {} (source {})",
-                            high_watermarks.len(), partitions.len(), c.topic, c.id,
+                             new_partition_count, current_partition_count, c.topic, c.id,
                         );
                     }
                     cmp::Ordering::Equal => (),
-                },
-                Err(e) => {
-                    error!(
-                        "Unable to fetch kafka metadata for topic {} (source {}): {}",
-                        c.topic, e, c.id
-                    );
                 }
+            }
+            Err(e) => {
+                error!(
+                    "Unable to fetch kafka metadata for topic {} (source {}): {}",
+                    c.topic, e, c.id
+                );
             }
         }
 
@@ -1873,10 +1520,17 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
         // TODO(benesch): Kafka supports fetching these in bulk, but
         // rust-rdkafka does not. That would save us a lot of requests on
         // large topics.
-        for i in 0..high_watermarks.len() {
+        for i in 0..current_partition_count {
             let pid: i32 = i.try_into().expect("invalid partition id");
-            match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(15)) {
-                Ok((_low, high)) => high_watermarks[i] = high,
+            match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(30)) {
+                Ok((_low, high)) => {
+                    let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
+                        &c.topic,
+                        &c.id.to_string(),
+                        &pid.to_string(),
+                    ]);
+                    max_offset.set(high);
+                }
                 Err(e) => {
                     error!(
                         "Unable to fetch Kafka watermarks for topic {} [{}] ({}): {}",
@@ -1886,15 +1540,14 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
             }
         }
 
-        // Export the offsets to the shared state.
-        c.state
-            .high_watermarks
-            .lock()
-            .expect("lock poisoned")
-            .clone_from(&high_watermarks);
-
-        i += 1;
-        thread::sleep(wait);
+        if current_partition_count > 0 {
+            thread::sleep(wait);
+        } else {
+            // If no partitions have been detected yet, sleep for a second rather than
+            // the specified "wait" period of time, as we know that there should at least be one
+            // partition
+            thread::sleep(Duration::from_secs(1));
+        }
     }
 
     debug!("Terminating realtime Kafka thread for {}", &c.topic);

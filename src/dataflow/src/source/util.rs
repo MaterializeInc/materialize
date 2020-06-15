@@ -9,8 +9,6 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use expr::SourceInstanceId;
 
@@ -21,7 +19,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use crate::server::TimestampChanges;
+use crate::server::TimestampMetadataUpdates;
 use dataflow_types::Timestamp;
 
 use super::{SourceStatus, SourceToken};
@@ -56,8 +54,7 @@ use super::{SourceStatus, SourceToken};
 /// to terminate any spawned threads in the source operator
 pub fn source<G, D, B, L>(
     id: SourceInstanceId,
-    timestamp_channel: Option<TimestampChanges>,
-    timestamping_flag: Arc<AtomicBool>,
+    timestamp_channel: Option<TimestampMetadataUpdates>,
     scope: &G,
     name: String,
     construct: B,
@@ -82,7 +79,6 @@ where
             capability: cap.clone(),
             activator: scope.activator_for(&info.address[..]),
             timestamp_drop: timestamp_channel,
-            stop_timestamping: timestamping_flag,
         });
 
         let mut tick = construct(info);

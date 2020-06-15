@@ -109,9 +109,6 @@ pub struct Config {
     pub logical_compaction_window: Option<Duration>,
     /// The interval at which sources should be timestamped.
     pub timestamp_frequency: Duration,
-    /// Whether to record realtime consistency information to the data directory
-    /// and attempt to recover that information on startup.
-    pub persist_ts: bool,
 
     // === Connection options. ===
     /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
@@ -273,7 +270,6 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             data_directory: config.data_directory.as_deref(),
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,
-                persist_ts: config.persist_ts,
             },
             logical_compaction_window: config.logical_compaction_window,
             executor: &executor,

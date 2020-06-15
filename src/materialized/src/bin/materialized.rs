@@ -219,7 +219,6 @@ fn run() -> Result<(), failure::Error> {
         None => Duration::from_millis(10),
         Some(d) => parse_duration::parse(&d)?,
     };
-    let persist_ts = popts.opt_get_default("persist-ts", false)?;
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -301,7 +300,6 @@ environment:{}",
         logging_granularity,
         logical_compaction_window,
         timestamp_frequency,
-        persist_ts,
         listen_addr,
         tls,
         data_directory: Some(data_directory),

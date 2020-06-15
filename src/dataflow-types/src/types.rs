@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use url::Url;
 
-use expr::{GlobalId, OptimizedRelationExpr, RelationExpr, ScalarExpr, SourceInstanceId};
+use expr::{
+    GlobalId, OptimizedRelationExpr, PartitionId, RelationExpr, ScalarExpr, SourceInstanceId,
+};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use regex::Regex;
@@ -508,6 +510,22 @@ impl fmt::Display for MzOffset {
 pub struct KafkaOffset {
     pub offset: i64,
 }
+
+/// Structure wrapping a timestamp update from a source
+/// If RT, contains a partition count
+/// If BYO, contains a tuple (PartitionCount, PartitionID, Timestamp, Offset),
+/// which informs workers that messages with Offset on PartititionId will be timestamped
+/// with Timestamp.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TimestampSourceUpdate {
+    /// Update for an RT source: contains an updated partition count for this source
+    RealTime(i32),
+    ///  Timestamp update for a BYO source: contains an updated partition count for this source,
+    /// combined with a PartitionID, Timestamp, MzOffset tuple. This tuple informs workers that
+    /// messages with Offset on PartitionId will be timestamped with Timestamp.
+    BringYourOwn(i32, PartitionId, u64, MzOffset),
+}
+
 /// Convert from KafkaOffset to MzOffset (1-indexed)
 impl From<KafkaOffset> for MzOffset {
     fn from(kafka_offset: KafkaOffset) -> Self {

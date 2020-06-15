@@ -430,7 +430,6 @@ impl State {
             executor: &executor,
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
-                persist_ts: false,
             },
             logical_compaction_window: None,
         })?;
