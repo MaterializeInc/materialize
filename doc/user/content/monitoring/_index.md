@@ -72,7 +72,11 @@ materialized.
 
 ## Datadog
 
-Materialize metrics can be sent to Datadog via the [OpenMetrics agent check](https://www.datadoghq.com/blog/monitor-prometheus-metrics/).  (Requires Datadog Agent 6 and above). Simply configure _prometheus_url_ (ie `http://<materialized host>/metrics`), namespace, and metrics (ie `mz*`) in _openmetrics.d/conf.yaml_.
+Materialize metrics can be sent to Datadog via the 
+[OpenMetrics agent check](https://www.datadoghq.com/blog/monitor-prometheus-metrics/).  
+(Requires Datadog Agent 6 and above). Simply configure _"prometheus_url"_ (ie 
+`http://<materialized host>/metrics`), namespace, and metrics (ie `mz*`) in 
+_"openmetrics.d/conf.yaml"_.
 
 # Other Setups
 
