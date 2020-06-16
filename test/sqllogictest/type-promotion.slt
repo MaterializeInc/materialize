@@ -142,3 +142,748 @@ EXPLAIN RAW PLAN FOR
 | Map
 
 EOF
+
+# Checks that f64 is preferred type for i32
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT floor(1);
+----
+%0 =
+| Constant ()
+| Map floorf64(i32tof64(1))
+| Project (#0)
+| Map
+
+EOF
+
+# Cannot implicitly cast i32 to string
+query error Cannot call function char_length\(i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT char_length(321);
+
+# Cannot implicitly cast string to any numeric category
+# query error no overload for string + string
+# SELECT 'dog'::text + 'cat'::text;
+
+# Cannot implicitly cast f64 to decimal
+query error Cannot call function round\(f64, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT round(1.23::float, 1);
+
+# Check that f64 is the most common type
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT coalesce(1::int, 1::numeric, 1::float);
+----
+%0 =
+| Constant ()
+| Map coalesce(i32tof64(1), (dectof64(i32todec(1)) / 1), i32tof64(1))
+| Project (#0)
+| Map
+
+EOF
+
+# Test bool->string explicit cast
+query T
+SELECT true::string;
+----
+true
+
+# Test bool->string implicit cast
+query T
+SELECT concat(true);
+----
+t
+
+# Check that date promotes to tstz
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT TIMESTAMPTZ '2001 03-04' - DATE '2002 03-04';
+----
+%0 =
+| Constant ()
+| Map (strtotstz("2001 03-04") - datetotstz(strtodate("2002 03-04")))
+| Project (#0)
+| Map
+
+EOF
+
+# Check that ts promotes to tstz
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT TIMESTAMPTZ '2001 03-04' - TIMESTAMP '2002 03-04';
+----
+%0 =
+| Constant ()
+| Map (strtotstz("2001 03-04") - tstotstz(strtots("2002 03-04")))
+| Project (#0)
+| Map
+
+EOF
+
+# Check that date promotes to ts
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT TIMESTAMP '2001 03-04' - DATE '2002 03-04';
+----
+%0 =
+| Constant ()
+| Map (strtots("2001 03-04") - datetots(strtodate("2002 03-04")))
+| Project (#0)
+| Map
+
+EOF
+
+# Check that tstz is most-common type
+query T multiline
+EXPLAIN RAW PLAN FOR
+    SELECT coalesce(DATE '2001', TIMESTAMP '2002', TIMESTAMPTZ '2003');
+----
+%0 =
+| Constant ()
+| Map coalesce(datetotstz(strtodate("2001")), tstotstz(strtots("2002")), strtotstz("2003"))
+| Project (#0)
+| Map
+
+EOF
+
+query T
+SELECT 1::bigint::bigint;
+----
+1
+
+query error CAST does not support casting from bool to i64
+SELECT TRUE::boolean::bigint
+
+query error CAST does not support casting from date to i64
+SELECT '2001 02-03'::date::bigint
+
+query T
+SELECT 1.1::numeric::bigint;
+----
+1
+
+query T
+SELECT 1.2::double::bigint;
+----
+1
+
+query T
+SELECT 1.3::real::bigint;
+----
+1
+
+query T
+SELECT 2::int::bigint;
+----
+2
+
+query error CAST does not support casting from interval to i64
+SELECT '1'::interval::bigint
+
+# pginvalid
+query T
+SELECT '{}'::jsonb::bigint;
+----
+NULL
+
+query error invalid input syntax for int8: invalid digit found in string: "dog"
+SELECT 'dog'::text::bigint
+
+query error CAST does not support casting from time to i64
+SELECT '01:02:03'::time::bigint
+
+query error CAST does not support casting from timestamp to i64
+SELECT '2002 03-04'::timestamp::bigint
+
+query error CAST does not support casting from timestamptz to i64
+SELECT '2003 04-05'::timestamptz::bigint
+
+# pginvalid
+query T
+SELECT 1::bigint::boolean;
+----
+true
+
+# should be 't'
+query T
+SELECT TRUE::boolean::boolean;
+----
+true
+
+query error CAST does not support casting from date to bool
+SELECT '2001 02-03'::date::boolean
+
+query error CAST does not support casting from decimal\(38, 0\) to bool
+SELECT 1.1::numeric::boolean
+
+query error CAST does not support casting from f64 to bool
+SELECT 1.2::double::boolean
+
+query error CAST does not support casting from f64 to bool
+SELECT 1.3::real::boolean
+
+# should be 't'
+query T
+SELECT 2::int::boolean;
+----
+true
+
+query error CAST does not support casting from interval to bool
+SELECT '1'::interval::boolean
+
+query T
+SELECT '{}'::jsonb::boolean;
+----
+NULL
+
+query error invalid input syntax for bool: "dog"
+SELECT 'dog'::text::boolean
+
+query error CAST does not support casting from time to bool
+SELECT '01:02:03'::time::boolean
+
+query error CAST does not support casting from timestamp to bool
+SELECT '2002 03-04'::timestamp::boolean
+
+query error CAST does not support casting from timestamptz to bool
+SELECT '2003 04-05'::timestamptz::boolean
+
+query error CAST does not support casting from i64 to date
+SELECT 1::bigint::date
+
+query error CAST does not support casting from bool to date
+SELECT TRUE::boolean::date
+
+query T
+SELECT '2001 02-03'::date::date;
+----
+2001-02-03
+
+query error CAST does not support casting from decimal\(38, 0\) to date
+SELECT 1.1::numeric::date
+
+query error CAST does not support casting from f64 to date
+SELECT 1.2::double::date
+
+query error CAST does not support casting from f64 to date
+SELECT 1.3::real::date
+
+query error CAST does not support casting from i32 to date
+SELECT 2::int::date
+
+query error CAST does not support casting from interval to date
+SELECT '1'::interval::date
+
+query error CAST does not support casting from jsonb to date
+SELECT '{}'::jsonb::date
+
+query error invalid input syntax for date: YEAR, MONTH, DAY are all required: "dog"
+SELECT 'dog'::text::date
+
+query error CAST does not support casting from time to date
+SELECT '01:02:03'::time::date
+
+query T
+SELECT '2002 03-04'::timestamp::date;
+----
+2002-03-04
+
+query T
+SELECT '2003 04-05'::timestamptz::date;
+----
+2003-04-05
+
+query R
+SELECT 1::bigint::numeric;
+----
+1.0000
+
+query error CAST does not support casting from bool to decimal\(38, 0\)
+SELECT TRUE::boolean::numeric
+
+query error CAST does not support casting from date to decimal\(38, 0\)
+SELECT '2001 02-03'::date::numeric
+
+query R
+SELECT 1.1::numeric::numeric;
+----
+1.0000
+
+query R
+SELECT 1.2::double::numeric;
+----
+1.0000
+
+query R
+SELECT 1.3::real::numeric;
+----
+1.0000
+
+query R
+SELECT 2::int::numeric;
+----
+2.0000
+
+query error CAST does not support casting from interval to decimal\(38, 0\)
+SELECT '1'::interval::numeric
+
+query T
+SELECT '{}'::jsonb::numeric;
+----
+NULL
+
+query error invalid input syntax for decimal: malformed numeric literal: dog: "dog"
+SELECT 'dog'::text::numeric
+
+query error CAST does not support casting from time to decimal\(38, 0\)
+SELECT '01:02:03'::time::numeric
+
+query error CAST does not support casting from timestamp to decimal\(38, 0\)
+SELECT '2002 03-04'::timestamp::numeric
+
+query error CAST does not support casting from timestamptz to decimal\(38, 0\)
+SELECT '2003 04-05'::timestamptz::numeric
+
+query T
+SELECT 1::bigint::double;
+----
+1.000
+
+query error CAST does not support casting from bool to f64
+SELECT TRUE::boolean::double
+
+query error CAST does not support casting from date to f64
+SELECT '2001 02-03'::date::double
+
+query T
+SELECT 1.1::numeric::double;
+----
+1.000
+
+query T
+SELECT 1.2::double::double;
+----
+1.200
+
+query T
+SELECT 1.3::real::double;
+----
+1.300
+
+query T
+SELECT 2::int::double;
+----
+2.000
+
+query error CAST does not support casting from interval to f64
+SELECT '1'::interval::double
+
+query T
+SELECT '{}'::jsonb::double;
+----
+NULL
+
+query error invalid input syntax for float8: invalid float literal: "dog"
+SELECT 'dog'::text::double
+
+query error CAST does not support casting from time to f64
+SELECT '01:02:03'::time::double
+
+query error CAST does not support casting from timestamp to f64
+SELECT '2002 03-04'::timestamp::double
+
+query error CAST does not support casting from timestamptz to f64
+SELECT '2003 04-05'::timestamptz::double
+
+query T
+SELECT 1::bigint::real;
+----
+1.000
+
+query error CAST does not support casting from bool to f64
+SELECT TRUE::boolean::real
+
+query error CAST does not support casting from date to f64
+SELECT '2001 02-03'::date::real
+
+query T
+SELECT 1.1::numeric::real;
+----
+1.000
+
+query T
+SELECT 1.2::double::real;
+----
+1.200
+
+query T
+SELECT 1.3::real::real;
+----
+1.300
+
+query T
+SELECT 2::int::real;
+----
+2.000
+
+query error CAST does not support casting from interval to f64
+SELECT '1'::interval::real
+
+query T
+SELECT '{}'::jsonb::real;
+----
+NULL
+
+query error invalid input syntax for float8: invalid float literal: "dog"
+SELECT 'dog'::text::real
+
+query error CAST does not support casting from time to f64
+SELECT '01:02:03'::time::real
+
+query error CAST does not support casting from timestamp to f64
+SELECT '2002 03-04'::timestamp::real
+
+query error CAST does not support casting from timestamptz to f64
+SELECT '2003 04-05'::timestamptz::real
+
+query T
+SELECT 1::bigint::integer;
+----
+1
+
+query error CAST does not support casting from bool to i32
+SELECT TRUE::boolean::integer
+
+query error CAST does not support casting from date to i32
+SELECT '2001 02-03'::date::integer
+
+query T
+SELECT 1.1::numeric::integer;
+----
+1
+
+query T
+SELECT 1.2::double::integer;
+----
+1
+
+query T
+SELECT 1.3::real::integer;
+----
+1
+
+query T
+SELECT 2::int::integer;
+----
+2
+
+query error CAST does not support casting from interval to i32
+SELECT '1'::interval::integer
+
+query T
+SELECT '{}'::jsonb::integer;
+----
+NULL
+
+query error invalid input syntax for int4: invalid digit found in string: "dog"
+SELECT 'dog'::text::integer
+
+query error CAST does not support casting from time to i32
+SELECT '01:02:03'::time::integer
+
+query error CAST does not support casting from timestamp to i32
+SELECT '2002 03-04'::timestamp::integer
+
+query error CAST does not support casting from timestamptz to i32
+SELECT '2003 04-05'::timestamptz::integer
+
+query error CAST does not support casting from i64 to interval
+SELECT 1::bigint::interval
+
+query error CAST does not support casting from bool to interval
+SELECT TRUE::boolean::interval
+
+query error CAST does not support casting from date to interval
+SELECT '2001 02-03'::date::interval
+
+query error CAST does not support casting from decimal\(38, 0\) to interval
+SELECT 1.1::numeric::interval
+
+query error CAST does not support casting from f64 to interval
+SELECT 1.2::double::interval
+
+query error CAST does not support casting from f64 to interval
+SELECT 1.3::real::interval
+
+query error CAST does not support casting from i32 to interval
+SELECT 2::int::interval
+
+query T
+SELECT '1'::interval::interval;
+----
+00:00:01
+
+query error CAST does not support casting from jsonb to interval
+SELECT '{}'::jsonb::interval
+
+query error invalid input syntax for interval: invalid DateTimeField: DOG: "dog"
+SELECT 'dog'::text::interval
+
+query T
+SELECT '01:02:03'::time::interval;
+----
+01:02:03
+
+query error CAST does not support casting from timestamp to interval
+SELECT '2002 03-04'::timestamp::interval
+
+query error CAST does not support casting from timestamptz to interval
+SELECT '2003 04-05'::timestamptz::interval
+
+query error CAST does not support casting from i64 to jsonb
+SELECT 1::bigint::jsonb
+
+query T
+SELECT TRUE::boolean::jsonb;
+----
+true
+
+query error CAST does not support casting from date to jsonb
+SELECT '2001 02-03'::date::jsonb
+
+query error CAST does not support casting from decimal\(38, 0\) to jsonb
+SELECT 1.1::numeric::jsonb
+
+query T
+SELECT 1.2::double::jsonb;
+----
+1.2
+
+query T
+SELECT 1.3::real::jsonb;
+----
+1.3
+
+query T
+SELECT 2::int::jsonb;
+----
+2.0
+
+query error CAST does not support casting from interval to jsonb
+SELECT '1'::interval::jsonb
+
+query T
+SELECT '{}'::jsonb::jsonb;
+----
+ {}
+
+query T
+SELECT 'dog'::text::jsonb;
+----
+NULL
+
+query error CAST does not support casting from time to jsonb
+SELECT '01:02:03'::time::jsonb
+
+query error CAST does not support casting from timestamp to jsonb
+SELECT '2002 03-04'::timestamp::jsonb
+
+query error CAST does not support casting from timestamptz to jsonb
+SELECT '2003 04-05'::timestamptz::jsonb
+
+query T
+SELECT 1::bigint::text;
+----
+1
+
+query T
+SELECT TRUE::boolean::text;
+----
+true
+
+query T
+SELECT '2001 02-03'::date::text;
+----
+2001-02-03
+
+query T
+SELECT 1.1::numeric::text;
+----
+1
+
+query T
+SELECT 1.2::double::text;
+----
+1.2
+
+query T
+SELECT 1.3::real::text;
+----
+1.3
+
+query T
+SELECT 2::int::text;
+----
+2
+
+query T
+SELECT '1'::interval::text;
+----
+00:00:01
+
+query T
+SELECT '{}'::jsonb::text;
+----
+{}
+
+query T
+SELECT 'dog'::text::text;
+----
+dog
+
+query T
+SELECT '01:02:03'::time::text;
+----
+01:02:03
+
+query T
+SELECT '2002 03-04'::timestamp::text;
+----
+2002-03-04 00:00:00
+
+query T
+SELECT '2003 04-05'::timestamptz::text;
+----
+2003-04-05 00:00:00+00
+
+query error CAST does not support casting from i64 to time
+SELECT 1::bigint::time
+
+query error CAST does not support casting from bool to time
+SELECT TRUE::boolean::time
+
+query error CAST does not support casting from date to time
+SELECT '2001 02-03'::date::time
+
+query error CAST does not support casting from decimal\(38, 0\) to time
+SELECT 1.1::numeric::time
+
+query error CAST does not support casting from f64 to time
+SELECT 1.2::double::time
+
+query error CAST does not support casting from f64 to time
+SELECT 1.3::real::time
+
+query error CAST does not support casting from i32 to time
+SELECT 2::int::time
+
+query T
+SELECT '1'::interval::time;
+----
+ 00:00:01
+
+query error CAST does not support casting from jsonb to time
+SELECT '{}'::jsonb::time
+
+query error invalid input syntax for time: invalid DateTimeField: DOG: "dog"
+SELECT 'dog'::text::time
+
+query T
+SELECT '01:02:03'::time::time;
+----
+ 01:02:03
+
+query error CAST does not support casting from timestamp to time
+SELECT '2002 03-04'::timestamp::time
+
+query error CAST does not support casting from timestamptz to time
+SELECT '2003 04-05'::timestamptz::time
+
+query error CAST does not support casting from i64 to timestamp
+SELECT 1::bigint::timestamp
+
+query error CAST does not support casting from bool to timestamp
+SELECT TRUE::boolean::timestamp
+
+query T
+SELECT '2001 02-03'::date::timestamp;
+----
+2001-02-03 00:00:00
+
+query error CAST does not support casting from decimal\(38, 0\) to timestamp
+SELECT 1.1::numeric::timestamp
+
+query error CAST does not support casting from f64 to timestamp
+SELECT 1.2::double::timestamp
+
+query error CAST does not support casting from f64 to timestamp
+SELECT 1.3::real::timestamp
+
+query error CAST does not support casting from i32 to timestamp
+SELECT 2::int::timestamp
+
+query error CAST does not support casting from interval to timestamp
+SELECT '1'::interval::timestamp
+
+query error CAST does not support casting from jsonb to timestamp
+SELECT '{}'::jsonb::timestamp
+
+query error invalid input syntax for timestamp: YEAR, MONTH, DAY are all required: "dog"
+SELECT 'dog'::text::timestamp
+
+query error CAST does not support casting from time to timestamp
+SELECT '01:02:03'::time::timestamp
+
+query T
+SELECT '2002 03-04'::timestamp::timestamp;
+----
+2002-03-04 00:00:00
+
+query T
+SELECT '2003 04-05'::timestamptz::timestamp;
+----
+2003-04-05 00:00:00
+
+query error CAST does not support casting from i64 to timestamptz
+SELECT 1::bigint::timestamptz
+
+query error CAST does not support casting from bool to timestamptz
+SELECT TRUE::boolean::timestamptz
+
+query T
+SELECT '2001 02-03'::date::timestamptz;
+----
+2001-02-03 00:00:00+00
+
+query error CAST does not support casting from decimal\(38, 0\) to timestamptz
+SELECT 1.1::numeric::timestamptz
+
+query error CAST does not support casting from f64 to timestamptz
+SELECT 1.2::double::timestamptz
+
+query error CAST does not support casting from f64 to timestamptz
+SELECT 1.3::real::timestamptz
+
+query error CAST does not support casting from i32 to timestamptz
+SELECT 2::int::timestamptz
+
+query error CAST does not support casting from interval to timestamptz
+SELECT '1'::interval::timestamptz
+
+query error CAST does not support casting from jsonb to timestamptz
+SELECT '{}'::jsonb::timestamptz
+
+query error invalid input syntax for timestamptz: YEAR, MONTH, DAY are all required: "dog"
+SELECT 'dog'::text::timestamptz
+
+query error CAST does not support casting from time to timestamptz
+SELECT '01:02:03'::time::timestamptz
+
+query T
+SELECT '2002 03-04'::timestamp::timestamptz;
+----
+2002-03-04 00:00:00+00
+
+query T
+SELECT '2003 04-05'::timestamptz::timestamptz;
+----
+2003-04-05 00:00:00+00
