@@ -212,6 +212,8 @@ Wikipedia.
 
 Once you're done, don't forget to stop `curl` and `rm wikirecent`.
 
-## Up next
+{{< cta >}}
 
-Check out our [architecture overview](/overview/architecture).
+[Next, see how Materialize can work as an entire microservices →](/docs/demos/microservice)
+
+{{</ cta >}}
