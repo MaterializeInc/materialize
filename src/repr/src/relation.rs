@@ -120,7 +120,7 @@ impl RelationType {
         self.column_types.len()
     }
 
-    /// Gets the keys used when creating a default index.
+    /// Gets the index of the columns used when creating a default index.
     pub fn default_key(&self) -> Vec<usize> {
         if let Some(key) = self.keys.first() {
             key.clone()
