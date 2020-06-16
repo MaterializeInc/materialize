@@ -69,35 +69,58 @@ services:
 
 mzconduct:
   workflows:
-    # This test is designed to delay inbound and outbound network
-    # traffic of the Kafka broker.
-    #
-    # Success: Kafka broker traffic is delayed, materialize does not
-    #          crash, chaos container exits successfully.
-    #          Note: to confirm that broker traffic is delayed, you can run the
-    #                following on the Kafka broker's container: `tc qdisc show  dev eth0`
-    # Failure: Kafka broker traffic is not delayed, materialize crashes,
-    #          or chaos container exits unsuccessfully.
+    # This test is designed to delay egress network traffic of the Kafka broker.
     delay-kafka:
       steps:
         - step: workflow
           workflow: start-everything
         - step: chaos-delay-docker
-          service: kafka
-        - step: run
-          service: chaos
-          command: >-
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 5
-            --message-count 1000000
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: chaos_run
-          exit_code: 0
+          container: chaos_kafka_1
+        - step: workflow
+          workflow: run-netem-and-confirm
+
+    # This test is designed to rate limit egress network traffic of the Kafka broker.
+    rate-kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-rate-docker
+          container: chaos_kafka_1
+        - step: workflow
+          workflow: run-netem-and-confirm
+
+    # This test is designed to test packet loss from the Kafka broker.
+    loss-kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-loss-docker
+          container: chaos_kafka_1
+          percent: 10
+        - step: workflow
+          workflow: run-netem-and-confirm
+
+    # This test is designed to test packet loss from the Kafka broker.
+    duplicate-kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-duplicate-docker
+          container: chaos_kafka_1
+          percent: 10
+        - step: workflow
+          workflow: run-netem-and-confirm
+
+    # This test is designed to test packet corruption from the Kafka broker.
+    corrupt-kafka:
+      steps:
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-corrupt-docker
+          container: chaos_kafka_1
+          percent: 10
+        - step: workflow
+          workflow: run-netem-and-confirm
 
     # This test is designed to pause and unpause the running Kafka broker
     # (chaos-kill-container sends a SIGSTOP signal to the container).
@@ -192,3 +215,29 @@ mzconduct:
         - step: wait-for-tcp
           host: materialized
           port: 6875
+
+    # To verify a netem chaos test, we run the chaos container to completion
+    # and check the following conditions:
+    #
+    # - the materialized container did not crash
+    # - the kafka container did not crash
+    # - the chaos container completed successfully
+    run-netem-and-confirm:
+      steps:
+        - step: run
+          service: chaos
+          command: >-
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 100
+            --message-count 100000000
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: kafka
+          running: true
+        - step: chaos-confirm
+          service: chaos_run
+          exit_code: 0
