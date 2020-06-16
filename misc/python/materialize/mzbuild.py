@@ -45,6 +45,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 import yaml
 
@@ -451,11 +452,15 @@ class ResolvedImage:
             acquired_from: How the image was acquired.
         """
         if self.image.publish:
-            try:
-                spawn.runv(["docker", "pull", self.spec()])
-                return AcquiredFrom.REGISTRY
-            except subprocess.CalledProcessError:
-                pass
+            while True:
+                try:
+                    spawn.runv(["docker", "pull", self.spec()])
+                    return AcquiredFrom.REGISTRY
+                except subprocess.CalledProcessError:
+                    if not ui.env_is_truthy("MZBUILD_WAIT_FOR_IMAGE"):
+                        break
+                    print(f"waiting for mzimage to become available", file=sys.stderr)
+                    time.sleep(10)
         self.build()
         return AcquiredFrom.LOCAL_BUILD
 
