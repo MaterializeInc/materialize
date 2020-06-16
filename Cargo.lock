@@ -697,6 +697,7 @@ dependencies = [
  "pdqselect",
  "prometheus",
  "prometheus-static-metric",
+ "rand",
  "rdkafka",
  "regex",
  "repr",

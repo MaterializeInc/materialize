@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use rand::Rng;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -667,8 +668,6 @@ struct ControlPlaneInfo {
     start_offset: MzOffset,
     /// Source Type (Real-time or BYO)
     source_type: Consistency,
-    /// Number of records processed since capability was last downgraded
-    record_count_since_downgrade: u64,
 }
 
 impl ControlPlaneInfo {
@@ -685,7 +684,6 @@ impl ControlPlaneInfo {
             start_offset,
             source_type: consistency,
             time_since_downgrade: Instant::now(),
-            record_count_since_downgrade: 0,
         }
     }
 
@@ -765,6 +763,7 @@ fn activate_source_timestamping<G>(
 
 /// This function is responsible for refreshing the number of known partitions. It marks the source
 /// has needing to be refreshed if new partitions are detected.
+#[allow(clippy::too_many_arguments)]
 fn metadata_fetch(
     timestamping_stopped: Arc<AtomicBool>,
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
@@ -790,6 +789,7 @@ fn metadata_fetch(
     }
 
     let mut partition_kafka_metadata: HashMap<i32, IntGauge> = HashMap::new();
+    let mut rng = rand::thread_rng();
 
     while !timestamping_stopped.load(Ordering::SeqCst) {
         let metadata = consumer.fetch_metadata(Some(&topic), Duration::from_secs(30));
@@ -855,7 +855,10 @@ fn metadata_fetch(
         }
 
         if new_partition_count > 0 {
-            thread::sleep(wait);
+            // Add jitter to spread-out metadata requests from workers. Brokers can get overloaded
+            // if all workers make simultaneous metadata request calls.
+            let sleep_jitter = rng.gen_range(Duration::from_secs(0), Duration::from_secs(15));
+            thread::sleep(wait + sleep_jitter);
         } else {
             // If no partitions have been detected yet, sleep for a second rather than
             // the specified "wait" period of time, as we know that there should at least be one
@@ -1039,7 +1042,6 @@ where
                                 &mut dp_info.partition_metrics.get_mut(&partition).unwrap();
                             partition_metrics.offset_ingested.set(offset.offset);
                             partition_metrics.messages_ingested.inc();
-                            cp_info.record_count_since_downgrade += 1;
                         }
                     }
 
@@ -1271,7 +1273,6 @@ fn downgrade_capability(
         if changed && min > 0 {
             dp_info.source_metrics.capability.set(min);
             cap.downgrade(&(&min + 1));
-            cp_info.record_count_since_downgrade = 0;
             cp_info.last_closed_ts = min;
         }
     } else {
@@ -1286,7 +1287,6 @@ fn downgrade_capability(
                 cap.downgrade(&(&ts + 1));
             }
             cp_info.time_since_downgrade = Instant::now();
-            cp_info.record_count_since_downgrade = 0;
         }
     }
 }
