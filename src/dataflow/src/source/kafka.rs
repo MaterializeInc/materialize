@@ -924,7 +924,7 @@ where
             // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
             let metadata_refresh_frequency = Duration::from_millis(
                 config_options
-                    .get("topic.metadata.refresh.interval.ms")
+                    .get("topic_metadata_refresh_interval_ms")
                     // Safe conversion: statement::extract_config enforces that option is a value
                     // between 0 and 3600000
                     .unwrap_or(&"30000".to_owned())
