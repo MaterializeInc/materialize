@@ -741,6 +741,11 @@ lazy_static! {
             "current_timestamp" => {
                 params!() => nullary_op(|ecx| plan_current_timestamp(ecx, "current_timestamp"))
             },
+            "date_part" => {
+                params!(String, Interval) => BinaryFunc::DatePartInterval,
+                params!(String, Timestamp) => BinaryFunc::DatePartTimestamp,
+                params!(String, TimestampTz) => BinaryFunc::DatePartTimestampTz
+            },
             "date_trunc" => {
                 params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp,
                 params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz

@@ -12,11 +12,12 @@ use std::mem;
 
 use serde::{Deserialize, Serialize};
 
+use repr::adt::datetime::DateTimeUnits;
 use repr::adt::regex::Regex;
 use repr::strconv::ParseError;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use self::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
+use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 
 pub mod func;
 pub mod like_pattern;
@@ -308,20 +309,47 @@ impl ScalarExpr {
                         Ok(regex) => expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex))),
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     };
+                } else if *func == BinaryFunc::DatePartInterval && expr1.is_literal() {
+                    let units = expr1.as_literal_str().unwrap();
+                    *e = match units.parse::<DateTimeUnits>() {
+                        Ok(units) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::DatePartInterval(units),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::DatePartTimestamp && expr1.is_literal() {
+                    let units = expr1.as_literal_str().unwrap();
+                    *e = match units.parse::<DateTimeUnits>() {
+                        Ok(units) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::DatePartTimestamp(units),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                    }
+                } else if *func == BinaryFunc::DatePartTimestampTz && expr1.is_literal() {
+                    let units = expr1.as_literal_str().unwrap();
+                    *e = match units.parse::<DateTimeUnits>() {
+                        Ok(units) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::DatePartTimestampTz(units),
+                            expr: Box::new(expr2.take()),
+                        },
+                        Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
+                    }
                 } else if *func == BinaryFunc::DateTruncTimestamp && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
-                    *e = match units.parse::<DateTruncTo>() {
-                        Ok(to) => ScalarExpr::CallUnary {
-                            func: UnaryFunc::DateTruncTimestamp(to),
+                    *e = match units.parse::<DateTimeUnits>() {
+                        Ok(units) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::DateTruncTimestamp(units),
                             expr: Box::new(expr2.take()),
                         },
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     }
                 } else if *func == BinaryFunc::DateTruncTimestampTz && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
-                    *e = match units.parse::<DateTruncTo>() {
-                        Ok(to) => ScalarExpr::CallUnary {
-                            func: UnaryFunc::DateTruncTimestampTz(to),
+                    *e = match units.parse::<DateTimeUnits>() {
+                        Ok(units) => ScalarExpr::CallUnary {
+                            func: UnaryFunc::DateTruncTimestampTz(units),
                             expr: Box::new(expr2.take()),
                         },
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
@@ -513,6 +541,7 @@ pub enum EvalError {
     },
     NegSqrt,
     UnknownUnits(String),
+    UnsupportedDateTimeUnits(DateTimeUnits),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
 }
@@ -535,6 +564,9 @@ impl std::fmt::Display for EvalError {
             ),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
             EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
+            EvalError::UnsupportedDateTimeUnits(units) => {
+                write!(f, "unsupported timestamp units '{}'", units)
+            }
             EvalError::UnterminatedLikeEscapeSequence => {
                 f.write_str("unterminated escape sequence in LIKE")
             }
