@@ -67,22 +67,11 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// Unary operation e.g. `NOT foo`
-    UnaryOp {
-        op: UnaryOperator,
-        expr: Box<Expr>,
-    },
+    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr>,
         data_type: DataType,
-    },
-    Extract {
-        field: String,
-        expr: Box<Expr>,
-    },
-    Trim {
-        side: TrimSide,
-        exprs: Vec<Expr>,
     },
     /// `expr COLLATE collation`
     Collate {
@@ -93,15 +82,11 @@ pub enum Expr {
     ///
     /// While COALESCE has the same syntax as a function call, its semantics are
     /// extremely unusual, and are better captured with a dedicated AST node.
-    Coalesce {
-        exprs: Vec<Expr>,
-    },
+    Coalesce { exprs: Vec<Expr> },
     /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr>),
     /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
-    Row {
-        exprs: Vec<Expr>,
-    },
+    Row { exprs: Vec<Expr> },
     /// A literal value, such as string, number, date or NULL
     Value(Value),
     /// Scalar function call e.g. `LEFT(foo, 5)`
@@ -229,8 +214,6 @@ impl AstDisplay for Expr {
                     | Expr::Cast { .. }
                     | Expr::Function { .. }
                     | Expr::Identifier { .. }
-                    | Expr::Extract { .. }
-                    | Expr::Trim { .. }
                     | Expr::Collate { .. }
                     | Expr::Coalesce { .. } => false,
                     _ => true,
@@ -244,23 +227,6 @@ impl AstDisplay for Expr {
                 }
                 f.write_str("::");
                 f.write_node(data_type);
-            }
-            Expr::Extract { field, expr } => {
-                f.write_str("EXTRACT(");
-                f.write_node(&display::escape_single_quote_string(field));
-                f.write_str(" FROM ");
-                f.write_node(&expr);
-                f.write_str(")");
-            }
-            Expr::Trim { side, exprs } => {
-                f.write_node(side);
-                f.write_str("(");
-                f.write_node(&exprs[0]);
-                if exprs.len() == 2 {
-                    f.write_str(", ");
-                    f.write_node(&exprs[1]);
-                }
-                f.write_str(")");
             }
             Expr::Collate { expr, collation } => {
                 f.write_node(&expr);
@@ -532,26 +498,3 @@ impl AstDisplay for FunctionArgs {
     }
 }
 impl_display!(FunctionArgs);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// Expresses which side you want to trim characters from in `trim` function
-/// calls.
-pub enum TrimSide {
-    /// Equivalent to `trim`
-    Both,
-    /// Equivalent to `ltrim`
-    Leading,
-    /// Equivalent to `rtrim`
-    Trailing,
-}
-
-impl AstDisplay for TrimSide {
-    fn fmt(&self, f: &mut AstFormatter) {
-        match self {
-            TrimSide::Both => f.write_str("btrim"),
-            TrimSide::Leading => f.write_str("ltrim"),
-            TrimSide::Trailing => f.write_str("rtrim"),
-        }
-    }
-}
-impl_display!(TrimSide);
