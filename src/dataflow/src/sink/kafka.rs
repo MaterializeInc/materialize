@@ -175,7 +175,6 @@ where
     let mut queue: VecDeque<(Row, Diff)> = VecDeque::new();
     let mut vector = Vec::new();
     let mut encoded_buffer = None;
-    let mut shutdown_button = None;
 
     let name = format!("kafka-{}", id);
     sink_reschedule(
@@ -184,11 +183,10 @@ where
         &name.clone(),
         |info| {
             let activator = stream.scope().activator_for(&info.address[..]);
-            let shutdown_button_ref = &mut shutdown_button;
-            *shutdown_button_ref = Some(ShutdownButton::new(
+            let shutdown_button = ShutdownButton::new(
                 producer.clone(),
                 stream.scope().activator_for(&info.address[..]),
-            ));
+            );
 
             (
                 move |input| {
@@ -301,7 +299,7 @@ where
 
                     false
                 },
-                shutdown_button.expect("sink shutdown button must exist"),
+                shutdown_button,
             )
         },
     )
