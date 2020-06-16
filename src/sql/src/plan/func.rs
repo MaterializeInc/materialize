@@ -22,12 +22,12 @@ use ore::collections::CollectionExt;
 use repr::{ColumnType, Datum, ScalarType};
 use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
 
-use super::cast::{self, rescale_decimal, CastTo};
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
     VariadicFunc,
 };
-use super::query::{self, CoerceTo, ExprContext, QueryLifetime};
+use super::query::{self, ExprContext, QueryLifetime};
+use super::typeconv::{self, rescale_decimal, CastTo, CoerceTo};
 use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -273,7 +273,7 @@ impl ParamType {
             ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
         };
 
-        cast::get_cast(from_type, &cast_to).is_some()
+        typeconv::get_cast(from_type, &cast_to).is_some()
     }
 
     /// Does `self` accept arguments of category `c`?
@@ -634,7 +634,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::JsonbAny => CoerceTo::JsonbAny,
             ParamType::StringAny => CoerceTo::Plain(String),
         };
-        let arg = query::plan_coerce(self.ecx, arg, coerce_to)?;
+        let arg = typeconv::plan_coerce(self.ecx, arg, coerce_to)?;
         let arg_type = self.ecx.scalar_type(&arg);
         let cast_to = match typ {
             ParamType::Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => return Ok(arg),
@@ -643,7 +643,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             ParamType::JsonbAny => CastTo::JsonbAny,
             ParamType::StringAny => CastTo::Explicit(String),
         };
-        query::plan_cast_internal(self.ident, self.ecx, arg, cast_to)
+        typeconv::plan_cast(self.ident, self.ecx, arg, cast_to)
     }
 }
 
@@ -768,7 +768,7 @@ lazy_static! {
                 params!(Float64) => identity_op(),
                 params!(Decimal(0, 0)) => identity_op(),
                 params!(Int32) => unary_op(|ecx, e| {
-                      super::query::plan_cast_internal(
+                      super::typeconv::plan_cast(
                           "internal.avg_promotion", ecx, e,
                           CastTo::Explicit(ScalarType::Decimal(10, 0)),
                       )
