@@ -53,7 +53,7 @@ lazy_static! {
 /// Per-Kafka source metrics.
 pub struct SourceMetrics {
     operator_scheduled_counter: IntCounter,
-    capability: UIntGauge,
+    capability: UIntGauge
 }
 
 impl SourceMetrics {
@@ -369,6 +369,8 @@ impl DataPlaneInfo {
         let refresh = self.refresh_metadata_info.clone();
         let id = self.source_id.clone();
         let topic = self.topic_name.clone();
+        let worker_id = self.worker_id;
+        let worker_count = self.worker_count;
         thread::spawn(move || {
             metadata_fetch(
                 timestamping_stopped,
@@ -376,6 +378,8 @@ impl DataPlaneInfo {
                 refresh,
                 &id,
                 &topic,
+                worker_id,
+                worker_count,
                 metadata_refresh_frequency,
             )
         });
@@ -421,8 +425,6 @@ impl DataPlaneInfo {
     }
 
     /// Returns true if this worker is responsible for this partition
-    /// If multi-worker reading is not enabled, this worker is *always* responsible for the
-    /// partition
     /// Ex: if pid=0 and worker_id = 0, then true
     /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: i32) -> bool {
@@ -665,6 +667,8 @@ struct ControlPlaneInfo {
     start_offset: MzOffset,
     /// Source Type (Real-time or BYO)
     source_type: Consistency,
+    /// Number of records processed since capability was last downgraded
+    record_count_since_downgrade: u64,
 }
 
 impl ControlPlaneInfo {
@@ -681,6 +685,7 @@ impl ControlPlaneInfo {
             start_offset,
             source_type: consistency,
             time_since_downgrade: Instant::now(),
+            record_count_since_downgrade: 0,
         }
     }
 
@@ -766,6 +771,8 @@ fn metadata_fetch(
     partition_count: Arc<Mutex<Option<i32>>>,
     id: &str,
     topic: &str,
+    worker_id: i32,
+    worker_count: i32,
     wait: Duration,
 ) {
     debug!(
@@ -811,26 +818,29 @@ fn metadata_fetch(
                 // Upgrade partition metrics
                 for p in 0..new_partition_count {
                     let pid = p.try_into().unwrap();
-                    match consumer.fetch_watermarks(&topic, pid, Duration::from_secs(1)) {
-                        Ok((_, high)) => {
-                            if let Some(max_available_offset) =
-                                partition_kafka_metadata.get_mut(&pid)
-                            {
-                                max_available_offset.set(high)
-                            } else {
-                                let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
-                                    topic,
-                                    &id,
-                                    &pid.to_string(),
-                                ]);
-                                max_offset.set(high);
-                                partition_kafka_metadata.insert(pid, max_offset);
+                    // Only check metadata updates for partitions that the worker owns
+                    if (pid % worker_count) == worker_id {
+                        match consumer.fetch_watermarks(&topic, pid, Duration::from_secs(1)) {
+                            Ok((_, high)) => {
+                                if let Some(max_available_offset) =
+                                    partition_kafka_metadata.get_mut(&pid)
+                                {
+                                    max_available_offset.set(high)
+                                } else {
+                                    let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
+                                        topic,
+                                        &id,
+                                        &pid.to_string(),
+                                    ]);
+                                    max_offset.set(high);
+                                    partition_kafka_metadata.insert(pid, max_offset);
+                                }
                             }
+                            Err(e) => warn!(
+                                "error loading watermarks topic={} partition={} error={}",
+                                topic, p, e
+                            ),
                         }
-                        Err(e) => warn!(
-                            "error loading watermarks topic={} partition={} error={}",
-                            topic, p, e
-                        ),
                     }
                 }
 
@@ -1029,6 +1039,7 @@ where
                                 &mut dp_info.partition_metrics.get_mut(&partition).unwrap();
                             partition_metrics.offset_ingested.set(offset.offset);
                             partition_metrics.messages_ingested.inc();
+                            cp_info.record_count_since_downgrade+=1;
                         }
                     }
 
@@ -1260,6 +1271,7 @@ fn downgrade_capability(
         if changed && min > 0 {
             dp_info.source_metrics.capability.set(min);
             cap.downgrade(&(&min + 1));
+            cp_info.record_count_since_downgrade = 0;
             cp_info.last_closed_ts = min;
         }
     } else {
@@ -1274,6 +1286,7 @@ fn downgrade_capability(
                 cap.downgrade(&(&ts + 1));
             }
             cp_info.time_since_downgrade = Instant::now();
+            cp_info.record_count_since_downgrade = 0;
         }
     }
 }
