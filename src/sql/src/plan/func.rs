@@ -623,14 +623,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         use ScalarType::*;
         let coerce_to = match typ {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
-            ParamType::Any => {
-                // `CoerceTo::Nothing` might seem more appropriate here, but
-                // that would reject literal NULLs. Since coercions are not
-                // binding, coercing to a string has no effect on values that
-                // have a different natural type (e.g., list literals), so this
-                // is correct.
-                CoerceTo::Plain(String)
-            }
+            ParamType::Any => CoerceTo::Plain(String),
             ParamType::JsonbAny => CoerceTo::JsonbAny,
             ParamType::StringAny => CoerceTo::Plain(String),
         };
@@ -919,7 +912,7 @@ pub fn select_scalar_func(
 
     let mut cexprs = Vec::new();
     for arg in args {
-        let cexpr = query::plan_coercible_expr(ecx, arg)?;
+        let cexpr = query::plan_expr(ecx, arg)?;
         cexprs.push(cexpr);
     }
 
@@ -1234,10 +1227,7 @@ pub fn plan_binary_op<'a>(
         None => unsupported!(op),
     };
 
-    let cexprs = vec![
-        query::plan_coercible_expr(ecx, left)?,
-        query::plan_coercible_expr(ecx, right)?,
-    ];
+    let cexprs = vec![query::plan_expr(ecx, left)?, query::plan_expr(ecx, right)?];
 
     ArgImplementationMatcher::select_implementation(
         &op.to_string(),
@@ -1295,7 +1285,7 @@ pub fn plan_unary_op<'a>(
         None => unsupported!(op),
     };
 
-    let cexpr = vec![query::plan_coercible_expr(ecx, expr)?];
+    let cexpr = vec![query::plan_expr(ecx, expr)?];
 
     ArgImplementationMatcher::select_implementation(
         &op.to_string(),
@@ -1430,7 +1420,7 @@ pub fn select_table_func(
 
     let mut cexprs = Vec::new();
     for arg in args {
-        let cexpr = query::plan_coercible_expr(ecx, arg)?;
+        let cexpr = query::plan_expr(ecx, arg)?;
         cexprs.push(cexpr);
     }
 
@@ -1518,7 +1508,7 @@ pub fn select_aggregate_func(
 
     let mut cexprs = Vec::new();
     for arg in args {
-        let cexpr = query::plan_coercible_expr(ecx, arg)?;
+        let cexpr = query::plan_expr(ecx, arg)?;
         cexprs.push(cexpr);
     }
 

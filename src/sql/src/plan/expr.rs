@@ -15,15 +15,19 @@
 use std::collections::{BTreeMap, HashMap};
 use std::mem;
 
+use failure::bail;
+
 use ore::collections::CollectionExt;
 use repr::*;
+
+use crate::plan::query::ExprContext;
+use crate::plan::typeconv::{self, CoerceTo};
+use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use expr::{
     AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc,
 };
-
-use crate::plan::Params;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like expr::RelationExpr, except where otherwise noted below.
@@ -176,6 +180,21 @@ pub enum CoercibleScalarExpr {
     LiteralNull,
     LiteralList(Vec<CoercibleScalarExpr>),
     LiteralString(String),
+}
+
+impl CoercibleScalarExpr {
+    pub fn type_as(self, ecx: &ExprContext, ty: ScalarType) -> Result<ScalarExpr, failure::Error> {
+        let expr = typeconv::plan_coerce(ecx, self, CoerceTo::Plain(ty.clone()))?;
+        let expr_ty = ecx.scalar_type(&expr);
+        if ty != expr_ty {
+            bail!("{} must have type {}, not type {}", ecx.name, ty, expr_ty);
+        }
+        Ok(expr)
+    }
+
+    pub fn type_as_any(self, ecx: &ExprContext) -> Result<ScalarExpr, failure::Error> {
+        typeconv::plan_coerce(ecx, self, CoerceTo::Plain(ScalarType::String))
+    }
 }
 
 pub trait ScalarTypeable {

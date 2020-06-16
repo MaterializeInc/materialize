@@ -67,10 +67,7 @@ pub enum Expr {
         right: Box<Expr>,
     },
     /// Unary operation e.g. `NOT foo`
-    UnaryOp {
-        op: UnaryOperator,
-        expr: Box<Expr>,
-    },
+    UnaryOp { op: UnaryOperator, expr: Box<Expr> },
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr>,
@@ -85,15 +82,11 @@ pub enum Expr {
     ///
     /// While COALESCE has the same syntax as a function call, its semantics are
     /// extremely unusual, and are better captured with a dedicated AST node.
-    Coalesce {
-        exprs: Vec<Expr>,
-    },
+    Coalesce { exprs: Vec<Expr> },
     /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr>),
     /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
-    Row {
-        exprs: Vec<Expr>,
-    },
+    Row { exprs: Vec<Expr> },
     /// A literal value, such as string, number, date or NULL
     Value(Value),
     /// Scalar function call e.g. `LEFT(foo, 5)`
