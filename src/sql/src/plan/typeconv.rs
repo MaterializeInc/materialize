@@ -20,7 +20,7 @@ use lazy_static::lazy_static;
 use expr::VariadicFunc;
 use repr::{ColumnType, Datum, ScalarType};
 
-use super::expr::{BinaryFunc, ScalarExpr, UnaryFunc, CoercibleScalarExpr};
+use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc};
 use super::query::ExprContext;
 
 /// Describes methods of planning a conversion between [`ScalarType`]s, which
@@ -419,8 +419,6 @@ pub fn guess_best_common_type(types: &[Option<ScalarType>]) -> Option<ScalarType
 /// the [`CoercibleScalarExpr::Coerced`] variant.
 #[derive(Clone, Debug)]
 pub enum CoerceTo {
-    /// No coercion preference.
-    Nothing,
     /// Coerce to the specified scalar type.
     Plain(ScalarType),
     /// Coerce using special JSONB coercion rules. The following table
@@ -447,15 +445,11 @@ pub fn plan_coerce<'a>(
     Ok(match (e, coerce_to) {
         (Coerced(e), _) => e,
 
-        (LiteralNull, Nothing) => bail!("unable to infer type for NULL"),
         (LiteralNull, Plain(typ)) => ScalarExpr::literal_null(typ),
         (LiteralNull, JsonbAny) => {
             ScalarExpr::literal(Datum::JsonNull, ColumnType::new(ScalarType::Jsonb))
         }
 
-        (LiteralString(s), Nothing) => {
-            ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String))
-        }
         (LiteralString(s), Plain(typ)) => {
             let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String));
             plan_cast("string literal", ecx, lit, CastTo::Explicit(typ))?
@@ -467,7 +461,7 @@ pub fn plan_coerce<'a>(
         (LiteralList(exprs), coerce_to) => {
             let coerce_elem_to = match &coerce_to {
                 Plain(ScalarType::List(typ)) => Plain((**typ).clone()),
-                Nothing | Plain(_) => {
+                Plain(_) => {
                     let typ = exprs
                         .iter()
                         .find_map(|e| ecx.column_type(e).map(|t| t.scalar_type));
@@ -506,7 +500,6 @@ pub fn plan_coerce<'a>(
 
         (Parameter(n), coerce_to) => {
             let typ = match coerce_to {
-                CoerceTo::Nothing => bail!("unable to infer type for parameter ${}", n),
                 CoerceTo::Plain(typ) => typ,
                 CoerceTo::JsonbAny => ScalarType::Jsonb,
             };
