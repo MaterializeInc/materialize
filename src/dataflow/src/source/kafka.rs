@@ -763,6 +763,7 @@ fn activate_source_timestamping<G>(
 
 /// This function is responsible for refreshing the number of known partitions. It marks the source
 /// has needing to be refreshed if new partitions are detected.
+#[allow(clippy::too_many_arguments)]
 fn metadata_fetch(
     timestamping_stopped: Arc<AtomicBool>,
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
