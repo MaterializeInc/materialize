@@ -919,7 +919,7 @@ pub fn select_scalar_func(
 
     let mut cexprs = Vec::new();
     for arg in args {
-        let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
+        let cexpr = query::plan_coercible_expr(ecx, arg)?;
         cexprs.push(cexpr);
     }
 
@@ -1235,8 +1235,8 @@ pub fn plan_binary_op<'a>(
     };
 
     let cexprs = vec![
-        query::plan_coercible_expr(ecx, left)?.0,
-        query::plan_coercible_expr(ecx, right)?.0,
+        query::plan_coercible_expr(ecx, left)?,
+        query::plan_coercible_expr(ecx, right)?,
     ];
 
     ArgImplementationMatcher::select_implementation(
@@ -1295,7 +1295,7 @@ pub fn plan_unary_op<'a>(
         None => unsupported!(op),
     };
 
-    let cexpr = vec![query::plan_coercible_expr(ecx, expr)?.0];
+    let cexpr = vec![query::plan_coercible_expr(ecx, expr)?];
 
     ArgImplementationMatcher::select_implementation(
         &op.to_string(),
@@ -1430,7 +1430,7 @@ pub fn select_table_func(
 
     let mut cexprs = Vec::new();
     for arg in args {
-        let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
+        let cexpr = query::plan_coercible_expr(ecx, arg)?;
         cexprs.push(cexpr);
     }
 
@@ -1518,7 +1518,7 @@ pub fn select_aggregate_func(
 
     let mut cexprs = Vec::new();
     for arg in args {
-        let cexpr = query::plan_coercible_expr(ecx, arg)?.0;
+        let cexpr = query::plan_coercible_expr(ecx, arg)?;
         cexprs.push(cexpr);
     }
 
