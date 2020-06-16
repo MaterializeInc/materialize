@@ -161,8 +161,8 @@ query error Cannot call function char_length\(i32\): arguments cannot be implici
 SELECT char_length(321);
 
 # Cannot implicitly cast string to any numeric category
-# query error no overload for string + string
-# SELECT 'dog'::text + 'cat'::text;
+query error no overload for string \+ string
+SELECT 'dog'::text + 'cat'::text;
 
 # Cannot implicitly cast f64 to decimal
 query error Cannot call function round\(f64, i32\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
@@ -279,11 +279,16 @@ SELECT 2::int::bigint;
 query error CAST does not support casting from interval to i64
 SELECT '1'::interval::bigint
 
-# pginvalid
+#pginvalid
 query T
 SELECT '{}'::jsonb::bigint;
 ----
 NULL
+
+query R
+SELECT '1'::jsonb::bigint;
+----
+1
 
 query error invalid input syntax for int8: invalid digit found in string: "dog"
 SELECT 'dog'::text::bigint
@@ -297,13 +302,11 @@ SELECT '2002 03-04'::timestamp::bigint
 query error CAST does not support casting from timestamptz to i64
 SELECT '2003 04-05'::timestamptz::bigint
 
-# pginvalid
 query T
 SELECT 1::bigint::boolean;
 ----
 true
 
-# should be 't'
 query T
 SELECT TRUE::boolean::boolean;
 ----
@@ -321,7 +324,6 @@ SELECT 1.2::double::boolean
 query error CAST does not support casting from f64 to bool
 SELECT 1.3::real::boolean
 
-# should be 't'
 query T
 SELECT 2::int::boolean;
 ----
@@ -330,8 +332,14 @@ true
 query error CAST does not support casting from interval to bool
 SELECT '1'::interval::boolean
 
+#pginvalid
 query T
 SELECT '{}'::jsonb::boolean;
+----
+NULL
+
+query T
+SELECT '1'::jsonb::boolean;
 ----
 NULL
 
@@ -431,6 +439,11 @@ SELECT '{}'::jsonb::numeric;
 ----
 NULL
 
+query R
+SELECT '1'::jsonb::numeric;
+----
+1.0000
+
 query error invalid input syntax for decimal: malformed numeric literal: dog: "dog"
 SELECT 'dog'::text::numeric
 
@@ -477,10 +490,16 @@ SELECT 2::int::double;
 query error CAST does not support casting from interval to f64
 SELECT '1'::interval::double
 
+#pginvalid
 query T
 SELECT '{}'::jsonb::double;
 ----
 NULL
+
+query T
+SELECT '1'::jsonb::double;
+----
+1.000
 
 query error invalid input syntax for float8: invalid float literal: "dog"
 SELECT 'dog'::text::double
@@ -528,10 +547,16 @@ SELECT 2::int::real;
 query error CAST does not support casting from interval to f64
 SELECT '1'::interval::real
 
+#pginvalid
 query T
 SELECT '{}'::jsonb::real;
 ----
 NULL
+
+query R
+SELECT '2'::jsonb::real;
+----
+2.000
 
 query error invalid input syntax for float8: invalid float literal: "dog"
 SELECT 'dog'::text::real
@@ -579,10 +604,16 @@ SELECT 2::int::integer;
 query error CAST does not support casting from interval to i32
 SELECT '1'::interval::integer
 
+#pginvalid
 query T
 SELECT '{}'::jsonb::integer;
 ----
 NULL
+
+query R
+SELECT '1'::jsonb::integer;
+----
+1
 
 query error invalid input syntax for int4: invalid digit found in string: "dog"
 SELECT 'dog'::text::integer
@@ -642,10 +673,9 @@ SELECT '2003 04-05'::timestamptz::interval
 query error CAST does not support casting from i64 to jsonb
 SELECT 1::bigint::jsonb
 
-query T
+#pginvalid
+query error CAST does not support casting from bool to jsonb
 SELECT TRUE::boolean::jsonb;
-----
-true
 
 query error CAST does not support casting from date to jsonb
 SELECT '2001 02-03'::date::jsonb
@@ -653,20 +683,11 @@ SELECT '2001 02-03'::date::jsonb
 query error CAST does not support casting from decimal\(38, 0\) to jsonb
 SELECT 1.1::numeric::jsonb
 
-query T
+query error CAST does not support casting from f64 to jsonb
 SELECT 1.2::double::jsonb;
-----
-1.2
 
-query T
-SELECT 1.3::real::jsonb;
-----
-1.3
-
-query T
+query error CAST does not support casting from i32 to jsonb
 SELECT 2::int::jsonb;
-----
-2.0
 
 query error CAST does not support casting from interval to jsonb
 SELECT '1'::interval::jsonb
@@ -674,8 +695,14 @@ SELECT '1'::interval::jsonb
 query T
 SELECT '{}'::jsonb::jsonb;
 ----
- {}
+{}
 
+query T
+SELECT '1'::jsonb::jsonb;
+----
+1.0
+
+#pginvalid
 query T
 SELECT 'dog'::text::jsonb;
 ----
@@ -734,6 +761,11 @@ query T
 SELECT '{}'::jsonb::text;
 ----
 {}
+
+query T
+SELECT '1'::jsonb::text;
+----
+1.0
 
 query T
 SELECT 'dog'::text::text;

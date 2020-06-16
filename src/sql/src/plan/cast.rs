@@ -143,16 +143,10 @@ lazy_static! {
         casts! {
             // BOOL
             (Bool, Explicit(String)) => CastBoolToStringExplicit,
-            (Bool, Explicit(Jsonb)) => CastJsonbOrNullToJsonb,
             (Bool, JsonbAny) => CastJsonbOrNullToJsonb,
 
             //INT32
             (Int32, Explicit(Bool)) => CastInt32ToBool,
-            (Int32, Explicit(Jsonb)) => CastOp::F(|_ecx, e, _to_type| {
-                e
-                .call_unary(UnaryFunc::CastInt32ToFloat64)
-                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
-            }),
             (Int32, Implicit(Int64)) => CastInt32ToInt64,
             (Int32, Implicit(Float32)) => CastInt32ToFloat32,
             (Int32, Implicit(Float64)) => CastInt32ToFloat64,
@@ -198,7 +192,6 @@ lazy_static! {
                 e.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
             }),
             (Float64, Explicit(String)) => CastFloat64ToString,
-            (Float64, Explicit(Jsonb)) => CastJsonbOrNullToJsonb,
             (Float64, JsonbAny) => CastJsonbOrNullToJsonb,
 
             // DECIMAL
