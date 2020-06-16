@@ -19,7 +19,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use repr::{ColumnType, Datum, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, ScalarType};
 use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
 
 use super::cast::{self, rescale_decimal, CastTo};
@@ -1304,7 +1304,7 @@ pub fn plan_unary_op<'a>(
 pub struct TableFuncPlan {
     pub func: TableFunc,
     pub exprs: Vec<ScalarExpr>,
-    pub column_names: Vec<String>,
+    pub column_names: Vec<Option<ColumnName>>,
 }
 
 lazy_static! {
@@ -1324,7 +1324,7 @@ lazy_static! {
                     Ok(TableFuncPlan {
                         func: TableFunc::CsvExtract(ncols),
                         exprs: vec![input],
-                        column_names: (1..=ncols).map(|i| format!("column{}", i)).collect(),
+                        column_names: (1..=ncols).map(|i| Some(format!("column{}", i).into())).collect(),
                     })
                 })
             },
@@ -1337,7 +1337,7 @@ lazy_static! {
                     Ok(TableFuncPlan {
                         func: TableFunc::JsonbArrayElements { stringify: false },
                         exprs: vec![jsonb],
-                        column_names: vec!["value".into()],
+                        column_names: vec![Some("value".into())],
                     })
                 })
             },
@@ -1346,7 +1346,7 @@ lazy_static! {
                     Ok(TableFuncPlan {
                         func: TableFunc::JsonbArrayElements { stringify: true },
                         exprs: vec![jsonb],
-                        column_names: vec!["value".into()],
+                        column_names: vec![Some("value".into())],
                     })
                 })
             },
@@ -1355,7 +1355,7 @@ lazy_static! {
                     Ok(TableFuncPlan {
                         func: TableFunc::JsonbEach { stringify: false },
                         exprs: vec![jsonb],
-                        column_names: vec!["key".into(), "value".into()],
+                        column_names: vec![Some("key".into()), Some("value".into())],
                     })
                 })
             },
@@ -1364,7 +1364,7 @@ lazy_static! {
                     Ok(TableFuncPlan {
                         func: TableFunc::JsonbEach { stringify: true },
                         exprs: vec![jsonb],
-                        column_names: vec!["key".into(), "value".into()],
+                        column_names: vec![Some("key".into()), Some("value".into())],
                     })
                 })
             },
@@ -1373,7 +1373,7 @@ lazy_static! {
                     Ok(TableFuncPlan {
                         func: TableFunc::JsonbObjectKeys,
                         exprs: vec![jsonb],
-                        column_names: vec!["jsonb_object_keys".into()],
+                        column_names: vec![Some("jsonb_object_keys".into())],
                     })
                 })
             },
@@ -1385,7 +1385,10 @@ lazy_static! {
                     };
                     let column_names = regex
                         .capture_groups_iter()
-                        .map(|cg| cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)))
+                        .map(|cg| {
+                            let name = cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index));
+                            Some(name.into())
+                        })
                         .collect();
                     Ok(TableFuncPlan {
                         func: TableFunc::RegexpExtract(regex),
@@ -1403,7 +1406,7 @@ fn plan_generate_series(ty: ScalarType) -> Operation<TableFuncPlan> {
         Ok(TableFuncPlan {
             func: TableFunc::GenerateSeries(ty.clone()),
             exprs,
-            column_names: vec!["generate_series".into()],
+            column_names: vec![Some("generate_series".into())],
         })
     })
 }

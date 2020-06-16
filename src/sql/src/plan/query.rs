@@ -708,18 +708,6 @@ fn plan_table_factor<'a>(
             if !with_hints.is_empty() {
                 unsupported!("WITH hints");
             }
-            let alias = if let Some(TableAlias { name, columns }) = alias {
-                if !columns.is_empty() {
-                    unsupported!(3112, "aliasing columns");
-                }
-                PartialName {
-                    database: None,
-                    schema: None,
-                    item: normalize::ident(name.clone()),
-                }
-            } else {
-                normalize::object_name(name.clone())?
-            };
             if let Some(args) = args {
                 let ecx = &ExprContext {
                     qcx,
@@ -729,7 +717,7 @@ fn plan_table_factor<'a>(
                     allow_aggregates: false,
                     allow_subqueries: true,
                 };
-                plan_table_function(ecx, left, &name, Some(alias), args)
+                plan_table_function(ecx, left, &name, alias.as_ref(), args)
             } else {
                 let name = qcx.scx.resolve_item(name.clone())?;
                 let item = qcx.scx.catalog.get_item(&name);
@@ -737,11 +725,8 @@ fn plan_table_factor<'a>(
                     id: Id::Global(item.id()),
                     typ: item.desc()?.typ().clone(),
                 };
-                let scope = Scope::from_source(
-                    Some(alias),
-                    item.desc()?.iter_names(),
-                    Some(qcx.outer_scope.clone()),
-                );
+                let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
+                let scope = plan_table_alias(qcx, alias.as_ref(), Some(name.into()), column_names)?;
                 plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
             }
         }
@@ -754,20 +739,9 @@ fn plan_table_factor<'a>(
                 unsupported!(3111, "LATERAL derived tables");
             }
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
-            let alias = if let Some(TableAlias { name, columns }) = alias {
-                if !columns.is_empty() {
-                    unsupported!(3112, "aliasing columns");
-                }
-                Some(PartialName {
-                    database: None,
-                    schema: None,
-                    item: normalize::ident(name.clone()),
-                })
-            } else {
-                None
-            };
-            let scope =
-                Scope::from_source(alias, scope.column_names(), Some(qcx.outer_scope.clone()));
+            let table_name = None;
+            let column_names = scope.column_names().map(|n| n.cloned()).collect();
+            let scope = plan_table_alias(qcx, alias.as_ref(), table_name, column_names)?;
             plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
         }
         TableFactor::NestedJoin(table_with_joins) => {
@@ -780,28 +754,69 @@ fn plan_table_function(
     ecx: &ExprContext,
     left: RelationExpr,
     name: &ObjectName,
-    alias: Option<PartialName>,
+    alias: Option<&TableAlias>,
     args: &FunctionArgs,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
-    let ident = &*normalize::function_name(name.clone())?;
+    let ident = normalize::function_name(name.clone())?;
     let args = match args {
         FunctionArgs::Star => bail!("{} does not accept * as an argument", ident),
         FunctionArgs::Args(args) => args,
     };
-    let tf = func::select_table_func(ecx, ident, args)?;
+    let tf = func::select_table_func(ecx, &*ident, args)?;
     let call = RelationExpr::FlatMap {
         input: Box::new(left),
         func: tf.func,
         exprs: tf.exprs,
     };
-    let scope = Scope::from_source(
-        alias,
-        tf.column_names
-            .iter()
-            .map(|name| Some(ColumnName::from(&**name))),
-        Some(ecx.qcx.outer_scope.clone()),
-    );
+    let name = PartialName {
+        database: None,
+        schema: None,
+        item: ident,
+    };
+    let scope = plan_table_alias(ecx.qcx, alias, Some(name), tf.column_names)?;
     Ok((call, ecx.scope.clone().product(scope)))
+}
+
+fn plan_table_alias(
+    qcx: &QueryContext,
+    alias: Option<&TableAlias>,
+    inherent_table_name: Option<PartialName>,
+    inherent_column_names: Vec<Option<ColumnName>>,
+) -> Result<Scope, failure::Error> {
+    let table_name = match alias {
+        None => inherent_table_name,
+        Some(TableAlias { name, .. }) => Some(PartialName {
+            database: None,
+            schema: None,
+            item: normalize::ident(name.to_owned()),
+        }),
+    };
+    let column_names = match alias {
+        None => inherent_column_names,
+        Some(TableAlias { columns, .. }) if columns.is_empty() => inherent_column_names,
+        Some(TableAlias { columns, .. }) if columns.len() > inherent_column_names.len() => {
+            bail!(
+                "{} has {} columns available but {} columns specified",
+                table_name
+                    .map(|n| n.to_string())
+                    .as_deref()
+                    .unwrap_or("subquery"),
+                inherent_column_names.len(),
+                columns.len()
+            );
+        }
+        Some(TableAlias { columns, .. }) => columns
+            .iter()
+            .cloned()
+            .map(|n| Some(normalize::column_name(n)))
+            .chain(inherent_column_names.into_iter().skip(columns.len()))
+            .collect(),
+    };
+    Ok(Scope::from_source(
+        table_name,
+        column_names,
+        Some(qcx.outer_scope.clone()),
+    ))
 }
 
 fn plan_select_item<'a>(
