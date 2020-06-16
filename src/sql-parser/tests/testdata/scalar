@@ -112,107 +112,107 @@ id::numeric
 parse-scalar
 EXTRACT(YEAR FROM d)
 ----
-Extract { field: "year", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("year")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MILLENIUM FROM d)
 ----
-Extract { field: "millenium", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("millenium")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(CENTURY FROM d)
 ----
-Extract { field: "century", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("century")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(YEAR FROM d)
 ----
-Extract { field: "year", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("year")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(ISOYEAR FROM d)
 ----
-Extract { field: "isoyear", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("isoyear")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(QUARTER FROM d)
 ----
-Extract { field: "quarter", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("quarter")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MONTH FROM d)
 ----
-Extract { field: "month", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("month")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DAY FROM d)
 ----
-Extract { field: "day", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("day")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(HOUR FROM d)
 ----
-Extract { field: "hour", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("hour")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MINUTE FROM d)
 ----
-Extract { field: "minute", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("minute")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(SECOND FROM d)
 ----
-Extract { field: "second", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("second")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MILLISECONDS FROM d)
 ----
-Extract { field: "milliseconds", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("milliseconds")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MICROSECONDS FROM d)
 ----
-Extract { field: "microseconds", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("microseconds")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE FROM d)
 ----
-Extract { field: "timezone", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("timezone")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE_HOUR FROM d)
 ----
-Extract { field: "timezone_hour", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("timezone_hour")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE_MINUTE FROM d)
 ----
-Extract { field: "timezone_minute", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("timezone_minute")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(WEEK FROM d)
 ----
-Extract { field: "week", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("week")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DOY FROM d)
 ----
-Extract { field: "doy", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("doy")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DOW FROM d)
 ----
-Extract { field: "dow", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("dow")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(ISODOW FROM d)
 ----
-Extract { field: "isodow", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("isodow")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(EPOCH FROM d)
 ----
-Extract { field: "epoch", expr: Identifier([Ident("d")]) }
+Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("epoch")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 COALESCE(foo, bar)

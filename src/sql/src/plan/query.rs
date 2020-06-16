@@ -30,7 +30,7 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
     ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
-    TableFactor, TableWithJoins, TrimSide, UnaryOperator, Value, Values,
+    TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -1415,24 +1415,6 @@ pub fn plan_coercible_expr<'a>(
                 }
             }
             Expr::Row { .. } => bail!("ROW constructors are not supported yet"),
-            Expr::Trim { side, exprs } => {
-                let ident = match side {
-                    TrimSide::Both => "btrim",
-                    TrimSide::Leading => "ltrim",
-                    TrimSide::Trailing => "rtrim",
-                };
-
-                (func::select_scalar_func(ecx, ident, exprs)?.into(), None)
-            }
-            Expr::Extract { field, expr } => (
-                func::select_scalar_func(
-                    ecx,
-                    "date_part",
-                    &[Expr::Value(Value::String(field.to_owned())), (**expr).clone()],
-                )?
-                .into(),
-                None,
-            ),
             Expr::Collate { .. } => unsupported!("COLLATE"),
             Expr::Coalesce { exprs } => {
                 assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error

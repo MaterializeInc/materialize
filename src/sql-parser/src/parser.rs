@@ -579,10 +579,13 @@ impl Parser {
         self.expect_keyword("FROM")?;
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Extract {
-            field,
-            expr: Box::new(expr),
-        })
+        Ok(Expr::Function(Function {
+            name: ObjectName(vec!["date_part".into()]),
+            args: FunctionArgs::Args(vec![Expr::Value(Value::String(field)), expr]),
+            filter: None,
+            over: None,
+            distinct: false,
+        }))
     }
 
     fn parse_row_expr(&mut self) -> Result<Expr, ParserError> {
@@ -605,14 +608,11 @@ impl Parser {
     // - trim(side 'string')
     fn parse_trim_expr(&mut self) -> Result<Expr, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let side = match self.parse_one_of_keywords(&["BOTH", "LEADING", "TRAILING"]) {
-            Some(d) => match d {
-                "BOTH" => TrimSide::Both,
-                "LEADING" => TrimSide::Leading,
-                "TRAILING" => TrimSide::Trailing,
-                _ => unreachable!(),
-            },
-            None => TrimSide::Both,
+        let name = match self.parse_one_of_keywords(&["BOTH", "LEADING", "TRAILING"]) {
+            None | Some("BOTH") => "btrim",
+            Some("LEADING") => "ltrim",
+            Some("TRAILING") => "rtrim",
+            _ => unreachable!(),
         };
         let mut exprs = Vec::new();
         if self.parse_keyword("FROM") {
@@ -628,7 +628,13 @@ impl Parser {
             }
         }
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Trim { side, exprs })
+        Ok(Expr::Function(Function {
+            name: ObjectName(vec![name.into()]),
+            args: FunctionArgs::Args(exprs),
+            filter: None,
+            over: None,
+            distinct: false,
+        }))
     }
 
     /// Parse an INTERVAL literal.
