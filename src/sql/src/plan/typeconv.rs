@@ -14,10 +14,13 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
+use failure::bail;
 use lazy_static::lazy_static;
+
+use expr::VariadicFunc;
 use repr::{ColumnType, Datum, ScalarType};
 
-use super::expr::{BinaryFunc, ScalarExpr, UnaryFunc};
+use super::expr::{BinaryFunc, ScalarExpr, UnaryFunc, CoercibleScalarExpr};
 use super::query::ExprContext;
 
 /// Describes methods of planning a conversion between [`ScalarType`]s, which
@@ -408,4 +411,142 @@ pub fn guess_best_common_type(types: &[Option<ScalarType>]) -> Option<ScalarType
     }
 
     None
+}
+
+/// Controls coercion behavior for `plan_coerce`.
+///
+/// Note that `CoerceTo` cannot affect already coerced elements, i.e.,
+/// the [`CoercibleScalarExpr::Coerced`] variant.
+#[derive(Clone, Debug)]
+pub enum CoerceTo {
+    /// No coercion preference.
+    Nothing,
+    /// Coerce to the specified scalar type.
+    Plain(ScalarType),
+    /// Coerce using special JSONB coercion rules. The following table
+    /// summarizes the differences between the normal and special JSONB
+    /// conversion rules.
+    ///
+    /// +--------------+---------------+--------------------+-------------------------+
+    /// |              | NULL          | 'literal'          | '"literal"'             |
+    /// +--------------|---------------|--------------------|-------------------------|
+    /// | Plain(Jsonb) | NULL::jsonb   | <error: bad json>  | '"literal"'::jsonb      |
+    /// | JsonbAny     | 'null'::jsonb | '"literal"'::jsonb | '"\"literal\""'::jsonb  |
+    /// +--------------+---------------+--------------------+-------------------------+
+    JsonbAny,
+}
+
+pub fn plan_coerce<'a>(
+    ecx: &'a ExprContext,
+    e: CoercibleScalarExpr,
+    coerce_to: CoerceTo,
+) -> Result<ScalarExpr, failure::Error> {
+    use CoerceTo::*;
+    use CoercibleScalarExpr::*;
+
+    Ok(match (e, coerce_to) {
+        (Coerced(e), _) => e,
+
+        (LiteralNull, Nothing) => bail!("unable to infer type for NULL"),
+        (LiteralNull, Plain(typ)) => ScalarExpr::literal_null(typ),
+        (LiteralNull, JsonbAny) => {
+            ScalarExpr::literal(Datum::JsonNull, ColumnType::new(ScalarType::Jsonb))
+        }
+
+        (LiteralString(s), Nothing) => {
+            ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String))
+        }
+        (LiteralString(s), Plain(typ)) => {
+            let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String));
+            plan_cast("string literal", ecx, lit, CastTo::Explicit(typ))?
+        }
+        (LiteralString(s), JsonbAny) => {
+            ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::Jsonb))
+        }
+
+        (LiteralList(exprs), coerce_to) => {
+            let coerce_elem_to = match &coerce_to {
+                Plain(ScalarType::List(typ)) => Plain((**typ).clone()),
+                Nothing | Plain(_) => {
+                    let typ = exprs
+                        .iter()
+                        .find_map(|e| ecx.column_type(e).map(|t| t.scalar_type));
+                    CoerceTo::Plain(typ.unwrap_or(ScalarType::String))
+                }
+                JsonbAny => bail!("cannot coerce list literal to jsonb type"),
+            };
+            let mut out = vec![];
+            for e in exprs {
+                out.push(plan_coerce(ecx, e, coerce_elem_to.clone())?);
+            }
+            let typ = if !out.is_empty() {
+                ecx.scalar_type(&out[0])
+            } else if let Plain(ScalarType::List(ty)) = coerce_to {
+                *ty
+            } else {
+                bail!("unable to infer type for empty list")
+            };
+            for (i, e) in out.iter().enumerate() {
+                let t = ecx.scalar_type(&e);
+                if t != typ {
+                    bail!(
+                        "Cannot create list with mixed types. \
+                        Element 1 has type {} but element {} has type {}",
+                        typ,
+                        i + 1,
+                        t,
+                    )
+                }
+            }
+            ScalarExpr::CallVariadic {
+                func: VariadicFunc::ListCreate { elem_type: typ },
+                exprs: out,
+            }
+        }
+
+        (Parameter(n), coerce_to) => {
+            let typ = match coerce_to {
+                CoerceTo::Nothing => bail!("unable to infer type for parameter ${}", n),
+                CoerceTo::Plain(typ) => typ,
+                CoerceTo::JsonbAny => ScalarType::Jsonb,
+            };
+            let prev = ecx.qcx.param_types.borrow_mut().insert(n, typ);
+            assert!(prev.is_none());
+            ScalarExpr::Parameter(n)
+        }
+    })
+}
+
+/// Plans a cast between [`ScalarType`]s, specifying which types of casts are
+/// permitted using [`CastTo`].
+///
+/// # Errors
+///
+/// If a cast between the `ScalarExpr`'s base type and the specified type is:
+/// - Not possible, e.g. `Bytes` to `Decimal`
+/// - Not permitted, e.g. implicitly casting from `Float64` to `Float32`.
+pub fn plan_cast<'a>(
+    caller_name: &str,
+    ecx: &ExprContext<'a>,
+    expr: ScalarExpr,
+    cast_to: CastTo,
+) -> Result<ScalarExpr, failure::Error> {
+    let from_scalar_type = ecx.scalar_type(&expr);
+
+    let cast_op = match get_cast(&from_scalar_type, &cast_to) {
+        Some(cast_op) => cast_op,
+        None => bail!(
+            "{} does not support {}casting from {} to {}",
+            caller_name,
+            if let CastTo::Implicit(_) = cast_to {
+                "implicitly "
+            } else {
+                ""
+            },
+            from_scalar_type,
+            cast_to
+        ),
+    };
+
+    Ok(cast_op.gen_expr(ecx, expr, cast_to))
 }
