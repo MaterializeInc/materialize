@@ -5,12 +5,18 @@ menu: "main"
 weight: 2
 ---
 
-You can access Materialize through the `materialized` binary, which you can
-install on macOS and Linux. These instructions install the latest release of
-Materialize, **{{< version >}}**. For prior releases, see the [Versions
-page](/versions).
+{{< promo >}}
 
-**Note**: We have unofficial support for other operating systems, e.g. FreeBSD, if you [build from source](#build-from-source).
+[Want to connect with Materialize? Join our growing community on Slack! →](https://materializecommunity.slack.com/join/shared_invite/zt-f0qdaz1v-NgGIuxK7Rm1H4AjvJEO8bQ#/)
+
+{{< /promo >}}
+
+You can access Materialize through the `materialized` binary, which you can
+install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
+instructions install the latest release of Materialize, **{{< version >}}**. For
+prior releases, see the [Versions page](/versions).
+
+**Have any questions?** [Contact us](https://materialize.io/contact/)
 
 ## macOS installation
 
@@ -89,6 +95,8 @@ Detail | Info
 
 For more information, see [CLI Connections](/connect/cli/).
 
-## Up next
+{{< cta >}}
 
-With `materialized` installed, let's [get started](/get-started).
+[Next, let's get started with Materialize →](/docs/get-started)
+
+{{</ cta >}}

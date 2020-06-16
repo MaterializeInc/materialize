@@ -207,4 +207,27 @@ a {
     margin: 16px 0;
     padding: 16px;
   }
+
+  .promo {
+    background-color: #d12fa7;
+    color: #fff;
+    margin: 16px 0;
+    padding: 16px;
+    text-align: center;
+    a {
+      color: #fff;
+    }
+  }
+
+  .cta-green {
+    background-color: $purple;
+    color: #fff;
+    display: inline-block;
+    margin: 16px 0 0 0;
+    padding: 16px;
+    a {
+      color: #fff;
+      font-weight: bold;
+    }
+  }
 }
