@@ -19,6 +19,7 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Thread
 from typing import (
     Any,
     Callable,
@@ -946,27 +947,115 @@ class ChaosKillDockerStep(ChaosDockerWorkflowStep):
             raise Failed(f"Unable to kill container {container_id}: {e}")
 
 
-@Steps.register("chaos-delay-docker")
-class ChaosDelayDockerStep(WorkflowStep):
-    """Delay the incoming and outgoing network traffic for a Docker service.
+class ChaosNetemStep(WorkflowStep):
+    """Base class for running netem chaos against a Docker container.
 
-    Params:
-        service: Docker service to delay, will be used to grep for container id
-                 NOTE: service name must be unique to correctly match the container id
-        delay: milliseconds to delay network traffic (default: 100ms)
+    We use pumba (a chaos testing tool for Docker) to run the various netem tests.
+    pumba only supports Docker container names (not container ids), meaning that
+    we have to pass the exact container name to these steps. We should fix this in
+    the future.
     """
 
-    def __init__(self, service: str, delay: int = 100) -> None:
-        self._service = service
-        self._delay = delay
+    def __init__(self, duration: int):
+        self._duration = duration
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
+        if self._duration == -1:
+            # If duration isn't provided, run for 7 days in a non-blocking thread.
+            duration = 10080
+        else:
+            duration = self._duration
+
+        cmd = self.get_cmd(duration).split()
+        netem_thread = Thread(target=self.threaded_netem, args=(cmd,), daemon=True)
+        netem_thread.start()
+
+    def get_cmd(self, duration: int) -> str:
+        pass
+
+    def threaded_netem(self, cmd: List[str]) -> None:
         try:
-            container_id = comp.get_container_id(self._service)
-            cmd = f"docker exec {container_id} tc qdisc add dev eth0 root netem delay {self._delay}ms".split()
             spawn.runv(cmd)
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to delay container {container_id}: {e}")
+            raise Failed(f"Unable to run netem chaos command: {e}")
+
+
+@Steps.register("chaos-delay-docker")
+class ChaosDelayDockerStep(ChaosNetemStep):
+    """Delay the egress network traffic for a Docker service.
+    """
+
+    def __init__(
+        self, container: str, duration: int = -1, delay: int = 250, jitter: int = 250,
+    ) -> None:
+        super().__init__(duration=duration)
+        self._container = container
+        self._duration = duration
+        self._delay = delay
+        self._jitter = jitter
+
+    def get_cmd(self, duration: int) -> str:
+        return f"pumba --random netem --duration {duration}m delay --time {self._delay} \
+            --jitter {self._jitter} --distribution normal {self._container}"
+
+
+@Steps.register("chaos-rate-docker")
+class ChaosRateDockerStep(ChaosNetemStep):
+    """Limit the egress network traffic for a Docker service.
+    """
+
+    def __init__(self, container: str, duration: int = -1) -> None:
+        super().__init__(duration=duration)
+        self._container = container
+        self._duration = duration
+
+    def get_cmd(self, duration: int) -> str:
+        return f"pumba netem --duration {duration}m rate {self._container}"
+
+
+@Steps.register("chaos-loss-docker")
+class ChaosLossDockerStep(ChaosNetemStep):
+    """Lose a percent of a Docker container's network packets.
+    """
+
+    def __init__(self, container: str, percent: int, duration: int = -1) -> None:
+        super().__init__(duration=duration)
+        self._container = container
+        self._duration = duration
+        self._percent = percent
+
+    def get_cmd(self, duration: int) -> str:
+        return f"pumba netem --duration {duration}m loss --percent {self._percent} {self._container}"
+
+
+@Steps.register("chaos-duplicate-docker")
+class ChaosDuplicateDockerStep(ChaosNetemStep):
+    """Duplicate a percent of a Docker container's network packets.
+    """
+
+    def __init__(self, container: str, percent: int, duration: int = -1) -> None:
+        super().__init__(duration=duration)
+        self._container = container
+        self._duration = duration
+        self._percent = percent
+
+    def get_cmd(self, duration: int) -> str:
+        return f"pumba netem --duration {duration}m duplicate --percent {self._percent} {self._container}"
+
+
+@Steps.register("chaos-corrupt-docker")
+class ChaosCorruptDockerStep(ChaosNetemStep):
+    """Corrupt a percent of a Docker container's network packets.
+    """
+
+    def __init__(self, container: str, percent: int, duration: int = -1) -> None:
+        super().__init__(duration=duration)
+        self._container = container
+        self._duration = duration
+        self._percent = percent
+
+    def get_cmd(self, duration: int) -> str:
+        return f"pumba netem --duration {duration}m corrupt --percent {self._percent} {self._container}"
 
 
 @Steps.register("chaos-confirm")
@@ -991,6 +1080,10 @@ class ChaosConfirmStep(WorkflowStep):
             if not comp.docker_container_is_running(container_id):
                 raise Failed(f"chaos-confirm: container {container_id} is not running")
         else:
+            if comp.docker_container_is_running(container_id):
+                raise Failed(
+                    f"chaos-confirm: expected {container_id} to have exited, is running"
+                )
             actual_exit_code = comp.docker_inspect("{{.State.ExitCode}}", container_id)
             if actual_exit_code != f"'{self._exit_code}'":
                 raise Failed(
