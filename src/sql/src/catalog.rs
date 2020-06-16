@@ -167,6 +167,10 @@ pub trait CatalogItem {
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
     fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)>;
+
+    /// Returns a [`View`]'s or [`Source`]'s primary index keys. Errors if
+    /// called on another type.
+    fn primary_idx_keys(&self) -> Result<Vec<usize>, failure::Error>;
 }
 
 /// The type of a [`CatalogItem`].

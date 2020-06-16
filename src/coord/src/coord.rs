@@ -2426,7 +2426,7 @@ pub fn auto_generate_primary_idx(
         create_sql: index_sql(index_name, on_name, &on_desc, &keys),
         plan_cx: PlanContext::default(),
         on: on_id,
-        keys: keys.into_iter().map(|k| ScalarExpr::Column(*k)).collect(),
+        keys: keys.iter().map(|k| ScalarExpr::Column(*k)).collect(),
     }
 }
 
@@ -2441,15 +2441,16 @@ fn index_sql(
     use sql_parser::ast::{Expr, Ident, Value};
 
     Statement::CreateIndex {
-        name: Ident::new(index_name),
+        name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
-        key_parts: keys
-            .iter()
-            .map(|i| match view_desc.get_unambiguous_name(*i) {
-                Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
-                _ => Expr::Value(Value::Number((i + 1).to_string())),
-            })
-            .collect(),
+        key_parts: Some(
+            keys.iter()
+                .map(|i| match view_desc.get_unambiguous_name(*i) {
+                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    _ => Expr::Value(Value::Number((i + 1).to_string())),
+                })
+                .collect(),
+        ),
         if_not_exists: false,
     }
     .to_string()

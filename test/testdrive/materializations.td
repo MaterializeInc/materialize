@@ -86,7 +86,7 @@ b  ?column?
 2  3
 
 # Materialize data_view.
-> CREATE INDEX data_view_idx on data_view(a)
+> CREATE INDEX ON data_view
 
 > SELECT * FROM data_view
 a  b

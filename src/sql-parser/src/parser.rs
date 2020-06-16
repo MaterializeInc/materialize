@@ -1222,7 +1222,13 @@ impl Parser {
             self.parse_create_source()
         } else if self.parse_keyword("SINK") {
             self.parse_create_sink()
+        } else if self.parse_keyword("DEFAULT") {
+            self.expect_keyword("INDEX")?;
+            self.prev_token();
+            self.prev_token();
+            self.parse_create_index()
         } else if self.parse_keyword("INDEX") {
+            self.prev_token();
             self.parse_create_index()
         } else {
             self.expected(
@@ -1490,22 +1496,41 @@ impl Parser {
     }
 
     fn parse_create_index(&mut self) -> Result<Statement, ParserError> {
+        let default_index = self.parse_keyword("DEFAULT");
+        self.expect_keyword("INDEX")?;
+
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_identifier()?;
-        self.expect_keyword("ON")?;
-        let on_name = self.parse_object_name()?;
-        self.expect_token(&Token::LParen)?;
-        let key_parts = if self.consume_token(&Token::RParen) {
-            vec![]
+        let name = if self.parse_keyword("ON") {
+            None
         } else {
-            let key_parts = self
-                .parse_comma_separated(Parser::parse_order_by_expr)?
-                .into_iter()
-                .map(|x| x.expr)
-                .collect::<Vec<_>>();
-            self.expect_token(&Token::RParen)?;
-            key_parts
+            let name = self.parse_identifier()?;
+            self.expect_keyword("ON")?;
+            Some(name)
         };
+        let on_name = self.parse_object_name()?;
+        let key_parts = if self.consume_token(&Token::LParen) {
+            if default_index {
+                return self.expected(
+                    self.peek_range(),
+                    "end of CREATE DEFAULT INDEX",
+                    self.peek_token(),
+                );
+            }
+            if self.consume_token(&Token::RParen) {
+                Some(vec![])
+            } else {
+                let key_parts = self
+                    .parse_comma_separated(Parser::parse_order_by_expr)?
+                    .into_iter()
+                    .map(|x| x.expr)
+                    .collect::<Vec<_>>();
+                self.expect_token(&Token::RParen)?;
+                Some(key_parts)
+            }
+        } else {
+            None
+        };
+
         Ok(Statement::CreateIndex {
             name,
             on_name,

@@ -1233,4 +1233,17 @@ impl sql::catalog::CatalogItem for CatalogEntry {
     fn used_by(&self) -> &[GlobalId] {
         self.used_by()
     }
+
+    fn primary_idx_keys(&self) -> Result<Vec<usize>, failure::Error> {
+        match self.item() {
+            CatalogItem::View(View { optimized_expr, .. }) => {
+                Ok(optimized_expr.as_ref().typ().get_primary_index_keys())
+            }
+            CatalogItem::Source(Source { desc, .. }) => Ok(desc.typ().get_primary_index_keys()),
+            _ => bail!(
+                "Can only get primary_idx_keys from View or Source, called on {:#?}",
+                self.item()
+            ),
+        }
+    }
 }
