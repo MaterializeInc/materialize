@@ -125,7 +125,8 @@ pub enum SequencedCommand {
         index: IndexDesc,
         /// The relation type of the input.
         on_type: RelationType,
-        /// Initial setting of the input's timestamp capability.
+        /// A timestamp to which all local input (including this one)'s capabilities should be
+        /// advanced.
         advance_to: Timestamp,
     },
     /// Insert `updates` into the local input named `id`.
@@ -134,7 +135,7 @@ pub enum SequencedCommand {
         id: GlobalId,
         /// A list of updates to be introduced to the input.
         updates: Vec<Update>,
-        /// A timestamp to which the input's capability should be advanced.
+        /// A timestamp to which all local input's capabilities should be advanced.
         advance_to: Timestamp,
     },
     /// Enable compaction in views.
@@ -634,7 +635,6 @@ where
                 on_type,
                 advance_to,
             } => {
-                let view_id = index.on_id;
                 render::build_local_input(
                     &mut self.traces,
                     self.inner,
@@ -646,8 +646,8 @@ where
                 );
                 self.reported_frontiers
                     .insert(index_id, Antichain::from_elem(0));
-                if let Some(input) = self.local_inputs.get_mut(&view_id) {
-                    input.capability.downgrade(&advance_to);
+                for (_, local_input) in self.local_inputs.iter_mut() {
+                    local_input.capability.downgrade(&advance_to);
                 }
             }
 
