@@ -14,9 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{cmp, thread};
 
-use dataflow_types::{
-    Consistency, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp,
-};
+use dataflow_types::{Consistency, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
@@ -719,9 +717,7 @@ impl ControlPlaneInfo {
 /// 1) for BYO sources, we notify the timestamping thread that a source has been created.
 /// 2) for a RT source, take no steps
 //
-fn activate_source_timestamping<G>(
-    config: &SourceConfig<G>
-) -> Option<TimestampChanges> {
+fn activate_source_timestamping<G>(config: &SourceConfig<G>) -> Option<TimestampChanges> {
     if let Consistency::BringYourOwn(_) = config.consistency {
         let prev = config
             .timestamp_histories

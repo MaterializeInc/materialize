@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -32,7 +32,6 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use rusoto_kinesis::KinesisClient;
-use rusqlite::{params, NO_PARAMS};
 
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
@@ -43,7 +42,6 @@ use dataflow_types::{
 use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
 
-use crate::catalog::storage::{self, SqlVal};
 use crate::coord;
 
 lazy_static! {
@@ -150,7 +148,6 @@ lazy_static! {
 
 pub struct TimestampConfig {
     pub frequency: Duration,
-    pub persist_ts: bool,
 }
 
 #[derive(Debug)]
@@ -505,9 +502,6 @@ pub struct Timestamper {
     /// Current list of up to date sources that use a BYO consistency model
     byo_sources: HashMap<SourceInstanceId, ByoTimestampConsumer>,
 
-    /// Connection to the underlying SQL lite instance
-    storage: Arc<Mutex<storage::Connection>>,
-
     tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
     rx: std::sync::mpsc::Receiver<TimestampMessage>,
 
@@ -516,9 +510,6 @@ pub struct Timestamper {
 
     /// Frequency at which thread should run
     timestamp_frequency: Duration,
-
-    /// Persist consistency information
-    persist_ts: bool,
 }
 
 /// A byo record contains a single timestamp update for a given source
@@ -728,31 +719,9 @@ fn identify_consistency_format(enc: DataEncoding, env: Envelope) -> ConsistencyF
 impl Timestamper {
     pub fn new(
         config: &TimestampConfig,
-        storage: Arc<Mutex<storage::Connection>>,
         tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
     ) -> Self {
-        // Recover existing data by running max on the timestamp count. This will ensure that
-        // there will never be two duplicate entries and that there is a continuous stream
-        // of timestamp updates across reboots
-        let max_ts = if config.persist_ts {
-            storage
-                .lock()
-                .expect("lock poisoned")
-                .prepare("SELECT MAX(timestamp) FROM timestamps")
-                .expect("Failed to prepare statement")
-                .query_row(NO_PARAMS, |row| {
-                    let res: Result<SqlVal<u64>, _> = row.get(2);
-                    match res {
-                        Ok(res) => Ok(res.0),
-                        _ => Ok(0),
-                    }
-                })
-                .expect("Failure to parse timestamp")
-        } else {
-            0
-        };
-
         info!(
             "Starting Timestamping Thread. Frequency: {} ms.",
             config.frequency.as_millis()
@@ -761,17 +730,11 @@ impl Timestamper {
         Self {
             rt_sources: HashMap::new(),
             byo_sources: HashMap::new(),
-            storage,
             tx,
             rx,
-            current_timestamp: max_ts,
+            current_timestamp: 0,
             timestamp_frequency: config.frequency,
-            persist_ts: config.persist_ts,
         }
-    }
-
-    fn storage(&self) -> MutexGuard<storage::Connection> {
-        self.storage.lock().expect("lock poisoned")
     }
 
     /// Run the update function in a loop at the specified frequency. Acquires timestamps using
@@ -793,9 +756,6 @@ impl Timestamper {
     fn update_rt_timestamp(&mut self) {
         let watermarks = self.rt_query_sources();
         self.rt_generate_next_timestamp();
-        if self.persist_ts {
-            self.rt_persist_timestamp(&watermarks);
-        }
         for (id, partition_count, pid, offset) in watermarks {
             self.tx
                 .unbounded_send(coord::Message::AdvanceSourceTimestamp {
@@ -852,24 +812,8 @@ impl Timestamper {
                                 // Obtain the last offsets that were recorded for this source.
                                 // If start_offset is specified, make sure to always start from
                                 // last_offset and never earlier
-                                let last_offsets = if self.persist_ts {
-                                    self.rt_recover_source(id)
-                                        .iter()
-                                        .map(|(pid, offs)| {
-                                            (
-                                                pid.clone(),
-                                                MzOffset {
-                                                    offset: std::cmp::max(
-                                                        start_offset.offset,
-                                                        offs.offset,
-                                                    ),
-                                                },
-                                            )
-                                        })
-                                        .collect()
-                                } else {
-                                    HashMap::new()
-                                };
+                                let last_offsets = HashMap::new();
+
                                 let consumer = self.create_rt_connector(
                                     id,
                                     sc,
@@ -900,11 +844,6 @@ impl Timestamper {
                 }
                 TimestampMessage::DropInstance(id) => {
                     info!("Dropping Timestamping for Source {}.", id);
-                    self.storage()
-                        .prepare_cached("DELETE FROM timestamps WHERE sid = ? AND vid = ?")
-                        .expect("Failed to prepare delete statement")
-                        .execute(params![SqlVal(&id.sid), SqlVal(&id.vid)])
-                        .expect("Failed to execute delete statement");
                     if let Some(RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(RtKafkaConnector { state, .. }),
                         ..
@@ -1583,56 +1522,6 @@ impl Timestamper {
         }
     }
 
-    /// Recovers any existing timestamp updates for that (SourceId,ViewId) pair from the underlying
-    /// SQL database. Notifies the coordinator of these updates
-    fn rt_recover_source(&mut self, id: SourceInstanceId) -> HashMap<PartitionId, MzOffset> {
-        let ts_updates: Vec<_> = self
-            .storage()
-            .prepare("SELECT pcount, pid, timestamp, offset FROM timestamps WHERE sid = ? AND vid = ? ORDER BY timestamp")
-            .expect("Failed to execute select statement")
-            .query_and_then(params![SqlVal(&id.sid), SqlVal(&id.vid)], |row| -> Result<_, failure::Error> {
-                let pcount: SqlVal<i32> = row.get(0)?;
-                let pid: SqlVal<PartitionId> = match row.get(1) {
-                    Ok(val) => val,
-                    Err(_err) => {
-                        // Historically, pid was an i32 value. If the found value is not of type
-                        // PartitionId, try to read an i32.
-                        let pid: SqlVal<i32> = row.get(1)?;
-                        SqlVal(PartitionId::Kafka(pid.0))
-                    },
-                };
-                let timestamp: SqlVal<u64> = row.get(2)?;
-                let offset: SqlVal<i64> = row.get(3)?;
-                Ok((pcount.0, pid.0, timestamp.0, offset.0))
-            })
-            .expect("Failed to parse SQL result")
-            .collect();
-
-        let mut max_offset = HashMap::new();
-        for row in ts_updates {
-            let (partition_count, pid, timestamp, offset) =
-                row.expect("Failed to parse SQL result");
-            if offset
-                > max_offset
-                    .entry(pid.clone())
-                    .or_insert(MzOffset { offset: 0 })
-                    .offset
-            {
-                max_offset.insert(pid.clone(), MzOffset { offset });
-            }
-            self.tx
-                .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                    id,
-                    partition_count,
-                    pid,
-                    timestamp,
-                    offset: MzOffset { offset },
-                })
-                .expect("Failed to send timestamp update to coordinator");
-        }
-        max_offset
-    }
-
     /// Query real-time sources for the current max offset that has been generated for that source
     ///
     /// Set the new timestamped offset to min(max_offset, last_offset + increment_size): this ensures
@@ -1774,37 +1663,6 @@ impl Timestamper {
             }
         }
         result
-    }
-
-    /// Persist timestamp updates to the underlying storage when using the
-    /// real-time timestamping logic.
-    fn rt_persist_timestamp(&self, ts_updates: &[(SourceInstanceId, i32, PartitionId, MzOffset)]) {
-        let storage = self.storage();
-        for (id, pcount, pid, offset) in ts_updates {
-            let mut stmt = storage
-                .prepare_cached(
-                    "INSERT INTO timestamps (sid, vid, pcount, pid, timestamp, offset) VALUES (?, ?, ?, ?, ?, ?)",
-                )
-                .expect(
-                    "Failed to prepare insert statement into persistent store. \
-                     Hint: increase the system file descriptor limit.",
-                );
-            while let Err(e) = stmt.execute(params![
-                SqlVal(&id.sid),
-                SqlVal(&id.vid),
-                SqlVal(&pcount),
-                SqlVal(&pid),
-                SqlVal(&self.current_timestamp),
-                SqlVal(&offset.offset)
-            ]) {
-                error!(
-                    "Failed to insert statement into persistent store: {}. \
-                     Hint: increase the system file descriptor limit.",
-                    e
-                );
-                std::thread::sleep(Duration::from_secs(1));
-            }
-        }
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.

@@ -25,9 +25,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{
-    MzOffset, SourceError, Timestamp,
-};
+use dataflow_types::{MzOffset, SourceError, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 
 use super::SourceOutput;
@@ -335,7 +333,6 @@ where
         active,
         scope,
         timestamp_histories,
-        consistency,
         ..
     } = config;
 

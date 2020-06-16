@@ -300,12 +300,8 @@ where
         });
 
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-        let mut timestamper = Timestamper::new(
-            &self.timestamp_config,
-            self.catalog.storage_handle(),
-            internal_cmd_tx.clone(),
-            ts_rx,
-        );
+        let mut timestamper =
+            Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
         let executor = self.executor.clone();
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
