@@ -948,7 +948,7 @@ class ChaosKillDockerStep(ChaosDockerWorkflowStep):
 
 
 class ChaosNetemStep(WorkflowStep):
-    """Base class for running netem chaos against a Docker container.
+    """Base class for running network chaos tests against a Docker container.
 
     We use pumba (a chaos testing tool for Docker) to run the various netem tests.
     pumba only supports Docker container names (not container ids), meaning that
@@ -990,7 +990,6 @@ class ChaosDelayDockerStep(ChaosNetemStep):
     ) -> None:
         super().__init__(duration=duration)
         self._container = container
-        self._duration = duration
         self._delay = delay
         self._jitter = jitter
 
@@ -1007,7 +1006,6 @@ class ChaosRateDockerStep(ChaosNetemStep):
     def __init__(self, container: str, duration: int = -1) -> None:
         super().__init__(duration=duration)
         self._container = container
-        self._duration = duration
 
     def get_cmd(self, duration: int) -> str:
         return f"pumba netem --duration {duration}m rate {self._container}"
@@ -1021,7 +1019,6 @@ class ChaosLossDockerStep(ChaosNetemStep):
     def __init__(self, container: str, percent: int, duration: int = -1) -> None:
         super().__init__(duration=duration)
         self._container = container
-        self._duration = duration
         self._percent = percent
 
     def get_cmd(self, duration: int) -> str:
@@ -1036,7 +1033,6 @@ class ChaosDuplicateDockerStep(ChaosNetemStep):
     def __init__(self, container: str, percent: int, duration: int = -1) -> None:
         super().__init__(duration=duration)
         self._container = container
-        self._duration = duration
         self._percent = percent
 
     def get_cmd(self, duration: int) -> str:
@@ -1051,7 +1047,6 @@ class ChaosCorruptDockerStep(ChaosNetemStep):
     def __init__(self, container: str, percent: int, duration: int = -1) -> None:
         super().__init__(duration=duration)
         self._container = container
-        self._duration = duration
         self._percent = percent
 
     def get_cmd(self, duration: int) -> str:
