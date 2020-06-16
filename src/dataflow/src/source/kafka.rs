@@ -53,7 +53,7 @@ lazy_static! {
 /// Per-Kafka source metrics.
 pub struct SourceMetrics {
     operator_scheduled_counter: IntCounter,
-    capability: UIntGauge
+    capability: UIntGauge,
 }
 
 impl SourceMetrics {
@@ -813,7 +813,6 @@ fn metadata_fetch(
                     continue;
                 }
                 new_partition_count = metadata_topic.partitions().len();
-                let mut refresh_data = partition_count.lock().expect("lock poisoned");
 
                 // Upgrade partition metrics
                 for p in 0..new_partition_count {
@@ -846,7 +845,8 @@ fn metadata_fetch(
 
                 // Kafka partition are i32, and Kafka consequently cannot support more than i32
                 // partitions
-                *refresh_data = Some(new_partition_count.try_into().unwrap());
+                *partition_count.lock().expect("lock poisoned") =
+                    Some(new_partition_count.try_into().unwrap());
             }
             Err(e) => {
                 new_partition_count = 0;
@@ -1039,7 +1039,7 @@ where
                                 &mut dp_info.partition_metrics.get_mut(&partition).unwrap();
                             partition_metrics.offset_ingested.set(offset.offset);
                             partition_metrics.messages_ingested.inc();
-                            cp_info.record_count_since_downgrade+=1;
+                            cp_info.record_count_since_downgrade += 1;
                         }
                     }
 
