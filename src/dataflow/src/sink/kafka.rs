@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -191,111 +192,114 @@ where
 
             (
                 move |input| {
-                    let producer = producer.borrow();
-                    if let Some(ref producer) = *producer {
-                        // Grab all of the available Rows and put them in a queue before we
-                        // send it over to Kafka. We Even though we want to do bounded work
-                        // per sink invocation, we still need to remember all inputs as we
-                        // receive them
-                        input.for_each(|_, rows| {
-                            rows.swap(&mut vector);
+                    let producer: &RefCell<_> = producer.borrow();
+                    let producer = &*producer.borrow();
+                    if producer.is_none() {
+                        // The sink has already been dropped
+                        return false;
+                    }
 
-                            for (row, _time, diff) in vector.drain(..) {
-                                queue.push_back((row, diff));
-                            }
-                        });
+                    let producer = producer.as_ref().expect("producer known to exist");
 
-                        // Send a bounded number of records to Kafka from the queue. This
-                        // loop has explicitly been designed so that each iteration sends
-                        // at most one record to Kafka
-                        for _ in 0..connector.fuel {
-                            let (encoded, count) = if let Some((encoded, count)) =
-                                encoded_buffer.take()
-                            {
-                                // We still need to send more copies of this record.
-                                (encoded, count)
-                            } else if let Some((row, diff)) = queue.pop_front() {
-                                // Convert a previously queued (Row, Diff) to a Avro diff
-                                // envelope record
-                                if diff == 0 {
-                                    // Explicitly refuse to send no-op records
-                                    continue;
-                                };
+                    // Grab all of the available Rows and put them in a queue before we
+                    // send it over to Kafka. We Even though we want to do bounded work
+                    // per sink invocation, we still need to remember all inputs as we
+                    // receive them
+                    input.for_each(|_, rows| {
+                        rows.swap(&mut vector);
 
-                                let diff_pair = if diff < 0 {
-                                    DiffPair {
-                                        before: Some(&row),
-                                        after: None,
-                                    }
-                                } else {
-                                    DiffPair {
-                                        before: None,
-                                        after: Some(&row),
-                                    }
-                                };
+                        for (row, _time, diff) in vector.drain(..) {
+                            queue.push_back((row, diff));
+                        }
+                    });
 
-                                let buf = encoder.encode_unchecked(connector.schema_id, diff_pair);
-                                // For diffs other than +/- 1, we send repeated copies of the
-                                // Avro record [diff] times. Since the format and envelope
-                                // capture the "polarity" of the update, we need to remember
-                                // how many times to send the data.
-                                (buf, diff.abs())
-                            } else {
-                                // Nothing left for us to do
-                                break;
+                    // Send a bounded number of records to Kafka from the queue. This
+                    // loop has explicitly been designed so that each iteration sends
+                    // at most one record to Kafka
+                    for _ in 0..connector.fuel {
+                        let (encoded, count) = if let Some((encoded, count)) = encoded_buffer.take()
+                        {
+                            // We still need to send more copies of this record.
+                            (encoded, count)
+                        } else if let Some((row, diff)) = queue.pop_front() {
+                            // Convert a previously queued (Row, Diff) to a Avro diff
+                            // envelope record
+                            if diff == 0 {
+                                // Explicitly refuse to send no-op records
+                                continue;
                             };
 
-                            let record =
-                                BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
-                            if let Err((e, _)) = producer.send(record) {
-                                sink_metrics.message_send_errors_counter.inc();
-                                error!("unable to produce in {}: {}", name, e);
-                                if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
-                                    // We are overloading Kafka by sending too many records
-                                    // retry sending this record at a later time.
-                                    // Note that any other error will result in dropped
-                                    // data as we will not attempt to resend it.
-                                    // https://github.com/edenhill/librdkafka/blob/master/examples/producer.c#L188-L208
-                                    // only retries on QueueFull so we will keep that
-                                    // convention here.
-                                    encoded_buffer = Some((encoded, count));
-                                    activator.activate_after(Duration::from_secs(60));
-                                    return true;
+                            let diff_pair = if diff < 0 {
+                                DiffPair {
+                                    before: Some(&row),
+                                    after: None,
                                 }
                             } else {
-                                sink_metrics.messages_sent_counter.inc();
+                                DiffPair {
+                                    before: None,
+                                    after: Some(&row),
+                                }
+                            };
+
+                            let buf = encoder.encode_unchecked(connector.schema_id, diff_pair);
+                            // For diffs other than +/- 1, we send repeated copies of the
+                            // Avro record [diff] times. Since the format and envelope
+                            // capture the "polarity" of the update, we need to remember
+                            // how many times to send the data.
+                            (buf, diff.abs())
+                        } else {
+                            // Nothing left for us to do
+                            break;
+                        };
+
+                        let record =
+                            BaseRecord::<&Vec<u8>, _>::to(&connector.topic).payload(&encoded);
+                        if let Err((e, _)) = producer.send(record) {
+                            sink_metrics.message_send_errors_counter.inc();
+                            error!("unable to produce in {}: {}", name, e);
+                            if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
+                                // We are overloading Kafka by sending too many records
+                                // retry sending this record at a later time.
+                                // Note that any other error will result in dropped
+                                // data as we will not attempt to resend it.
+                                // https://github.com/edenhill/librdkafka/blob/master/examples/producer.c#L188-L208
+                                // only retries on QueueFull so we will keep that
+                                // convention here.
+                                encoded_buffer = Some((encoded, count));
+                                activator.activate_after(Duration::from_secs(60));
+                                return true;
                             }
-
-                            // Cache the Avro encoded data if we need to send again and
-                            // remember how many more times we need to send it
-                            if count > 1 {
-                                encoded_buffer = Some((encoded, count - 1));
-                            }
+                        } else {
+                            sink_metrics.messages_sent_counter.inc();
                         }
 
-                        let in_flight = producer.in_flight_count();
-
-                        sink_metrics.rows_queued.set(queue.len() as u64);
-                        sink_metrics.messages_in_flight.set(in_flight as u64);
-                        if encoded_buffer.is_some() || !queue.is_empty() {
-                            // We need timely to reschedule this operator as we have pending
-                            // items that we need to send to Kafka
-                            activator.activate();
-                            return true;
+                        // Cache the Avro encoded data if we need to send again and
+                        // remember how many more times we need to send it
+                        if count > 1 {
+                            encoded_buffer = Some((encoded, count - 1));
                         }
-
-                        if in_flight > 0 {
-                            // We still have messages that need to be flushed out to Kafka
-                            // Let's make sure to keep the sink operator around until
-                            // we flush them out
-                            activator.activate_after(Duration::from_secs(5));
-                            return true;
-                        }
-
-                        false
-                    } else {
-                        false
                     }
+
+                    let in_flight = producer.in_flight_count();
+
+                    sink_metrics.rows_queued.set(queue.len() as u64);
+                    sink_metrics.messages_in_flight.set(in_flight as u64);
+                    if encoded_buffer.is_some() || !queue.is_empty() {
+                        // We need timely to reschedule this operator as we have pending
+                        // items that we need to send to Kafka
+                        activator.activate();
+                        return true;
+                    }
+
+                    if in_flight > 0 {
+                        // We still have messages that need to be flushed out to Kafka
+                        // Let's make sure to keep the sink operator around until
+                        // we flush them out
+                        activator.activate_after(Duration::from_secs(5));
+                        return true;
+                    }
+
+                    false
                 },
                 shutdown_button.expect("sink shutdown button must exist"),
             )
