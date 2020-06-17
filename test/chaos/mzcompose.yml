@@ -17,9 +17,12 @@ x-port-mappings:
   - &grafana 3000:3000
   - &schema-registry 8081:8081
   - &kafka 9092:9092
+  - &connect 8083:8083
+  - &mysql 3306:3306
 
 version: '3.7'
 services:
+  # Core test services.
   chaos:
     init: true
     mzbuild: chaos
@@ -56,9 +59,10 @@ services:
     ports:
       - *schema-registry
     environment:
-      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
-      - SCHEMA_REGISTRY_HOST_NAME=localhost
-    depends_on: [kafka, zookeeper]
+      - SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181
+      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
+    depends_on: [zookeeper, kafka]
 
   dashboard:
     mzbuild: dashboard
@@ -66,6 +70,48 @@ services:
       - 'MATERIALIZED_URL=materialized:6875'
     ports:
       - *grafana
+
+  # mysql -> debezium -> kafka test services.
+  connect:
+    image: debezium/connect:1.0
+    ports:
+      - *connect
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    depends_on: [kafka, schema-registry]
+  connector:
+    build: connector
+  mysql:
+    image: debezium/example-mysql:1.1
+    ports:
+      - *mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=debezium
+      - MYSQL_USER=mysqluser
+      - MYSQL_PASSWORD=mysqlpw
+    volumes:
+      - type: volume
+        source: chbench-gen
+        target: /var/lib/mysql-files
+        read_only: true
+  chbench:
+    init: true
+    mzbuild: chbenchmark
+    # NOTE: we really don't want to add a depends_on, because that causes docker-compose
+    # to _restart_ the items that this is depending on, which may blow away all the old
+    # state.
+    volumes:
+      - chbench-gen:/gen
+
+volumes:
+  chbench-gen:
 
 mzconduct:
   workflows:
@@ -122,13 +168,7 @@ mzconduct:
         - step: workflow
           workflow: run-netem-and-confirm
 
-    # This test is designed to pause and unpause the running Kafka broker
-    # (chaos-kill-container sends a SIGSTOP signal to the container).
-    #
-    # Success: Kafka is continuously paused and unpaused, materialize
-    #          does not crash, chaos container exits successfully.
-    # Failure: Kafka is not paused and unpaused, materialize crashes,
-    #          or chaos container exits unsuccessfully.
+    # These tests are designed to start and stop the specified Docker container.
     pause-kafka:
       steps:
         - step: workflow
@@ -141,19 +181,31 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 5
-            --message-count 10000
+            --message-count 1000000
         - step: chaos-pause-docker
           service: kafka
           other_service: chaos_run
 
-    # This test is designed to stop and start the running Kafka broker
-    # (chaos-kill-container sends a SIGTERM, then SIGKILL signal to the
-    # container).
-    #
-    # Success: Kafka is continuously stopped and restarted, materialize
-    #          does not crash, chaos container exits successfully.
-    # Failure: Kafka is not stopped and restarted, materialize crashes,
-    #          or chaos container exits unsuccessfully.
+    pause-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-stop-docker
+          service: chaos_connect_1
+          other_service: chbench
+
+    # These tests are designed to start and stop the specified Docker container.
     stop-kafka:
       steps:
         - step: workflow
@@ -171,13 +223,26 @@ mzconduct:
           service: kafka
           other_service: chaos_run
 
-    # This test is designed to kill the running Kafka broker
-    # (chaos-kill-container sends a SIGKILL signal to the container).
-    #
-    # Success: Kafka is killed and materialize does not crash.
-    #          Note: the chaos test will not be able to proceed and
-    #                will therefore never exit.
-    # Failure: Kafka is not killed or materialize does crash.
+    stop-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-stop-docker
+          service: chaos_connect_1
+          other_service: chbench
+
+    # These tests are designed to kill the specified Docker container.
     kill-kafka:
       steps:
         - step: workflow
@@ -200,8 +265,31 @@ mzconduct:
           service: kafka
           exit_code: 137 #SIGKILL
 
-    # Helper workflows
+    kill-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-kill-docker
+          service: chaos_connect_1
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: chaos_connect_1
+          exit_code: 137 #SIGKILL
 
+    # Helper workflows
     start-everything:
       steps:
         - step: start-services
@@ -227,6 +315,7 @@ mzconduct:
         - step: run
           service: chaos
           command: >-
+            --test bytes-to-kafka
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
@@ -241,3 +330,60 @@ mzconduct:
         - step: chaos-confirm
           service: chaos_run
           exit_code: 0
+
+    # chbench helper workflows
+    chbench-chaos-test:
+      steps:
+        - step: workflow
+          workflow: chbench-bring-up-source-data
+        # start the dashboard before the load data get started so that we have data from
+        # the beginning of time
+        - step: start-services
+          services: [dashboard]
+        - step: workflow
+          workflow: chbench-heavy-load
+
+    chbench-bring-up-source-data:
+      steps:
+        - step: start-services
+          services: [materialized, mysql]
+        - step: wait-for-tcp
+          host: materialized
+          port: 6875
+        - step: wait-for-mysql
+          user: root
+          password: debezium
+          timeout_secs: 30
+        - step: start-services
+          services: [connect, connector]
+        - step: wait-for-tcp
+          host: connect
+          port: 8083
+          timeout_secs: 120
+        - step: wait-for-tcp
+          host: schema-registry
+          port: 8081
+        - step: drop-kafka-topics
+          kafka-container: chaos_kafka_1
+          topic_pattern: mysql.tpcch.*
+        - step: run
+          service: chbench
+          command: >-
+            gen
+            --warehouses=1
+            --config-file-path=/etc/chbenchmark/mz-default.cfg
+
+    chbench-heavy-load:
+      steps:
+        - step: run
+          service: chbench
+          daemon: true
+          command: >-
+            run
+            --dsn=mysql --gen-dir=/var/lib/mysql-files
+            --analytic-threads=0
+            --transactional-threads=1
+            --run-seconds=864000
+            -l /dev/stdout
+            --config-file-path=/etc/chbenchmark/mz-default.cfg
+            --mz-url=postgresql://materialized:6875/materialize?sslmode=disable

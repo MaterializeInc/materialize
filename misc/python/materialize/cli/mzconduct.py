@@ -354,11 +354,16 @@ class Composition:
             ports.extend(these_ports)
         return ports
 
-    def get_container_id(self, service: str) -> str:
+    def get_container_id(self, service: str, running: bool = False) -> str:
         """Given a service name, tries to find a unique matching container id
+
+        If running is True, only return running containers.
         """
         try:
-            cmd = f"docker ps -a".split()
+            if running:
+                cmd = f"docker ps".split()
+            else:
+                cmd = f"docker ps -a".split()
             list_containers = spawn.capture(cmd, unicode=True)
 
             pattern = re.compile(f"^(?P<c_id>[^ ]+).*{service}")
@@ -846,7 +851,7 @@ class ChaosDockerWorkflowStep(WorkflowStep):
             f"{self._stop_cmd} and {self._run_cmd} {container_id}: running for {self._run_time} seconds, stopping for {self._stop_time} seconds"
         )
         if self._other_service != "":
-            other_container_id = comp.get_container_id(self._other_service)
+            other_container_id = comp.get_container_id(self._other_service, True)
             while comp.docker_container_is_running(other_container_id):
                 self.stop_and_start(container_id)
         elif self._duration >= 0:
