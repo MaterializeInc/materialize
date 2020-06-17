@@ -8,14 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-
+use std::convert::TryInto;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use failure::ResultExt;
 use log::error;
@@ -25,7 +25,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{MzOffset, SourceError, Timestamp};
+use dataflow_types::{Consistency, MzOffset, SourceError, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 
 use super::SourceOutput;
@@ -218,64 +218,118 @@ pub fn read_file_task<Ctor, I, Out, Err>(
 /// (even across partitions). This means that once we see a timestamp with ts x, no entry with
 /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
 /// partitions
+/// TODO(ncrooks): Refactor control plane information as in kafka.rs
+#[allow(clippy::too_many_arguments)]
 fn downgrade_capability(
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
     last_processed_offset: &mut MzOffset,
     last_closed_ts: &mut u64,
+    time_since_downgrade: &mut Instant,
+    downgrade_capability_frequency: u64,
+    consistency: &Consistency,
     timestamp_histories: &TimestampHistories,
 ) {
     let mut changed = false;
-    match timestamp_histories.borrow_mut().get_mut(id) {
-        None => {}
-        Some(entries) => {
-            // Files do not have partitions. There should never be more than
-            // one entry here
-            for entries in entries.values_mut() {
-                // Check whether timestamps can be closed on this partition
-                while let Some((_, ts, offset)) = entries.front() {
-                    if *last_processed_offset == *offset {
-                        // We have now seen all messages corresponding to this timestamp.  We
-                        // can close the timestamp and remove the associated metadata.
-                        *last_closed_ts = *ts;
-                        entries.pop_front();
-                        changed = true;
-                    } else {
-                        // Offset isn't at a timestamp boundary, we take no action
-                        break;
+
+    if let Consistency::BringYourOwn(_) = consistency {
+        match timestamp_histories.borrow_mut().get_mut(id) {
+            None => {}
+            Some(entries) => {
+                // Files do not have partitions. There should never be more than
+                // one entry here
+                for entries in entries.values_mut() {
+                    // Check whether timestamps can be closed on this partition
+                    while let Some((_, ts, offset)) = entries.front() {
+                        if *last_processed_offset == *offset {
+                            // We have now seen all messages corresponding to this timestamp.  We
+                            // can close the timestamp and remove the associated metadata.
+                            *last_closed_ts = *ts;
+                            entries.pop_front();
+                            changed = true;
+                        } else {
+                            // Offset isn't at a timestamp boundary, we take no action
+                            break;
+                        }
                     }
                 }
             }
         }
+        // Downgrade capability to new minimum open timestamp (which corresponds to last_closed_ts + 1).
+        if changed && (*last_closed_ts > 0) {
+            cap.downgrade(&(*last_closed_ts + 1));
+        }
+    } else {
+        // This a RT source. It is always possible to close the timestamp and downgrade the
+        // capability
+        if time_since_downgrade.elapsed().as_millis()
+            > downgrade_capability_frequency.try_into().unwrap()
+        {
+            let ts = generate_next_timestamp(last_closed_ts);
+            if let Some(ts) = ts {
+                cap.downgrade(&(&ts + 1));
+            }
+            *time_since_downgrade = Instant::now();
+        }
     }
-    // Downgrade capability to new minimum open timestamp (which corresponds to last_closed_ts + 1).
-    if changed && (*last_closed_ts > 0) {
-        cap.downgrade(&(*last_closed_ts + 1));
+}
+
+/// Generates a timestamp that is guaranteed to be monotonically increasing.
+/// This may require multiple calls to the underlying now() system method, which is not
+/// guaranteed to increase monotonically
+fn generate_next_timestamp(last_closed_ts: &mut u64) -> Option<u64> {
+    let mut new_ts = 0;
+    while new_ts <= *last_closed_ts {
+        let start = SystemTime::now();
+        new_ts = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as u64;
+        if new_ts < *last_closed_ts && *last_closed_ts - new_ts > 1000 {
+            // If someone resets their system clock to be too far in the past, this could cause
+            // Materialize to block and not give control to other operators. We thus give up
+            // on timestamping this message
+            error!("The new timestamp is more than 1 second behind the last assigned timestamp. To\
+                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please\
+                consider resetting your system time.");
+            return None;
+        }
     }
+    assert!(new_ts > *last_closed_ts);
+    *last_closed_ts = new_ts;
+    Some(*last_closed_ts)
 }
 
 /// For a given offset, returns an option type returning the matching timestamp or None
 /// if no timestamp can be assigned. The timestamp history contains a sequence of
 /// (timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
 /// for which offset>=x.
+/// TODO(ncrooks): refactor to take ControlPlaneInfo and DataPlaneInfo as in kafka.rs
 fn find_matching_timestamp(
     id: &SourceInstanceId,
     offset: MzOffset,
+    source_type: &Consistency,
+    last_closed_ts: u64,
     timestamp_histories: &TimestampHistories,
 ) -> Option<Timestamp> {
-    match timestamp_histories.borrow().get(id) {
-        None => None,
-        Some(entries) => match entries.get(&PartitionId::File) {
-            Some(entries) => {
-                for (_, ts, max_offset) in entries {
-                    if offset <= *max_offset {
-                        return Some(ts.clone());
-                    }
-                }
-                None
-            }
+    if let Consistency::RealTime = source_type {
+        // Simply assign to this message the next timestamp that is not closed
+        Some(last_closed_ts + 1)
+    } else {
+        match timestamp_histories.borrow().get(id) {
             None => None,
-        },
+            Some(entries) => match entries.get(&PartitionId::File) {
+                Some(entries) => {
+                    for (_, ts, max_offset) in entries {
+                        if offset <= *max_offset {
+                            return Some(ts.clone());
+                        }
+                    }
+                    None
+                }
+                None => None,
+            },
+        }
     }
 }
 
@@ -302,21 +356,38 @@ where
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_RECORDS_PER_INVOCATION: usize = 1024;
 
-    let ts = if config.active {
-        let prev = config
-            .timestamp_histories
-            .borrow_mut()
-            .insert(config.id.clone(), HashMap::new());
-        assert!(prev.is_none());
-        config
-            .timestamp_tx
-            .as_ref()
-            .borrow_mut()
-            .push(StartTimestamping(config.id));
-        Some(config.timestamp_tx)
+    let ts = if let Consistency::BringYourOwn(_) = config.consistency {
+        if config.active {
+            let prev = config
+                .timestamp_histories
+                .borrow_mut()
+                .insert(config.id.clone(), HashMap::new());
+            assert!(prev.is_none());
+            config
+                .timestamp_tx
+                .as_ref()
+                .borrow_mut()
+                .push(StartTimestamping(config.id));
+            Some(config.timestamp_tx)
+        } else {
+            None
+        }
     } else {
         None
     };
+
+    // TODO(ncrooks): refactor this information into separate ControlPlaneInfo and DataPlaneInfo
+    // as in kafka.rs
+
+    let SourceConfig {
+        id,
+        active,
+        scope,
+        timestamp_histories,
+        consistency,
+        timestamp_frequency,
+        ..
+    } = config;
 
     // Buffer placeholder for buffering messages for which we did not have a timestamp
     let mut buffer: Option<Result<Out, failure::Error>> = None;
@@ -324,17 +395,12 @@ where
     let mut last_processed_offset = MzOffset { offset: 0 };
     // Index of the current message's offset
     let mut current_msg_offset = MzOffset { offset: 0 };
-    // Records closed timestamps. It corresponds to the smallest timestamp that is still
-    // open
+    // Records closed timestamps. It corresponds to the smallest timestamp that is still open
     let mut last_closed_ts: u64 = 0;
-
-    let SourceConfig {
-        id,
-        active,
-        scope,
-        timestamp_histories,
-        ..
-    } = config;
+    // At at which the capability was last downgraded
+    let mut time_since_downgrade: Instant = Instant::now();
+    // Safe conversion: statement.rs checks that value specified fits in u64
+    let downgrade_capability_frequency = timestamp_frequency.as_millis().try_into().unwrap();
 
     let (stream, capability) = source(
         id,
@@ -370,6 +436,9 @@ where
                         cap,
                         &mut last_processed_offset,
                         &mut last_closed_ts,
+                        &mut time_since_downgrade,
+                        downgrade_capability_frequency,
+                        &consistency,
                         &timestamp_histories,
                     );
 
@@ -392,8 +461,13 @@ where
                     }
 
                     while let Some(message) = buffer.take() {
-                        let ts =
-                            find_matching_timestamp(&id, current_msg_offset, &timestamp_histories);
+                        let ts = find_matching_timestamp(
+                            &id,
+                            current_msg_offset,
+                            &consistency,
+                            last_closed_ts,
+                            &timestamp_histories,
+                        );
                         let message = match message {
                             Ok(message) => message,
                             Err(err) => {
@@ -418,11 +492,15 @@ where
                                     message,
                                     Some(last_processed_offset.offset),
                                 )));
+
                                 downgrade_capability(
                                     &id,
                                     cap,
                                     &mut last_processed_offset,
                                     &mut last_closed_ts,
+                                    &mut time_since_downgrade,
+                                    downgrade_capability_frequency,
+                                    &consistency,
                                     &timestamp_histories,
                                 );
                             }

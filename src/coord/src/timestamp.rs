@@ -1572,7 +1572,8 @@ impl Timestamper {
                     */
                 }
                 RtTimestampConnector::File(ref mut fc) => {
-                    let mut count = 0;
+                    unreachable!();
+                    /* let mut count = 0;
                     let last_offset = cons
                         .last_partition_offset
                         .entry(PartitionId::File)
@@ -1591,10 +1592,11 @@ impl Timestamper {
                         }
                     }
                     last_offset.offset += count;
-                    result.push((*id, 1, PartitionId::File, *last_offset))
+                    result.push((*id, 1, PartitionId::File, *last_offset)) */
                 }
                 RtTimestampConnector::Ocf(ref mut fc) => {
-                    let last_offset = cons
+                    unreachable!();
+                    /* let last_offset = cons
                         .last_partition_offset
                         .entry(PartitionId::File)
                         .or_insert(cons.start_offset);
@@ -1613,7 +1615,7 @@ impl Timestamper {
                         }
                     }
                     last_offset.offset += count;
-                    result.push((*id, 1, PartitionId::File, *last_offset))
+                    result.push((*id, 1, PartitionId::File, *last_offset)) */
                 }
                 RtTimestampConnector::Kinesis(kc) => {
                     // The Kinesis ListShards API is rate limited to 100 transactions per second
