@@ -70,6 +70,14 @@ Materialize provides a [recommended dashboard][dashboard-json] that you can [imp
 Grafana][graf-import]. It relies on you having configured prometheus to scrape
 materialized.
 
+## Datadog
+
+Materialize metrics can be sent to Datadog via the
+[OpenMetrics agent check](https://www.datadoghq.com/blog/monitor-prometheus-metrics/).
+(Requires Datadog Agent 6 and above). Simply configure _"prometheus_url"_ (ie
+`http://<materialized host>/metrics`), namespace, and metrics (ie `mz*`) in
+_"openmetrics.d/conf.yaml"_.
+
 # Other Setups
 
 Even if you aren't running materialized at web scale, you can still use our web-scale
