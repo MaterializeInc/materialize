@@ -96,7 +96,7 @@ fn memoize_and_reuse(
 
 /// Visit and memoize expression nodes.
 ///
-/// Importantly, we should not memoize expressions that may not be execuded by virtue of
+/// Importantly, we should not memoize expressions that may not be excluded by virtue of
 /// being guarded by `if` expressions.
 fn memoize(
     expr: &mut ScalarExpr,
@@ -113,7 +113,7 @@ fn memoize(
             // Literals do not need to be memoized.
         }
         _ => {
-            // We should not eagerly memoize if branches that might not be taken.
+            // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.
             if let ScalarExpr::If {
                 cond,
