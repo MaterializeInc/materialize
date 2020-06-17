@@ -1001,8 +1001,8 @@ FROM
     part
 WHERE
     l_partkey = p_partkey
-    AND l_shipdate >= DATE '1996-01-01'
-    AND l_shipdate < DATE '1996-01-01' + INTERVAL '1' month
+    AND l_shipdate >= DATE '1995-09-01'
+    AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month
 ----
 %0 =
 | Get materialize.public.lineitem (u21)
@@ -1016,7 +1016,7 @@ WHERE
 | Join %0 %1 (= #1 #16)
 | | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#1)
 | | demand = (#5, #6, #10, #20)
-| Filter (datetots(#10) < 1996-02-01 00:00:00), (#10 >= 1996-01-01)
+| Filter (datetots(#10) < 1995-10-01 00:00:00), (#10 >= 1995-09-01)
 | Reduce group=() sum(if "^PROMO.*$" ~(#20) then {(#5 * (100dec - #6))} else {0dec}) sum((#5 * (100dec - #6)))
 
 %3 =
