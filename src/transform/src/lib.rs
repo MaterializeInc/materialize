@@ -252,9 +252,9 @@ impl Default for Optimizer {
                     Box::new(crate::map_lifting::LiteralLifting),
                 ],
             }),
-            Box::new(crate::fusion::project::Project),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
             Box::new(crate::cse::map::Map),
+            Box::new(crate::fusion::project::Project),
             Box::new(crate::reduction::FoldConstants),
         ];
         Self { transforms }

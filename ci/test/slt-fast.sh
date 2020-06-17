@@ -25,6 +25,7 @@ export RUST_BACKTRACE=full
 
 tests=(
     test/sqllogictest/*.slt
+    test/sqllogictest/transform/*.slt
     # test/sqllogictest/sqlite/test/evidence/in1.test
     test/sqllogictest/sqlite/test/evidence/in2.test
     test/sqllogictest/sqlite/test/evidence/slt_lang_aggfunc.test
