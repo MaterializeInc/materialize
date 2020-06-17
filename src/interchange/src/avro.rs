@@ -829,9 +829,9 @@ impl Decoder {
 ///   * Union schemas are only used to represent nullability. The first
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
-fn build_schema(desc: &RelationDesc) -> Schema {
+fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
     let mut fields = Vec::new();
-    for (name, typ) in desc.iter() {
+    for (name, typ) in columns.iter() {
         let mut field_type = match &typ.scalar_type {
             ScalarType::Bool => json!("boolean"),
             ScalarType::Int32 => json!("int"),
@@ -874,7 +874,7 @@ fn build_schema(desc: &RelationDesc) -> Schema {
             field_type = json!(["null", field_type]);
         }
         fields.push(json!({
-            "name": name.expect("function preconditions require name to be present"),
+            "name": name,
             "type": field_type,
         }));
     }
@@ -918,16 +918,33 @@ impl fmt::Debug for Encoder {
 
 impl Encoder {
     pub fn new(desc: RelationDesc) -> Self {
-        let writer_schema = build_schema(&desc);
         // Invent names for columns that don't have a name.
-        let columns = desc
+        let mut columns: Vec<_> = desc
             .into_iter()
             .enumerate()
             .map(|(i, (name, ty))| match name {
-                None => (ColumnName::from(format!("column{}", i)), ty),
+                None => (ColumnName::from(format!("column{}", i + 1)), ty),
                 Some(name) => (name, ty),
             })
             .collect();
+
+        // Deduplicate names.
+        let mut seen = HashSet::new();
+        for (name, _ty) in &mut columns {
+            let stem_len = name.as_str().len();
+            let mut i = 1;
+            while seen.contains(name) {
+                name.as_mut_str().truncate(stem_len);
+                if name.as_str().ends_with(|c: char| c.is_ascii_digit()) {
+                    name.as_mut_str().push('_');
+                }
+                name.as_mut_str().push_str(&i.to_string());
+                i += 1;
+            }
+            seen.insert(name);
+        }
+
+        let writer_schema = build_schema(&columns);
         Encoder {
             columns,
             writer_schema,

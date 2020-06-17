@@ -9,6 +9,30 @@
 
 # Test Avro sinks.
 
+# Test that we invent field names for unnamed columns.
+
+> CREATE VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
+
+> CREATE SINK unnamed_cols_sink FROM unnamed_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
+{"before": null, "after": {"column1": 1, "b": 2, "column3": 3}}
+
+# Test that invented field names do not clash with named columns.
+
+> CREATE VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b, 5 as b;
+
+> CREATE SINK clashing_cols_sink FROM clashing_cols
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clashing-cols-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
+{"before": null, "after": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}
+
+# Test a basic sink with multiple rows.
+
 > CREATE VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
 
 > CREATE SINK data_sink FROM data
@@ -20,6 +44,8 @@ $ kafka-verify format=avro sink=materialize.public.data_sink
 {"before": null, "after": {"a": 1, "b": 2}}
 {"before": null, "after": {"a": 2, "b": 1}}
 {"before": null, "after": {"a": 3, "b": 1}}
+
+# Test date/time types.
 
 > CREATE VIEW datetime_data (date, ts, ts_tz) AS VALUES
   (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
