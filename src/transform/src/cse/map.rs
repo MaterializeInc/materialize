@@ -62,6 +62,9 @@ impl Map {
 /// This method extracts all expression AST nodes as individual expressions,
 /// and builds others out of column references to them, avoiding any duplication.
 /// Once complete, expressions which are referred to only once are re-inlined.
+///
+/// Some care is taken to ensure that `if` expressions only memoize expresions
+/// they are certain to evaluate.
 fn memoize_and_reuse(
     exprs: &mut [ScalarExpr],
     input_arity: usize,
@@ -69,32 +72,8 @@ fn memoize_and_reuse(
     let mut projection = (0..input_arity).collect::<Vec<_>>();
     let mut scalars = Vec::new();
     for expr in exprs.iter_mut() {
-        expr.visit_mut(&mut |node| {
-            match node {
-                ScalarExpr::Column(index) => {
-                    // Column references need to be rewritten, but do not
-                    // need to be memoized.
-                    *index = projection[*index];
-                }
-                ScalarExpr::Literal(_, _) => {
-                    // Literals do not need to be memoized.
-                }
-                _ => {
-                    if let Some(position) = scalars.iter().position(|e| e == node) {
-                        // Any complex expression that already exists as a prior column can
-                        // be replaced by a reference to that column.
-                        *node = ScalarExpr::Column(input_arity + position);
-                    } else {
-                        // A complex expression that does not exist should be memoized, and
-                        // replaced by a reference to the column.
-                        scalars.push(std::mem::replace(
-                            node,
-                            ScalarExpr::Column(input_arity + scalars.len()),
-                        ));
-                    }
-                }
-            }
-        });
+        // Carefully memoize expressions that will certainly be evaluated.
+        memoize(expr, &mut scalars, &mut projection, input_arity);
 
         // At this point `expr` should be a column reference or a literal. It may not have
         // been added to `scalars` and we should do so if it is a literal to make sure we
@@ -113,6 +92,53 @@ fn memoize_and_reuse(
 
     inline_single_use(&mut scalars, &mut projection[..], input_arity);
     (scalars, projection)
+}
+
+/// Visit and memoize expression nodes.
+///
+/// Importantly, we should not memoize expressions that may not be execuded by virtue of
+/// being guarded by `if` expressions.
+fn memoize(
+    expr: &mut ScalarExpr,
+    scalars: &mut Vec<ScalarExpr>,
+    projection: &mut Vec<usize>,
+    input_arity: usize,
+) {
+    match expr {
+        ScalarExpr::Column(index) => {
+            // Column references need to be rewritten, but do not need to be memoized.
+            *index = projection[*index];
+        }
+        ScalarExpr::Literal(_, _) => {
+            // Literals do not need to be memoized.
+        }
+        _ => {
+            // We should not eagerly memoize if branches that might not be taken.
+            // TODO: Memoize expressions in the intersection of `then` and `els`.
+            if let ScalarExpr::If {
+                cond,
+                then: _,
+                els: _,
+            } = expr
+            {
+                memoize(cond, scalars, projection, input_arity);
+            } else {
+                expr.visit1_mut(|e| memoize(e, scalars, projection, input_arity));
+            }
+            if let Some(position) = scalars.iter().position(|e| e == expr) {
+                // Any complex expression that already exists as a prior column can
+                // be replaced by a reference to that column.
+                *expr = ScalarExpr::Column(input_arity + position);
+            } else {
+                // A complex expression that does not exist should be memoized, and
+                // replaced by a reference to the column.
+                scalars.push(std::mem::replace(
+                    expr,
+                    ScalarExpr::Column(input_arity + scalars.len()),
+                ));
+            }
+        }
+    }
 }
 
 /// Replaces column references that occur once with the referenced expression.
