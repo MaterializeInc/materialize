@@ -426,6 +426,16 @@ impl RelationExpr {
         ScalarExpr::Select(Box::new(self))
     }
 
+    pub fn take(&mut self) -> RelationExpr {
+        mem::replace(
+            self,
+            RelationExpr::Constant {
+                rows: vec![],
+                typ: RelationType::new(Vec::new()),
+            },
+        )
+    }
+
     pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
@@ -714,6 +724,10 @@ impl ScalarExpr {
         }
     }
 
+    pub fn take(&mut self) -> Self {
+        mem::replace(self, ScalarExpr::literal_null(ScalarType::String))
+    }
+
     pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
@@ -754,6 +768,14 @@ impl ScalarExpr {
     {
         self.visit1_mut(|e: &mut ScalarExpr| e.visit_mut(f));
         f(self);
+    }
+
+    pub fn visit_mut_pre<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Self),
+    {
+        f(self);
+        self.visit1_mut(|e: &mut ScalarExpr| e.visit_mut(f));
     }
 
     pub fn visit1_mut<F>(&mut self, mut f: F)

@@ -1568,61 +1568,25 @@ fn plan_any_or_all<'a>(
         allow_subqueries: true,
     };
 
-    if !column_types[0].nullable {
-        // This transformation allows us to exploit some structure that is easy to spot at this
-        // level, but trickier at the dataflow layer, so we do it here. However, it's only valid if
-        // the column from the right subquery is non-nullable.
-        //
-        // Planning ANY:
-        // SELECT abc.a = ANY(SELECT xyz.x FROM xyz) FROM abc
-        // =>
-        // SELECT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
-        //
-        // Planning ALL (the same, but applying De Morgan's law):
-        // SELECT abc.a != ALL(SELECT xyz.x FROM xyz) FROM abc
-        // =>
-        // SELECT NOT EXISTS(SELECT xyz.x FROM xyz WHERE abc.a = xyz.x) FROM abc
+    let op_expr = func::plan_binary_op(
+        &any_ecx,
+        op,
+        left,
+        &Expr::Identifier(vec![Ident::new(right_name)]),
+    )?;
 
-        let mut cond = func::plan_binary_op(
-            &any_ecx,
-            op,
-            left,
-            &Expr::Identifier(vec![Ident::new(right_name)]),
-        )?;
-        if func == AggregateFunc::All {
-            cond = cond.call_unary(UnaryFunc::Not);
-        }
-
-        let mut exists = right.filter(vec![cond]).exists();
-        if func == AggregateFunc::All {
-            exists = exists.call_unary(UnaryFunc::Not);
-        }
-        Ok(ScalarExpr::If {
-            cond: Box::new(plan_is_null_expr(ecx, left, false)?),
-            then: Box::new(ScalarExpr::literal_null(ecx.scalar_type(&exists))),
-            els: Box::new(exists),
-        })
-    } else {
-        let op_expr = func::plan_binary_op(
-            &any_ecx,
-            op,
-            left,
-            &Expr::Identifier(vec![Ident::new(right_name)]),
-        )?;
-
-        // plan subquery
-        let expr = right
-            .reduce(
-                vec![],
-                vec![AggregateExpr {
-                    func,
-                    expr: Box::new(op_expr),
-                    distinct: false,
-                }],
-            )
-            .select();
-        Ok(expr)
-    }
+    // plan subquery
+    let expr = right
+        .reduce(
+            vec![],
+            vec![AggregateExpr {
+                func,
+                expr: Box::new(op_expr),
+                distinct: false,
+            }],
+        )
+        .select();
+    Ok(expr)
 }
 
 fn plan_cast<'a>(
