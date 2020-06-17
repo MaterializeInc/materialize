@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use rand::Rng;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -369,6 +370,8 @@ impl DataPlaneInfo {
         let refresh = self.refresh_metadata_info.clone();
         let id = self.source_id.clone();
         let topic = self.topic_name.clone();
+        let worker_id = self.worker_id;
+        let worker_count = self.worker_count;
         thread::spawn(move || {
             metadata_fetch(
                 timestamping_stopped,
@@ -376,6 +379,8 @@ impl DataPlaneInfo {
                 refresh,
                 &id,
                 &topic,
+                worker_id,
+                worker_count,
                 metadata_refresh_frequency,
             )
         });
@@ -421,8 +426,6 @@ impl DataPlaneInfo {
     }
 
     /// Returns true if this worker is responsible for this partition
-    /// If multi-worker reading is not enabled, this worker is *always* responsible for the
-    /// partition
     /// Ex: if pid=0 and worker_id = 0, then true
     /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: i32) -> bool {
@@ -760,12 +763,15 @@ fn activate_source_timestamping<G>(
 
 /// This function is responsible for refreshing the number of known partitions. It marks the source
 /// has needing to be refreshed if new partitions are detected.
+#[allow(clippy::too_many_arguments)]
 fn metadata_fetch(
     timestamping_stopped: Arc<AtomicBool>,
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     partition_count: Arc<Mutex<Option<i32>>>,
     id: &str,
     topic: &str,
+    worker_id: i32,
+    worker_count: i32,
     wait: Duration,
 ) {
     debug!(
@@ -783,6 +789,7 @@ fn metadata_fetch(
     }
 
     let mut partition_kafka_metadata: HashMap<i32, IntGauge> = HashMap::new();
+    let mut rng = rand::thread_rng();
 
     while !timestamping_stopped.load(Ordering::SeqCst) {
         let metadata = consumer.fetch_metadata(Some(&topic), Duration::from_secs(30));
@@ -806,37 +813,40 @@ fn metadata_fetch(
                     continue;
                 }
                 new_partition_count = metadata_topic.partitions().len();
-                let mut refresh_data = partition_count.lock().expect("lock poisoned");
 
                 // Upgrade partition metrics
                 for p in 0..new_partition_count {
                     let pid = p.try_into().unwrap();
-                    match consumer.fetch_watermarks(&topic, pid, Duration::from_secs(1)) {
-                        Ok((_, high)) => {
-                            if let Some(max_available_offset) =
-                                partition_kafka_metadata.get_mut(&pid)
-                            {
-                                max_available_offset.set(high)
-                            } else {
-                                let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
-                                    topic,
-                                    &id,
-                                    &pid.to_string(),
-                                ]);
-                                max_offset.set(high);
-                                partition_kafka_metadata.insert(pid, max_offset);
+                    // Only check metadata updates for partitions that the worker owns
+                    if (pid % worker_count) == worker_id {
+                        match consumer.fetch_watermarks(&topic, pid, Duration::from_secs(1)) {
+                            Ok((_, high)) => {
+                                if let Some(max_available_offset) =
+                                    partition_kafka_metadata.get_mut(&pid)
+                                {
+                                    max_available_offset.set(high)
+                                } else {
+                                    let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
+                                        topic,
+                                        &id,
+                                        &pid.to_string(),
+                                    ]);
+                                    max_offset.set(high);
+                                    partition_kafka_metadata.insert(pid, max_offset);
+                                }
                             }
+                            Err(e) => warn!(
+                                "error loading watermarks topic={} partition={} error={}",
+                                topic, p, e
+                            ),
                         }
-                        Err(e) => warn!(
-                            "error loading watermarks topic={} partition={} error={}",
-                            topic, p, e
-                        ),
                     }
                 }
 
                 // Kafka partition are i32, and Kafka consequently cannot support more than i32
                 // partitions
-                *refresh_data = Some(new_partition_count.try_into().unwrap());
+                *partition_count.lock().expect("lock poisoned") =
+                    Some(new_partition_count.try_into().unwrap());
             }
             Err(e) => {
                 new_partition_count = 0;
@@ -845,7 +855,10 @@ fn metadata_fetch(
         }
 
         if new_partition_count > 0 {
-            thread::sleep(wait);
+            // Add jitter to spread-out metadata requests from workers. Brokers can get overloaded
+            // if all workers make simultaneous metadata request calls.
+            let sleep_jitter = rng.gen_range(Duration::from_secs(0), Duration::from_secs(15));
+            thread::sleep(wait + sleep_jitter);
         } else {
             // If no partitions have been detected yet, sleep for a second rather than
             // the specified "wait" period of time, as we know that there should at least be one
