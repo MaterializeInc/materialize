@@ -674,7 +674,7 @@ FROM
             AND p_partkey = l_partkey
             AND o_orderkey = l_orderkey
             AND s_nationkey = n_nationkey
-            AND p_name like 'green'
+            AND p_name like '%green%'
     ) AS profit
 GROUP BY
     nation,
@@ -711,7 +711,7 @@ ORDER BY
 | Join %0 %1 %2 %3 %4 %5 (= #9 #18 #33) (= #0 #17 #32) (= #16 #37) (= #12 #46)
 | | implementation = DeltaQuery %0 %2.(#1) %3.(#0, #1) %1.(#0) %4.(#0) %5.(#0) | %1 %5.(#0) %2.(#2) %3.(#0, #1) %0.(#0) %4.(#0) | %2 %3.(#0, #1) %0.(#0) %1.(#0) %4.(#0) %5.(#0) | %3 %0.(#0) %1.(#0) %5.(#0) %2.(#1, #2) %4.(#0) | %4 %2.(#0) %3.(#0, #1) %0.(#0) %1.(#0) %5.(#0) | %5 %1.(#3) %2.(#2) %3.(#0, #1) %0.(#0) %4.(#0)
 | | demand = (#1, #20..#22, #35, #41, #47)
-| Filter "^green$" ~(#1)
+| Filter "^.*green.*$" ~(#1)
 | Reduce group=(#47, tsextractyear(datetots(#41))) sum(((#21 * (100dec - #22)) - (#35 * #20)))
 
 Finish order_by=(#0 asc, #1 desc) limit=none offset=0 project=(#0..#2)
@@ -1713,7 +1713,7 @@ FROM
             customer
         WHERE
             substring(c_phone, 1, 2)
-            IN (':1', ':2', ':3', ':4', ':5', ':6', ':7')
+            IN ('13', '31', '23', '29', '30', '18', '17')
             AND c_acctbal
                 > (
                         SELECT
@@ -1751,7 +1751,7 @@ ORDER BY
 ----
 %0 =
 | Get materialize.public.customer (u15)
-| Filter (((((((substr(#4, 1, 2) = ":1") || (substr(#4, 1, 2) = ":2")) || (substr(#4, 1, 2) = ":3")) || (substr(#4, 1, 2) = ":4")) || (substr(#4, 1, 2) = ":5")) || (substr(#4, 1, 2) = ":6")) || (substr(#4, 1, 2) = ":7"))
+| Filter (((((((substr(#4, 1, 2) = "13") || (substr(#4, 1, 2) = "31")) || (substr(#4, 1, 2) = "23")) || (substr(#4, 1, 2) = "29")) || (substr(#4, 1, 2) = "30")) || (substr(#4, 1, 2) = "18")) || (substr(#4, 1, 2) = "17"))
 
 %1 =
 | Get materialize.public.customer (u15)
