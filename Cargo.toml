@@ -34,6 +34,16 @@ members = [
     "test/test-util",
 ]
 
+[profile.dev.package]
+# Compile the backtrace crate and its dependencies with all optimizations, even
+# in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
+# optimizations enabled, symbolizing a backtrace takes less than 1s.
+addr2line = { opt-level = 3 }
+backtrace = { opt-level = 3 }
+gimli = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
+object = { opt-level = 3 }
+
 [profile.release]
 # Emit only the line info tables, not full debug info, in release builds, to
 # substantially reduce the size of the debug info. Line info tables are enough
