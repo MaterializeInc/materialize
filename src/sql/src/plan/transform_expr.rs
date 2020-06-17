@@ -9,9 +9,16 @@
 
 //! Transformations of SQL IR, before decorrelation.
 
+use std::collections::BTreeMap;
 use std::mem;
 
-use crate::plan::expr::{BinaryFunc, RelationExpr, ScalarExpr};
+use lazy_static::lazy_static;
+
+use repr::{ColumnType, RelationType, ScalarType};
+
+use crate::plan::expr::{
+    AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc,
+};
 
 /// Rewrites predicates that contain subqueries so that the subqueries
 /// appear in their own later predicate when possible.
@@ -125,4 +132,131 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
     }
 
     walk_relation(expr)
+}
+
+/// Rewrites quantified comparisons into simpler EXISTS operators.
+///
+/// Note that this transformation is only valid when the expression is
+/// used in a context where the distinction between `FALSE` and `NULL`
+/// is immaterial, e.g., in a `WHERE` clause or a `CASE` condition, or
+/// when the inputs to the comparison are non-nullable. This function is careful
+/// to only apply the transformation when it is valid to do so.
+///
+/// WHERE (SELECT any(<pred>) FROM <rel>)
+/// =>
+/// WHERE EXISTS(SELECT * FROM <rel> WHERE <pred>)
+///
+/// WHERE (SELECT all(<pred>) FROM <rel>)
+/// =>
+/// WHERE NOT EXISTS(SELECT * FROM <rel> WHERE (NOT <pred>) OR <pred> IS NULL)
+///
+/// See Section 3.5 of "Execution Strategies for SQL Subqueries" by
+/// M. Elhemali, et al.
+pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
+    fn walk_relation(expr: &mut RelationExpr, outers: &[RelationType]) {
+        expr.visit_mut(&mut |expr| match expr {
+            RelationExpr::Map { scalars, input }
+            | RelationExpr::FlatMap {
+                exprs: scalars,
+                input,
+                ..
+            } => {
+                let mut outers = outers.to_vec();
+                outers.push(input.typ(&outers, &NO_PARAMS));
+                for scalar in scalars {
+                    walk_scalar(scalar, &outers, false);
+                }
+            }
+            RelationExpr::Filter { predicates, input } => {
+                let mut outers = outers.to_vec();
+                outers.push(input.typ(&outers, &NO_PARAMS));
+                for pred in predicates {
+                    walk_scalar(pred, &outers, true);
+                }
+            }
+            _ => (),
+        })
+    }
+
+    fn walk_scalar(expr: &mut ScalarExpr, outers: &[RelationType], mut in_filter: bool) {
+        expr.visit_mut_pre(&mut |e| match e {
+            ScalarExpr::Exists(input) => walk_relation(input, outers),
+            ScalarExpr::Select(input) => {
+                walk_relation(input, outers);
+
+                // We're inside of a `(SELECT ...)` subquery. Now let's see if
+                // it has the form `(SELECT <any|all>(...) FROM <input>)`.
+                // Ideally we could do this with one pattern, but Rust's pattern
+                // matching engine is not powerful enough, so we have to do this
+                // in stages; the early returns avoid brutal nesting.
+
+                let (func, expr, input) = match &mut **input {
+                    RelationExpr::Reduce {
+                        group_key,
+                        aggregates,
+                        input,
+                    } if group_key.is_empty() && aggregates.len() == 1 => {
+                        let agg = &mut aggregates[0];
+                        (&agg.func, &mut agg.expr, input)
+                    }
+                    _ => return,
+                };
+
+                if !in_filter && column_type(outers, input, expr).nullable {
+                    // Unless we're directly inside of a WHERE, this
+                    // transformation is only valid if the expression involved
+                    // is non-nullable.
+                    return;
+                }
+
+                match func {
+                    AggregateFunc::Any => {
+                        // Found `(SELECT any(<expr>) FROM <input>)`. Rewrite to
+                        // `EXISTS(SELECT 1 FROM <input> WHERE <expr>)`.
+                        *e = input.take().filter(vec![expr.take()]).exists();
+                    }
+                    AggregateFunc::All => {
+                        // Found `(SELECT all(<expr>) FROM <input>)`. Rewrite to
+                        // `NOT EXISTS(SELECT 1 FROM <input> WHERE NOT <expr> OR <expr> IS NULL)`.
+                        //
+                        // Note that negation of <expr> alone is insufficient.
+                        // Consider that `WHERE <pred>` filters out rows if
+                        // `<pred>` is false *or* null. To invert the test, we
+                        // need `NOT <pred> OR <pred> IS NULL`.
+                        let expr = expr.take();
+                        let filter = expr
+                            .clone()
+                            .call_unary(UnaryFunc::Not)
+                            .call_binary(expr.call_unary(UnaryFunc::IsNull), BinaryFunc::Or);
+                        *e = input
+                            .take()
+                            .filter(vec![filter])
+                            .exists()
+                            .call_unary(UnaryFunc::Not);
+                    }
+                    _ => (),
+                }
+            }
+            _ => {
+                // As soon as we see *any* scalar expression, we are no longer
+                // directly inside of a filter.
+                in_filter = false;
+            }
+        })
+    }
+
+    walk_relation(expr, &[])
+}
+
+lazy_static! {
+    /// An empty parameter type map.
+    ///
+    /// These transformations are expected to run after parameters are bound, so
+    /// there is no need to provide any parameter type information.
+    static ref NO_PARAMS: BTreeMap<usize, ScalarType> = BTreeMap::new();
+}
+
+fn column_type(outers: &[RelationType], inner: &RelationExpr, expr: &ScalarExpr) -> ColumnType {
+    let inner_type = inner.typ(&outers, &NO_PARAMS);
+    expr.typ(&outers, &inner_type, &NO_PARAMS)
 }
