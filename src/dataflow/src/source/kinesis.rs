@@ -20,7 +20,7 @@ use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 
 use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
-use dataflow_types::{KinesisSourceConnector, Timestamp};
+use dataflow_types::{Consistency, KinesisSourceConnector, Timestamp};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Activator;
@@ -67,21 +67,26 @@ where
 {
     // Putting source information on the Timestamp channel lets this
     // Dataflow worker communicate that it has created a source.
-    let ts = if config.active {
-        let prev = config
-            .timestamp_histories
-            .borrow_mut()
-            .insert(config.id.clone(), HashMap::new());
-        assert!(prev.is_none());
-        config
-            .timestamp_tx
-            .as_ref()
-            .borrow_mut()
-            .push(StartTimestamping(config.id));
-        Some(config.timestamp_tx)
-    } else {
-        None
-    };
+    let ts =
+        if let Consistency::BringYourOwn(_) = config.consistency {
+            if config.active {
+                let prev = config
+                    .timestamp_histories
+                    .borrow_mut()
+                    .insert(config.id.clone(), HashMap::new());
+                assert!(prev.is_none());
+                config
+                    .timestamp_tx
+                    .as_ref()
+                    .borrow_mut()
+                    .push(StartTimestamping(config.id));
+                Some(config.timestamp_tx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
     let mut state = block_on(create_state(connector));
     let mut last_checked_shards = std::time::Instant::now();
