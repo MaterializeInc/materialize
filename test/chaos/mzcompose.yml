@@ -201,7 +201,7 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --run-seconds=864000
-        - step: chaos-stop-docker
+        - step: chaos-pause-docker
           service: chaos_connect_1
           other_service: chbench
 
