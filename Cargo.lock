@@ -2772,6 +2772,7 @@ name = "repr"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "chrono",
  "criterion",
  "hex",
