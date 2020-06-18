@@ -45,41 +45,18 @@ use crate::plan::expr::{BinaryFunc, RelationExpr, ScalarExpr};
 /// subquery, especially when the original conjunction contains join keys.
 pub fn split_subquery_predicates(expr: &mut RelationExpr) {
     fn walk_relation(expr: &mut RelationExpr) {
-        match expr {
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
-
-            RelationExpr::Project { input, .. }
-            | RelationExpr::Distinct { input }
-            | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input }
-            | RelationExpr::Reduce { input, .. }
-            | RelationExpr::TopK { input, .. } => walk_relation(input),
-
-            RelationExpr::Join { left, right, .. } | RelationExpr::Union { left, right } => {
-                walk_relation(left);
-                walk_relation(right);
-            }
-
-            RelationExpr::Map { input, scalars } => {
-                walk_relation(input);
+        expr.visit_mut(&mut |expr| match expr {
+            RelationExpr::Map { scalars, .. } => {
                 for scalar in scalars {
                     walk_scalar(scalar);
                 }
             }
-
-            RelationExpr::FlatMap {
-                input,
-                func: _,
-                exprs,
-            } => {
-                walk_relation(input);
+            RelationExpr::FlatMap { exprs, .. } => {
                 for expr in exprs {
                     walk_scalar(expr);
                 }
             }
-
-            RelationExpr::Filter { input, predicates } => {
-                walk_relation(input);
+            RelationExpr::Filter { predicates, .. } => {
                 let mut subqueries = vec![];
                 for predicate in &mut *predicates {
                     walk_scalar(predicate);
@@ -94,50 +71,24 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
                     predicates.push(subquery);
                 }
             }
-        }
+            _ => (),
+        })
     }
 
     fn walk_scalar(expr: &mut ScalarExpr) {
-        match expr {
-            ScalarExpr::Column(_)
-            | ScalarExpr::Literal(_, _)
-            | ScalarExpr::Parameter(_)
-            | ScalarExpr::CallNullary(_) => (),
+        expr.visit_mut(&mut |expr| match expr {
             ScalarExpr::Exists(input) | ScalarExpr::Select(input) => walk_relation(input),
-            ScalarExpr::CallUnary { expr, .. } => walk_scalar(expr),
-            ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                walk_scalar(expr1);
-                walk_scalar(expr2);
-            }
-            ScalarExpr::CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    walk_scalar(expr);
-                }
-            }
-            ScalarExpr::If { cond, then, els } => {
-                walk_scalar(cond);
-                walk_scalar(then);
-                walk_scalar(els);
-            }
-        }
+            _ => (),
+        })
     }
 
     fn contains_subquery(expr: &ScalarExpr) -> bool {
-        match expr {
-            ScalarExpr::Column(_)
-            | ScalarExpr::Literal(_, _)
-            | ScalarExpr::Parameter(_)
-            | ScalarExpr::CallNullary(_) => false,
-            ScalarExpr::Exists(_) | ScalarExpr::Select(_) => true,
-            ScalarExpr::CallUnary { expr, .. } => contains_subquery(expr),
-            ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                contains_subquery(expr1) || contains_subquery(expr2)
-            }
-            ScalarExpr::CallVariadic { exprs, .. } => exprs.iter().any(contains_subquery),
-            ScalarExpr::If { cond, then, els } => {
-                contains_subquery(cond) || contains_subquery(then) || contains_subquery(els)
-            }
-        }
+        let mut found = false;
+        expr.visit(&mut |expr| match expr {
+            ScalarExpr::Exists(_) | ScalarExpr::Select(_) => found = true,
+            _ => (),
+        });
+        found
     }
 
     /// Extracts subqueries from a conjunction into `out`.
@@ -166,11 +117,10 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
                 extract_conjuncted_subqueries(expr1, out);
                 extract_conjuncted_subqueries(expr2, out);
             }
-            expr => {
-                if contains_subquery(expr) {
-                    out.push(mem::replace(expr, ScalarExpr::literal_true()))
-                }
+            expr if contains_subquery(expr) => {
+                out.push(mem::replace(expr, ScalarExpr::literal_true()))
             }
+            _ => (),
         }
     }
 

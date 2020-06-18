@@ -748,6 +748,40 @@ impl ScalarExpr {
         }
     }
 
+    pub fn visit_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Self),
+    {
+        self.visit1_mut(|e: &mut ScalarExpr| e.visit_mut(f));
+        f(self);
+    }
+
+    pub fn visit1_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        use ScalarExpr::*;
+        match self {
+            Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
+            CallUnary { expr, .. } => f(expr),
+            CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+            Exists(..) | Select(..) => (),
+        }
+    }
+
     /// Visits the column references in this scalar expression.
     ///
     /// The `depth` argument should indicate the subquery nesting depth of the expression,
