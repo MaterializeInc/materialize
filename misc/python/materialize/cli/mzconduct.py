@@ -848,10 +848,11 @@ class ChaosDockerWorkflowStep(WorkflowStep):
     def run(self, comp: Composition, workflow: Workflow) -> None:
         container_id = comp.get_container_id(self._service)
         say(
-            f"{self._stop_cmd} and {self._run_cmd} {container_id}: running for {self._run_time} seconds, stopping for {self._stop_time} seconds"
+            f"{self._stop_cmd} and {self._run_cmd} {container_id}: running for {self._run_time} seconds, \
+             stopping for {self._stop_time} seconds"
         )
         if self._other_service != "":
-            other_container_id = comp.get_container_id(self._other_service, True)
+            other_container_id = comp.get_container_id(self._other_service, running=True)
             while comp.docker_container_is_running(other_container_id):
                 self.stop_and_start(container_id)
         elif self._duration >= 0:

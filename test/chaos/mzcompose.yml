@@ -14,7 +14,6 @@
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
   - &materialized 6875:6875
-  - &grafana 3000:3000
   - &schema-registry 8081:8081
   - &kafka 9092:9092
   - &connect 8083:8083
@@ -63,13 +62,6 @@ services:
       - SCHEMA_REGISTRY_HOST_NAME=schema-registry
       - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
     depends_on: [zookeeper, kafka]
-
-  dashboard:
-    mzbuild: dashboard
-    environment:
-      - 'MATERIALIZED_URL=materialized:6875'
-    ports:
-      - *grafana
 
   # mysql -> debezium -> kafka test services.
   connect:
@@ -428,7 +420,7 @@ mzconduct:
     start-everything:
       steps:
         - step: start-services
-          services: [materialized, kafka, schema-registry, dashboard]
+          services: [materialized, kafka, schema-registry]
         - step: wait-for-tcp
           host: kafka
           port: 9092
@@ -471,10 +463,6 @@ mzconduct:
       steps:
         - step: workflow
           workflow: chbench-bring-up-source-data
-        # start the dashboard before the load data get started so that we have data from
-        # the beginning of time
-        - step: start-services
-          services: [dashboard]
         - step: workflow
           workflow: chbench-heavy-load
 
