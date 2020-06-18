@@ -2776,8 +2776,8 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
 
-            DateTruncTimestamp(_) => ColumnType::new(ScalarType::Timestamp).nullable(false),
-            DateTruncTimestampTz(_) => ColumnType::new(ScalarType::TimestampTz).nullable(false),
+            DateTruncTimestamp(_) => ColumnType::new(ScalarType::Timestamp).nullable(true),
+            DateTruncTimestampTz(_) => ColumnType::new(ScalarType::TimestampTz).nullable(true),
 
             ToTimestamp => ColumnType::new(ScalarType::TimestampTz).nullable(true),
 
