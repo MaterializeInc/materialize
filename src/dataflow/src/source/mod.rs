@@ -25,7 +25,7 @@ use timely::{scheduling::Activator, Data};
 use dataflow_types::{Consistency, Timestamp};
 use expr::SourceInstanceId;
 
-use crate::server::{TimestampMetadataUpdates, TimestampDataUpdates, TimestampMetadataUpdate};
+use crate::server::{TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates};
 
 mod file;
 mod kafka;

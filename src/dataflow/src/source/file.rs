@@ -30,7 +30,7 @@ use expr::{PartitionId, SourceInstanceId};
 
 use super::SourceOutput;
 use crate::operator::StreamExt;
-use crate::server::{TimestampDataUpdates, TimestampMetadataUpdate, TimestampDataUpdate};
+use crate::server::{TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate};
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
 
@@ -252,8 +252,8 @@ fn downgrade_capability(
                         }
                     }
                 }
-            },
-            _ => panic!("Unexpected message type. Expected BYO update.")
+            }
+            _ => panic!("Unexpected message type. Expected BYO update."),
         }
         // Downgrade capability to new minimum open timestamp (which corresponds to last_closed_ts + 1).
         if changed && (*last_closed_ts > 0) {
@@ -318,18 +318,20 @@ fn find_matching_timestamp(
     } else {
         match timestamp_histories.borrow().get(id) {
             None => None,
-            Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(&PartitionId::File) {
-                Some(entries) => {
-                    for (_, ts, max_offset) in entries {
-                        if offset <= *max_offset {
-                            return Some(ts.clone());
+            Some(TimestampDataUpdate::BringYourOwn(entries)) => {
+                match entries.get(&PartitionId::File) {
+                    Some(entries) => {
+                        for (_, ts, max_offset) in entries {
+                            if offset <= *max_offset {
+                                return Some(ts.clone());
+                            }
                         }
+                        None
                     }
-                    None
+                    None => None,
                 }
-                None => None,
-            },
-            _ => panic!("Unexpected format in TimestampDataUpdates. Expected a BYO message.")
+            }
+            _ => panic!("Unexpected format in TimestampDataUpdates. Expected a BYO message."),
         }
     }
 }
@@ -359,10 +361,10 @@ where
 
     let ts = if let Consistency::BringYourOwn(_) = config.consistency {
         if config.active {
-            let prev = config
-                .timestamp_histories
-                .borrow_mut()
-                .insert(config.id.clone(), TimestampDataUpdate::BringYourOwn(HashMap::new()));
+            let prev = config.timestamp_histories.borrow_mut().insert(
+                config.id.clone(),
+                TimestampDataUpdate::BringYourOwn(HashMap::new()),
+            );
             assert!(prev.is_none());
             config
                 .timestamp_tx

@@ -35,8 +35,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse,
-    PeekWhen, SinkConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
+    SinkConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -479,18 +479,12 @@ where
                     }
                 }
 
-                Message::AdvanceSourceTimestamp {
-                    id,
-                    update,
-                } => {
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::AdvanceSourceTimestamp {
-                                id,
-                                update
-                            },
-                        );
-                },
+                Message::AdvanceSourceTimestamp { id, update } => {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AdvanceSourceTimestamp { id, update },
+                    );
+                }
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
                     self.shutdown();

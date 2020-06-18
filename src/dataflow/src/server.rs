@@ -41,7 +41,8 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, Diff, IndexDesc, MzOffset, PeekResponse, Timestamp, TimestampSourceUpdate, Update,
+    DataflowDesc, DataflowError, Diff, IndexDesc, MzOffset, PeekResponse, Timestamp,
+    TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -149,7 +150,7 @@ pub enum SequencedCommand {
         /// The ID of the timestamped source
         id: SourceInstanceId,
         /// The associated update (RT or BYO)
-        update: TimestampSourceUpdate
+        update: TimestampSourceUpdate,
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
@@ -255,11 +256,10 @@ pub enum TimestampDataUpdate {
     /// RT sources see a current estimate of the number of partitions for the soruce
     RealTime(PartitionCount),
     /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
-    BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>)
+    BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
-pub type TimestampDataUpdates =
-    Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
+pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
 
 /// List of sources that need to start being timestamped or have been dropped and no longer require
 /// timestamping.
@@ -688,19 +688,23 @@ where
                 self.traces.del_all_traces();
                 self.shutdown_logging();
             }
-            SequencedCommand::AdvanceSourceTimestamp {
-                id,
-               update
-            } => {
-
+            SequencedCommand::AdvanceSourceTimestamp { id, update } => {
                 let mut timestamps = self.ts_histories.borrow_mut();
                 if let Some(updates) = timestamps.get_mut(&id) {
                     match updates {
                         TimestampDataUpdate::BringYourOwn(entries) => {
-                            if let TimestampSourceUpdate::BringYourOwn(partition_count, pid, timestamp,offset) = update {
-                                let partition_entries= entries.entry(pid).or_insert_with(VecDeque::new);
-                                let (_, last_ts, last_offset) =
-                                    partition_entries.back().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
+                            if let TimestampSourceUpdate::BringYourOwn(
+                                partition_count,
+                                pid,
+                                timestamp,
+                                offset,
+                            ) = update
+                            {
+                                let partition_entries =
+                                    entries.entry(pid).or_insert_with(VecDeque::new);
+                                let (_, last_ts, last_offset) = partition_entries
+                                    .back()
+                                    .unwrap_or(&(0, 0, MzOffset { offset: 0 }));
                                 assert!(
                                     offset >= *last_offset,
                                     "offset should not go backwards, but {} < {}",
@@ -717,11 +721,17 @@ where
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
                             }
-                        },
+                        }
                         TimestampDataUpdate::RealTime(current_partition_count) => {
-                             if let TimestampSourceUpdate::RealTime(partition_count) = update {
-                                assert!(*current_partition_count<=partition_count, "The number of partititions\
-                            for source {} decreased from {} to {}", id, partition_count, current_partition_count);
+                            if let TimestampSourceUpdate::RealTime(partition_count) = update {
+                                assert!(
+                                    *current_partition_count <= partition_count,
+                                    "The number of partititions\
+                            for source {} decreased from {} to {}",
+                                    id,
+                                    partition_count,
+                                    current_partition_count
+                                );
                                 *current_partition_count = partition_count;
                             } else {
                                 panic!("Expected message type. Expected RT update.");
@@ -737,7 +747,7 @@ where
                             token.activate();
                         }
                     }
-                 }
+                }
             }
         }
     }

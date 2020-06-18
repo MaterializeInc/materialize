@@ -35,7 +35,9 @@ use url::Url;
 
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
-use crate::server::{TimestampMetadataUpdates, TimestampDataUpdates, TimestampMetadataUpdate, TimestampDataUpdate};
+use crate::server::{
+    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+};
 use ore::collections::CollectionExt;
 
 // Global Kafka metrics.
@@ -718,10 +720,10 @@ impl ControlPlaneInfo {
 //
 fn activate_source_timestamping<G>(config: &SourceConfig<G>) -> Option<TimestampMetadataUpdates> {
     if let Consistency::BringYourOwn(_) = config.consistency {
-        let prev = config
-            .timestamp_histories
-            .borrow_mut()
-            .insert(config.id.clone(), TimestampDataUpdate::BringYourOwn(HashMap::new()));
+        let prev = config.timestamp_histories.borrow_mut().insert(
+            config.id.clone(),
+            TimestampDataUpdate::BringYourOwn(HashMap::new()),
+        );
         // Check that this is the first time this source id is registered
         assert!(prev.is_none());
         config
@@ -1068,18 +1070,20 @@ fn find_matching_timestamp(
         // The source is a BYO source, we must check the TimestampHistories to obtain a
         match timestamp_histories.borrow().get(id) {
             None => None,
-            Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(&PartitionId::Kafka(partition)) {
-                Some(entries) => {
-                    for (_, ts, max_offset) in entries {
-                        if offset <= *max_offset {
-                            return Some(ts.clone());
+            Some(TimestampDataUpdate::BringYourOwn(entries)) => {
+                match entries.get(&PartitionId::Kafka(partition)) {
+                    Some(entries) => {
+                        for (_, ts, max_offset) in entries {
+                            if offset <= *max_offset {
+                                return Some(ts.clone());
+                            }
                         }
+                        None
                     }
-                    None
+                    None => None,
                 }
-                None => None,
-            },
-            _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source")
+            }
+            _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source"),
         }
     }
 }
@@ -1173,8 +1177,7 @@ fn downgrade_capability(
             match entries {
                 TimestampDataUpdate::BringYourOwn(entries) => {
                     // Iterate over each partition that we know about
-                    for
-                        (pid, entries) in entries {
+                    for (pid, entries) in entries {
                         let pid = match pid {
                             PartitionId::Kafka(pid) => *pid,
                             _ => unreachable!(
@@ -1225,8 +1228,8 @@ fn downgrade_capability(
                             }
                         }
                     }
-                },
-                _ => panic!("Unexpected timestamp message format. Expected BYO update.")
+                }
+                _ => panic!("Unexpected timestamp message format. Expected BYO update."),
             }
         }
 

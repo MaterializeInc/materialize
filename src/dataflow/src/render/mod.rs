@@ -139,7 +139,7 @@ use crate::decode::{decode_avro_values, decode_upsert, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
-use crate::server::{TimestampMetadataUpdates, TimestampDataUpdates};
+use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
 use source::SourceOutput;
 
 mod arrange_by;
