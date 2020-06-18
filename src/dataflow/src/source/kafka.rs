@@ -35,8 +35,7 @@ use url::Url;
 
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
-use crate::server::TimestampMetadataChange::StartTimestamping;
-use crate::server::{TimestampChanges, TimestampHistories};
+use crate::server::{TimestampMetadataUpdates, TimestampDataUpdates, TimestampMetadataUpdate, TimestampDataUpdate};
 use ore::collections::CollectionExt;
 
 // Global Kafka metrics.
@@ -717,19 +716,19 @@ impl ControlPlaneInfo {
 /// 1) for BYO sources, we notify the timestamping thread that a source has been created.
 /// 2) for a RT source, take no steps
 //
-fn activate_source_timestamping<G>(config: &SourceConfig<G>) -> Option<TimestampChanges> {
+fn activate_source_timestamping<G>(config: &SourceConfig<G>) -> Option<TimestampMetadataUpdates> {
     if let Consistency::BringYourOwn(_) = config.consistency {
         let prev = config
             .timestamp_histories
             .borrow_mut()
-            .insert(config.id.clone(), HashMap::new());
+            .insert(config.id.clone(), TimestampDataUpdate::BringYourOwn(HashMap::new()));
         // Check that this is the first time this source id is registered
         assert!(prev.is_none());
         config
             .timestamp_tx
             .as_ref()
             .borrow_mut()
-            .push(StartTimestamping(config.id));
+            .push(TimestampMetadataUpdate::StartTimestamping(config.id));
         return Some(config.timestamp_tx.clone());
     }
     None
@@ -1060,7 +1059,7 @@ fn find_matching_timestamp(
     id: &SourceInstanceId,
     partition: i32,
     offset: MzOffset,
-    timestamp_histories: &TimestampHistories,
+    timestamp_histories: &TimestampDataUpdates,
 ) -> Option<Timestamp> {
     if let Consistency::RealTime = cp_info.source_type {
         // Simply assign to this message the next timestamp that is not closed
@@ -1069,7 +1068,7 @@ fn find_matching_timestamp(
         // The source is a BYO source, we must check the TimestampHistories to obtain a
         match timestamp_histories.borrow().get(id) {
             None => None,
-            Some(entries) => match entries.get(&PartitionId::Kafka(partition)) {
+            Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(&PartitionId::Kafka(partition)) {
                 Some(entries) => {
                     for (_, ts, max_offset) in entries {
                         if offset <= *max_offset {
@@ -1080,6 +1079,7 @@ fn find_matching_timestamp(
                 }
                 None => None,
             },
+            _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source")
         }
     }
 }
@@ -1158,7 +1158,7 @@ fn downgrade_capability(
     cap: &mut Capability<Timestamp>,
     cp_info: &mut ControlPlaneInfo,
     dp_info: &mut DataPlaneInfo,
-    timestamp_histories: &TimestampHistories,
+    timestamp_histories: &TimestampDataUpdates,
 ) {
     let mut changed = false;
 
@@ -1170,57 +1170,63 @@ fn downgrade_capability(
         // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
         // in next_partition_ts
         if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
-            // Iterate over each partition that we know about
-            for (pid, entries) in entries {
-                let pid = match pid {
-                    PartitionId::Kafka(pid) => *pid,
-                    _ => unreachable!(
-                        "timestamp.rs should never send messages with non-Kafka partitions \
+            match entries {
+                TimestampDataUpdate::BringYourOwn(entries) => {
+                    // Iterate over each partition that we know about
+                    for
+                        (pid, entries) in entries {
+                        let pid = match pid {
+                            PartitionId::Kafka(pid) => *pid,
+                            _ => unreachable!(
+                                "timestamp.rs should never send messages with non-Kafka partitions \
                                    to Kafka sources."
-                    ),
-                };
+                            ),
+                        };
 
-                dp_info.ensure_partition(cp_info, pid);
+                        dp_info.ensure_partition(cp_info, pid);
 
-                // Check whether timestamps can be closed on this partition
-                while let Some((partition_count, ts, offset)) = entries.front() {
-                    assert!(
-                        *offset >= cp_info.start_offset,
-                        "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
-                        offset, cp_info.start_offset
-                    );
+                        // Check whether timestamps can be closed on this partition
+                        while let Some((partition_count, ts, offset)) = entries.front() {
+                            assert!(
+                                *offset >= cp_info.start_offset,
+                                "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
+                                offset, cp_info.start_offset
+                            );
 
-                    assert!(
-                        *ts > 0,
-                        "Internal error! Received a zero-timestamp. Materialize will crash now."
-                    );
+                            assert!(
+                                *ts > 0,
+                                "Internal error! Received a zero-timestamp. Materialize will crash now."
+                            );
 
-                    // This timestamp update was done with the expectation that there were more partitions
-                    // than we know about. Partition IDs are assigned contiguously
-                    // starting from zero, so seeing a `partition_count` of N means
-                    // that we should have partitions up to N-1.
-                    dp_info.ensure_partition(cp_info, partition_count - 1);
+                            // This timestamp update was done with the expectation that there were more partitions
+                            // than we know about. Partition IDs are assigned contiguously
+                            // starting from zero, so seeing a `partition_count` of N means
+                            // that we should have partitions up to N-1.
+                            dp_info.ensure_partition(cp_info, partition_count - 1);
 
-                    if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
-                        pmetrics
-                            .closed_ts
-                            .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
+                            if let Some(pmetrics) = dp_info.partition_metrics.get_mut(&pid) {
+                                pmetrics
+                                    .closed_ts
+                                    .set(cp_info.partition_metadata.get(&pid).unwrap().ts);
+                            }
+
+                            if can_close_timestamp(cp_info, dp_info, pid, *offset) {
+                                // We have either 1) seen all messages corresponding to this timestamp for this
+                                // partition 2) do not own this partition 3) the consumer has forwarded past the
+                                // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
+                                // again
+                                // We can close the timestamp (on this partition) and remove the associated metadata
+                                cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
+                                entries.pop_front();
+                                changed = true;
+                            } else {
+                                // Offset isn't at a timestamp boundary, we take no action
+                                break;
+                            }
+                        }
                     }
-
-                    if can_close_timestamp(cp_info, dp_info, pid, *offset) {
-                        // We have either 1) seen all messages corresponding to this timestamp for this
-                        // partition 2) do not own this partition 3) the consumer has forwarded past the
-                        // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
-                        // again
-                        // We can close the timestamp (on this partition) and remove the associated metadata
-                        cp_info.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
-                        entries.pop_front();
-                        changed = true;
-                    } else {
-                        // Offset isn't at a timestamp boundary, we take no action
-                        break;
-                    }
-                }
+                },
+                _ => panic!("Unexpected timestamp message format. Expected BYO update.")
             }
         }
 

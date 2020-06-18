@@ -21,7 +21,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use crate::server::TimestampChanges;
+use crate::server::TimestampMetadataUpdates;
 use dataflow_types::Timestamp;
 
 use super::{SourceStatus, SourceToken};
@@ -56,7 +56,7 @@ use super::{SourceStatus, SourceToken};
 /// to terminate any spawned threads in the source operator
 pub fn source<G, D, B, L>(
     id: SourceInstanceId,
-    timestamp_channel: Option<TimestampChanges>,
+    timestamp_channel: Option<TimestampMetadataUpdates>,
     timestamping_flag: Arc<AtomicBool>,
     scope: &G,
     name: &str,

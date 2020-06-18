@@ -41,7 +41,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, Diff, IndexDesc, MzOffset, PeekResponse, Timestamp, Update,
+    DataflowDesc, DataflowError, Diff, IndexDesc, MzOffset, PeekResponse, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -148,14 +148,8 @@ pub enum SequencedCommand {
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
         id: SourceInstanceId,
-        /// TODO(ncrooks)
-        partition_count: i32,
-        /// TODO(ncrooks)
-        pid: PartitionId,
-        /// TODO(ncrooks)
-        timestamp: Timestamp,
-        /// TODO(ncrooks)
-        offset: MzOffset,
+        /// The associated update (RT or BYO)
+        update: TimestampSourceUpdate
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
@@ -250,29 +244,31 @@ where
     })
 }
 
-/// A type wrapper for the number of partitions associated with a source
+/// A type wrapper for the number of partitions associated with a source.
 pub type PartitionCount = i32;
 
-/// A type wrapper for a timestamp update that consists of a PartitionCount, a Timestamp,
-/// and a MzOffset
-pub type TimestampUpdate = (PartitionCount, Timestamp, MzOffset);
-
-/// Map of source ID to per-partition timestamp history.
-///
-/// Timestamp history is a vector of BYO timestamp updates which are tuples (partition_count, timestamp, offset),
-/// where the correct timestamp for a given offset `x` is the highest timestamp value for
-/// the first offset >= `x`.
-pub type TimestampHistories =
-    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, VecDeque<TimestampUpdate>>>>>;
+/// A type wrapper for a timestamp update
+/// For real-time sources, it consists of a PartitionCount
+/// For BYO sources, it consists of a mapping from PartitionId to a vector of
+/// (PartitionCount, Timestamp, MzOffset) tuple.
+pub enum TimestampDataUpdate {
+    /// RT sources see a current estimate of the number of partitions for the soruce
+    RealTime(PartitionCount),
+    /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
+    BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>)
+}
+/// Map of source ID to timestamp data updates (RT or BYO).
+pub type TimestampDataUpdates =
+    Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
 
 /// List of sources that need to start being timestamped or have been dropped and no longer require
 /// timestamping.
 /// A source inserts a StartTimestamping to this vector on source creation, and adds a
 /// StopTimestamping request once the operator for the source is dropped.
-pub type TimestampChanges = Rc<RefCell<Vec<TimestampMetadataChange>>>;
+pub type TimestampMetadataUpdates = Rc<RefCell<Vec<TimestampMetadataUpdate>>>;
 
 /// Possible timestamping metadata information messages that get sent from workers to coordinator
-pub enum TimestampMetadataChange {
+pub enum TimestampMetadataUpdate {
     /// Requests to start timestamping a source with given id
     StartTimestamping(SourceInstanceId),
     /// Request to stop timestamping a source wth given id
@@ -297,8 +293,8 @@ where
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
     ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
-    ts_histories: TimestampHistories,
-    ts_source_updates: TimestampChanges,
+    ts_histories: TimestampDataUpdates,
+    ts_source_updates: TimestampMetadataUpdates,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     metrics: Metrics,
 }
@@ -443,7 +439,7 @@ where
         let mut updates = self.ts_source_updates.borrow_mut();
         for source_update in updates.iter() {
             match source_update {
-                TimestampMetadataChange::StopTimestamping(id) => {
+                TimestampMetadataUpdate::StopTimestamping(id) => {
                     // A source was deleted
                     self.ts_histories.borrow_mut().remove(id);
                     self.ts_source_mapping.remove(id);
@@ -454,7 +450,7 @@ where
                     }))
                     .unwrap();
                 }
-                TimestampMetadataChange::StartTimestamping(id) => {
+                TimestampMetadataUpdate::StartTimestamping(id) => {
                     // A source was created
                     let connector = self.feedback_tx.as_mut().unwrap();
                     block_on(connector.send(WorkerFeedbackWithMeta {
@@ -694,29 +690,44 @@ where
             }
             SequencedCommand::AdvanceSourceTimestamp {
                 id,
-                partition_count,
-                pid,
-                timestamp,
-                offset,
+               update
             } => {
+
                 let mut timestamps = self.ts_histories.borrow_mut();
-                if let Some(entries) = timestamps.get_mut(&id) {
-                    let ts = entries.entry(pid).or_insert_with(VecDeque::new);
-                    let (_, last_ts, last_offset) =
-                        ts.back().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
-                    assert!(
-                        offset >= *last_offset,
-                        "offset should not go backwards, but {} < {}",
-                        offset,
-                        last_offset
-                    );
-                    assert!(
-                        timestamp > *last_ts,
-                        "timestamp should move forwards, but {} <= {}",
-                        timestamp,
-                        last_ts
-                    );
-                    ts.push_back((partition_count, timestamp, offset));
+                if let Some(updates) = timestamps.get_mut(&id) {
+                    match updates {
+                        TimestampDataUpdate::BringYourOwn(entries) => {
+                            if let TimestampSourceUpdate::BringYourOwn(partition_count, pid, timestamp,offset) = update {
+                                let partition_entries= entries.entry(pid).or_insert_with(VecDeque::new);
+                                let (_, last_ts, last_offset) =
+                                    partition_entries.back().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
+                                assert!(
+                                    offset >= *last_offset,
+                                    "offset should not go backwards, but {} < {}",
+                                    offset,
+                                    last_offset
+                                );
+                                assert!(
+                                    timestamp > *last_ts,
+                                    "timestamp should move forwards, but {} <= {}",
+                                    timestamp,
+                                    last_ts
+                                );
+                                partition_entries.push_back((partition_count, timestamp, offset));
+                            } else {
+                                panic!("Unexpected message type. Expected BYO update.")
+                            }
+                        },
+                        TimestampDataUpdate::RealTime(current_partition_count) => {
+                             if let TimestampSourceUpdate::RealTime(partition_count) = update {
+                                assert!(*current_partition_count<=partition_count, "The number of partititions\
+                            for source {} decreased from {} to {}", id, partition_count, current_partition_count);
+                                *current_partition_count = partition_count;
+                            } else {
+                                panic!("Expected message type. Expected RT update.");
+                            }
+                        }
+                    }
                     let source = self
                         .ts_source_mapping
                         .get(&id)
@@ -726,7 +737,7 @@ where
                             token.activate();
                         }
                     }
-                }
+                 }
             }
         }
     }

@@ -30,8 +30,7 @@ use expr::{PartitionId, SourceInstanceId};
 
 use super::SourceOutput;
 use crate::operator::StreamExt;
-use crate::server::TimestampHistories;
-use crate::server::TimestampMetadataChange::StartTimestamping;
+use crate::server::{TimestampDataUpdates, TimestampMetadataUpdate, TimestampDataUpdate};
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
 
@@ -228,14 +227,14 @@ fn downgrade_capability(
     time_since_downgrade: &mut Instant,
     downgrade_capability_frequency: u64,
     consistency: &Consistency,
-    timestamp_histories: &TimestampHistories,
+    timestamp_histories: &TimestampDataUpdates,
 ) {
     let mut changed = false;
 
     if let Consistency::BringYourOwn(_) = consistency {
         match timestamp_histories.borrow_mut().get_mut(id) {
             None => {}
-            Some(entries) => {
+            Some(TimestampDataUpdate::BringYourOwn(entries)) => {
                 // Files do not have partitions. There should never be more than
                 // one entry here
                 for entries in entries.values_mut() {
@@ -253,7 +252,8 @@ fn downgrade_capability(
                         }
                     }
                 }
-            }
+            },
+            _ => panic!("Unexpected message type. Expected BYO update.")
         }
         // Downgrade capability to new minimum open timestamp (which corresponds to last_closed_ts + 1).
         if changed && (*last_closed_ts > 0) {
@@ -310,7 +310,7 @@ fn find_matching_timestamp(
     offset: MzOffset,
     source_type: &Consistency,
     last_closed_ts: u64,
-    timestamp_histories: &TimestampHistories,
+    timestamp_histories: &TimestampDataUpdates,
 ) -> Option<Timestamp> {
     if let Consistency::RealTime = source_type {
         // Simply assign to this message the next timestamp that is not closed
@@ -318,7 +318,7 @@ fn find_matching_timestamp(
     } else {
         match timestamp_histories.borrow().get(id) {
             None => None,
-            Some(entries) => match entries.get(&PartitionId::File) {
+            Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(&PartitionId::File) {
                 Some(entries) => {
                     for (_, ts, max_offset) in entries {
                         if offset <= *max_offset {
@@ -329,6 +329,7 @@ fn find_matching_timestamp(
                 }
                 None => None,
             },
+            _ => panic!("Unexpected format in TimestampDataUpdates. Expected a BYO message.")
         }
     }
 }
@@ -361,13 +362,13 @@ where
             let prev = config
                 .timestamp_histories
                 .borrow_mut()
-                .insert(config.id.clone(), HashMap::new());
+                .insert(config.id.clone(), TimestampDataUpdate::BringYourOwn(HashMap::new()));
             assert!(prev.is_none());
             config
                 .timestamp_tx
                 .as_ref()
                 .borrow_mut()
-                .push(StartTimestamping(config.id));
+                .push(TimestampMetadataUpdate::StartTimestamping(config.id));
             Some(config.timestamp_tx)
         } else {
             None

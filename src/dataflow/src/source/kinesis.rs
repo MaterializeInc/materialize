@@ -28,7 +28,7 @@ use timely::scheduling::Activator;
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
 use crate::metrics::EVENTS_COUNTER;
-use crate::server::TimestampMetadataChange::StartTimestamping;
+use crate::server::{TimestampMetadataUpdate, TimestampDataUpdate};
 
 lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
@@ -73,13 +73,13 @@ where
                 let prev = config
                     .timestamp_histories
                     .borrow_mut()
-                    .insert(config.id.clone(), HashMap::new());
+                    .insert(config.id.clone(), TimestampDataUpdate::BringYourOwn(HashMap::new()));
                 assert!(prev.is_none());
                 config
                     .timestamp_tx
                     .as_ref()
                     .borrow_mut()
-                    .push(StartTimestamping(config.id));
+                    .push(TimestampMetadataUpdate::StartTimestamping(config.id));
                 Some(config.timestamp_tx)
             } else {
                 None
