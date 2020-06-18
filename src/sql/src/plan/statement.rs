@@ -438,8 +438,7 @@ fn handle_show_objects(
                 .list_items(&scx.resolve_default_database()?, "public")
         };
 
-        let filtered_items =
-            items.filter(|entry| object_type_matches(object_type, entry.item_type()));
+        let filtered_items = items.filter(|entry| object_type == entry.item_type());
 
         if object_type == ObjectType::View || object_type == ObjectType::Source {
             // TODO(justin): we can't handle SHOW ... WHERE here yet because the coordinator adds
@@ -487,8 +486,8 @@ fn handle_show_indexes(
     }
     let from_name = scx.resolve_item(from_name)?;
     let from_entry = scx.catalog.get_item(&from_name);
-    if !object_type_matches(ObjectType::View, from_entry.item_type())
-        && !object_type_matches(ObjectType::Source, from_entry.item_type())
+    if from_entry.item_type() != CatalogItemType::View
+        && from_entry.item_type() != CatalogItemType::Source
     {
         bail!(
             "cannot show indexes on {} because it is a {}",
@@ -502,8 +501,7 @@ fn handle_show_indexes(
         .iter()
         .map(|id| scx.catalog.get_item_by_id(id))
         .filter(|entry| {
-            object_type_matches(ObjectType::Index, entry.item_type())
-                && entry.uses() == vec![from_entry.id()]
+            CatalogItemType::Index == entry.item_type() && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| {
             let (keys, on) = entry.index_details().expect("known to be an index");
@@ -767,8 +765,8 @@ fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
     let on_name = scx.resolve_item(on_name)?;
     let catalog_entry = scx.catalog.get_item(&on_name);
     let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
-    if !object_type_matches(ObjectType::View, catalog_entry.item_type())
-        && !object_type_matches(ObjectType::Source, catalog_entry.item_type())
+    if CatalogItemType::View != catalog_entry.item_type()
+        && CatalogItemType::Source != catalog_entry.item_type()
     {
         bail!(
             "index cannot be created on {} because it is a {}",
@@ -1490,7 +1488,7 @@ fn handle_drop_item(
             name
         );
     }
-    if !object_type_matches(object_type, catalog_entry.item_type()) {
+    if object_type != catalog_entry.item_type() {
         bail!("{} is not of type {}", name, object_type);
     }
     if !cascade {
@@ -1606,14 +1604,22 @@ fn handle_query(
 ///
 /// For now tables are treated as a special kind of source in Materialize, so just
 /// allow `TABLE` to refer to either.
-fn object_type_matches(object_type: ObjectType, item_type: CatalogItemType) -> bool {
-    match item_type {
-        CatalogItemType::Source => {
-            object_type == ObjectType::Source || object_type == ObjectType::Table
+impl PartialEq<ObjectType> for CatalogItemType {
+    fn eq(&self, other: &ObjectType) -> bool {
+        match (self, other) {
+            (CatalogItemType::Source, ObjectType::Source)
+            | (CatalogItemType::Source, ObjectType::Table)
+            | (CatalogItemType::Sink, ObjectType::Sink)
+            | (CatalogItemType::View, ObjectType::View)
+            | (CatalogItemType::Index, ObjectType::Index) => true,
+            (_, _) => false,
         }
-        CatalogItemType::Sink => object_type == ObjectType::Sink,
-        CatalogItemType::View => object_type == ObjectType::View,
-        CatalogItemType::Index => object_type == ObjectType::Index,
+    }
+}
+
+impl PartialEq<CatalogItemType> for ObjectType {
+    fn eq(&self, other: &CatalogItemType) -> bool {
+        other == self
     }
 }
 
