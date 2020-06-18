@@ -852,7 +852,9 @@ class ChaosDockerWorkflowStep(WorkflowStep):
              stopping for {self._stop_time} seconds"
         )
         if self._other_service != "":
-            other_container_id = comp.get_container_id(self._other_service, running=True)
+            other_container_id = comp.get_container_id(
+                self._other_service, running=True
+            )
             while comp.docker_container_is_running(other_container_id):
                 self.stop_and_start(container_id)
         elif self._duration >= 0:

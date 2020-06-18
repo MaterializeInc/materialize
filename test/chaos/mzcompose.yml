@@ -81,7 +81,11 @@ services:
     cap_add:
       - NET_ADMIN
   connector:
-    build: connector
+    image: confluentinc/cp-enterprise-kafka:5.3.0
+    volumes:
+      - ./connector/docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh
+    entrypoint:
+      - docker-entrypoint.sh
   mysql:
     image: debezium/example-mysql:1.1
     ports:
@@ -469,7 +473,7 @@ mzconduct:
     chbench-bring-up-source-data:
       steps:
         - step: start-services
-          services: [materialized, mysql]
+          services: [materialized, mysql, zookeeper, kafka, schema-registry, connect]
         - step: wait-for-tcp
           host: materialized
           port: 6875
@@ -477,8 +481,6 @@ mzconduct:
           user: root
           password: debezium
           timeout_secs: 30
-        - step: start-services
-          services: [connect, connector]
         - step: wait-for-tcp
           host: connect
           port: 8083
@@ -486,6 +488,11 @@ mzconduct:
         - step: wait-for-tcp
           host: schema-registry
           port: 8081
+        - step: wait-for-tcp
+          host: kafka
+          port: 9092
+        - step: start-services
+          services: [connector]
         - step: drop-kafka-topics
           kafka-container: chaos_kafka_1
           topic_pattern: mysql.tpcch.*
