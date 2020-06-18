@@ -45,6 +45,7 @@ pub(crate) mod query;
 pub(crate) mod scope;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
+pub(crate) mod transform_expr;
 
 pub use self::expr::RelationExpr;
 // This is used by sqllogictest to turn SQL values into `Datum`s.

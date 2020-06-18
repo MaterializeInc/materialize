@@ -862,7 +862,6 @@ pub mod decorrelation {
     //! against a relation containing the assignments of values to those holes.
 
     use std::collections::{BTreeSet, HashMap};
-    use std::mem;
 
     use failure::bail;
 
@@ -872,103 +871,19 @@ pub mod decorrelation {
 
     use crate::plan::expr::RelationExpr;
     use crate::plan::expr::ScalarExpr;
-    use crate::plan::expr::{
-        AggregateExpr, BinaryFunc, ColumnMap, ColumnOrder, ColumnRef, JoinKind,
-    };
+    use crate::plan::expr::{AggregateExpr, ColumnMap, ColumnOrder, ColumnRef, JoinKind};
+    use crate::plan::transform_expr;
 
     impl RelationExpr {
         /// Rewrite `self` into a `expr::RelationExpr`.
         /// This requires rewriting all correlated subqueries (nested `RelationExpr`s) into flat queries
         pub fn decorrelate(mut self) -> expr::RelationExpr {
             let mut id_gen = expr::IdGen::default();
-            self.split_subquery_predicates();
+            transform_expr::split_subquery_predicates(&mut self);
             expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
                 .let_in(&mut id_gen, |id_gen, get_outer| {
                     self.applied_to(id_gen, get_outer, &ColumnMap::empty())
                 })
-        }
-
-        /// Rewrites predicates that contain subqueries so that the subqueries
-        /// appear in their own later predicate when possible.
-        ///
-        /// For example, this function rewrites this expression
-        ///
-        /// ```text
-        /// Filter {
-        ///     predicates: [a = b AND EXISTS (<subquery 1>) AND c = d AND (<subquery 2>) = e]
-        /// }
-        /// ```
-        ///
-        /// like so:
-        ///
-        /// ```text
-        /// Filter {
-        ///     predicates: [
-        ///         a = b AND c = d,
-        ///         EXISTS (<subquery>),
-        ///         (<subquery 2>) = e,
-        ///     ]
-        /// }
-        /// ```
-        ///
-        /// The rewrite causes decorrelation to incorporate prior predicates into
-        /// the outer relation upon which the subquery is evaluated. In the above
-        /// rewritten example, the `EXISTS (<subquery>)` will only be evaluated for
-        /// outer rows where `a = b AND c = d`. The second subquery, `(<subquery 2>)
-        /// = e`, will be further restricted to outer rows that match `A = b AND c =
-        /// d AND EXISTS(<subquery>)`. This can vastly reduce the cost of the
-        /// subquery, especially when the original conjunction contains join keys.
-        fn split_subquery_predicates(&mut self) {
-            match self {
-                RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
-
-                RelationExpr::Project { input, .. }
-                | RelationExpr::Distinct { input }
-                | RelationExpr::Negate { input }
-                | RelationExpr::Threshold { input }
-                | RelationExpr::Reduce { input, .. }
-                | RelationExpr::TopK { input, .. } => input.split_subquery_predicates(),
-
-                RelationExpr::Join { left, right, .. } | RelationExpr::Union { left, right } => {
-                    left.split_subquery_predicates();
-                    right.split_subquery_predicates();
-                }
-
-                RelationExpr::Map { input, scalars } => {
-                    input.split_subquery_predicates();
-                    for scalar in scalars {
-                        scalar.split_subquery_predicates();
-                    }
-                }
-
-                RelationExpr::FlatMap {
-                    input,
-                    func: _,
-                    exprs,
-                } => {
-                    input.split_subquery_predicates();
-                    for expr in exprs {
-                        expr.split_subquery_predicates();
-                    }
-                }
-
-                RelationExpr::Filter { input, predicates } => {
-                    input.split_subquery_predicates();
-                    let mut subqueries = vec![];
-                    for predicate in &mut *predicates {
-                        predicate.split_subquery_predicates();
-                        predicate.extract_conjuncted_subqueries(&mut subqueries);
-                    }
-                    // TODO(benesch): we could be smarter about the order in which
-                    // we emit subqueries. At the moment we just emit in the order
-                    // we discovered them, but ideally we'd emit them in an order
-                    // that accounted for their cost/selectivity. E.g., low-cost,
-                    // high-selectivity subqueries should go first.
-                    for subquery in subqueries {
-                        predicates.push(subquery);
-                    }
-                }
-            }
         }
 
         /// Return a `expr::RelationExpr` which evaluates `self` once for each row of `get_outer`.
@@ -1402,87 +1317,6 @@ pub mod decorrelation {
                         },
                     );
                     SS::Column(inner.arity() - 1)
-                }
-            }
-        }
-
-        /// Calls [`RelationExpr::split_subquery_predicates`] on any subqueries
-        /// contained within this scalar expression.
-        fn split_subquery_predicates(&mut self) {
-            match self {
-                ScalarExpr::Column(_)
-                | ScalarExpr::Literal(_, _)
-                | ScalarExpr::Parameter(_)
-                | ScalarExpr::CallNullary(_) => (),
-                ScalarExpr::Exists(input) | ScalarExpr::Select(input) => {
-                    input.split_subquery_predicates()
-                }
-                ScalarExpr::CallUnary { expr, .. } => expr.split_subquery_predicates(),
-                ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                    expr1.split_subquery_predicates();
-                    expr2.split_subquery_predicates();
-                }
-                ScalarExpr::CallVariadic { exprs, .. } => {
-                    for expr in exprs {
-                        expr.split_subquery_predicates();
-                    }
-                }
-                ScalarExpr::If { cond, then, els } => {
-                    cond.split_subquery_predicates();
-                    then.split_subquery_predicates();
-                    els.split_subquery_predicates();
-                }
-            }
-        }
-
-        /// Extracts subqueries from a conjunction into `out`.
-        ///
-        /// For example, given an expression like
-        ///
-        /// ```text
-        /// a = b AND EXISTS (<subquery 1>) AND c = d AND (<subquery 2>) = e
-        /// ```
-        ///
-        /// this function rewrites the expression to
-        ///
-        /// ```text
-        /// a = b AND true AND c = d AND true
-        /// ```
-        ///
-        /// and returns the expression fragments `EXISTS (<subquery 1>)` and
-        //// `(<subquery 2>) = e` in the `out` vector.
-        fn extract_conjuncted_subqueries(&mut self, out: &mut Vec<ScalarExpr>) {
-            fn contains_subquery(expr: &ScalarExpr) -> bool {
-                match expr {
-                    ScalarExpr::Column(_)
-                    | ScalarExpr::Literal(_, _)
-                    | ScalarExpr::Parameter(_)
-                    | ScalarExpr::CallNullary(_) => false,
-                    ScalarExpr::Exists(_) | ScalarExpr::Select(_) => true,
-                    ScalarExpr::CallUnary { expr, .. } => contains_subquery(expr),
-                    ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                        contains_subquery(expr1) || contains_subquery(expr2)
-                    }
-                    ScalarExpr::CallVariadic { exprs, .. } => exprs.iter().any(contains_subquery),
-                    ScalarExpr::If { cond, then, els } => {
-                        contains_subquery(cond) || contains_subquery(then) || contains_subquery(els)
-                    }
-                }
-            }
-
-            match self {
-                ScalarExpr::CallBinary {
-                    func: BinaryFunc::And,
-                    expr1,
-                    expr2,
-                } => {
-                    expr1.extract_conjuncted_subqueries(out);
-                    expr2.extract_conjuncted_subqueries(out);
-                }
-                expr => {
-                    if contains_subquery(expr) {
-                        out.push(mem::replace(expr, ScalarExpr::literal_true()))
-                    }
                 }
             }
         }
