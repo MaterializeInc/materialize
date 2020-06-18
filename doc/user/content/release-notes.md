@@ -55,6 +55,7 @@ Wrap your release notes at the 80 character mark.
   `bit_length`.
 - Improve `length` function's PostgreSQL compatibility by accepting `bytea` as
   the first argument when getting the length of encoded bytes.
+- Add `--max-frame-len` parameter to tune the max size (in bytes) of `SELECT` results.
 
 <span id="v0.3.0"></span>
 ## 0.2.2 &rarr; 0.3.0

@@ -64,14 +64,16 @@ use crate::switchboard::Switchboard;
 pub struct Sender<D> {
     addr: Addr,
     uuid: Uuid,
+    max_frame_length: usize,
     _data: std::marker::PhantomData<D>,
 }
 
 impl<D> Sender<D> {
-    pub(crate) fn new(addr: impl Into<Addr>, uuid: Uuid) -> Sender<D> {
+    pub(crate) fn new(addr: impl Into<Addr>, uuid: Uuid, max_frame_length: usize) -> Sender<D> {
         Sender {
             addr: addr.into(),
             uuid,
+            max_frame_length,
             _data: PhantomData,
         }
     }
@@ -87,12 +89,18 @@ impl<D> Sender<D> {
         D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
     {
         match &self.addr {
-            Addr::Tcp(addr) => {
-                protocol::connect_channel::<TcpStream, _>(addr.clone(), self.uuid).left()
-            }
-            Addr::Unix(addr) => {
-                protocol::connect_channel::<UnixStream, _>(addr.clone(), self.uuid).right()
-            }
+            Addr::Tcp(addr) => protocol::connect_channel::<TcpStream, _>(
+                addr.clone(),
+                self.uuid,
+                self.max_frame_length,
+            )
+            .left(),
+            Addr::Unix(addr) => protocol::connect_channel::<UnixStream, _>(
+                addr.clone(),
+                self.uuid,
+                self.max_frame_length,
+            )
+            .right(),
         }
     }
 }

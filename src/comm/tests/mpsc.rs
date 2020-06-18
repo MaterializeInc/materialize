@@ -88,7 +88,8 @@ fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let mut listener = TcpListener::bind(&addr).await?;
 
-        let switchboard = Switchboard::new(vec![listener.local_addr()?], 0, executor.clone());
+        let switchboard =
+            Switchboard::new(vec![listener.local_addr()?], 0, executor.clone(), 1 << 30);
         executor.spawn({
             let switchboard = switchboard.clone();
             async move {

@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut listener = runtime.block_on(TcpListener::bind(&nodes[id]))?;
     println!("listening on {}...", listener.local_addr()?);
 
-    let switchboard = Switchboard::new(nodes, id, runtime.handle().clone());
+    let switchboard = Switchboard::new(nodes, id, runtime.handle().clone(), 1 << 30);
     runtime.spawn({
         let switchboard = switchboard.clone();
         async move {

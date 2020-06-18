@@ -70,6 +70,8 @@ where
     rendezvous_table: Mutex<router::RoutingTable<u64, C>>,
     /// Task executor, so that background work can be spawned.
     executor: tokio::runtime::Handle,
+    /// Maximum length of encoded messages (1 GiB by default)
+    max_frame_length: usize,
 }
 
 impl Switchboard<UnixStream> {
@@ -82,6 +84,7 @@ impl Switchboard<UnixStream> {
     /// will likely want to configure its own Tokio runtime and handle its own
     /// network binding.
     pub fn local() -> Result<(Switchboard<UnixStream>, Runtime), io::Error> {
+        const DEFAULT_MAXIMUM_FRAME_SIZE: usize = 1 << 30;
         let mut rng = rand::thread_rng();
         let suffix: String = (0..6)
             .map(|_| rng.sample(rand::distributions::Alphanumeric))
@@ -90,8 +93,12 @@ impl Switchboard<UnixStream> {
         path.push(format!("comm.switchboard.{}", suffix));
         let runtime = Runtime::new()?;
         let mut listener = runtime.enter(|| UnixListener::bind(&path))?;
-        let switchboard =
-            Switchboard::new(vec![path.to_str().unwrap()], 0, runtime.handle().clone());
+        let switchboard = Switchboard::new(
+            vec![path.to_str().unwrap()],
+            0,
+            runtime.handle().clone(),
+            DEFAULT_MAXIMUM_FRAME_SIZE,
+        );
         runtime.spawn({
             let switchboard = switchboard.clone();
             async move {
@@ -124,7 +131,12 @@ where
     /// The consumer of a `Switchboard` must separately arrange to listen on the
     /// local node's address and route `comm` traffic to this `Switchboard`
     /// via [`Switchboard::handle_connection`].
-    pub fn new<I>(nodes: I, id: usize, executor: tokio::runtime::Handle) -> Switchboard<C>
+    pub fn new<I>(
+        nodes: I,
+        id: usize,
+        executor: tokio::runtime::Handle,
+        max_frame_length: usize,
+    ) -> Switchboard<C>
     where
         I: IntoIterator,
         I::Item: Into<C::Addr>,
@@ -135,6 +147,7 @@ where
             channel_table: Mutex::default(),
             rendezvous_table: Mutex::default(),
             executor,
+            max_frame_length,
         }))
     }
 
@@ -224,7 +237,8 @@ where
     /// ```
     pub fn handle_connection(&self, conn: C) -> impl Future<Output = Result<(), io::Error>> {
         let inner = self.0.clone();
-        protocol::recv_handshake(conn).map_ok(move |conn| inner.route_connection(conn))
+        protocol::recv_handshake(conn, self.0.max_frame_length)
+            .map_ok(move |conn| inner.route_connection(conn))
     }
 
     /// Attempts to recycle an incoming channel connection for use with a new
@@ -253,9 +267,13 @@ where
     {
         let uuid = token.uuid();
         if token.loopback() {
-            broadcast::Sender::new::<C, _>(uuid, self.0.nodes.iter().cloned())
+            broadcast::Sender::new::<C, _>(
+                uuid,
+                self.0.nodes.iter().cloned(),
+                self.0.max_frame_length,
+            )
         } else {
-            broadcast::Sender::new::<C, _>(uuid, self.peers().cloned())
+            broadcast::Sender::new::<C, _>(uuid, self.peers().cloned(), self.0.max_frame_length)
         }
     }
 
@@ -295,7 +313,7 @@ where
     {
         let uuid = Uuid::new_v4();
         let addr = self.0.nodes[self.0.id].clone();
-        let tx = mpsc::Sender::new(addr, uuid);
+        let tx = mpsc::Sender::new(addr, uuid, self.0.max_frame_length);
         let sb = self.clone();
         let rx = mpsc::Receiver::new(
             self.new_rx(uuid).take(max_producers),

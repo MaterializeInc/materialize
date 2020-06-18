@@ -126,6 +126,8 @@ pub struct Config {
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
+    /// The maximum length of a frame in the communication layer
+    pub max_frame_length: usize,
 }
 
 impl Config {
@@ -196,7 +198,12 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         SocketAddr::new(listen_addr.ip(), local_addr.port()),
     );
 
-    let switchboard = Switchboard::new(config.addresses, config.process, executor.clone());
+    let switchboard = Switchboard::new(
+        config.addresses,
+        config.process,
+        executor.clone(),
+        config.max_frame_length,
+    );
 
     // Launch task to serve connections.
     //

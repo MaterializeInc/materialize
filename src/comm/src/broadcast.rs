@@ -128,14 +128,14 @@ impl<D> Sender<D>
 where
     D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + Clone + 'static,
 {
-    pub(crate) fn new<C, I>(uuid: Uuid, addrs: I) -> Sender<D>
+    pub(crate) fn new<C, I>(uuid: Uuid, addrs: I, max_frame_length: usize) -> Sender<D>
     where
         C: protocol::Connection,
         I: IntoIterator<Item = C::Addr>,
     {
         let conns = addrs
             .into_iter()
-            .map(|addr| protocol::connect_channel::<C, D>(addr, uuid))
+            .map(|addr| protocol::connect_channel::<C, D>(addr, uuid, max_frame_length))
             .collect::<FuturesUnordered<_>>()
             // TODO(benesch): this might be more efficient with a multi-fanout that
             // could fan out to multiple streams at once. Not clear what the

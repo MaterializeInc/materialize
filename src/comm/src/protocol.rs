@@ -161,12 +161,12 @@ pub(crate) type Framed<C> = tokio_util::codec::Framed<C, LengthDelimitedCodec>;
 /// Frames `conn` using a length-delimited codec. In other words, it transforms
 /// a connection which implements [`AsyncRead`] and [`AsyncWrite`] into an
 /// combination [`Sink`] and [`Stream`] which produces/emits byte chunks.
-pub(crate) fn framed<C>(conn: C) -> Framed<C>
+pub(crate) fn framed<C>(conn: C, max_frame_length: usize) -> Framed<C>
 where
     C: Connection,
 {
     let mut codec = LengthDelimitedCodec::new();
-    codec.set_max_frame_length(1 << 30 /* 1GiB */);
+    codec.set_max_frame_length(max_frame_length);
     Framed::new(conn, codec)
 }
 
@@ -350,6 +350,7 @@ enum TrafficType {
 pub(crate) async fn send_channel_handshake<C>(
     mut conn: C,
     uuid: Uuid,
+    max_frame_length: usize,
 ) -> Result<Framed<C>, io::Error>
 where
     C: Connection,
@@ -358,7 +359,7 @@ where
     (&mut buf[..8]).copy_from_slice(&PROTOCOL_MAGIC);
     buf[8] = TrafficType::Channel.into();
     conn.write_all(&buf).await?;
-    let mut conn = framed(conn);
+    let mut conn = framed(conn, max_frame_length);
     conn.send(Bytes::copy_from_slice(&uuid.as_bytes()[..]))
         .await?;
     Ok(conn)
@@ -381,7 +382,10 @@ pub(crate) enum RecvHandshake<C> {
     Rendezvous(u64, C),
 }
 
-pub(crate) async fn recv_handshake<C>(mut conn: C) -> Result<RecvHandshake<C>, io::Error>
+pub(crate) async fn recv_handshake<C>(
+    mut conn: C,
+    max_frame_length: usize,
+) -> Result<RecvHandshake<C>, io::Error>
 where
     C: Connection,
 {
@@ -389,7 +393,7 @@ where
     conn.read_exact(&mut buf).await?;
     assert_eq!(&buf[..8], PROTOCOL_MAGIC);
     match buf[8].try_into().unwrap() {
-        TrafficType::Channel => recv_channel_handshake(framed(conn)).await,
+        TrafficType::Channel => recv_channel_handshake(framed(conn, max_frame_length)).await,
         TrafficType::Rendezvous => recv_rendezvous_handshake(conn).await,
     }
 }
@@ -450,6 +454,7 @@ type Bincoder<C, D> = tokio_serde::SymmetricallyFramed<C, D, BincodeCodec<D>>;
 pub(crate) async fn connect_channel<C, D>(
     addr: C::Addr,
     uuid: Uuid,
+    max_frame_length: usize,
 ) -> Result<SendSink<D>, io::Error>
 where
     C: Connection,
@@ -462,7 +467,7 @@ where
         Ok(encoder(conn, pool))
     } else {
         let conn = C::connect(addr).await?;
-        let conn = send_channel_handshake(conn, uuid).await?;
+        let conn = send_channel_handshake(conn, uuid, max_frame_length).await?;
         Ok(encoder(conn, pool))
     }
 }

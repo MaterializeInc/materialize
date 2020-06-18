@@ -145,6 +145,12 @@ fn run() -> Result<(), failure::Error> {
         "PATH",
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
+    opts.optopt(
+        "",
+        "max-frame-len",
+        "Maximum length of messages in communication layer",
+        "N",
+    );
 
     let popts = opts.parse(&args[1..])?;
 
@@ -268,6 +274,8 @@ fn run() -> Result<(), failure::Error> {
         }
     }
 
+    let max_frame_length = popts.opt_get_default("max-frame-len", 1 << 30 /* 1 GiB */)?;
+
     // TODO - make this only check for "MZ_" if #1223 is fixed
     let env_message: String = std::env::vars()
         .filter(|(name, _value)| {
@@ -306,6 +314,7 @@ environment:{}",
         tls,
         data_directory: Some(data_directory),
         symbiosis_url,
+        max_frame_length,
     })?;
 
     // Block forever.
