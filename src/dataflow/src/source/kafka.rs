@@ -297,9 +297,6 @@ struct DataPlaneInfo {
     buffered_metadata: HashSet<i32>,
     /// The number of known partitions.
     known_partitions: i32,
-    /// Information about new partitions (obtained by the metadata thread)
-    refresh_metadata_info: Arc<Mutex<Option<i32>>>,
-    /// (RT only: if true, the metadata thread has detected new partitions)
     /// Per-source metrics.
     source_metrics: SourceMetrics,
     /// Per-partition metrics.
@@ -336,57 +333,6 @@ impl DataPlaneInfo {
             consumer: Arc::new(consumer),
             worker_id: worker_id.try_into().unwrap(),
             worker_count: worker_count.try_into().unwrap(),
-            refresh_metadata_info: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    // Metadata fetch requests on production Kafka clusters can take
-    // more than 1s to complete. This makes it far too expensive to run on
-    // the main Kafka threads. We only trigger metadata requests for Real time sources
-    fn start_metadata_fetch_thread(
-        &mut self,
-        metadata_refresh_frequency: Duration,
-        timestamping_stopped: Arc<AtomicBool>,
-    ) {
-        let consumer = self.consumer.clone();
-        let refresh = self.refresh_metadata_info.clone();
-        let id = self.source_id.clone();
-        let topic = self.topic_name.clone();
-        thread::spawn(move || {
-            metadata_fetch(
-                timestamping_stopped,
-                consumer,
-                refresh,
-                &id,
-                &topic,
-                metadata_refresh_frequency,
-            )
-        });
-    }
-    /// Update metadata information as refreshed by the metadata thread
-    fn refresh_metadata(&mut self, cp_info: &mut ControlPlaneInfo) {
-        let new_partition_count = self
-            .refresh_metadata_info
-            .lock()
-            .expect("lock poisoned")
-            .take();
-        if let Some(new_partition_count) = new_partition_count {
-            match self.known_partitions.cmp(&new_partition_count) {
-                cmp::Ordering::Greater => {
-                    error!(
-                        "Topic {} (Source ID: {}) has fewer partitions (from {} to {}). This
-                    is unexpected. Has the topic been deleted?",
-                        self.topic_name, self.source_id, self.known_partitions, new_partition_count
-                    );
-                }
-                cmp::Ordering::Less => {
-                    info!("New partitions (from {} to {}) have been detected for topic {} (Source Id: {})", self.known_partitions, new_partition_count, self.topic_name, self.source_id);
-                    // Kafka partitions are assigned contiguous ID (starting from 0). If a topic has x partitions,
-                    // the partition with max id will be x-1
-                    self.ensure_partition(cp_info, new_partition_count - 1);
-                }
-                cmp::Ordering::Equal => {}
-            }
         }
     }
 
@@ -719,119 +665,25 @@ impl ControlPlaneInfo {
 /// 2) for a RT source, take no steps
 //
 fn activate_source_timestamping<G>(config: &SourceConfig<G>) -> Option<TimestampMetadataUpdates> {
-    if let Consistency::BringYourOwn(_) = config.consistency {
-        let prev = config.timestamp_histories.borrow_mut().insert(
+    let prev = if let Consistency::BringYourOwn(_) = config.consistency {
+        config.timestamp_histories.borrow_mut().insert(
             config.id.clone(),
             TimestampDataUpdate::BringYourOwn(HashMap::new()),
-        );
-        // Check that this is the first time this source id is registered
-        assert!(prev.is_none());
-        config
-            .timestamp_tx
-            .as_ref()
-            .borrow_mut()
-            .push(TimestampMetadataUpdate::StartTimestamping(config.id));
-        return Some(config.timestamp_tx.clone());
-    }
-    None
-}
-
-/// This function is responsible for refreshing the number of known partitions. It marks the source
-/// has needing to be refreshed if new partitions are detected.
-fn metadata_fetch(
-    timestamping_stopped: Arc<AtomicBool>,
-    consumer: Arc<BaseConsumer<GlueConsumerContext>>,
-    partition_count: Arc<Mutex<Option<i32>>>,
-    id: &str,
-    topic: &str,
-    wait: Duration,
-) {
-    debug!(
-        "Starting realtime Kafka thread for {} (source {})",
-        &topic, id
-    );
-
-    lazy_static! {
-        static ref MAX_AVAILABLE_OFFSET: IntGaugeVec = register_int_gauge_vec!(
-            "mz_kafka_partition_offset_max",
-            "The high watermark for a partition, the maximum offset that we could hope to ingest",
-            &["topic", "source_id", "partition_id"]
         )
-        .unwrap();
-    }
-
-    let mut partition_kafka_metadata: HashMap<i32, IntGauge> = HashMap::new();
-
-    while !timestamping_stopped.load(Ordering::SeqCst) {
-        let metadata = consumer.fetch_metadata(Some(&topic), Duration::from_secs(30));
-        let new_partition_count;
-        match metadata {
-            Ok(metadata) => {
-                if metadata.topics().len() == 0 {
-                    error!("topic {} does not exist", topic);
-                    continue;
-                } else if metadata.topics().len() > 1 {
-                    error!("topic metadata had more than one result");
-                    continue;
-                }
-                let metadata_topic = metadata.topics().into_element();
-                if metadata_topic.name() != topic {
-                    error!(
-                        "got results for wrong topic {} (expected {})",
-                        metadata_topic.name(),
-                        topic
-                    );
-                    continue;
-                }
-                new_partition_count = metadata_topic.partitions().len();
-                let mut refresh_data = partition_count.lock().expect("lock poisoned");
-
-                // Upgrade partition metrics
-                for p in 0..new_partition_count {
-                    let pid = p.try_into().unwrap();
-                    match consumer.fetch_watermarks(&topic, pid, Duration::from_secs(1)) {
-                        Ok((_, high)) => {
-                            if let Some(max_available_offset) =
-                                partition_kafka_metadata.get_mut(&pid)
-                            {
-                                max_available_offset.set(high)
-                            } else {
-                                let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
-                                    topic,
-                                    &id,
-                                    &pid.to_string(),
-                                ]);
-                                max_offset.set(high);
-                                partition_kafka_metadata.insert(pid, max_offset);
-                            }
-                        }
-                        Err(e) => warn!(
-                            "error loading watermarks topic={} partition={} error={}",
-                            topic, p, e
-                        ),
-                    }
-                }
-
-                // Kafka partition are i32, and Kafka consequently cannot support more than i32
-                // partitions
-                *refresh_data = Some(new_partition_count.try_into().unwrap());
-            }
-            Err(e) => {
-                new_partition_count = 0;
-                error!("Failed to obtain Kafka Metadata Information {}", e);
-            }
-        }
-
-        if new_partition_count > 0 {
-            thread::sleep(wait);
-        } else {
-            // If no partitions have been detected yet, sleep for a second rather than
-            // the specified "wait" period of time, as we know that there should at least be one
-            // partition
-            thread::sleep(Duration::from_secs(1));
-        }
-    }
-    debug!("Terminating realtime Kafka thread for {}", topic);
+    } else {
+        config
+            .timestamp_histories
+            .borrow_mut()
+            .insert(config.id.clone(), TimestampDataUpdate::RealTime(0))
+    };
+    // Check that this is the first time this source id is registered
+    assert!(prev.is_none());
+    config
+        .timestamp_tx
+        .as_ref()
+        .borrow_mut()
+        .push(TimestampMetadataUpdate::StartTimestamping(config.id));
+    Some(config.timestamp_tx.clone())
 }
 
 /// Creates a Kafka-based timely dataflow source operator.
@@ -909,7 +761,8 @@ where
                     .parse()
                     .unwrap(),
             );
-            dp_info.start_metadata_fetch_thread(metadata_refresh_frequency, timestamping_stopped);
+
+            // dp_info.start_metadata_fetch_thread(metadata_refresh_frequency, timestamping_stopped);
 
             move |cap, output| {
                 let timer = Instant::now();
@@ -1251,6 +1104,15 @@ fn downgrade_capability(
     } else {
         // This a RT source. It is always possible to close the timestamp and downgrade the
         // capability
+        if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            match entries {
+                TimestampDataUpdate::RealTime(partition_count) => {
+                    dp_info.ensure_partition(cp_info, *partition_count)
+                }
+                _ => panic!("Unexpected timestamp message. Expected RT update."),
+            }
+        }
+
         if cp_info.time_since_downgrade.elapsed().as_millis()
             > cp_info.downgrade_capability_frequency.try_into().unwrap()
         {
