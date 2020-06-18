@@ -192,12 +192,10 @@ where
             let ret = move |input: &mut FrontieredInputHandle<_, _, _>| {
                 let producer: &RefCell<_> = producer.borrow();
                 let producer = &*producer.borrow();
-                if producer.is_none() {
-                    // The sink has already been dropped
-                    return false;
-                }
-
-                let producer = producer.as_ref().expect("producer known to exist");
+                let producer = match producer {
+                    Some(producer) => producer,
+                    None => return false,
+                };
 
                 // Grab all of the available Rows and put them in a queue before we
                 // send it over to Kafka. We Even though we want to do bounded work
