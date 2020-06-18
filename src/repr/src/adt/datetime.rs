@@ -17,10 +17,99 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveTime};
+use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
 
-type Result<T> = std::result::Result<T, String>;
+/// Units of measurements associated with dates and times.
+///
+/// TODO(benesch): with enough thinking, this type could probably be merged with
+/// `DateTimeField`.
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DateTimeUnits {
+    Epoch,
+    Millennium,
+    Century,
+    Decade,
+    Year,
+    Quarter,
+    Week,
+    Month,
+    Hour,
+    Day,
+    DayOfWeek,
+    DayOfYear,
+    IsoDayOfWeek,
+    IsoDayOfYear,
+    Minute,
+    Second,
+    Milliseconds,
+    Microseconds,
+    Timezone,
+    TimezoneHour,
+    TimezoneMinute,
+}
+
+impl fmt::Display for DateTimeUnits {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Epoch => f.write_str("epoch"),
+            Self::Millennium => f.write_str("millennium"),
+            Self::Century => f.write_str("century"),
+            Self::Decade => f.write_str("decade"),
+            Self::Year => f.write_str("year"),
+            Self::Quarter => f.write_str("quarter"),
+            Self::Week => f.write_str("week"),
+            Self::Month => f.write_str("month"),
+            Self::Hour => f.write_str("hour"),
+            Self::Day => f.write_str("day"),
+            Self::DayOfWeek => f.write_str("dow"),
+            Self::DayOfYear => f.write_str("doy"),
+            Self::IsoDayOfWeek => f.write_str("isodow"),
+            Self::IsoDayOfYear => f.write_str("isodoy"),
+            Self::Minute => f.write_str("minute"),
+            Self::Second => f.write_str(""),
+            Self::Milliseconds => f.write_str("milliseconds"),
+            Self::Microseconds => f.write_str("microseconds"),
+            Self::Timezone => f.write_str("timezone"),
+            Self::TimezoneHour => f.write_str("timezone_hour"),
+            Self::TimezoneMinute => f.write_str("timezone_minute"),
+        }
+    }
+}
+
+impl FromStr for DateTimeUnits {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "epoch" => Ok(Self::Epoch),
+            "mil" | "millennia" | "millennium" | "millenniums" => Ok(Self::Millennium),
+            "c" | "cent" | "century" | "centuries" => Ok(Self::Century),
+            "dec" | "decs" | "decade" | "decades" => Ok(Self::Decade),
+            "y" | "year" | "years" | "yr" | "yrs" => Ok(Self::Year),
+            "qtr" | "quarter" => Ok(Self::Quarter),
+            "w" | "week" | "weeks" => Ok(Self::Week),
+            "d" | "day" | "days" => Ok(Self::Day),
+            "dow" => Ok(Self::DayOfWeek),
+            "doy" => Ok(Self::DayOfYear),
+            "isodow" => Ok(Self::IsoDayOfWeek),
+            "isodoy" => Ok(Self::IsoDayOfYear),
+            "h" | "hour" | "hours" | "hr" | "hrs" => Ok(Self::Hour),
+            "microsecond" | "microseconds" => Ok(Self::Microseconds),
+            "m" | "min" | "mins" | "minute" | "minutes" => Ok(Self::Minute),
+            "mon" | "mons" | "month" | "months" => Ok(Self::Month),
+            "ms" | "msec" | "millisecond" | "milliseconds" | "mseconds" | "msecs" => {
+                Ok(Self::Milliseconds)
+            }
+            "s" | "sec" | "second" | "seconds" | "secs" => Ok(Self::Second),
+            "timezone" => Ok(Self::Timezone),
+            "timezone_h" | "timezone_hour" => Ok(Self::TimezoneHour),
+            "timezone_m" | "timezone_minute" => Ok(Self::TimezoneMinute),
+            _ => Err(format!("unknown units {}", s)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
@@ -222,7 +311,7 @@ impl ParsedDateTime {
     ///
     /// # Errors
     /// - If any component overflows a parameter (i.e. i64).
-    pub fn compute_interval(&self) -> Result<Interval> {
+    pub fn compute_interval(&self) -> Result<Interval, String> {
         use DateTimeField::*;
         let mut months = 0i64;
         let mut seconds = 0i64;
@@ -262,7 +351,7 @@ impl ParsedDateTime {
         months: &mut i64,
         seconds: &mut i64,
         nanos: &mut i64,
-    ) -> Result<()> {
+    ) -> Result<(), String> {
         use DateTimeField::*;
         match d {
             Year => {
@@ -366,7 +455,7 @@ impl ParsedDateTime {
     /// # Errors
     /// - If year, month, or day overflows their respective parameter in
     ///   [chrono::naive::date::NaiveDate::from_ymd](https://docs.rs/chrono/0.3.0/chrono/naive/date/struct.NaiveDate.html).
-    pub fn compute_date(&self) -> Result<chrono::NaiveDate> {
+    pub fn compute_date(&self) -> Result<chrono::NaiveDate, String> {
         match (self.year, self.month, self.day) {
             (Some(year), Some(month), Some(day)) => {
                 let p_err = |e, field| format!("{} in date is invalid: {}", field, e);
@@ -383,7 +472,7 @@ impl ParsedDateTime {
     ///
     /// # Errors
     /// - If hour, minute, or second (both `unit` and `fraction`) overflow `u32`.
-    pub fn compute_time(&self) -> Result<chrono::NaiveTime> {
+    pub fn compute_time(&self) -> Result<chrono::NaiveTime, String> {
         let p_err = |e, field| format!("invalid {}: {}", field, e);
         let hour = match self.hour {
             Some(hour) => hour.unit.try_into().map_err(|e| p_err(e, "HOUR"))?,
@@ -418,7 +507,7 @@ impl ParsedDateTime {
     pub fn build_parsed_datetime_interval(
         value: &str,
         ambiguous_resolver: DateTimeField,
-    ) -> Result<ParsedDateTime> {
+    ) -> Result<ParsedDateTime, String> {
         use DateTimeField::*;
 
         let mut pdt = ParsedDateTime::default();
@@ -528,7 +617,7 @@ impl ParsedDateTime {
     /// # Arguments
     ///
     /// * `value` is a SQL-formatted TIMESTAMP string.
-    pub fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime> {
+    pub fn build_parsed_datetime_timestamp(value: &str) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
         let mut ts_actual = tokenize_time_str(value)?;
@@ -557,7 +646,7 @@ impl ParsedDateTime {
     /// # Arguments
     ///
     /// * `value` is a SQL-formatted TIME string.
-    pub fn build_parsed_datetime_time(value: &str) -> Result<ParsedDateTime> {
+    pub fn build_parsed_datetime_time(value: &str) -> Result<ParsedDateTime, String> {
         let mut pdt = ParsedDateTime::default();
 
         let mut time_actual = tokenize_time_str(value)?;
@@ -580,7 +669,7 @@ impl ParsedDateTime {
         &mut self,
         f: DateTimeField,
         u: Option<DateTimeFieldValue>,
-    ) -> Result<()> {
+    ) -> Result<(), String> {
         use DateTimeField::*;
 
         if u.is_some() {
@@ -608,7 +697,7 @@ impl ParsedDateTime {
         }
         Ok(())
     }
-    pub fn check_datelike_bounds(&self) -> Result<()> {
+    pub fn check_datelike_bounds(&self) -> Result<(), String> {
         if let Some(month) = self.month {
             if month.unit < 1 || month.unit > 12 {
                 return Err(format!("MONTH must be [1, 12], got {}", month.unit));
@@ -644,7 +733,7 @@ impl ParsedDateTime {
 
         Ok(())
     }
-    pub fn check_interval_bounds(&self, d: DateTimeField) -> Result<()> {
+    pub fn check_interval_bounds(&self, d: DateTimeField) -> Result<(), String> {
         use DateTimeField::*;
 
         match d {
@@ -710,7 +799,7 @@ impl ParsedDateTime {
 fn fill_pdt_date(
     mut pdt: &mut ParsedDateTime,
     mut actual: &mut VecDeque<TimeStrToken>,
-) -> Result<()> {
+) -> Result<(), String> {
     use TimeStrToken::*;
 
     // Check for one number that represents YYYYMMDDD.
@@ -787,7 +876,7 @@ fn fill_pdt_date(
 fn fill_pdt_time(
     mut pdt: &mut ParsedDateTime,
     mut actual: &mut VecDeque<TimeStrToken>,
-) -> Result<()> {
+) -> Result<(), String> {
     match determine_format_w_datetimefield(actual)? {
         Some(TimePartFormat::SqlStandard(leading_field)) => {
             let mut expected = expected_dur_like_tokens(leading_field)?;
@@ -812,7 +901,7 @@ fn fill_pdt_interval_sql(
     mut actual: &mut VecDeque<TimeStrToken>,
     leading_field: DateTimeField,
     mut pdt: &mut ParsedDateTime,
-) -> Result<()> {
+) -> Result<(), String> {
     use DateTimeField::*;
 
     // Ensure that no fields have been previously modified.
@@ -887,7 +976,7 @@ fn fill_pdt_interval_pg(
     mut actual: &mut VecDeque<TimeStrToken>,
     time_unit: DateTimeField,
     mut pdt: &mut ParsedDateTime,
-) -> Result<()> {
+) -> Result<(), String> {
     use TimeStrToken::*;
 
     // We remove all spaces during tokenization, so TimeUnit only shows up if
@@ -918,7 +1007,7 @@ fn fill_pdt_from_tokens(
     expected: &mut VecDeque<TimeStrToken>,
     leading_field: DateTimeField,
     sign: i64,
-) -> Result<()> {
+) -> Result<(), String> {
     use TimeStrToken::*;
     let mut current_field = leading_field;
 
@@ -1076,7 +1165,7 @@ struct AnnotatedIntervalPart {
 /// Note that `toks` should _not_ contain space
 fn determine_format_w_datetimefield(
     toks: &VecDeque<TimeStrToken>,
-) -> Result<Option<TimePartFormat>> {
+) -> Result<Option<TimePartFormat>, String> {
     use DateTimeField::*;
     use TimePartFormat::*;
     use TimeStrToken::*;
@@ -1133,7 +1222,7 @@ fn determine_format_w_datetimefield(
 ///
 /// # Errors
 /// - If `from` is YEAR, MONTH, or DAY.
-fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken>> {
+fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken>, String> {
     use DateTimeField::*;
     use TimeStrToken::*;
 
@@ -1267,11 +1356,11 @@ impl std::fmt::Display for TimeStrToken {
 /// - Any sequence of alphabetic characters cannot be cast into a DateTimeField.
 /// - Any sequence of numeric characters cannot be cast into an i64.
 /// - Any non-alpha numeric character cannot be cast into a TimeStrToken, e.g. `%`.
-pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
+pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, String> {
     let mut toks = VecDeque::new();
     let mut num_buf = String::with_capacity(4);
     let mut char_buf = String::with_capacity(7);
-    fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken> {
+    fn parse_num(n: &str, idx: usize) -> Result<TimeStrToken, String> {
         Ok(TimeStrToken::Num(n.parse().map_err(|e| {
             format!("Unable to parse value as a number at index {}: {}", idx, e)
         })?))
@@ -1281,7 +1370,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
         i: usize,
         is_frac: &mut bool,
         t: &mut VecDeque<TimeStrToken>,
-    ) -> Result<()> {
+    ) -> Result<(), String> {
         if !n.is_empty() {
             if *is_frac {
                 // Fractions only support 9 places of precision.
@@ -1301,7 +1390,10 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
         *is_frac = false;
         Ok(())
     }
-    fn maybe_tokenize_char_buf(c: &mut String, t: &mut VecDeque<TimeStrToken>) -> Result<()> {
+    fn maybe_tokenize_char_buf(
+        c: &mut String,
+        t: &mut VecDeque<TimeStrToken>,
+    ) -> Result<(), String> {
         if !c.is_empty() {
             // Supports ISO-formatted datetime strings.
             if c == "T" || c == "t" {
@@ -1370,7 +1462,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>> {
     Ok(toks)
 }
 
-fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>> {
+fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
     let mut toks: Vec<TimeStrToken> = vec![];
     let mut num_buf = String::with_capacity(4);
     // If the timezone string has a colon, we need to parse all numbers naively.
@@ -1384,7 +1476,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>> {
         n: &str,
         split_nums: bool,
         idx: usize,
-    ) -> Result<()> {
+    ) -> Result<(), String> {
         if n.is_empty() {
             return Ok(());
         }
@@ -1460,7 +1552,7 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>> {
     Ok(toks)
 }
 
-fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64> {
+fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<i64, String> {
     use TimeStrToken::*;
     let all_formats = [
         vec![Plus, Num(0), Colon, Num(0)],
@@ -1610,7 +1702,7 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
     }
 }
 
-pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64> {
+pub(crate) fn parse_timezone_offset_second(value: &str) -> Result<i64, String> {
     let toks = tokenize_timezone(value)?;
     Ok(build_timezone_offset_second(&toks, value)?)
 }

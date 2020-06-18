@@ -30,7 +30,7 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
     ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
-    TableFactor, TableWithJoins, TrimSide, UnaryOperator, Value, Values,
+    TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use uuid::Uuid;
 
@@ -1430,93 +1430,6 @@ pub fn plan_coercible_expr<'a>(
                 }
             }
             Expr::Row { .. } => bail!("ROW constructors are not supported yet"),
-            Expr::Trim { side, exprs } => {
-                let ident = match side {
-                    TrimSide::Both => "btrim",
-                    TrimSide::Leading => "ltrim",
-                    TrimSide::Trailing => "rtrim",
-                };
-
-                (
-                    CoercibleScalarExpr::Coerced(func::select_scalar_func(ecx, ident, exprs)?),
-                    None,
-                )
-            }
-            Expr::Extract { field, expr } => {
-                // No type hint passed to `plan_expr`, because `expr` can be
-                // any date type. PostgreSQL is also unable to infer parameter
-                // types in this position.
-                let mut expr = plan_expr(ecx, expr, None)?;
-                let mut typ = ecx.scalar_type(&expr);
-                if let ScalarType::Date = typ {
-                    expr = plan_cast_internal(
-                        "EXTRACT",
-                        ecx,
-                        expr,
-                        cast::CastTo::Explicit(ScalarType::Timestamp),
-                    )?;
-                    typ = ecx.scalar_type(&expr);
-                }
-                let func = match &typ {
-                    ScalarType::Interval => match field.as_str() {
-                        "year" => UnaryFunc::ExtractIntervalYear,
-                        "month" => UnaryFunc::ExtractIntervalMonth,
-                        "day" => UnaryFunc::ExtractIntervalDay,
-                        "hour" => UnaryFunc::ExtractIntervalHour,
-                        "minute" => UnaryFunc::ExtractIntervalMinute,
-                        "second" => UnaryFunc::ExtractIntervalSecond,
-                        "epoch" => UnaryFunc::ExtractIntervalEpoch,
-                        "dow" | "isodow" | "quarter" => {
-                            failure::bail!("invalid extract field for INTERVAL: {}", field)
-                        }
-                        _ => failure::bail!(
-                            "EXTRACT({} ..) for INTERVAL is not yet implemented",
-                            field
-                        ),
-                    },
-                    ScalarType::Timestamp => match field.as_str() {
-                        "year" => UnaryFunc::ExtractTimestampYear,
-                        "quarter" => UnaryFunc::ExtractTimestampQuarter,
-                        "month" => UnaryFunc::ExtractTimestampMonth,
-                        "day" => UnaryFunc::ExtractTimestampDay,
-                        "hour" => UnaryFunc::ExtractTimestampHour,
-                        "minute" => UnaryFunc::ExtractTimestampMinute,
-                        "second" => UnaryFunc::ExtractTimestampSecond,
-                        "week" => UnaryFunc::ExtractTimestampWeek,
-                        "doy" => UnaryFunc::ExtractTimestampDayOfYear,
-                        "dow" => UnaryFunc::ExtractTimestampDayOfWeek,
-                        "isodow" => UnaryFunc::ExtractTimestampIsoDayOfWeek,
-                        "epoch" => UnaryFunc::ExtractTimestampEpoch,
-                        _ => failure::bail!(
-                            "EXTRACT({} ..) for timestamp is not yet implemented",
-                            field
-                        ),
-                    },
-                    ScalarType::TimestampTz => match field.as_str() {
-                        "year" => UnaryFunc::ExtractTimestampTzYear,
-                        "quarter" => UnaryFunc::ExtractTimestampTzQuarter,
-                        "month" => UnaryFunc::ExtractTimestampTzMonth,
-                        "day" => UnaryFunc::ExtractTimestampTzDay,
-                        "hour" => UnaryFunc::ExtractTimestampTzHour,
-                        "minute" => UnaryFunc::ExtractTimestampTzMinute,
-                        "second" => UnaryFunc::ExtractTimestampTzSecond,
-                        "week" => UnaryFunc::ExtractTimestampTzWeek,
-                        "doy" => UnaryFunc::ExtractTimestampTzDayOfYear,
-                        "dow" => UnaryFunc::ExtractTimestampTzDayOfWeek,
-                        "isodow" => UnaryFunc::ExtractTimestampTzIsoDayOfWeek,
-                        "epoch" => UnaryFunc::ExtractTimestampTzEpoch,
-                        _ => failure::bail!(
-                            "EXTRACT({} ..) for timestamp tz is not yet implemented",
-                            field
-                        ),
-                    },
-                    other => bail!(
-                        "EXTRACT expects timestamp, interval, or date input, got {:?}",
-                        other
-                    ),
-                };
-                (expr.call_unary(func).into(), None)
-            }
             Expr::Collate { .. } => unsupported!("COLLATE"),
             Expr::Coalesce { exprs } => {
                 assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error

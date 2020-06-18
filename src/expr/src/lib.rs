@@ -26,7 +26,7 @@ pub use relation::{
     compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr,
     RowSetFinishing,
 };
-pub use scalar::func::{BinaryFunc, DateTruncTo, NullaryFunc, UnaryFunc, VariadicFunc};
+pub use scalar::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, ScalarExpr};
 
 /// A [`RelationExpr`] that claims to have been optimized, e.g., by an
