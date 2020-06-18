@@ -73,7 +73,7 @@ services:
 
   # mysql -> debezium -> kafka test services.
   connect:
-    image: debezium/connect:1.0
+    build: connect
     ports:
       - *connect
     environment:
@@ -86,6 +86,8 @@ services:
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
+    cap_add:
+      - NET_ADMIN
   connector:
     build: connector
   mysql:
@@ -125,6 +127,32 @@ mzconduct:
         - step: workflow
           workflow: run-netem-and-confirm
 
+    delay-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-delay-docker
+          container: chaos_connect_1
+        - step: run
+          service: chaos
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: kafka
+          running: true
+        - step: chaos-confirm
+          service: chaos_run
+          exit_code: 0
+
     # This test is designed to rate limit egress network traffic of the Kafka broker.
     rate-kafka:
       steps:
@@ -134,6 +162,32 @@ mzconduct:
           container: chaos_kafka_1
         - step: workflow
           workflow: run-netem-and-confirm
+
+    rate-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-rate-docker
+          container: chaos_connect_1
+        - step: run
+          service: chaos
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: kafka
+          running: true
+        - step: chaos-confirm
+          service: chaos_run
+          exit_code: 0
 
     # This test is designed to test packet loss from the Kafka broker.
     loss-kafka:
@@ -146,6 +200,33 @@ mzconduct:
         - step: workflow
           workflow: run-netem-and-confirm
 
+    loss-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-loss-docker
+          container: chaos_connect_1
+          percent: 10
+        - step: run
+          service: chaos
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: kafka
+          running: true
+        - step: chaos-confirm
+          service: chaos_run
+          exit_code: 0
+
     # This test is designed to test packet loss from the Kafka broker.
     duplicate-kafka:
       steps:
@@ -157,6 +238,33 @@ mzconduct:
         - step: workflow
           workflow: run-netem-and-confirm
 
+    duplicate-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-duplicate-docker
+          container: chaos_connect_1
+          percent: 10
+        - step: run
+          service: chaos
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: kafka
+          running: true
+        - step: chaos-confirm
+          service: chaos_run
+          exit_code: 0
+
     # This test is designed to test packet corruption from the Kafka broker.
     corrupt-kafka:
       steps:
@@ -167,6 +275,33 @@ mzconduct:
           percent: 10
         - step: workflow
           workflow: run-netem-and-confirm
+
+    corrupt-debezium-chbench:
+      steps:
+        - step: workflow
+          workflow: chbench-chaos-test
+        - step: workflow
+          workflow: start-everything
+        - step: chaos-corrupt-docker
+          container: chaos_connect_1
+          percent: 10
+        - step: run
+          service: chaos
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+        - step: chaos-confirm
+          service: materialized
+          running: true
+        - step: chaos-confirm
+          service: kafka
+          running: true
+        - step: chaos-confirm
+          service: chaos_run
+          exit_code: 0
 
     # These tests are designed to start and stop the specified Docker container.
     pause-kafka:

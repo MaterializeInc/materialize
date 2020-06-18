@@ -707,7 +707,7 @@ class WaitForMysqlStep(WorkflowStep):
             ports = comp.find_host_ports(self._service)
             if len(ports) != 1:
                 raise Failed(
-                    f"Could not unambiguously determing port for {self._service} "
+                    f"Could not unambiguously determine port for {self._service} "
                     f"found: {','.join(ports)}"
                 )
             port = int(ports[0])
@@ -954,35 +954,17 @@ class ChaosKillDockerStep(ChaosDockerWorkflowStep):
 
 class ChaosNetemStep(WorkflowStep):
     """Base class for running network chaos tests against a Docker container.
-
-    We use pumba (a chaos testing tool for Docker) to run the various netem tests.
-    pumba only supports Docker container names (not container ids), meaning that
-    we have to pass the exact container name to these steps. We should fix this in
-    the future.
     """
 
-    def __init__(self, duration: int):
-        self._duration = duration
-
     def run(self, comp: Composition, workflow: Workflow) -> None:
-        if self._duration == -1:
-            # If duration isn't provided, run for 7 days in a non-blocking thread.
-            duration = 10080
-        else:
-            duration = self._duration
-
-        cmd = self.get_cmd(duration).split()
-        netem_thread = Thread(target=self.threaded_netem, args=(cmd,), daemon=True)
-        netem_thread.start()
-
-    def get_cmd(self, duration: int) -> str:
-        pass
-
-    def threaded_netem(self, cmd: List[str]) -> None:
         try:
+            cmd = self.get_cmd().split()
             spawn.runv(cmd)
         except subprocess.CalledProcessError as e:
             raise Failed(f"Unable to run netem chaos command: {e}")
+
+    def get_cmd(self) -> str:
+        pass
 
 
 @Steps.register("chaos-delay-docker")
@@ -990,17 +972,14 @@ class ChaosDelayDockerStep(ChaosNetemStep):
     """Delay the egress network traffic for a Docker service.
     """
 
-    def __init__(
-        self, container: str, duration: int = -1, delay: int = 250, jitter: int = 250,
-    ) -> None:
-        super().__init__(duration=duration)
+    def __init__(self, container: str, delay: int = 250, jitter: int = 250,) -> None:
         self._container = container
         self._delay = delay
         self._jitter = jitter
 
-    def get_cmd(self, duration: int) -> str:
-        return f"pumba --random netem --duration {duration}m delay --time {self._delay} \
-            --jitter {self._jitter} --distribution normal {self._container}"
+    def get_cmd(self) -> str:
+        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem \
+                    delay {self._delay}ms {self._jitter}ms distribution normal"
 
 
 @Steps.register("chaos-rate-docker")
@@ -1008,12 +987,13 @@ class ChaosRateDockerStep(ChaosNetemStep):
     """Limit the egress network traffic for a Docker service.
     """
 
-    def __init__(self, container: str, duration: int = -1) -> None:
-        super().__init__(duration=duration)
+    def __init__(self, container: str) -> None:
         self._container = container
 
-    def get_cmd(self, duration: int) -> str:
-        return f"pumba netem --duration {duration}m rate {self._container}"
+    def get_cmd(self) -> str:
+        # todo: what are good defaults here?
+        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem \
+                    rate 5kbit 20 100 5"
 
 
 @Steps.register("chaos-loss-docker")
@@ -1021,13 +1001,12 @@ class ChaosLossDockerStep(ChaosNetemStep):
     """Lose a percent of a Docker container's network packets.
     """
 
-    def __init__(self, container: str, percent: int, duration: int = -1) -> None:
-        super().__init__(duration=duration)
+    def __init__(self, container: str, percent: int) -> None:
         self._container = container
         self._percent = percent
 
-    def get_cmd(self, duration: int) -> str:
-        return f"pumba netem --duration {duration}m loss --percent {self._percent} {self._container}"
+    def get_cmd(self) -> str:
+        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem loss {self._percent}"
 
 
 @Steps.register("chaos-duplicate-docker")
@@ -1035,13 +1014,12 @@ class ChaosDuplicateDockerStep(ChaosNetemStep):
     """Duplicate a percent of a Docker container's network packets.
     """
 
-    def __init__(self, container: str, percent: int, duration: int = -1) -> None:
-        super().__init__(duration=duration)
+    def __init__(self, container: str, percent: int) -> None:
         self._container = container
         self._percent = percent
 
-    def get_cmd(self, duration: int) -> str:
-        return f"pumba netem --duration {duration}m duplicate --percent {self._percent} {self._container}"
+    def get_cmd(self) -> str:
+        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem duplicate {self._percent}"
 
 
 @Steps.register("chaos-corrupt-docker")
@@ -1049,13 +1027,12 @@ class ChaosCorruptDockerStep(ChaosNetemStep):
     """Corrupt a percent of a Docker container's network packets.
     """
 
-    def __init__(self, container: str, percent: int, duration: int = -1) -> None:
-        super().__init__(duration=duration)
+    def __init__(self, container: str, percent: int) -> None:
         self._container = container
         self._percent = percent
 
-    def get_cmd(self, duration: int) -> str:
-        return f"pumba netem --duration {duration}m corrupt --percent {self._percent} {self._container}"
+    def get_cmd(self) -> str:
+        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem corrupt {self._percent}"
 
 
 @Steps.register("chaos-confirm")
