@@ -38,6 +38,7 @@ use crate::catalog::Catalog;
 use crate::names::{DatabaseSpecifier, FullName};
 
 pub(crate) mod cast;
+pub(crate) mod decorrelate;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod func;
