@@ -50,7 +50,7 @@ use crate::plan::expr::{
 use crate::plan::func;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
-use crate::plan::transform;
+use crate::plan::transform_ast;
 use crate::{normalize, unsupported};
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
@@ -66,7 +66,7 @@ pub fn plan_root_query(
     mut query: Query,
     lifetime: QueryLifetime,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
-    transform::transform(&mut query);
+    transform_ast::transform(&mut query);
     let qcx = QueryContext::root(scx, lifetime);
     let (expr, scope, finishing) = plan_query(&qcx, &query)?;
     let typ = qcx.relation_type(&expr);
