@@ -119,6 +119,16 @@ impl RelationType {
     pub fn arity(&self) -> usize {
         self.column_types.len()
     }
+
+    // Gets the keys used when creating a `primary_idx` on `self`. Note that
+    // these are not equivalent to "primary keys", in the RDBMS sense.
+    pub fn get_primary_index_keys(&self) -> Vec<usize> {
+        if let Some(keys) = self.keys.first() {
+            keys.clone()
+        } else {
+            (0..self.column_types.len()).collect()
+        }
+    }
 }
 
 /// The name of a column in a [`RelationDesc`].

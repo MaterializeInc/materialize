@@ -2393,7 +2393,7 @@ pub fn auto_generate_src_idx(
 ) -> catalog::Index {
     auto_generate_primary_idx(
         index_name,
-        &source.desc.typ().keys,
+        &source.desc.typ().get_primary_index_keys(),
         source_name,
         source_id,
         &source.desc,
@@ -2408,7 +2408,7 @@ pub fn auto_generate_view_idx(
 ) -> catalog::Index {
     auto_generate_primary_idx(
         index_name,
-        &view.optimized_expr.as_ref().typ().keys,
+        &view.optimized_expr.as_ref().typ().get_primary_index_keys(),
         view_name,
         view_id,
         &view.desc,
@@ -2417,21 +2417,16 @@ pub fn auto_generate_view_idx(
 
 pub fn auto_generate_primary_idx(
     index_name: String,
-    keys: &[Vec<usize>],
+    keys: &[usize],
     on_name: FullName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
 ) -> catalog::Index {
-    let keys = if let Some(keys) = keys.first() {
-        keys.clone()
-    } else {
-        (0..on_desc.typ().column_types.len()).collect()
-    };
     catalog::Index {
         create_sql: index_sql(index_name, on_name, &on_desc, &keys),
         plan_cx: PlanContext::default(),
         on: on_id,
-        keys: keys.into_iter().map(ScalarExpr::Column).collect(),
+        keys: keys.into_iter().map(|k| ScalarExpr::Column(*k)).collect(),
     }
 }
 
