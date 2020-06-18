@@ -811,7 +811,10 @@ impl PendingPeek {
             Err(text) => PeekResponse::Error(text),
         };
         let mut tx = block_on(self.tx.connect()).unwrap();
-        block_on(tx.send(response)).unwrap();
+        let tx_result = block_on(tx.send(response));
+        if let Err(e) = tx_result {
+            block_on(tx.send(PeekResponse::Error(e.to_string()))).unwrap();
+        }
         true
     }
 
