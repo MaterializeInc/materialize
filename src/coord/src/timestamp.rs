@@ -1248,10 +1248,21 @@ impl Timestamper {
             topic: kc.topic,
         };
 
+        // Start metadata refresh thread
+        // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+        let metadata_refresh_frequency = Duration::from_millis(
+            kc.config_options
+                .get("topic_metadata_refresh_interval_ms")
+                // Safe conversion: statement::extract_config enforces that option is a value
+                // between 0 and 3600000
+                .unwrap_or(&"30000".to_owned())
+                .parse()
+                .unwrap(),
+        );
+
         thread::spawn({
             let connector = connector.clone();
-            let timestamp_frequency = self.timestamp_frequency;
-            move || rt_kafka_metadata_fetch_loop(connector, consumer, timestamp_frequency)
+            move || rt_kafka_metadata_fetch_loop(connector, consumer,  metadata_refresh_frequency)
         });
 
         Some(connector)

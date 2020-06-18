@@ -793,9 +793,6 @@ where
                     }
                 }
 
-                // Update any metadata changes triggered by the metadata thread
-                dp_info.refresh_metadata(&mut cp_info);
-
                 while let Some(message) = dp_info.get_next_message(&cp_info, &activator) {
                     let partition = message.partition;
                     let offset = MzOffset::from(message.offset);
