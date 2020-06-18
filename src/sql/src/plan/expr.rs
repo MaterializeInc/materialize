@@ -565,6 +565,48 @@ impl RelationExpr {
         }
     }
 
+    /// Visits the column references in this relation expression.
+    ///
+    /// The `depth` argument should indicate the subquery nesting depth of the expression,
+    /// which will be incremented with each subquery entered and presented to the supplied
+    /// function `f`.
+    pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+    where
+        F: FnMut(usize, &mut ColumnRef),
+    {
+        self.visit_mut(&mut |e| match e {
+            RelationExpr::Join { on, .. } => on.visit_columns(depth, f),
+            RelationExpr::Map { scalars, .. } => {
+                for scalar in scalars {
+                    scalar.visit_columns(depth, f);
+                }
+            }
+            RelationExpr::FlatMap { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_columns(depth, f);
+                }
+            }
+            RelationExpr::Filter { predicates, .. } => {
+                for predicate in predicates {
+                    predicate.visit_columns(depth, f);
+                }
+            }
+            RelationExpr::Reduce { aggregates, .. } => {
+                for aggregate in aggregates {
+                    aggregate.visit_columns(depth, f);
+                }
+            }
+            RelationExpr::Constant { .. }
+            | RelationExpr::Get { .. }
+            | RelationExpr::Project { .. }
+            | RelationExpr::Distinct { .. }
+            | RelationExpr::TopK { .. }
+            | RelationExpr::Negate { .. }
+            | RelationExpr::Threshold { .. }
+            | RelationExpr::Union { .. } => (),
+        })
+    }
+
     /// Replaces any parameter references in the expression with the
     /// corresponding datum from `parameters`.
     pub fn bind_parameters(&mut self, parameters: &Params) {
@@ -609,6 +651,27 @@ impl RelationExpr {
             .map(move |datums| row_packer.pack(datums))
             .collect();
         RelationExpr::Constant { rows, typ }
+    }
+
+    pub fn finish(&mut self, finishing: expr::RowSetFinishing) {
+        if !finishing.is_trivial() {
+            *self = RelationExpr::Project {
+                input: Box::new(RelationExpr::TopK {
+                    input: Box::new(std::mem::replace(
+                        self,
+                        RelationExpr::Constant {
+                            rows: vec![],
+                            typ: RelationType::new(Vec::new()),
+                        },
+                    )),
+                    group_key: vec![],
+                    order_key: finishing.order_by,
+                    limit: finishing.limit,
+                    offset: finishing.offset,
+                }),
+                outputs: finishing.project,
+            }
+        }
     }
 }
 
@@ -717,6 +780,39 @@ impl ScalarExpr {
                 f(els);
             }
             Exists(..) | Select(..) => (),
+        }
+    }
+
+    /// Visits the column references in this scalar expression.
+    ///
+    /// The `depth` argument should indicate the subquery nesting depth of the expression,
+    /// which will be incremented with each subquery entered and presented to the supplied
+    /// function `f`.
+    pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+    where
+        F: FnMut(usize, &mut ColumnRef),
+    {
+        match self {
+            ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) | ScalarExpr::CallNullary(_) => (),
+            ScalarExpr::Column(col_ref) => f(depth, col_ref),
+            ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
+            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.visit_columns(depth, f);
+                expr2.visit_columns(depth, f);
+            }
+            ScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_columns(depth, f);
+                }
+            }
+            ScalarExpr::If { cond, then, els } => {
+                cond.visit_columns(depth, f);
+                then.visit_columns(depth, f);
+                els.visit_columns(depth, f);
+            }
+            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+                expr.visit_columns(depth + 1, f);
+            }
         }
     }
 
@@ -830,6 +926,18 @@ impl AggregateExpr {
         params: &BTreeMap<usize, ScalarType>,
     ) -> ColumnType {
         self.func.output_type(self.expr.typ(outers, inner, params))
+    }
+
+    /// Visits the column references in this aggregate expression.
+    ///
+    /// The `depth` argument should indicate the subquery nesting depth of the expression,
+    /// which will be incremented with each subquery entered and presented to the supplied
+    /// function `f`.
+    pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
+    where
+        F: FnMut(usize, &mut ColumnRef),
+    {
+        self.expr.visit_columns(depth, f);
     }
 }
 
@@ -1164,48 +1272,6 @@ pub mod decorrelation {
                 }
             }
         }
-
-        /// Visits the column references in this relation expression.
-        ///
-        /// The `depth` argument should indicate the subquery nesting depth of the expression,
-        /// which will be incremented with each subquery entered and presented to the supplied
-        /// function `f`.
-        fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-        where
-            F: FnMut(usize, &mut ColumnRef),
-        {
-            self.visit_mut(&mut |e| match e {
-                RelationExpr::Join { on, .. } => on.visit_columns(depth, f),
-                RelationExpr::Map { scalars, .. } => {
-                    for scalar in scalars {
-                        scalar.visit_columns(depth, f);
-                    }
-                }
-                RelationExpr::FlatMap { exprs, .. } => {
-                    for expr in exprs {
-                        expr.visit_columns(depth, f);
-                    }
-                }
-                RelationExpr::Filter { predicates, .. } => {
-                    for predicate in predicates {
-                        predicate.visit_columns(depth, f);
-                    }
-                }
-                RelationExpr::Reduce { aggregates, .. } => {
-                    for aggregate in aggregates {
-                        aggregate.visit_columns(depth, f);
-                    }
-                }
-                RelationExpr::Constant { .. }
-                | RelationExpr::Get { .. }
-                | RelationExpr::Project { .. }
-                | RelationExpr::Distinct { .. }
-                | RelationExpr::TopK { .. }
-                | RelationExpr::Negate { .. }
-                | RelationExpr::Threshold { .. }
-                | RelationExpr::Union { .. } => (),
-            })
-        }
     }
 
     impl ScalarExpr {
@@ -1356,41 +1422,6 @@ pub mod decorrelation {
                 }
             })
         }
-
-        /// Visits the column references in this scalar expression.
-        ///
-        /// The `depth` argument should indicate the subquery nesting depth of the expression,
-        /// which will be incremented with each subquery entered and presented to the supplied
-        /// function `f`.
-        fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-        where
-            F: FnMut(usize, &mut ColumnRef),
-        {
-            match self {
-                ScalarExpr::Literal(_, _)
-                | ScalarExpr::Parameter(_)
-                | ScalarExpr::CallNullary(_) => (),
-                ScalarExpr::Column(col_ref) => f(depth, col_ref),
-                ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
-                ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                    expr1.visit_columns(depth, f);
-                    expr2.visit_columns(depth, f);
-                }
-                ScalarExpr::CallVariadic { exprs, .. } => {
-                    for expr in exprs {
-                        expr.visit_columns(depth, f);
-                    }
-                }
-                ScalarExpr::If { cond, then, els } => {
-                    cond.visit_columns(depth, f);
-                    then.visit_columns(depth, f);
-                    els.visit_columns(depth, f);
-                }
-                ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
-                    expr.visit_columns(depth + 1, f);
-                }
-            }
-        }
     }
 
     /// Prepare to apply `inner` to `outer`. Note that `inner` is a correlated (SQL)
@@ -1497,40 +1528,6 @@ pub mod decorrelation {
                 func,
                 expr: expr.applied_to(id_gen, col_map, inner),
                 distinct,
-            }
-        }
-        /// Visits the column references in this aggregate expression.
-        ///
-        /// The `depth` argument should indicate the subquery nesting depth of the expression,
-        /// which will be incremented with each subquery entered and presented to the supplied
-        /// function `f`.
-        pub fn visit_columns<F>(&mut self, depth: usize, f: &mut F)
-        where
-            F: FnMut(usize, &mut ColumnRef),
-        {
-            self.expr.visit_columns(depth, f);
-        }
-    }
-}
-
-impl RelationExpr {
-    pub fn finish(&mut self, finishing: expr::RowSetFinishing) {
-        if !finishing.is_trivial() {
-            *self = RelationExpr::Project {
-                input: Box::new(RelationExpr::TopK {
-                    input: Box::new(std::mem::replace(
-                        self,
-                        RelationExpr::Constant {
-                            rows: vec![],
-                            typ: RelationType::new(Vec::new()),
-                        },
-                    )),
-                    group_key: vec![],
-                    order_key: finishing.order_by,
-                    limit: finishing.limit,
-                    offset: finishing.offset,
-                }),
-                outputs: finishing.project,
             }
         }
     }
