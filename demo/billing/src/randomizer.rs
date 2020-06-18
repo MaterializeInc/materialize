@@ -26,16 +26,7 @@ pub trait Randomizer {
 }
 
 pub struct RecordState {
-    last_time: DateTime<Utc>,
-}
-
-impl RecordState {
-    pub fn new(last_time: Option<DateTime<Utc>>) -> RecordState {
-        RecordState {
-            last_time: last_time
-                .unwrap_or(Utc::now() - chrono::Duration::seconds(60 * 60 * 24 * 7)),
-        }
-    }
+    pub last_time: DateTime<Utc>,
 }
 
 fn protobuf_timestamp(time: DateTime<Utc>) -> Timestamp {
