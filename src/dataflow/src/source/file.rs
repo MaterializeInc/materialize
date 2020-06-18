@@ -404,130 +404,124 @@ where
     // Safe conversion: statement.rs checks that value specified fits in u64
     let downgrade_capability_frequency = timestamp_frequency.as_millis().try_into().unwrap();
 
-    let (stream, capability) = source(
-        id,
-        ts,
-        scope,
-        &config.name.clone(),
-        move |info| {
-            let activator = scope.activator_for(&info.address[..]);
-            let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);
-            if active {
-                let activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
-                thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
-            }
-            let mut dead = false;
-            move |cap, output| {
-                // If nothing else causes us to wake up, do so after a specified amount of time.
-                let mut next_activation_duration = HEARTBEAT;
-                // Number of records read for this particular activation
-                let mut records_read = 0;
+    let (stream, capability) = source(id, ts, scope, &config.name.clone(), move |info| {
+        let activator = scope.activator_for(&info.address[..]);
+        let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);
+        if active {
+            let activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
+            thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
+        }
+        let mut dead = false;
+        move |cap, output| {
+            // If nothing else causes us to wake up, do so after a specified amount of time.
+            let mut next_activation_duration = HEARTBEAT;
+            // Number of records read for this particular activation
+            let mut records_read = 0;
 
-                assert!(
-                    !dead,
-                    "A file source should not be scheduled again after erroring."
+            assert!(
+                !dead,
+                "A file source should not be scheduled again after erroring."
+            );
+
+            if active {
+                // Check if the capability can be downgraded (this is independent of whether
+                // there are new messages that can be processed) as timestamps can become
+                // closed in the absence of messages
+                downgrade_capability(
+                    &id,
+                    cap,
+                    &mut last_processed_offset,
+                    &mut last_closed_ts,
+                    &mut time_since_downgrade,
+                    downgrade_capability_frequency,
+                    &consistency,
+                    &timestamp_histories,
                 );
 
-                if active {
-                    // Check if the capability can be downgraded (this is independent of whether
-                    // there are new messages that can be processed) as timestamps can become
-                    // closed in the absence of messages
-                    downgrade_capability(
-                        &id,
-                        cap,
-                        &mut last_processed_offset,
-                        &mut last_closed_ts,
-                        &mut time_since_downgrade,
-                        downgrade_capability_frequency,
-                        &consistency,
-                        &timestamp_histories,
-                    );
-
-                    // Check if there was a message buffered. If yes, use this message. Else,
-                    // attempt to process the next message
-                    if buffer.is_none() {
-                        match rx.try_recv() {
-                            Ok(result) => {
-                                records_read += 1;
-                                current_msg_offset.offset += 1;
-                                buffer = Some(result);
-                            }
-                            Err(TryRecvError::Empty) => {
-                                // nothing to read, go to sleep
-                            }
-                            Err(TryRecvError::Disconnected) => {
-                                return SourceStatus::Done;
-                            }
+                // Check if there was a message buffered. If yes, use this message. Else,
+                // attempt to process the next message
+                if buffer.is_none() {
+                    match rx.try_recv() {
+                        Ok(result) => {
+                            records_read += 1;
+                            current_msg_offset.offset += 1;
+                            buffer = Some(result);
                         }
-                    }
-
-                    while let Some(message) = buffer.take() {
-                        let ts = find_matching_timestamp(
-                            &id,
-                            current_msg_offset,
-                            &consistency,
-                            last_closed_ts,
-                            &timestamp_histories,
-                        );
-                        let message = match message {
-                            Ok(message) => message,
-                            Err(err) => {
-                                output.session(&cap).give(Err(err.to_string()));
-                                dead = true;
-                                return SourceStatus::Done;
-                            }
-                        };
-                        match ts {
-                            None => {
-                                // We have not yet decided on a timestamp for this message,
-                                // we need to buffer the message
-                                buffer = Some(Ok(message));
-                                activator.activate();
-                                return SourceStatus::Alive;
-                            }
-                            Some(ts) => {
-                                last_processed_offset = current_msg_offset;
-                                let ts_cap = cap.delayed(&ts);
-                                output.session(&ts_cap).give(Ok(SourceOutput::new(
-                                    vec![],
-                                    message,
-                                    Some(last_processed_offset.offset),
-                                )));
-
-                                downgrade_capability(
-                                    &id,
-                                    cap,
-                                    &mut last_processed_offset,
-                                    &mut last_closed_ts,
-                                    &mut time_since_downgrade,
-                                    downgrade_capability_frequency,
-                                    &consistency,
-                                    &timestamp_histories,
-                                );
-                            }
+                        Err(TryRecvError::Empty) => {
+                            // nothing to read, go to sleep
                         }
-
-                        if records_read == MAX_RECORDS_PER_INVOCATION {
-                            next_activation_duration = Default::default();
-                            break;
-                        }
-
-                        buffer = match rx.try_recv() {
-                            Ok(record) => {
-                                records_read += 1;
-                                current_msg_offset.offset += 1;
-                                Some(record)
-                            }
-                            Err(TryRecvError::Empty) => None,
-                            Err(TryRecvError::Disconnected) => return SourceStatus::Done,
+                        Err(TryRecvError::Disconnected) => {
+                            return SourceStatus::Done;
                         }
                     }
                 }
-                activator.activate_after(next_activation_duration);
-                SourceStatus::Alive
+
+                while let Some(message) = buffer.take() {
+                    let ts = find_matching_timestamp(
+                        &id,
+                        current_msg_offset,
+                        &consistency,
+                        last_closed_ts,
+                        &timestamp_histories,
+                    );
+                    let message = match message {
+                        Ok(message) => message,
+                        Err(err) => {
+                            output.session(&cap).give(Err(err.to_string()));
+                            dead = true;
+                            return SourceStatus::Done;
+                        }
+                    };
+                    match ts {
+                        None => {
+                            // We have not yet decided on a timestamp for this message,
+                            // we need to buffer the message
+                            buffer = Some(Ok(message));
+                            activator.activate();
+                            return SourceStatus::Alive;
+                        }
+                        Some(ts) => {
+                            last_processed_offset = current_msg_offset;
+                            let ts_cap = cap.delayed(&ts);
+                            output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                vec![],
+                                message,
+                                Some(last_processed_offset.offset),
+                            )));
+
+                            downgrade_capability(
+                                &id,
+                                cap,
+                                &mut last_processed_offset,
+                                &mut last_closed_ts,
+                                &mut time_since_downgrade,
+                                downgrade_capability_frequency,
+                                &consistency,
+                                &timestamp_histories,
+                            );
+                        }
+                    }
+
+                    if records_read == MAX_RECORDS_PER_INVOCATION {
+                        next_activation_duration = Default::default();
+                        break;
+                    }
+
+                    buffer = match rx.try_recv() {
+                        Ok(record) => {
+                            records_read += 1;
+                            current_msg_offset.offset += 1;
+                            Some(record)
+                        }
+                        Err(TryRecvError::Empty) => None,
+                        Err(TryRecvError::Disconnected) => return SourceStatus::Done,
+                    }
+                }
             }
-        },
-    );
+            activator.activate_after(next_activation_duration);
+            SourceStatus::Alive
+        }
+    });
 
     let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
 
