@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::ops::Add;
 use std::str;
 use std::time::Duration;
 
@@ -30,15 +31,86 @@ async fn run() -> Result<(), anyhow::Error> {
     let args = Args::from_args();
     env_logger::init();
 
+    match args.test {
+        Tests::BytesToKafka => bytes_to_kafka(args).await?,
+        Tests::MysqlDebeziumKafka => mysql_debezium_kafka(args).await?,
+    }
+
+    log::info!(
+        "Completed chaos testing in {} milliseconds",
+        timer.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+async fn mysql_debezium_kafka(args: Args) -> Result<(), anyhow::Error> {
+    let run_seconds = args.run_seconds.unwrap_or(864_000);
+    let end = std::time::Instant::now().add(Duration::from_secs(run_seconds));
+    log::info!(
+        "starting chaos test {:#?} with mzd={}:{} kafka={} run seconds={}",
+        args.test,
+        args.materialized_host,
+        args.materialized_port,
+        args.kafka_url,
+        run_seconds,
+    );
+
+    let mz_client = mz_client::client(&args.materialized_host, args.materialized_port).await?;
+
+    // Create Kafka source.
+    let src_query = "CREATE SOURCE src_orderline
+                           FROM KAFKA BROKER 'kafka:9092' TOPIC 'mysql.tpcch.orderline'
+                           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+                           ENVELOPE DEBEZIUM;";
+    log::info!("creating source=> {}", src_query);
+    mz_client.execute(&*src_query, &[]).await?;
+
+    // Create count materialized view.
+    let count_query = "CREATE MATERIALIZED VIEW orderline_count AS
+                             SELECT count(*) FROM src_orderline;";
+    log::info!("creating view=> {}", count_query);
+    mz_client.execute(&*count_query, &[]).await?;
+
+    // Create Q01 materialized view.
+    let qo1_query = "CREATE MATERIALIZED VIEW q01 AS
+                           SELECT
+                               ol_number,
+                               sum(ol_quantity) AS sum_qty,
+                               sum(ol_amount) AS sum_amount,
+                               avg(ol_quantity) AS avg_qty,
+                               avg(ol_amount) AS avg_amount,
+                               count(*) AS count_order
+                           FROM src_orderline
+                           WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
+                           GROUP BY ol_number
+                           ORDER BY ol_number;";
+    log::info!("creating view=> {}", qo1_query);
+    mz_client.execute(&*qo1_query, &[]).await?;
+
+    // Query both materialized views until run_seconds has expired, raise any errors.
+    while std::time::Instant::now() < end {
+        let count = "SELECT * FROM orderline_count;";
+        mz_client::try_query_one(&mz_client, &*count, Duration::from_secs(1)).await?;
+
+        let q01 = "SELECT * FROM q01;";
+        mz_client::try_query(&mz_client, &q01, Duration::from_secs(1)).await?;
+    }
+
+    Ok(())
+}
+
+async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
     let seed: u32 = rand::thread_rng().gen();
     let topic = format!("chaos-{}", seed);
+    let message_count = args.message_count.unwrap_or(10_000);
     log::info!(
-        "starting chaos test with mzd={}:{} kafka={} topic={} message_count={}",
+        "starting chaos test {:#?} with mzd={}:{} kafka={} topic={} message_count={}",
+        args.test,
         args.materialized_host,
         args.materialized_port,
         args.kafka_url,
         topic,
-        args.message_count
+        message_count,
     );
 
     // Create Kafka topic.
@@ -50,19 +122,20 @@ async fn run() -> Result<(), anyhow::Error> {
         &[("enable.idempotence", "true")],
     )?;
     retry::retry_for(Duration::from_secs(10), |_| {
-        kafka_client.create_topic(args.kafka_partitions, Some(Duration::from_secs(10)))
+        kafka_client.create_topic(
+            args.kafka_partitions.unwrap_or(1),
+            Some(Duration::from_secs(10)),
+        )
     })
     .await?;
 
     let kafka_task = tokio::spawn({
-        let message_count = args.message_count;
         async move { generate_and_push_records(kafka_client, message_count).await }
     });
     let materialize_task = tokio::spawn({
         let materialized_host = args.materialized_host.clone();
         let materialized_port = args.materialized_port;
         let kafka_url = args.kafka_url.clone();
-        let message_count = args.message_count;
         async move {
             query_materialize(
                 &materialized_host,
@@ -89,10 +162,6 @@ async fn run() -> Result<(), anyhow::Error> {
         ));
     }
 
-    log::info!(
-        "Completed chaos testing in {} milliseconds",
-        timer.elapsed().as_millis()
-    );
     Ok(())
 }
 
@@ -205,8 +274,30 @@ async fn query_materialize(
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum Tests {
+    BytesToKafka,
+    MysqlDebeziumKafka,
+}
+
+impl str::FromStr for Tests {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_ref() {
+            "bytes-to-kafka" => Ok(Tests::BytesToKafka),
+            "mysql-debezium-kafka" => Ok(Tests::MysqlDebeziumKafka),
+            _ => Err(anyhow::anyhow!("could not parse test: {}", s)),
+        }
+    }
+}
+
 #[derive(Clone, Debug, StructOpt)]
 pub struct Args {
+    /// The specific types of chaos test to run
+    #[structopt(long)]
+    pub test: Tests,
+
     /// The materialized host
     #[structopt(long, default_value = "materialized")]
     pub materialized_host: String,
@@ -220,10 +311,14 @@ pub struct Args {
     pub kafka_url: String,
 
     /// Number of Kafka partitions
-    #[structopt(long, default_value = "1")]
-    pub kafka_partitions: i32,
+    #[structopt(long)]
+    pub kafka_partitions: Option<i32>,
 
     /// The total number of records to create
-    #[structopt(long, default_value = "10_000")]
-    pub message_count: usize,
+    #[structopt(long)]
+    pub message_count: Option<usize>,
+
+    /// The number of seconds to run
+    #[structopt(long)]
+    pub run_seconds: Option<u64>,
 }
