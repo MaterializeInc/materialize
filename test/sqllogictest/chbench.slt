@@ -1360,7 +1360,6 @@ ORDER BY su_name
 
 %8 =
 | Get %6
-| Filter (#0 = ((#11 * #12) % 10000))
 
 %9 =
 | Get %6
@@ -1378,6 +1377,8 @@ ORDER BY su_name
 | Filter "^co.*$" ~(#44)
 | Reduce group=(#0, #11, #12, #13) sum(#36)
 | Filter ((2 * #3) > #4)
+| Map ((#1 * #2) % 10000)
+| Filter (#0 = #5)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 

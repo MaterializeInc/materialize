@@ -18,7 +18,11 @@ use aho_corasick::AhoCorasickBuilder;
 use enum_iterator::IntoEnumIterator;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-use crate::scalar::func::TimestampLike;
+use repr::{Datum, RowArena, ScalarType};
+
+use crate::scalar::func::datetime::TimestampLike;
+use crate::scalar::func::{FuncProps, Nulls, OutputType};
+use crate::scalar::EvalError;
 
 /// The raw tokens that can appear in a format string. Many of these tokens
 /// overlap, in which case the longest matching token should be selected.
@@ -884,4 +888,36 @@ impl DateTimeFormat {
         }
         out
     }
+}
+
+pub const TO_CHAR_PROPS: FuncProps = FuncProps {
+    can_error: false,
+    preserves_uniqueness: false,
+    nulls: Nulls::Sometimes {
+        propagates_nulls: true,
+        introduces_nulls: false,
+    },
+    output_type: OutputType::Fixed(ScalarType::String),
+};
+
+pub fn to_char_timestamp<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Ok(Datum::String(
+        temp_storage.push_string(fmt.render(a.unwrap_timestamp())),
+    ))
+}
+
+pub fn to_char_timestamptz<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Ok(Datum::String(
+        temp_storage.push_string(fmt.render(a.unwrap_timestamptz())),
+    ))
 }

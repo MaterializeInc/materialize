@@ -853,7 +853,7 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::SqrtFloat64,
                 params!(Decimal(0,0)) => unary_op(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                    Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
+                    Ok(e.call_unary(UnaryFunc::SqrtDecimal(s)))
                 })
             },
             "to_char" => {
@@ -1058,9 +1058,9 @@ lazy_static! {
 
             // CONCAT
             Concat => {
-                vec![Plain(String), StringAny] => TextConcat,
-                vec![StringAny, Plain(String)] => TextConcat,
-                params!(String, String) => TextConcat,
+                vec![Plain(String), StringAny] => StringConcat,
+                vec![StringAny, Plain(String)] => StringConcat,
+                params!(String, String) => StringConcat,
                 params!(Jsonb, Jsonb) => JsonbConcat
             },
 
