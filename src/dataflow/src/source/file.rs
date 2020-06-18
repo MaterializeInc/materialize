@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -408,7 +407,6 @@ where
     let (stream, capability) = source(
         id,
         ts,
-        Arc::new(AtomicBool::new(false)),
         scope,
         &config.name.clone(),
         move |info| {

@@ -11,8 +11,6 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -136,9 +134,6 @@ pub struct SourceToken {
     /// A reference to the timestamper control channel. Inserts a timestamp drop message
     /// when this source token is dropped
     timestamp_drop: Option<TimestampMetadataUpdates>,
-    /// A boolean flag that is set to true when this source token is dropped and timestamping
-    /// should stop
-    stop_timestamping: Arc<AtomicBool>,
 }
 
 impl SourceToken {
@@ -159,7 +154,6 @@ impl Drop for SourceToken {
                 .borrow_mut()
                 .push(TimestampMetadataUpdate::StopTimestamping(self.id));
         }
-        self.stop_timestamping.store(true, Ordering::SeqCst);
     }
 }
 

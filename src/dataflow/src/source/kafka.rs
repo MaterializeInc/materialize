@@ -9,15 +9,14 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc,Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{cmp, thread};
+use std::cmp;
 
 use dataflow_types::{Consistency, KafkaOffset, KafkaSourceConnector, MzOffset, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
-use log::{debug, error, info, log_enabled, warn};
+use log::{error, info, log_enabled, warn};
 use prometheus::{
     register_int_counter, register_int_counter_vec, register_int_gauge_vec,
     register_uint_gauge_vec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, UIntGauge,
@@ -38,7 +37,6 @@ use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
-use ore::collections::CollectionExt;
 
 // Global Kafka metrics.
 lazy_static! {
@@ -706,7 +704,6 @@ where
     } = connector;
 
     let timestamp_channel = activate_source_timestamping(&config);
-    let timestamping_stopped = Arc::new(AtomicBool::new(false));
 
     let SourceConfig {
         name,
@@ -723,7 +720,6 @@ where
     let (stream, capability) = source(
         id,
         timestamp_channel,
-        timestamping_stopped.clone(),
         scope,
         &name.clone(),
         move |info| {
@@ -749,20 +745,6 @@ where
                 worker_id,
                 worker_count,
             );
-
-            // Start metadata refresh thread
-            // Default value obtained from https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-            let metadata_refresh_frequency = Duration::from_millis(
-                config_options
-                    .get("topic.metadata.refresh.interval.ms")
-                    // Safe conversion: statement::extract_config enforces that option is a value
-                    // between 0 and 3600000
-                    .unwrap_or(&"30000".to_owned())
-                    .parse()
-                    .unwrap(),
-            );
-
-            // dp_info.start_metadata_fetch_thread(metadata_refresh_frequency, timestamping_stopped);
 
             move |cap, output| {
                 let timer = Instant::now();

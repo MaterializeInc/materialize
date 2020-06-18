@@ -8,8 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::executor::block_on;
@@ -95,7 +93,6 @@ where
     let (stream, capability) = source(
         config.id,
         ts,
-        Arc::new(AtomicBool::new(false)),
         scope,
         &name.clone(),
         move |info| {

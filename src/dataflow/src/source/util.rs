@@ -9,8 +9,6 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use expr::SourceInstanceId;
 
@@ -57,7 +55,6 @@ use super::{SourceStatus, SourceToken};
 pub fn source<G, D, B, L>(
     id: SourceInstanceId,
     timestamp_channel: Option<TimestampMetadataUpdates>,
-    timestamping_flag: Arc<AtomicBool>,
     scope: &G,
     name: &str,
     construct: B,
@@ -82,7 +79,6 @@ where
             capability: cap.clone(),
             activator: scope.activator_for(&info.address[..]),
             timestamp_drop: timestamp_channel,
-            stop_timestamping: timestamping_flag,
         });
 
         let mut tick = construct(info);
