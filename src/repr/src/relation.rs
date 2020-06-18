@@ -119,6 +119,15 @@ impl RelationType {
     pub fn arity(&self) -> usize {
         self.column_types.len()
     }
+
+    /// Gets the keys used when creating a default index.
+    pub fn default_key(&self) -> Vec<usize> {
+        if let Some(key) = self.keys.first() {
+            key.clone()
+        } else {
+            (0..self.column_types.len()).collect()
+        }
+    }
 }
 
 /// The name of a column in a [`RelationDesc`].
