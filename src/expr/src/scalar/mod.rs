@@ -295,7 +295,7 @@ impl ScalarExpr {
                 if expr1.is_literal() && expr2.is_literal() {
                     *e = eval(e);
                 } else if (expr1.is_literal_null() || expr2.is_literal_null())
-                    && func.propagates_nulls()
+                    && func.props().propagates_nulls()
                 {
                     *e = ScalarExpr::literal_null(e.typ(relation_type));
                 } else if let Some(err) = expr1.as_literal_err() {
@@ -404,7 +404,9 @@ impl ScalarExpr {
                     }
                 } else if exprs.iter().all(|e| e.is_literal()) {
                     *e = eval(e);
-                } else if func.propagates_nulls() && exprs.iter().any(|e| e.is_literal_null()) {
+                } else if func.props().propagates_nulls()
+                    && exprs.iter().any(|e| e.is_literal_null())
+                {
                     *e = ScalarExpr::literal_null(e.typ(&relation_type));
                 } else if let Some(err) = exprs.iter().find_map(|e| e.as_literal_err()) {
                     *e = ScalarExpr::literal(Err(err.clone()), e.typ(&relation_type));
@@ -456,18 +458,18 @@ impl ScalarExpr {
             ScalarExpr::Literal(..) => {}
             ScalarExpr::CallNullary(_) => (),
             ScalarExpr::CallUnary { func, expr } => {
-                if func.propagates_nulls() {
+                if func.props().propagates_nulls() {
                     expr.non_null_requirements(columns);
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                if func.propagates_nulls() {
+                if func.props().propagates_nulls() {
                     expr1.non_null_requirements(columns);
                     expr2.non_null_requirements(columns);
                 }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                if func.propagates_nulls() {
+                if func.props().propagates_nulls() {
                     for expr in exprs {
                         expr.non_null_requirements(columns);
                     }

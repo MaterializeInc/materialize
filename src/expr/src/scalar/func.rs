@@ -7,29 +7,168 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp::{self, Ordering};
-use std::convert::{TryFrom, TryInto};
 use std::fmt;
-use std::str;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use encoding::label::encoding_from_whatwg_label;
-use encoding::DecoderTrap;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
-use ore::result::ResultExt;
 use repr::adt::datetime::DateTimeUnits;
-use repr::adt::decimal::MAX_DECIMAL_PRECISION;
-use repr::adt::interval::Interval;
-use repr::adt::jsonb::JsonbRef;
 use repr::adt::regex::Regex;
-use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, RowArena, ScalarType};
 
-use crate::scalar::func::format::DateTimeFormat;
-use crate::{like_pattern, EvalError, ScalarExpr};
+use crate::{EvalError, ScalarExpr};
 
-mod format;
+pub(crate) mod bool;
+pub(crate) mod cmp;
+pub(crate) mod datetime;
+pub(crate) mod decimal;
+pub(crate) mod float;
+pub(crate) mod format;
+pub(crate) mod integer;
+pub(crate) mod interval;
+pub(crate) mod jsonb;
+pub(crate) mod list;
+pub(crate) mod null;
+pub(crate) mod string;
+
+/// Specifies the null behavior of a function.
+#[derive(Debug)]
+pub enum Nulls {
+    /// The function never returns null, not even if the inputs to the function
+    /// are null.
+    Never,
+    /// The function sometimes returns null.
+    Sometimes {
+        /// The function returns null if any of its inputs are null.
+        propagates_nulls: bool,
+        /// The function might return null even if its inputs are non-null.
+        introduces_nulls: bool,
+    },
+}
+
+/// The output type of a function.
+pub enum OutputType {
+    /// The output type is the same as the input type.
+    ///
+    /// If the function takes multiple arguments, this variant indicates that
+    /// those arguments must have identical types. The function must take at
+    /// least one argument.
+    MatchesInput,
+    /// The output type is fixed to the contained type.
+    Fixed(ScalarType),
+    /// The output type is computed based on the input types.
+    Computed(fn(Vec<ColumnType>) -> ScalarType),
+}
+
+impl fmt::Debug for OutputType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OutputType::MatchesInput => f.write_str("OutputType::MatchesInput"),
+            OutputType::Fixed(ty) => write!(f, "OutputType::Fixed({:?})", ty),
+            OutputType::Computed(_) => f.write_str("OutputType::Computed(<omitted>)"),
+        }
+    }
+}
+
+/// Describes properties a function.
+#[derive(Debug)]
+pub struct FuncProps {
+    /// Whether the function can produce an error.
+    pub can_error: bool,
+    /// True iff for x != y, we are assured f(x) != f(y).
+    ///
+    /// This is most often the case for methods that promote to types that
+    /// can contain all the precision of the input type.
+    pub preserves_uniqueness: bool,
+    /// Specifies the null behavior of the function function.
+    pub nulls: Nulls,
+    /// Specifies the output type of the function.
+    pub output_type: OutputType,
+}
+
+impl FuncProps {
+    /// Returns whether this function returns null if any of its inputs are
+    /// null.
+    ///
+    /// This is a convenience accessor for the field of the same name in
+    /// [`Nulls`].
+    pub fn propagates_nulls(&self) -> bool {
+        match self.nulls {
+            Nulls::Never => false,
+            Nulls::Sometimes {
+                propagates_nulls, ..
+            } => propagates_nulls,
+        }
+    }
+
+    fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
+        let nullable = match self.nulls {
+            Nulls::Never => false,
+            Nulls::Sometimes {
+                introduces_nulls: true,
+                ..
+            } => true,
+            Nulls::Sometimes {
+                introduces_nulls: false,
+                ..
+            } => input_types.iter().any(|t| t.nullable),
+        };
+        match &self.output_type {
+            OutputType::Fixed(ty) => ColumnType::new(ty.clone()).nullable(nullable),
+            OutputType::MatchesInput => {
+                debug_assert!(
+                    input_types
+                        .windows(2)
+                        .all(|w| w[0].scalar_type == w[1].scalar_type),
+                    "inputs did not have uniform type: {:?}",
+                    input_types
+                );
+                input_types.into_first().nullable(nullable)
+            }
+            OutputType::Computed(f) => ColumnType::new(f(input_types)).nullable(nullable),
+        }
+    }
+
+    /// Checks whether the properties permit the supplied result for the
+    /// supplied input.
+    fn check(&self, input: &[Datum], result: &Result<Datum, EvalError>) -> Result<(), String> {
+        let result = match result {
+            Ok(result) => result,
+            Err(_) if self.can_error => return Ok(()),
+            Err(e) => return Err(format!("!can_error function returned error ({})", e)),
+        };
+
+        if result.is_null() {
+            match self.nulls {
+                Nulls::Never => Err("never-null function returned null".into()),
+                Nulls::Sometimes {
+                    introduces_nulls: false,
+                    ..
+                } if !input.iter().any(|d| d.is_null()) => {
+                    Err("!introduces_null function introduced null".into())
+                }
+                _ => Ok(()),
+            }
+        } else {
+            if let OutputType::Fixed(ty) = &self.output_type {
+                if !result.is_instance_of_scalar(ty) {
+                    return Err(format!(
+                        "return value {:?} does not have expected type {:?}",
+                        result, ty
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Specifies the affixment of the string representation of an operator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Affixment {
+    Prefix,
+    Infix,
+}
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {
@@ -52,1706 +191,609 @@ impl fmt::Display for NullaryFunc {
     }
 }
 
-pub fn and<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    a_expr: &'a ScalarExpr,
-    b_expr: &'a ScalarExpr,
-) -> Result<Datum<'a>, EvalError> {
-    match a_expr.eval(datums, temp_storage)? {
-        Datum::False => Ok(Datum::False),
-        a => match (a, b_expr.eval(datums, temp_storage)?) {
-            (_, Datum::False) => Ok(Datum::False),
-            (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
-            (Datum::True, Datum::True) => Ok(Datum::True),
-            _ => unreachable!(),
-        },
-    }
-}
-
-pub fn or<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    a_expr: &'a ScalarExpr,
-    b_expr: &'a ScalarExpr,
-) -> Result<Datum<'a>, EvalError> {
-    match a_expr.eval(datums, temp_storage)? {
-        Datum::True => Ok(Datum::True),
-        a => match (a, b_expr.eval(datums, temp_storage)?) {
-            (_, Datum::True) => Ok(Datum::True),
-            (Datum::Null, _) | (_, Datum::Null) => Ok(Datum::Null),
-            (Datum::False, Datum::False) => Ok(Datum::False),
-            _ => unreachable!(),
-        },
-    }
-}
-
-fn not<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(!a.unwrap_bool())
-}
-
-fn abs_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32().abs())
-}
-
-fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64().abs())
-}
-
-fn abs_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal().abs())
-}
-
-fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().abs())
-}
-
-fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().abs())
-}
-
-fn cast_bool_to_string_explicit<'a>(a: Datum<'a>) -> Datum<'a> {
-    // N.B. this function differs from `cast_bool_to_string_implicit` because
-    // the SQL specification requires `true` and `false` to be spelled out
-    // in explicit casts, while PostgreSQL prefers its more concise `t` and `f`
-    // representation in implicit casts.
-    match a.unwrap_bool() {
-        true => Datum::from("true"),
-        false => Datum::from("false"),
-    }
-}
-
-fn cast_bool_to_string_implicit<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::String(strconv::format_bool_static(a.unwrap_bool()))
-}
-
-fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() != 0)
-}
-
-fn cast_int32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_int32(&mut buf, a.unwrap_int32());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
-    Datum::from(a.unwrap_int32() as f32)
-}
-
-fn cast_int32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
-    Datum::from(f64::from(a.unwrap_int32()))
-}
-
-fn cast_int32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(i64::from(a.unwrap_int32()))
-}
-
-fn cast_int32_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(i128::from(a.unwrap_int32()))
-}
-
-fn cast_int64_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() != 0)
-}
-
-fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match i32::try_from(a.unwrap_int64()) {
-        Ok(n) => Ok(Datum::from(n)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
-    }
-}
-
-fn cast_int64_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(i128::from(a.unwrap_int64()))
-}
-
-fn cast_int64_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
-    Datum::from(a.unwrap_int64() as f32)
-}
-
-fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
-    Datum::from(a.unwrap_int64() as f64)
-}
-
-fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_int64(&mut buf, a.unwrap_int64());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
-    // i64 (https://github.com/rust-lang/rust/issues/10184).
-    Datum::from(a.unwrap_float32() as i64)
-}
-
-fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
-    Datum::from(f64::from(a.unwrap_float32()))
-}
-
-fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let f = a.unwrap_float32();
-    let scale = b.unwrap_int32();
-
-    if f > 10_f32.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
-        // When we can return error detail:
-        // format!("A field with precision {}, \
-        //         scale {} must round to an absolute value less than 10^{}.",
-        //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
-        return Err(EvalError::NumericFieldOverflow);
-    }
-
-    Ok(Datum::from((f * 10_f32.powi(scale)) as i128))
-}
-
-fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_float32(&mut buf, a.unwrap_float32());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_float64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    let f = a.unwrap_float64();
-    if f > (i32::max_value() as f64) || f < (i32::min_value() as f64) {
-        Datum::Null
-    } else {
-        Datum::from(f as i32)
-    }
-}
-
-fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
-    // i64 (https://github.com/rust-lang/rust/issues/10184).
-    Datum::from(a.unwrap_float64() as i64)
-}
-
-fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let f = a.unwrap_float64();
-    let scale = b.unwrap_int32();
-
-    if f > 10_f64.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
-        // When we can return error detail:
-        // format!("A field with precision {}, \
-        //         scale {} must round to an absolute value less than 10^{}.",
-        //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
-        return Err(EvalError::NumericFieldOverflow);
-    }
-
-    Ok(Datum::from((f * 10_f64.powi(scale)) as i128))
-}
-
-fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_float64(&mut buf, a.unwrap_float64());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal().as_i128() as i32)
-}
-
-fn cast_decimal_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal().as_i128() as i64)
-}
-
-fn cast_significand_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    // The second half of this function is defined in plan_cast_internal
-    Datum::from(a.unwrap_decimal().as_i128() as f32)
-}
-
-fn cast_significand_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // The second half of this function is defined in plan_cast_internal
-    Datum::from(a.unwrap_decimal().as_i128() as f64)
-}
-
-fn cast_decimal_to_string<'a>(a: Datum<'a>, scale: u8, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_decimal(&mut buf, &a.unwrap_decimal().with_scale(scale));
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_string_to_bool<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match strconv::parse_bool(a.unwrap_str())? {
-        true => Ok(Datum::True),
-        false => Ok(Datum::False),
-    }
-}
-
-fn cast_string_to_bytes<'a>(
-    a: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let bytes = strconv::parse_bytes(a.unwrap_str())?;
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
-}
-
-fn cast_string_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_int32(a.unwrap_str())
-        .map(Datum::Int32)
-        .err_into()
-}
-
-fn cast_string_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_int64(a.unwrap_str())
-        .map(Datum::Int64)
-        .err_into()
-}
-
-fn cast_string_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_float32(a.unwrap_str())
-        .map(|n| Datum::Float32(n.into()))
-        .err_into()
-}
-
-fn cast_string_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_float64(a.unwrap_str())
-        .map(|n| Datum::Float64(n.into()))
-        .err_into()
-}
-
-fn cast_string_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_decimal(a.unwrap_str())
-        .map(|d| {
-            Datum::from(match d.scale().cmp(&scale) {
-                Ordering::Less => d.significand() * 10_i128.pow(u32::from(scale - d.scale())),
-                Ordering::Equal => d.significand(),
-                Ordering::Greater => d.significand() / 10_i128.pow(u32::from(d.scale() - scale)),
-            })
-        })
-        .err_into()
-}
-
-fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_date(a.unwrap_str())
-        .map(Datum::Date)
-        .err_into()
-}
-
-fn cast_string_to_time<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_time(a.unwrap_str())
-        .map(Datum::Time)
-        .err_into()
-}
-
-fn cast_string_to_timestamp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_timestamp(a.unwrap_str())
-        .map(Datum::Timestamp)
-        .err_into()
-}
-
-fn cast_string_to_timestamptz<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_timestamptz(a.unwrap_str())
-        .map(Datum::TimestampTz)
-        .err_into()
-}
-
-fn cast_string_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    strconv::parse_interval(a.unwrap_str())
-        .map(Datum::Interval)
-        .err_into()
-}
-
-fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
-}
-
-fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::TimestampTz(DateTime::<Utc>::from_utc(
-        a.unwrap_date().and_hms(0, 0, 0),
-        Utc,
-    ))
-}
-
-fn cast_date_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_date(&mut buf, a.unwrap_date());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_time_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_time(&mut buf, a.unwrap_time());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_time_to_interval<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let t = a.unwrap_time();
-    match Interval::new(
-        0,
-        t.num_seconds_from_midnight() as i64,
-        t.nanosecond() as i64,
-    ) {
-        Ok(i) => Ok(Datum::Interval(i)),
-        Err(_) => Err(EvalError::IntervalOutOfRange),
-    }
-}
-
-fn cast_timestamp_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Date(a.unwrap_timestamp().date())
-}
-
-fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
-}
-
-fn cast_timestamp_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_timestamp(&mut buf, a.unwrap_timestamp());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_timestamptz_to_date<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Date(a.unwrap_timestamptz().naive_utc().date())
-}
-
-fn cast_timestamptz_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::Timestamp(a.unwrap_timestamptz().naive_utc())
-}
-
-fn cast_timestamptz_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_timestamptz(&mut buf, a.unwrap_timestamptz());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_interval_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_interval(&mut buf, a.unwrap_interval());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn cast_interval_to_time<'a>(a: Datum<'a>) -> Datum<'a> {
-    let mut i = a.unwrap_interval();
-
-    // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
-    if i.duration < 0 {
-        i = Interval::new(0, 86400, 0)
-            .unwrap()
-            .checked_add(
-                &Interval::new(0, i.dur_as_secs() % (24 * 60 * 60), i.nanoseconds() as i64)
-                    .unwrap(),
-            )
-            .unwrap();
-    }
-
-    Datum::Time(NaiveTime::from_hms_nano(
-        i.hours() as u32,
-        i.minutes() as u32,
-        i.seconds() as u32,
-        i.nanoseconds() as u32,
-    ))
-}
-
-fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_bytes(&mut buf, a.unwrap_bytes());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-// TODO(jamii): it would be much more efficient to skip the intermediate
-// repr::jsonb::Jsonb.
-fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match strconv::parse_jsonb(a.unwrap_str()) {
-        Err(_) => Datum::Null,
-        Ok(jsonb) => temp_storage.push_row(jsonb.into_row()).unpack_first(),
-    }
-}
-
-fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_jsonb(&mut buf, JsonbRef::from_datum(a));
-    Datum::String(temp_storage.push_string(buf))
-}
-
-pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match a {
-        Datum::JsonNull => Datum::Null,
-        Datum::String(_) => a,
-        _ => cast_jsonb_to_string(a, temp_storage),
-    }
-}
-
-fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::Null => Datum::JsonNull,
-        Datum::Float64(f) => {
-            if f.is_finite() {
-                a
-            } else if f.is_nan() {
-                Datum::String("NaN")
-            } else if f.is_sign_positive() {
-                Datum::String("Infinity")
-            } else {
-                Datum::String("-Infinity")
-            }
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum UnaryFunc {
+    /// Boolean functions.
+    CastBoolToStringExplicit,
+    CastBoolToStringImplicit,
+    CastStringToBool,
+    Not,
+
+    // Date and time functions.
+    CastDateToString,
+    CastTimeToString,
+    CastTimestampToString,
+    CastTimestampTzToString,
+    CastStringToDate,
+    CastStringToTime,
+    CastStringToTimestamp,
+    CastStringToTimestampTz,
+    CastDateToTimestamp,
+    CastDateToTimestampTz,
+    CastTimestampToDate,
+    CastTimestampTzToDate,
+    CastTimestampToTimestampTz,
+    CastTimestampTzToTimestamp,
+    ToTimestamp,
+    DatePartTimestamp(DateTimeUnits),
+    DatePartTimestampTz(DateTimeUnits),
+    DateTruncTimestamp(DateTimeUnits),
+    DateTruncTimestampTz(DateTimeUnits),
+
+    // Decimal functions.
+    CastDecimalToString(u8),
+    CastStringToDecimal(u8),
+    CastDecimalToInt32,
+    CastDecimalToInt64,
+    CastDecimalToFloat32,
+    CastDecimalToFloat64,
+    AbsDecimal,
+    NegDecimal,
+    CeilDecimal(u8),
+    FloorDecimal(u8),
+    RoundDecimal(u8),
+    SqrtDecimal(u8),
+
+    // Float functions.
+    CastFloat32ToString,
+    CastFloat64ToString,
+    CastStringToFloat32,
+    CastStringToFloat64,
+    CastFloat32ToInt64,
+    CastFloat32ToFloat64,
+    CastFloat64ToInt32,
+    CastFloat64ToInt64,
+    CastFloat32ToDecimal(u8),
+    CastFloat64ToDecimal(u8),
+    AbsFloat32,
+    AbsFloat64,
+    NegFloat32,
+    NegFloat64,
+    SqrtFloat32,
+    SqrtFloat64,
+    CeilFloat32,
+    CeilFloat64,
+    FloorFloat32,
+    FloorFloat64,
+    RoundFloat32,
+    RoundFloat64,
+
+    // Integer functions.
+    CastStringToInt32,
+    CastStringToInt64,
+    CastInt32ToBool,
+    CastInt32ToFloat32,
+    CastInt32ToFloat64,
+    CastInt32ToInt64,
+    CastInt32ToString,
+    CastInt32ToDecimal,
+    CastInt64ToBool,
+    CastInt64ToDecimal,
+    CastInt64ToFloat32,
+    CastInt64ToFloat64,
+    CastInt64ToInt32,
+    CastInt64ToString,
+    AbsInt32,
+    AbsInt64,
+    NegInt32,
+    NegInt64,
+
+    // Interval functions.
+    CastIntervalToString,
+    CastStringToInterval,
+    CastTimeToInterval,
+    CastIntervalToTime,
+    NegInterval,
+    DatePartInterval(DateTimeUnits),
+
+    // JSONB functions.
+    CastStringToJsonb,
+    CastJsonbToString,
+    CastJsonbOrNullToJsonb,
+    CastJsonbToFloat64,
+    CastJsonbToBool,
+    JsonbPretty,
+    JsonbTypeof,
+    JsonbArrayLength,
+    JsonbStripNulls,
+
+    // Null-handling functions.
+    IsNull,
+
+    // String functions.
+    CastBytesToString,
+    CastStringToBytes,
+    BitLengthBytes,
+    BitLengthString,
+    ByteLengthBytes,
+    ByteLengthString,
+    CharLength,
+    Ascii,
+    TrimWhitespace,
+    TrimLeadingWhitespace,
+    TrimTrailingWhitespace,
+    MatchRegex(Regex),
+}
+
+impl UnaryFunc {
+    pub fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a ScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        use UnaryFunc::*;
+
+        let a = a.eval(datums, temp_storage)?;
+        if self.props().propagates_nulls() && a.is_null() {
+            return Ok(Datum::Null);
         }
-        _ => a,
-    }
-}
 
-fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::Float64(_) => a,
-        Datum::String(s) => match s {
-            "NaN" => std::f64::NAN.into(),
-            "Infinity" => std::f64::INFINITY.into(),
-            "-Infinity" => std::f64::NEG_INFINITY.into(),
-            _ => Datum::Null,
-        },
-        _ => Datum::Null,
-    }
-}
-
-fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::True | Datum::False => a,
-        _ => Datum::Null,
-    }
-}
-
-fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int32()
-        .checked_add(b.unwrap_int32())
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
-}
-
-fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int64()
-        .checked_add(b.unwrap_int64())
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
-}
-
-fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() + b.unwrap_float32())
-}
-
-fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() + b.unwrap_float64())
-}
-
-fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let dt = a.unwrap_timestamp();
-    Datum::Timestamp(match b {
-        Datum::Interval(i) => {
-            let dt = add_timestamp_months(dt, i.months);
-            dt + i.duration_as_chrono()
-        }
-        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
-    })
-}
-
-fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let dt = a.unwrap_timestamptz().naive_utc();
-
-    let new_ndt = match b {
-        Datum::Interval(i) => {
-            let dt = add_timestamp_months(dt, i.months);
-            dt + i.duration_as_chrono()
-        }
-        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
-    };
-
-    Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
-}
-
-fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let date = a.unwrap_date();
-    let time = b.unwrap_time();
-
-    Datum::Timestamp(
-        NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms_nano(
-            time.hour(),
-            time.minute(),
-            time.second(),
-            time.nanosecond(),
-        ),
-    )
-}
-
-fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let date = a.unwrap_date();
-    let interval = b.unwrap_interval();
-
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
-    let dt = add_timestamp_months(dt, interval.months);
-    Datum::Timestamp(dt + interval.duration_as_chrono())
-}
-
-fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let time = a.unwrap_time();
-    let interval = b.unwrap_interval();
-    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());
-    Datum::Time(t)
-}
-
-fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().ceil())
-}
-
-fn ceil_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().ceil())
-}
-
-fn ceil_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
-    let decimal = a.unwrap_decimal();
-    Datum::from(decimal.with_scale(scale).ceil().significand())
-}
-
-fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().floor())
-}
-
-fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().floor())
-}
-
-fn floor_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
-    let decimal = a.unwrap_decimal();
-    Datum::from(decimal.with_scale(scale).floor().significand())
-}
-
-fn round_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().round())
-}
-
-fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().round())
-}
-
-fn round_decimal_unary<'a>(a: Datum<'a>, a_scale: u8) -> Datum<'a> {
-    round_decimal_binary(a, Datum::Int64(0), a_scale)
-}
-
-fn round_decimal_binary<'a>(a: Datum<'a>, b: Datum<'a>, a_scale: u8) -> Datum<'a> {
-    let round_to = b.unwrap_int64();
-    let decimal = a.unwrap_decimal().with_scale(a_scale);
-    Datum::from(decimal.round(round_to).significand())
-}
-
-fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
-    // which the encoding library uses[3].
-    // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
-    // [2]: https://encoding.spec.whatwg.org/
-    // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
-
-    match encoding_from_whatwg_label(&encoding_name) {
-        Some(enc) => {
-            // todo@jldlaughlin: #2282
-            if enc.name() != "utf-8" {
-                return Err(EvalError::InvalidEncodingName(encoding_name));
-            }
-        }
-        None => return Err(EvalError::InvalidEncodingName(encoding_name)),
-    }
-
-    let bytes = a.unwrap_bytes();
-    match str::from_utf8(bytes) {
-        Ok(from) => Ok(Datum::String(from)),
-        Err(e) => {
-            let mut byte_sequence = String::new();
-            strconv::format_bytes(&mut byte_sequence, &bytes);
-            Err(EvalError::InvalidByteSequence {
-                byte_sequence: e.to_string(),
-                encoding_name,
-            })
-        }
-    }
-}
-
-fn bit_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
-where
-    B: AsRef<[u8]>,
-{
-    match i32::try_from(bytes.as_ref().len() * 8) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
-    }
-}
-
-fn byte_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
-where
-    B: AsRef<[u8]>,
-{
-    match i32::try_from(bytes.as_ref().len()) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
-    }
-}
-
-fn char_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    match i32::try_from(a.unwrap_str().chars().count()) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
-    }
-}
-
-fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
-    // which the encoding library uses[3].
-    // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
-    // [2]: https://encoding.spec.whatwg.org/
-    // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
-
-    let enc = match encoding_from_whatwg_label(&encoding_name) {
-        Some(enc) => enc,
-        None => return Err(EvalError::InvalidEncodingName(encoding_name)),
-    };
-
-    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(EvalError::InvalidByteSequence {
-                byte_sequence: e.to_string(),
-                encoding_name,
-            })
-        }
-    };
-
-    match i32::try_from(decoded_string.chars().count()) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
-    }
-}
-
-fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    add_timestamp_interval(a, Datum::Interval(-b.unwrap_interval()))
-}
-
-fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    add_timestamptz_interval(a, Datum::Interval(-b.unwrap_interval()))
-}
-
-fn add_timestamp_months(dt: NaiveDateTime, months: i32) -> NaiveDateTime {
-    if months == 0 {
-        return dt;
-    }
-
-    let mut months = months;
-
-    let (mut year, mut month, mut day) = (dt.year(), dt.month0() as i32, dt.day());
-    let years = months / 12;
-    year += years;
-    months %= 12;
-    // positive modulus is easier to reason about
-    if months < 0 {
-        year -= 1;
-        months += 12;
-    }
-    year += (month + months) / 12;
-    month = (month + months) % 12;
-    // account for dt.month0
-    month += 1;
-
-    // handle going from January 31st to February by saturation
-    let mut new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
-    while new_d.is_none() {
-        debug_assert!(day > 28, "there are no months with fewer than 28 days");
-        day -= 1;
-        new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
-    }
-    let new_d = new_d.unwrap();
-
-    // Neither postgres nor mysql support leap seconds, so this should be safe.
-    //
-    // Both my testing and https://dba.stackexchange.com/a/105829 support the
-    // idea that we should ignore leap seconds
-    new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
-}
-
-fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
-}
-
-fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_interval()
-        .checked_add(&b.unwrap_interval())
-        .ok_or(EvalError::IntervalOutOfRange)
-        .map(Datum::from)
-}
-
-fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int32()
-        .checked_sub(b.unwrap_int32())
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
-}
-
-fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int64()
-        .checked_sub(b.unwrap_int64())
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
-}
-
-fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() - b.unwrap_float32())
-}
-
-fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() - b.unwrap_float64())
-}
-
-fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
-}
-
-fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
-}
-
-fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
-}
-
-fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_date() - b.unwrap_date())
-}
-
-fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_time() - b.unwrap_time())
-}
-
-fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_interval()
-        .checked_add(&-b.unwrap_interval())
-        .ok_or(EvalError::IntervalOutOfRange)
-        .map(Datum::from)
-}
-
-fn sub_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let date = a.unwrap_date();
-    let interval = b.unwrap_interval();
-
-    let dt = NaiveDate::from_ymd(date.year(), date.month(), date.day()).and_hms(0, 0, 0);
-    let dt = add_timestamp_months(dt, -interval.months);
-    Datum::Timestamp(dt - interval.duration_as_chrono())
-}
-
-fn sub_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let time = a.unwrap_time();
-    let interval = b.unwrap_interval();
-    let (t, _) = time.overflowing_sub_signed(interval.duration_as_chrono());
-    Datum::Time(t)
-}
-
-fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int32()
-        .checked_mul(b.unwrap_int32())
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
-}
-
-fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int64()
-        .checked_mul(b.unwrap_int64())
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
-}
-
-fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32() * b.unwrap_float32())
-}
-
-fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64() * b.unwrap_float64())
-}
-
-fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
-}
-
-fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_int32();
-    if b == 0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_int32() / b))
-    }
-}
-
-fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_int64();
-    if b == 0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_int64() / b))
-    }
-}
-
-fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_float32();
-    if b == 0.0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_float32() / b))
-    }
-}
-
-fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_float64();
-    if b == 0.0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_float64() / b))
-    }
-}
-
-fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_decimal();
-    if b == 0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_decimal() / b))
-    }
-}
-
-fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_int32();
-    if b == 0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_int32() % b))
-    }
-}
-
-fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_int64();
-    if b == 0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_int64() % b))
-    }
-}
-
-fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_float32();
-    if b == 0.0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_float32() % b))
-    }
-}
-
-fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_float64();
-    if b == 0.0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_float64() % b))
-    }
-}
-
-fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_decimal();
-    if b == 0 {
-        Err(EvalError::DivisionByZero)
-    } else {
-        Ok(Datum::from(a.unwrap_decimal() % b))
-    }
-}
-
-fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_int32())
-}
-
-fn neg_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_int64())
-}
-
-fn neg_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_float32())
-}
-
-fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_float64())
-}
-
-fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_decimal())
-}
-
-pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(-a.unwrap_interval())
-}
-
-fn sqrt_float32<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let x = a.unwrap_float32();
-    if x < 0.0 {
-        return Err(EvalError::NegSqrt);
-    }
-    Ok(Datum::from(x.sqrt()))
-}
-
-fn sqrt_float64<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let x = a.unwrap_float64();
-    if x < 0.0 {
-        return Err(EvalError::NegSqrt);
-    }
-
-    Ok(Datum::from(x.sqrt()))
-}
-
-fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
-    let d = a.unwrap_decimal();
-    if d.as_i128() < 0 {
-        return Err(EvalError::NegSqrt);
-    }
-    let d_f64 = cast_significand_to_float64(a);
-    let d_scaled = d_f64.unwrap_float64() / 10_f64.powi(i32::from(scale));
-    cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), Datum::from(i32::from(scale)))
-}
-
-fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a == b)
-}
-
-fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a != b)
-}
-
-fn lt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a < b)
-}
-
-fn lte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a <= b)
-}
-
-fn gt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a > b)
-}
-
-fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a >= b)
-}
-
-fn to_char_timestamp<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let fmt = DateTimeFormat::compile(b.unwrap_str());
-    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamp())))
-}
-
-fn to_char_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let fmt = DateTimeFormat::compile(b.unwrap_str());
-    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamptz())))
-}
-
-fn jsonb_get_int64<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-    stringify: bool,
-) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    match a {
-        Datum::List(list) => {
-            let i = if i >= 0 {
-                i
-            } else {
-                // index backwards from the end
-                (list.iter().count() as i64) + i
-            };
-            match list.iter().nth(i as usize) {
-                Some(d) if stringify => jsonb_stringify(d, temp_storage),
-                Some(d) => d,
-                None => Datum::Null,
-            }
-        }
-        Datum::Dict(_) => Datum::Null,
-        _ => {
-            if i == 0 || i == -1 {
-                // I have no idea why postgres does this, but we're stuck with it
-                if stringify {
-                    jsonb_stringify(a, temp_storage)
-                } else {
-                    a
-                }
-            } else {
-                Datum::Null
-            }
-        }
-    }
-}
-
-fn jsonb_get_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-    stringify: bool,
-) -> Datum<'a> {
-    let k = b.unwrap_str();
-    match a {
-        Datum::Dict(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
-            Some((_k, v)) if stringify => jsonb_stringify(v, temp_storage),
-            Some((_k, v)) => v,
-            None => Datum::Null,
-        },
-        _ => Datum::Null,
-    }
-}
-
-fn jsonb_contains_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let k = b.unwrap_str();
-    // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
-    match a {
-        Datum::List(list) => list.iter().any(|k2| b == k2).into(),
-        Datum::Dict(dict) => dict.iter().any(|(k2, _v)| k == k2).into(),
-        Datum::String(string) => (string == k).into(),
-        _ => false.into(),
-    }
-}
-
-// TODO(jamii) nested loops are possibly not the fastest way to do this
-fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
-    fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
-        match (a, b) {
-            (Datum::JsonNull, Datum::JsonNull) => true,
-            (Datum::False, Datum::False) => true,
-            (Datum::True, Datum::True) => true,
-            (Datum::Float64(a), Datum::Float64(b)) => (a == b),
-            (Datum::String(a), Datum::String(b)) => (a == b),
-            (Datum::List(a), Datum::List(b)) => b
-                .iter()
-                .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),
-            (Datum::Dict(a), Datum::Dict(b)) => b.iter().all(|(b_key, b_val)| {
-                a.iter()
-                    .any(|(a_key, a_val)| (a_key == b_key) && contains(a_val, b_val, false))
-            }),
-
-            // fun special case
-            (Datum::List(a), b) => {
-                at_top_level && a.iter().any(|a_elem| contains(a_elem, b, false))
+        let out = match self {
+            // Boolean functions.
+            CastBoolToStringExplicit => bool::cast_bool_to_string_explicit(a),
+            CastBoolToStringImplicit => bool::cast_bool_to_string_implicit(a),
+            CastStringToBool => bool::cast_string_to_bool(a),
+            Not => bool::not(a),
+
+            // Date and time functions.
+            CastDateToString => datetime::cast_date_to_string(a, temp_storage),
+            CastTimeToString => datetime::cast_time_to_string(a, temp_storage),
+            CastTimestampToString => datetime::cast_timestamp_to_string(a, temp_storage),
+            CastTimestampTzToString => datetime::cast_timestamptz_to_string(a, temp_storage),
+            CastStringToDate => datetime::cast_string_to_date(a),
+            CastStringToTime => datetime::cast_string_to_time(a),
+            CastStringToTimestamp => datetime::cast_string_to_timestamp(a),
+            CastStringToTimestampTz => datetime::cast_string_to_timestamptz(a),
+            CastDateToTimestamp => datetime::cast_date_to_timestamp(a),
+            CastDateToTimestampTz => datetime::cast_date_to_timestamptz(a),
+            CastTimestampToDate => datetime::cast_timestamp_to_date(a),
+            CastTimestampTzToDate => datetime::cast_timestamptz_to_date(a),
+            CastTimestampToTimestampTz => datetime::cast_timestamp_to_timestamptz(a),
+            CastTimestampTzToTimestamp => datetime::cast_timestamptz_to_timestamp(a),
+            ToTimestamp => datetime::to_timestamp(a),
+            DatePartTimestamp(units) => datetime::date_part_inner(*units, a.unwrap_timestamp()),
+            DatePartTimestampTz(units) => datetime::date_part_inner(*units, a.unwrap_timestamptz()),
+            DateTruncTimestamp(units) => datetime::date_trunc_inner(*units, a.unwrap_timestamp()),
+            DateTruncTimestampTz(units) => {
+                datetime::date_trunc_inner(*units, a.unwrap_timestamptz())
             }
 
-            _ => false,
-        }
-    }
-    contains(a, b, true).into()
-}
+            // Decimal functions.
+            CastDecimalToString(scale) => decimal::cast_decimal_to_string(a, *scale, temp_storage),
+            CastStringToDecimal(scale) => decimal::cast_string_to_decimal(a, *scale),
+            CastDecimalToInt32 => decimal::cast_decimal_to_int32(a),
+            CastDecimalToInt64 => decimal::cast_decimal_to_int64(a),
+            CastDecimalToFloat32 => decimal::cast_decimal_to_float32(a),
+            CastDecimalToFloat64 => decimal::cast_decimal_to_float64(a),
+            AbsDecimal => decimal::abs_decimal(a),
+            NegDecimal => decimal::neg_decimal(a),
+            SqrtDecimal(scale) => decimal::sqrt_decimal(a, *scale),
+            CeilDecimal(scale) => decimal::ceil_decimal(a, *scale),
+            FloorDecimal(scale) => decimal::floor_decimal(a, *scale),
+            RoundDecimal(scale) => decimal::round_decimal_unary(a, *scale),
 
-fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match (a, b) {
-        (Datum::Dict(dict_a), Datum::Dict(dict_b)) => {
-            let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
-            // stable sort, so if keys collide dedup prefers dict_b
-            pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
-            pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-            temp_storage.make_datum(|packer| packer.push_dict(pairs))
-        }
-        (Datum::List(list_a), Datum::List(list_b)) => {
-            let elems = list_a.iter().chain(list_b.iter());
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        (Datum::List(list_a), b) => {
-            let elems = list_a.iter().chain(Some(b).into_iter());
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        (a, Datum::List(list_b)) => {
-            let elems = Some(a).into_iter().chain(list_b.iter());
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        _ => Datum::Null,
-    }
-}
+            // Float functions.
+            CastStringToFloat32 => float::cast_string_to_float32(a),
+            CastStringToFloat64 => float::cast_string_to_float64(a),
+            CastFloat32ToInt64 => float::cast_float32_to_int64(a),
+            CastFloat32ToFloat64 => float::cast_float32_to_float64(a),
+            CastFloat32ToString => float::cast_float32_to_string(a, temp_storage),
+            CastFloat64ToInt32 => float::cast_float64_to_int32(a),
+            CastFloat64ToInt64 => float::cast_float64_to_int64(a),
+            CastFloat64ToString => float::cast_float64_to_string(a, temp_storage),
+            CastFloat32ToDecimal(s) => float::cast_float32_to_decimal(a, *s),
+            CastFloat64ToDecimal(s) => float::cast_float64_to_decimal(a, *s),
+            AbsFloat32 => float::abs_float32(a),
+            AbsFloat64 => float::abs_float64(a),
+            NegFloat32 => float::neg_float32(a),
+            NegFloat64 => float::neg_float64(a),
+            CeilFloat32 => float::ceil_float32(a),
+            CeilFloat64 => float::ceil_float64(a),
+            FloorFloat32 => float::floor_float32(a),
+            FloorFloat64 => float::floor_float64(a),
+            SqrtFloat32 => float::sqrt_float32(a),
+            SqrtFloat64 => float::sqrt_float64(a),
+            RoundFloat32 => float::round_float32(a),
+            RoundFloat64 => float::round_float64(a),
 
-fn jsonb_delete_int64<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    match a {
-        Datum::List(list) => {
-            let i = if i >= 0 {
-                i
-            } else {
-                // index backwards from the end
-                (list.iter().count() as i64) + i
-            } as usize;
-            let elems = list
-                .iter()
-                .enumerate()
-                .filter(|(i2, _e)| i != *i2)
-                .map(|(_, e)| e);
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        _ => Datum::Null,
-    }
-}
+            // Integer functions.
+            CastInt32ToBool => integer::cast_int32_to_bool(a),
+            CastInt32ToFloat32 => integer::cast_int32_to_float32(a),
+            CastInt32ToFloat64 => integer::cast_int32_to_float64(a),
+            CastInt32ToInt64 => integer::cast_int32_to_int64(a),
+            CastInt32ToDecimal => integer::cast_int32_to_decimal(a),
+            CastInt32ToString => integer::cast_int32_to_string(a, temp_storage),
+            CastInt64ToInt32 => integer::cast_int64_to_int32(a),
+            CastInt64ToBool => integer::cast_int64_to_bool(a),
+            CastInt64ToDecimal => integer::cast_int64_to_decimal(a),
+            CastInt64ToFloat32 => integer::cast_int64_to_float32(a),
+            CastInt64ToFloat64 => integer::cast_int64_to_float64(a),
+            CastInt64ToString => integer::cast_int64_to_string(a, temp_storage),
+            CastStringToInt32 => integer::cast_string_to_int32(a),
+            CastStringToInt64 => integer::cast_string_to_int64(a),
+            AbsInt32 => integer::abs_int32(a),
+            AbsInt64 => integer::abs_int64(a),
+            NegInt32 => integer::neg_int32(a),
+            NegInt64 => integer::neg_int64(a),
 
-fn jsonb_delete_string<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match a {
-        Datum::List(list) => {
-            let elems = list.iter().filter(|e| b != *e);
-            temp_storage.make_datum(|packer| packer.push_list(elems))
-        }
-        Datum::Dict(dict) => {
-            let k = b.unwrap_str();
-            let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
-            temp_storage.make_datum(|packer| packer.push_dict(pairs))
-        }
-        _ => Datum::Null,
-    }
-}
+            // Interval functions.
+            CastStringToInterval => interval::cast_string_to_interval(a),
+            CastTimeToInterval => interval::cast_time_to_interval(a),
+            CastIntervalToString => interval::cast_interval_to_string(a, temp_storage),
+            CastIntervalToTime => interval::cast_interval_to_time(a),
+            NegInterval => interval::neg_interval(a),
+            DatePartInterval(units) => interval::date_part_inner(*units, a.unwrap_interval()),
 
-fn match_like_pattern<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = like_pattern::build_regex(b.unwrap_str())?;
-    Ok(Datum::from(needle.is_match(haystack)))
-}
+            // JSONB functions.
+            CastJsonbToString => jsonb::cast_jsonb_to_string(a, temp_storage),
+            CastStringToJsonb => jsonb::cast_string_to_jsonb(a, temp_storage),
+            CastJsonbOrNullToJsonb => jsonb::cast_jsonb_or_null_to_jsonb(a),
+            CastJsonbToFloat64 => jsonb::cast_jsonb_to_float64(a),
+            CastJsonbToBool => jsonb::cast_jsonb_to_bool(a),
+            JsonbPretty => jsonb::jsonb_pretty(a, temp_storage),
+            JsonbArrayLength => jsonb::jsonb_array_length(a),
+            JsonbStripNulls => jsonb::jsonb_strip_nulls(a, temp_storage),
+            JsonbTypeof => jsonb::jsonb_typeof(a),
 
-fn match_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
-    let haystack = a.unwrap_str();
-    Datum::from(needle.is_match(haystack))
-}
+            // Null-handling functions.
+            IsNull => null::is_null(a),
 
-fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a.unwrap_str().chars().next() {
-        None => Datum::Int32(0),
-        Some(v) => Datum::Int32(v as i32),
-    }
-}
-
-/// A timestamp with both a date and a time component, but not necessarily a
-/// timezone component.
-pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datum<'a>> {
-    fn new(date: NaiveDate, time: NaiveTime) -> Self;
-
-    /// Returns the weekday as a `usize` between 0 and 6, where 0 represents
-    /// Sunday and 6 represents Saturday.
-    fn weekday0(&self) -> usize {
-        self.weekday().num_days_from_sunday() as usize
-    }
-
-    /// Like [`chrono::Datelike::year_ce`], but works on the ISO week system.
-    fn iso_year_ce(&self) -> u32 {
-        let year = self.iso_week().year();
-        if year < 1 {
-            (1 - year) as u32
-        } else {
-            year as u32
-        }
-    }
-
-    fn timestamp(&self) -> i64;
-
-    fn timestamp_subsec_micros(&self) -> u32;
-
-    fn extract_epoch(&self) -> f64 {
-        self.timestamp() as f64 + (self.timestamp_subsec_micros() as f64) / 1e6
-    }
-
-    fn extract_year(&self) -> f64 {
-        f64::from(self.year())
-    }
-
-    fn extract_quarter(&self) -> f64 {
-        (f64::from(self.month()) / 3.0).ceil()
-    }
-
-    fn extract_month(&self) -> f64 {
-        f64::from(self.month())
-    }
-
-    fn extract_day(&self) -> f64 {
-        f64::from(self.day())
-    }
-
-    fn extract_hour(&self) -> f64 {
-        f64::from(self.hour())
-    }
-
-    fn extract_minute(&self) -> f64 {
-        f64::from(self.minute())
-    }
-
-    fn extract_second(&self) -> f64 {
-        let s = f64::from(self.second());
-        let ns = f64::from(self.nanosecond()) / 1e9;
-        s + ns
-    }
-
-    /// Extract the iso week of the year
-    ///
-    /// Note that because isoweeks are defined in terms of January 4th, Jan 1 is only in week
-    /// 1 about half of the time
-    fn extract_week(&self) -> f64 {
-        f64::from(self.iso_week().week())
-    }
-
-    fn extract_dayofyear(&self) -> f64 {
-        f64::from(self.ordinal())
-    }
-
-    fn extract_dayofweek(&self) -> f64 {
-        f64::from(self.weekday().num_days_from_sunday())
-    }
-
-    fn extract_isodayofweek(&self) -> f64 {
-        f64::from(self.weekday().number_from_monday())
-    }
-
-    fn truncate_microseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_micro(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000,
-        );
-
-        Self::new(self.date(), time)
-    }
-
-    fn truncate_milliseconds(&self) -> Self {
-        let time = NaiveTime::from_hms_milli(
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nanosecond() / 1_000_000,
-        );
-
-        Self::new(self.date(), time)
-    }
-
-    fn truncate_second(&self) -> Self {
-        let time = NaiveTime::from_hms(self.hour(), self.minute(), self.second());
-
-        Self::new(self.date(), time)
-    }
-
-    fn truncate_minute(&self) -> Self {
-        Self::new(
-            self.date(),
-            NaiveTime::from_hms(self.hour(), self.minute(), 0),
-        )
-    }
-
-    fn truncate_hour(&self) -> Self {
-        Self::new(self.date(), NaiveTime::from_hms(self.hour(), 0, 0))
-    }
-
-    fn truncate_day(&self) -> Self {
-        Self::new(self.date(), NaiveTime::from_hms(0, 0, 0))
-    }
-
-    fn truncate_week(&self) -> Self {
-        let num_days_from_monday = self.date().weekday().num_days_from_monday();
-        Self::new(
-            NaiveDate::from_ymd(self.year(), self.month(), self.day() - num_days_from_monday),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-
-    fn truncate_month(&self) -> Self {
-        Self::new(
-            NaiveDate::from_ymd(self.year(), self.month(), 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-
-    fn truncate_quarter(&self) -> Self {
-        let month = self.month();
-        let quarter = if month <= 3 {
-            1
-        } else if month <= 6 {
-            4
-        } else if month <= 9 {
-            7
-        } else {
-            10
+            // String functions.
+            CastBytesToString => string::cast_bytes_to_string(a, temp_storage),
+            CastStringToBytes => string::cast_string_to_bytes(a, temp_storage),
+            BitLengthString => string::bit_length(a.unwrap_str()),
+            BitLengthBytes => string::bit_length(a.unwrap_bytes()),
+            ByteLengthString => string::byte_length(a.unwrap_str()),
+            ByteLengthBytes => string::byte_length(a.unwrap_bytes()),
+            CharLength => string::char_length(a),
+            Ascii => string::ascii(a),
+            TrimWhitespace => string::trim_whitespace(a),
+            TrimLeadingWhitespace => string::trim_leading_whitespace(a),
+            TrimTrailingWhitespace => string::trim_trailing_whitespace(a),
+            MatchRegex(regex) => string::match_regex(a, &regex),
         };
 
-        Self::new(
-            NaiveDate::from_ymd(self.year(), quarter, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
+        #[cfg(debug_assertions)]
+        self.props()
+            .check(&[a], &out)
+            .unwrap_or_else(|e| panic!("{} failed property validation: {}", self, e));
+
+        out
     }
 
-    fn truncate_year(&self) -> Self {
-        Self::new(
-            NaiveDate::from_ymd(self.year(), 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-    fn truncate_decade(&self) -> Self {
-        Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 10), 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-    fn truncate_century(&self) -> Self {
-        // Expects the first year of the century, meaning 2001 instead of 2000.
-        Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 100) + 1, 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
-    fn truncate_millennium(&self) -> Self {
-        // Expects the first year of the millennium, meaning 2001 instead of 2000.
-        Self::new(
-            NaiveDate::from_ymd(self.year() - (self.year() % 1_000) + 1, 1, 1),
-            NaiveTime::from_hms(0, 0, 0),
-        )
-    }
+    pub fn props(&self) -> FuncProps {
+        use UnaryFunc::*;
 
-    /// Return the date component of the timestamp
-    fn date(&self) -> NaiveDate;
+        match self {
+            // Boolean functions.
+            CastBoolToStringImplicit | CastBoolToStringExplicit => bool::CAST_BOOL_TO_STRING_PROPS,
+            CastStringToBool => bool::CAST_STRING_TO_BOOL_PROPS,
+            Not => bool::NOT_PROPS,
 
-    /// Returns a string representing the timezone's offset from UTC.
-    fn timezone_offset(&self) -> &'static str;
+            // Date and time functions.
+            CastDateToString
+            | CastTimeToString
+            | CastTimestampToString
+            | CastTimestampTzToString => datetime::CAST_TO_STRING_PROPS,
+            CastStringToDate => datetime::CAST_STRING_TO_DATE_PROPS,
+            CastStringToTime => datetime::CAST_STRING_TO_TIME_PROPS,
+            CastStringToTimestamp => datetime::CAST_STRING_TO_TIMESTAMP_PROPS,
+            CastStringToTimestampTz => datetime::CAST_STRING_TO_TIMESTAMPTZ_PROPS,
+            CastDateToTimestamp => datetime::CAST_DATE_TO_TIMESTAMP_PROPS,
+            CastDateToTimestampTz => datetime::CAST_DATE_TO_TIMESTAMPTZ_PROPS,
+            CastTimestampToDate | CastTimestampTzToDate => datetime::CAST_TIMESTAMP_TO_DATE_PROPS,
+            CastTimestampToTimestampTz => datetime::CAST_TIMESTAMP_TO_TIMESTAMPTZ_PROPS,
+            CastTimestampTzToTimestamp => datetime::CAST_TIMESTAMPTZ_TO_TIMESTAMP_PROPS,
+            ToTimestamp => datetime::TO_TIMESTAMP_PROPS,
+            DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
+                datetime::DATE_PART_PROPS
+            }
+            DateTruncTimestamp(_) => datetime::DATE_TRUNC_TIMESTAMP_PROPS,
+            DateTruncTimestampTz(_) => datetime::DATE_TRUNC_TIMESTAMPTZ_PROPS,
 
-    /// Returns a string representing the hour portion of the timezone's offset
-    /// from UTC.
-    fn timezone_hours(&self) -> &'static str;
+            // Decimal functions.
+            CastDecimalToString(_) => decimal::CAST_DECIMAL_TO_STRING_PROPS,
+            CastStringToDecimal(s) => decimal::cast_string_to_decimal_props(*s),
+            CastDecimalToInt32 => decimal::CAST_DECIMAL_TO_INT32_PROPS,
+            CastDecimalToInt64 => decimal::CAST_DECIMAL_TO_INT64_PROPS,
+            CastDecimalToFloat32 => decimal::CAST_DECIMAL_TO_FLOAT32_PROPS,
+            CastDecimalToFloat64 => decimal::CAST_DECIMAL_TO_FLOAT64_PROPS,
+            AbsDecimal | NegDecimal | CeilDecimal(_) | FloorDecimal(_) => {
+                decimal::DECIMAL_MATH_PROPS
+            }
+            RoundDecimal(_) => decimal::ROUND_DECIMAL_PROPS,
+            SqrtDecimal(_) => decimal::SQRT_DECIMAL_PROPS,
 
-    /// Returns a string representing the minute portion of the timezone's
-    /// offset from UTC.
-    fn timezone_minutes(&self) -> &'static str;
+            // Float functions.
+            CastStringToFloat32 => float::CAST_STRING_TO_FLOAT32_PROPS,
+            CastStringToFloat64 => float::CAST_STRING_TO_FLOAT64_PROPS,
+            CastFloat32ToInt64 | CastFloat64ToInt64 => float::CAST_FLOAT_TO_INT64_PROPS,
+            CastFloat32ToFloat64 => float::CAST_FLOAT32_TO_FLOAT64_PROPS,
+            CastFloat32ToString | CastFloat64ToString => float::CAST_FLOAT_TO_STRING_PROPS,
+            CastFloat64ToInt32 => float::CAST_FLOAT_TO_INT32_PROPS,
+            CastFloat32ToDecimal(s) | CastFloat64ToDecimal(s) => {
+                float::cast_float_to_decimal_props(*s)
+            }
+            AbsFloat32 | NegFloat32 | CeilFloat32 | FloorFloat32 | RoundFloat32 | SqrtFloat32 => {
+                float::FLOAT32_MATH_PROPS
+            }
+            AbsFloat64 | NegFloat64 | CeilFloat64 | FloorFloat64 | RoundFloat64 | SqrtFloat64 => {
+                float::FLOAT64_MATH_PROPS
+            }
 
-    /// Returns the abbreviated name of the timezone with the specified
-    /// capitalization.
-    fn timezone_name(&self, caps: bool) -> &'static str;
-}
+            // Integer functions.
+            CastStringToInt32 => integer::CAST_STRING_TO_INT32_PROPS,
+            CastStringToInt64 => integer::CAST_STRING_TO_INT64_PROPS,
+            CastInt32ToBool | CastInt64ToBool => integer::CAST_INT_TO_BOOL_PROPS,
+            CastInt32ToFloat32 | CastInt64ToFloat32 => integer::CAST_INT_TO_FLOAT32_PROPS,
+            CastInt32ToFloat64 | CastInt64ToFloat64 => integer::CAST_INT_TO_FLOAT64_PROPS,
+            CastInt32ToString | CastInt64ToString => integer::CAST_INT_TO_STRING_PROPS,
+            CastInt32ToInt64 => integer::CAST_INT32_TO_INT64_PROPS,
+            CastInt32ToDecimal => integer::CAST_INT32_TO_DECIMAL_PROPS,
+            CastInt64ToInt32 => integer::CAST_INT64_TO_INT32_PROPS,
+            CastInt64ToDecimal => integer::CAST_INT64_TO_DECIMAL_PROPS,
+            AbsInt32 | NegInt32 => integer::INT32_MATH_PROPS,
+            AbsInt64 | NegInt64 => integer::INT64_MATH_PROPS,
 
-impl TimestampLike for chrono::NaiveDateTime {
-    fn new(date: NaiveDate, time: NaiveTime) -> Self {
-        NaiveDateTime::new(date, time)
-    }
+            // Interval functions.
+            CastIntervalToString => interval::CAST_INTERVAL_TO_STRING_PROPS,
+            CastStringToInterval => interval::CAST_STRING_TO_INTERVAL_PROPS,
+            CastTimeToInterval => interval::CAST_TIME_TO_INTERVAL_PROPS,
+            CastIntervalToTime => interval::CAST_INTERVAL_TO_TIME_PROPS,
+            NegInterval => interval::INTERVAL_MATH_PROPS,
 
-    fn date(&self) -> NaiveDate {
-        self.date()
-    }
+            // JSONB functions.
+            CastJsonbToString => jsonb::CAST_JSONB_TO_STRING_PROPS,
+            CastStringToJsonb => jsonb::CAST_STRING_TO_JSONB_PROPS,
+            CastJsonbOrNullToJsonb => jsonb::CAST_JSONB_OR_NULL_TO_JSONB_PROPS,
+            CastJsonbToFloat64 => jsonb::CAST_JSONB_TO_FLOAT64_PROPS,
+            CastJsonbToBool => jsonb::CAST_JSONB_TO_BOOL_PROPS,
+            JsonbPretty => jsonb::JSONB_PRETTY_PROPS,
+            JsonbArrayLength => jsonb::JSONB_ARRAY_LENGTH_PROPS,
+            JsonbStripNulls => jsonb::JSONB_STRIP_NULLS_PROPS,
+            JsonbTypeof => jsonb::JSONB_TYPEOF_PROPS,
 
-    fn timestamp(&self) -> i64 {
-        self.timestamp()
-    }
+            // Null-handling functions.
+            IsNull => null::IS_NULL_PROPS,
 
-    fn timestamp_subsec_micros(&self) -> u32 {
-        self.timestamp_subsec_micros()
-    }
-
-    fn timezone_offset(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_hours(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_minutes(&self) -> &'static str {
-        "00"
-    }
-
-    fn timezone_name(&self, _caps: bool) -> &'static str {
-        ""
-    }
-}
-
-impl TimestampLike for chrono::DateTime<chrono::Utc> {
-    fn new(date: NaiveDate, time: NaiveTime) -> Self {
-        DateTime::<Utc>::from_utc(NaiveDateTime::new(date, time), Utc)
-    }
-
-    fn date(&self) -> NaiveDate {
-        self.naive_utc().date()
-    }
-
-    fn timestamp(&self) -> i64 {
-        self.timestamp()
-    }
-
-    fn timestamp_subsec_micros(&self) -> u32 {
-        self.timestamp_subsec_micros()
-    }
-
-    fn timezone_offset(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_hours(&self) -> &'static str {
-        "+00"
-    }
-
-    fn timezone_minutes(&self) -> &'static str {
-        "00"
-    }
-
-    fn timezone_name(&self, caps: bool) -> &'static str {
-        if caps {
-            "UTC"
-        } else {
-            "utc"
+            // String functions.
+            CastBytesToString => string::CAST_BYTES_TO_STRING_PROPS,
+            CastStringToBytes => string::CAST_STRING_TO_BYTES_PROPS,
+            TrimWhitespace | TrimLeadingWhitespace | TrimTrailingWhitespace => string::TRIM_PROPS,
+            Ascii => string::ASCII_PROPS,
+            CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes | ByteLengthString => {
+                string::LENGTH_PROPS
+            }
+            MatchRegex(_) => string::MATCH_REGEX_PROPS,
         }
     }
-}
 
-fn date_part_interval<'a>(a: Datum<'a>, interval: Interval) -> Result<Datum<'a>, EvalError> {
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => date_part_interval_inner(units, interval),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
+    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        self.props().output_type(vec![input_type])
     }
 }
 
-fn date_part_interval_inner(
-    units: DateTimeUnits,
-    interval: Interval,
-) -> Result<Datum<'static>, EvalError> {
-    match units {
-        DateTimeUnits::Epoch => Ok(interval.as_seconds().into()),
-        DateTimeUnits::Year => Ok(interval.years().into()),
-        DateTimeUnits::Day => Ok(interval.days().into()),
-        DateTimeUnits::Hour => Ok(interval.hours().into()),
-        DateTimeUnits::Minute => Ok(interval.minutes().into()),
-        DateTimeUnits::Second => Ok(interval.seconds().into()),
-        DateTimeUnits::Millennium
-        | DateTimeUnits::Century
-        | DateTimeUnits::Decade
-        | DateTimeUnits::Quarter
-        | DateTimeUnits::Week
-        | DateTimeUnits::Month
-        | DateTimeUnits::Milliseconds
-        | DateTimeUnits::Microseconds
-        | DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::DayOfWeek
-        | DateTimeUnits::DayOfYear
-        | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
-    }
-}
+impl fmt::Display for UnaryFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use UnaryFunc::*;
 
-fn date_part_timestamp<'a, T>(a: Datum<'a>, ts: T) -> Result<Datum<'a>, EvalError>
-where
-    T: TimestampLike,
-{
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => date_part_timestamp_inner(units, ts),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
+        match self {
+            // Boolean functions.
+            CastBoolToStringExplicit => f.write_str("booltostrex"),
+            CastBoolToStringImplicit => f.write_str("booltostrim"),
+            CastStringToBool => f.write_str("strtobool"),
+            Not => f.write_str("!"),
 
-fn date_part_timestamp_inner<'a, T>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
-where
-    T: TimestampLike,
-{
-    match units {
-        DateTimeUnits::Epoch => Ok(ts.extract_epoch().into()),
-        DateTimeUnits::Year => Ok(ts.extract_year().into()),
-        DateTimeUnits::Quarter => Ok(ts.extract_quarter().into()),
-        DateTimeUnits::Week => Ok(ts.extract_week().into()),
-        DateTimeUnits::Day => Ok(ts.extract_day().into()),
-        DateTimeUnits::DayOfWeek => Ok(ts.extract_dayofweek().into()),
-        DateTimeUnits::DayOfYear => Ok(ts.extract_dayofyear().into()),
-        DateTimeUnits::IsoDayOfWeek => Ok(ts.extract_isodayofweek().into()),
-        DateTimeUnits::Hour => Ok(ts.extract_hour().into()),
-        DateTimeUnits::Minute => Ok(ts.extract_minute().into()),
-        DateTimeUnits::Second => Ok(ts.extract_second().into()),
-        DateTimeUnits::Month => Ok(ts.extract_month().into()),
-        DateTimeUnits::Millennium
-        | DateTimeUnits::Century
-        | DateTimeUnits::Decade
-        | DateTimeUnits::Milliseconds
-        | DateTimeUnits::Microseconds
-        | DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
-    }
-}
+            // Date and time functions.
+            CastDateToString => f.write_str("datetostr"),
+            CastTimeToString => f.write_str("timetostr"),
+            CastTimestampToString => f.write_str("tstostr"),
+            CastTimestampTzToString => f.write_str("tstztostr"),
+            CastStringToDate => f.write_str("strtodate"),
+            CastStringToTime => f.write_str("strtotime"),
+            CastStringToTimestamp => f.write_str("strtots"),
+            CastStringToTimestampTz => f.write_str("strtotstz"),
+            CastDateToTimestamp => f.write_str("datetots"),
+            CastDateToTimestampTz => f.write_str("datetotstz"),
+            CastTimestampToDate => f.write_str("tstodate"),
+            CastTimestampToTimestampTz => f.write_str("tstotstz"),
+            CastTimestampTzToDate => f.write_str("tstodate"),
+            CastTimestampTzToTimestamp => f.write_str("tstztots"),
+            ToTimestamp => f.write_str("tots"),
+            DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
+            DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),
+            DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
+            DateTruncTimestamp(units) => write!(f, "date_trunc_{}_ts", units),
+            DateTruncTimestampTz(units) => write!(f, "date_trunc_{}_tstz", units),
 
-fn date_trunc<'a, T>(a: Datum<'a>, ts: T) -> Result<Datum<'a>, EvalError>
-where
-    T: TimestampLike,
-{
-    let units = a.unwrap_str();
-    match units.parse() {
-        Ok(units) => date_trunc_inner(units, ts),
-        Err(_) => Err(EvalError::UnknownUnits(units.to_owned())),
-    }
-}
+            // Decimal functions.
+            CastStringToDecimal(_) => f.write_str("strtodec"),
+            CastDecimalToString(_) => f.write_str("dectostr"),
+            CastDecimalToInt32 => f.write_str("dectoi32"),
+            CastDecimalToInt64 => f.write_str("dectoi64"),
+            CastDecimalToFloat32 => f.write_str("dectof32"),
+            CastDecimalToFloat64 => f.write_str("dectof64"),
+            AbsDecimal => f.write_str("abs"),
+            NegDecimal => f.write_str("-"),
+            SqrtDecimal(_) => f.write_str("sqrtdec"),
+            CeilDecimal(_) => f.write_str("ceildec"),
+            FloorDecimal(_) => f.write_str("floordec"),
+            RoundDecimal(_) => f.write_str("roundunary"),
 
-fn date_trunc_inner<'a, T>(units: DateTimeUnits, ts: T) -> Result<Datum<'a>, EvalError>
-where
-    T: TimestampLike,
-{
-    match units {
-        DateTimeUnits::Millennium => Ok(ts.truncate_millennium().into()),
-        DateTimeUnits::Century => Ok(ts.truncate_century().into()),
-        DateTimeUnits::Decade => Ok(ts.truncate_decade().into()),
-        DateTimeUnits::Year => Ok(ts.truncate_year().into()),
-        DateTimeUnits::Quarter => Ok(ts.truncate_quarter().into()),
-        DateTimeUnits::Week => Ok(ts.truncate_week().into()),
-        DateTimeUnits::Day => Ok(ts.truncate_day().into()),
-        DateTimeUnits::Hour => Ok(ts.truncate_hour().into()),
-        DateTimeUnits::Minute => Ok(ts.truncate_minute().into()),
-        DateTimeUnits::Second => Ok(ts.truncate_second().into()),
-        DateTimeUnits::Month => Ok(ts.truncate_month().into()),
-        DateTimeUnits::Milliseconds => Ok(ts.truncate_milliseconds().into()),
-        DateTimeUnits::Microseconds => Ok(ts.truncate_microseconds().into()),
-        DateTimeUnits::Epoch
-        | DateTimeUnits::Timezone
-        | DateTimeUnits::TimezoneHour
-        | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::DayOfWeek
-        | DateTimeUnits::DayOfYear
-        | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::UnsupportedDateTimeUnits(units)),
-    }
-}
+            // Float functions.
+            CastStringToFloat32 => f.write_str("strtof32"),
+            CastStringToFloat64 => f.write_str("strtof64"),
+            CastFloat32ToInt64 => f.write_str("f32toi64"),
+            CastFloat32ToFloat64 => f.write_str("f32tof64"),
+            CastFloat32ToString => f.write_str("f32tostr"),
+            CastFloat64ToInt32 => f.write_str("f64toi32"),
+            CastFloat64ToInt64 => f.write_str("f64toi64"),
+            CastFloat64ToString => f.write_str("f64tostr"),
+            CastFloat32ToDecimal(_) => f.write_str("f32todec"),
+            CastFloat64ToDecimal(_) => f.write_str("f64todec"),
+            AbsFloat32 => f.write_str("abs"),
+            AbsFloat64 => f.write_str("abs"),
+            NegFloat32 => f.write_str("-"),
+            NegFloat64 => f.write_str("-"),
+            SqrtFloat32 => f.write_str("sqrtf32"),
+            SqrtFloat64 => f.write_str("sqrtf64"),
+            CeilFloat32 => f.write_str("ceilf32"),
+            CeilFloat64 => f.write_str("ceilf64"),
+            FloorFloat32 => f.write_str("floorf32"),
+            FloorFloat64 => f.write_str("floorf64"),
+            RoundFloat32 => f.write_str("roundf32"),
+            RoundFloat64 => f.write_str("roundf64"),
 
-fn to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    let f = a.unwrap_float64();
-    if !f.is_finite() {
-        return Datum::Null;
-    }
-    let secs = f.trunc() as i64;
-    // NOTE(benesch): PostgreSQL has microsecond precision in its timestamps,
-    // while chrono has nanosecond precision. While we normally accept
-    // nanosecond precision, here we round to the nearest microsecond because
-    // f64s lose quite a bit of accuracy in the nanosecond digits when dealing
-    // with common Unix timestamp values (> 1 billion).
-    let nanosecs = ((f.fract() * 1_000_000.0).round() as u32) * 1_000;
-    match NaiveDateTime::from_timestamp_opt(secs as i64, nanosecs as u32) {
-        None => Datum::Null,
-        Some(ts) => Datum::TimestampTz(DateTime::<Utc>::from_utc(ts, Utc)),
-    }
-}
+            // Integer functions.
+            CastStringToInt32 => f.write_str("strtoi32"),
+            CastStringToInt64 => f.write_str("strtoi64"),
+            CastInt32ToBool => f.write_str("i32tobool"),
+            CastInt32ToFloat32 => f.write_str("i32tof32"),
+            CastInt32ToFloat64 => f.write_str("i32tof64"),
+            CastInt32ToInt64 => f.write_str("i32toi64"),
+            CastInt32ToString => f.write_str("i32tostr"),
+            CastInt32ToDecimal => f.write_str("i32todec"),
+            CastInt64ToInt32 => f.write_str("i64toi32"),
+            CastInt64ToBool => f.write_str("i64tobool"),
+            CastInt64ToDecimal => f.write_str("i64todec"),
+            CastInt64ToFloat32 => f.write_str("i64tof32"),
+            CastInt64ToFloat64 => f.write_str("i64tof64"),
+            CastInt64ToString => f.write_str("i64tostr"),
+            AbsInt32 => f.write_str("abs"),
+            AbsInt64 => f.write_str("abs"),
+            NegInt32 => f.write_str("-"),
+            NegInt64 => f.write_str("-"),
 
-fn jsonb_array_length<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::List(list) => Datum::Int64(list.iter().count() as i64),
-        _ => Datum::Null,
-    }
-}
+            // Interval functions.
+            CastIntervalToString => f.write_str("ivtostr"),
+            CastStringToInterval => f.write_str("strtoiv"),
+            CastTimeToInterval => f.write_str("timetoiv"),
+            CastIntervalToTime => f.write_str("ivtotime"),
+            NegInterval => f.write_str("-"),
 
-fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
-    match a {
-        Datum::Dict(_) => Datum::String("object"),
-        Datum::List(_) => Datum::String("array"),
-        Datum::String(_) => Datum::String("string"),
-        Datum::Float64(_) => Datum::String("number"),
-        Datum::True | Datum::False => Datum::String("boolean"),
-        Datum::JsonNull => Datum::String("null"),
-        Datum::Null => Datum::Null,
-        _ => panic!("Not jsonb: {:?}", a),
-    }
-}
+            // JSONB functions.
+            CastJsonbToString => f.write_str("jsonbtostr"),
+            CastStringToJsonb => f.write_str("strtojsonb"),
+            CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
+            CastJsonbToFloat64 => f.write_str("jsonbtof64"),
+            CastJsonbToBool => f.write_str("jsonbtobool"),
+            JsonbPretty => f.write_str("jsonb_pretty"),
+            JsonbTypeof => f.write_str("jsonb_typeof"),
+            JsonbArrayLength => f.write_str("jsonb_array_length"),
+            JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
 
-fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    fn strip_nulls(a: Datum, packer: &mut RowPacker) {
-        match a {
-            Datum::Dict(dict) => packer.push_dict_with(|packer| {
-                for (k, v) in dict.iter() {
-                    match v {
-                        Datum::JsonNull => (),
-                        _ => {
-                            packer.push(Datum::String(k));
-                            strip_nulls(v, packer);
-                        }
-                    }
-                }
-            }),
-            Datum::List(list) => packer.push_list_with(|packer| {
-                for elem in list.iter() {
-                    strip_nulls(elem, packer);
-                }
-            }),
-            _ => packer.push(a),
+            // Null-handling functions.
+            UnaryFunc::IsNull => f.write_str("isnull"),
+
+            // String functions.
+            CastBytesToString => f.write_str("bytestostr"),
+            CastStringToBytes => f.write_str("strtobytes"),
+            TrimWhitespace => f.write_str("btrim"),
+            TrimLeadingWhitespace => f.write_str("ltrim"),
+            TrimTrailingWhitespace => f.write_str("rtrim"),
+            Ascii => f.write_str("ascii"),
+            CharLength => f.write_str("char_length"),
+            BitLengthBytes => f.write_str("bit_length"),
+            BitLengthString => f.write_str("bit_length"),
+            ByteLengthBytes => f.write_str("byte_length"),
+            ByteLengthString => f.write_str("byte_length"),
+            MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
         }
     }
-    temp_storage.make_datum(|packer| strip_nulls(a, packer))
-}
-
-fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    strconv::format_jsonb_pretty(&mut buf, JsonbRef::from_datum(a));
-    Datum::String(temp_storage.push_string(buf))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
+    // Boolean functions.
     And,
     Or,
-    AddInt32,
-    AddInt64,
-    AddFloat32,
-    AddFloat64,
-    AddInterval,
-    AddTimestampInterval,
-    AddTimestampTzInterval,
-    AddDateInterval,
-    AddDateTime,
-    AddTimeInterval,
-    AddDecimal,
-    SubInt32,
-    SubInt64,
-    SubFloat32,
-    SubFloat64,
-    SubInterval,
-    SubTimestamp,
-    SubTimestampTz,
-    SubTimestampInterval,
-    SubTimestampTzInterval,
-    SubDate,
-    SubDateInterval,
-    SubTime,
-    SubTimeInterval,
-    SubDecimal,
-    MulInt32,
-    MulInt64,
-    MulFloat32,
-    MulFloat64,
-    MulDecimal,
-    DivInt32,
-    DivInt64,
-    DivFloat32,
-    DivFloat64,
-    DivDecimal,
-    ModInt32,
-    ModInt64,
-    ModFloat32,
-    ModFloat64,
-    ModDecimal,
-    RoundDecimal(u8),
+
+    // Comparison functions.
     Eq,
     NotEq,
     Lt,
     Lte,
     Gt,
     Gte,
-    MatchLikePattern,
-    ToCharTimestamp,
-    ToCharTimestampTz,
-    DatePartInterval,
+
+    // Date and time functions.
     DatePartTimestamp,
     DatePartTimestampTz,
     DateTruncTimestamp,
     DateTruncTimestampTz,
-    CastFloat32ToDecimal,
-    CastFloat64ToDecimal,
-    TextConcat,
+    AddDateTime,
+
+    // Decimal functions.
+    AddDecimal,
+    SubDecimal,
+    ModDecimal,
+    MulDecimal,
+    DivDecimal,
+    RoundDecimal(u8),
+
+    // Float functions.
+    AddFloat32,
+    AddFloat64,
+    SubFloat32,
+    SubFloat64,
+    MulFloat32,
+    MulFloat64,
+    DivFloat32,
+    DivFloat64,
+    ModFloat32,
+    ModFloat64,
+
+    // Formatting functions.
+    ToCharTimestamp,
+    ToCharTimestampTz,
+
+    // Integer functions.
+    AddInt32,
+    AddInt64,
+    SubInt32,
+    SubInt64,
+    MulInt32,
+    MulInt64,
+    DivInt32,
+    DivInt64,
+    ModInt32,
+    ModInt64,
+
+    // Interval functions.
+    AddInterval,
+    AddDateInterval,
+    AddTimeInterval,
+    AddTimestampInterval,
+    AddTimestampTzInterval,
+    SubInterval,
+    SubDateInterval,
+    SubTimeInterval,
+    SubTimestampTzInterval,
+    SubTimestampInterval,
+    SubDate,
+    SubTime,
+    SubTimestamp,
+    SubTimestampTz,
+    DatePartInterval,
+
+    // JSONB functions.
     JsonbGetInt64 { stringify: bool },
     JsonbGetString { stringify: bool },
-    JsonbContainsString,
-    JsonbConcat,
-    JsonbContainsJsonb,
     JsonbDeleteInt64,
     JsonbDeleteString,
+    JsonbContainsString,
+    JsonbContainsJsonb,
+    JsonbConcat,
+
+    // String functions.
     ConvertFrom,
+    EncodedBytesCharLength,
+    StringConcat,
     Trim,
     TrimLeading,
     TrimTrailing,
-    EncodedBytesCharLength,
+    MatchLikePattern,
 }
 
 impl BinaryFunc {
@@ -1762,1084 +804,329 @@ impl BinaryFunc {
         a_expr: &'a ScalarExpr,
         b_expr: &'a ScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
+        use BinaryFunc::*;
+
         macro_rules! eager {
             ($func:expr $(, $args:expr)*) => {{
                 let a = a_expr.eval(datums, temp_storage)?;
                 let b = b_expr.eval(datums, temp_storage)?;
-                if self.propagates_nulls() && (a.is_null() || b.is_null()) {
+                if self.props().propagates_nulls() && (a.is_null() || b.is_null()) {
                     return Ok(Datum::Null);
                 }
-                $func(a, b $(, $args)*)
+                let out = $func(a, b $(, $args)*);
+                #[cfg(debug_assertions)]
+                self.props()
+                    .check(&[a, b], &out)
+                    .unwrap_or_else(|e| panic!("{} failed property validation: {}", self, e));
+                out
             }}
         }
 
         match self {
-            BinaryFunc::And => and(datums, temp_storage, a_expr, b_expr),
-            BinaryFunc::Or => or(datums, temp_storage, a_expr, b_expr),
-            BinaryFunc::AddInt32 => eager!(add_int32),
-            BinaryFunc::AddInt64 => eager!(add_int64),
-            BinaryFunc::AddFloat32 => Ok(eager!(add_float32)),
-            BinaryFunc::AddFloat64 => Ok(eager!(add_float64)),
-            BinaryFunc::AddTimestampInterval => Ok(eager!(add_timestamp_interval)),
-            BinaryFunc::AddTimestampTzInterval => Ok(eager!(add_timestamptz_interval)),
-            BinaryFunc::AddDateTime => Ok(eager!(add_date_time)),
-            BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
-            BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
-            BinaryFunc::AddDecimal => Ok(eager!(add_decimal)),
-            BinaryFunc::AddInterval => eager!(add_interval),
-            BinaryFunc::SubInt32 => eager!(sub_int32),
-            BinaryFunc::SubInt64 => eager!(sub_int64),
-            BinaryFunc::SubFloat32 => Ok(eager!(sub_float32)),
-            BinaryFunc::SubFloat64 => Ok(eager!(sub_float64)),
-            BinaryFunc::SubTimestamp => Ok(eager!(sub_timestamp)),
-            BinaryFunc::SubTimestampTz => Ok(eager!(sub_timestamptz)),
-            BinaryFunc::SubTimestampInterval => Ok(eager!(sub_timestamp_interval)),
-            BinaryFunc::SubTimestampTzInterval => Ok(eager!(sub_timestamptz_interval)),
-            BinaryFunc::SubInterval => eager!(sub_interval),
-            BinaryFunc::SubDate => Ok(eager!(sub_date)),
-            BinaryFunc::SubDateInterval => Ok(eager!(sub_date_interval)),
-            BinaryFunc::SubTime => Ok(eager!(sub_time)),
-            BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
-            BinaryFunc::SubDecimal => Ok(eager!(sub_decimal)),
-            BinaryFunc::MulInt32 => eager!(mul_int32),
-            BinaryFunc::MulInt64 => eager!(mul_int64),
-            BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
-            BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
-            BinaryFunc::MulDecimal => Ok(eager!(mul_decimal)),
-            BinaryFunc::DivInt32 => eager!(div_int32),
-            BinaryFunc::DivInt64 => eager!(div_int64),
-            BinaryFunc::DivFloat32 => eager!(div_float32),
-            BinaryFunc::DivFloat64 => eager!(div_float64),
-            BinaryFunc::DivDecimal => eager!(div_decimal),
-            BinaryFunc::ModInt32 => eager!(mod_int32),
-            BinaryFunc::ModInt64 => eager!(mod_int64),
-            BinaryFunc::ModFloat32 => eager!(mod_float32),
-            BinaryFunc::ModFloat64 => eager!(mod_float64),
-            BinaryFunc::ModDecimal => eager!(mod_decimal),
-            BinaryFunc::Eq => Ok(eager!(eq)),
-            BinaryFunc::NotEq => Ok(eager!(not_eq)),
-            BinaryFunc::Lt => Ok(eager!(lt)),
-            BinaryFunc::Lte => Ok(eager!(lte)),
-            BinaryFunc::Gt => Ok(eager!(gt)),
-            BinaryFunc::Gte => Ok(eager!(gte)),
-            BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
-            BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
-            BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
-            BinaryFunc::DatePartInterval => {
-                eager!(|a, b: Datum| date_part_interval(a, b.unwrap_interval()))
+            // Boolean functions.
+            And => bool::and(datums, temp_storage, a_expr, b_expr),
+            Or => bool::or(datums, temp_storage, a_expr, b_expr),
+
+            // Comparison functions.
+            Eq => eager!(cmp::eq),
+            NotEq => eager!(cmp::not_eq),
+            Lt => eager!(cmp::lt),
+            Lte => eager!(cmp::lte),
+            Gt => eager!(cmp::gt),
+            Gte => eager!(cmp::gte),
+
+            // Date and time functions.
+            DatePartTimestamp => eager!(|a, b: Datum| datetime::date_part(a, b.unwrap_timestamp())),
+            DatePartTimestampTz => {
+                eager!(|a, b: Datum| datetime::date_part(a, b.unwrap_timestamptz()))
             }
-            BinaryFunc::DatePartTimestamp => {
-                eager!(|a, b: Datum| date_part_timestamp(a, b.unwrap_timestamp()))
+            DateTruncTimestamp => {
+                eager!(|a, b: Datum| datetime::date_trunc(a, b.unwrap_timestamp()))
             }
-            BinaryFunc::DatePartTimestampTz => {
-                eager!(|a, b: Datum| date_part_timestamp(a, b.unwrap_timestamptz()))
+            DateTruncTimestampTz => {
+                eager!(|a, b: Datum| datetime::date_trunc(a, b.unwrap_timestamptz()))
             }
-            BinaryFunc::DateTruncTimestamp => {
-                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamp()))
+            AddDateTime => eager!(datetime::add_date_time),
+
+            // Decimal functions.
+            AddDecimal => eager!(decimal::add_decimal),
+            SubDecimal => eager!(decimal::sub_decimal),
+            MulDecimal => eager!(decimal::mul_decimal),
+            DivDecimal => eager!(decimal::div_decimal),
+            ModDecimal => eager!(decimal::mod_decimal),
+            RoundDecimal(scale) => eager!(decimal::round_decimal_binary, *scale),
+
+            // Float functions.
+            AddFloat32 => eager!(float::add_float32),
+            AddFloat64 => eager!(float::add_float64),
+            SubFloat32 => eager!(float::sub_float32),
+            SubFloat64 => eager!(float::sub_float64),
+            MulFloat32 => eager!(float::mul_float32),
+            MulFloat64 => eager!(float::mul_float64),
+            DivFloat32 => eager!(float::div_float32),
+            DivFloat64 => eager!(float::div_float64),
+            ModFloat32 => eager!(float::mod_float32),
+            ModFloat64 => eager!(float::mod_float64),
+
+            // Formatting functions.
+            ToCharTimestamp => eager!(format::to_char_timestamp, temp_storage),
+            ToCharTimestampTz => eager!(format::to_char_timestamptz, temp_storage),
+
+            // Integer functions.
+            AddInt32 => eager!(integer::add_int32),
+            AddInt64 => eager!(integer::add_int64),
+            SubInt32 => eager!(integer::sub_int32),
+            SubInt64 => eager!(integer::sub_int64),
+            MulInt32 => eager!(integer::mul_int32),
+            MulInt64 => eager!(integer::mul_int64),
+            DivInt32 => eager!(integer::div_int32),
+            DivInt64 => eager!(integer::div_int64),
+            ModInt32 => eager!(integer::mod_int32),
+            ModInt64 => eager!(integer::mod_int64),
+
+            // Interval functions.
+            AddInterval => eager!(interval::add_interval),
+            AddDateInterval => eager!(interval::add_date_interval),
+            AddTimeInterval => eager!(interval::add_time_interval),
+            AddTimestampInterval => eager!(interval::add_timestamp_interval),
+            AddTimestampTzInterval => eager!(interval::add_timestamptz_interval),
+            SubInterval => eager!(interval::sub_interval),
+            SubDateInterval => eager!(interval::sub_date_interval),
+            SubTimeInterval => eager!(interval::sub_time_interval),
+            SubTimestampInterval => eager!(interval::sub_timestamp_interval),
+            SubTimestampTzInterval => eager!(interval::sub_timestamptz_interval),
+            SubDate => eager!(interval::sub_date),
+            SubTime => eager!(interval::sub_time),
+            SubTimestamp => eager!(interval::sub_timestamp),
+            SubTimestampTz => eager!(interval::sub_timestamptz),
+            DatePartInterval => eager!(|a, b: Datum| interval::date_part(a, b.unwrap_interval())),
+
+            // JSONB functions.
+            JsonbGetInt64 { stringify } => eager!(jsonb::jsonb_get_int64, temp_storage, *stringify),
+            JsonbGetString { stringify } => {
+                eager!(jsonb::jsonb_get_string, temp_storage, *stringify)
             }
-            BinaryFunc::DateTruncTimestampTz => {
-                eager!(|a, b: Datum| date_trunc(a, b.unwrap_timestamptz()))
+            JsonbDeleteInt64 => eager!(jsonb::jsonb_delete_int64, temp_storage),
+            JsonbDeleteString => eager!(jsonb::jsonb_delete_string, temp_storage),
+            JsonbContainsString => eager!(jsonb::jsonb_contains_string),
+            JsonbContainsJsonb => eager!(jsonb::jsonb_contains_jsonb),
+            JsonbConcat => eager!(jsonb::jsonb_concat, temp_storage),
+
+            // String functions.
+            ConvertFrom => eager!(string::convert_from),
+            EncodedBytesCharLength => eager!(string::encoded_bytes_char_length),
+            StringConcat => eager!(string::concat_binary, temp_storage),
+            Trim => eager!(string::trim),
+            TrimLeading => eager!(string::trim_leading),
+            TrimTrailing => eager!(string::trim_trailing),
+            MatchLikePattern => eager!(string::match_like_pattern),
+        }
+    }
+
+    pub fn props(&self) -> FuncProps {
+        use BinaryFunc::*;
+
+        match self {
+            // Boolean functions.
+            And => bool::AND_PROPS,
+            Or => bool::OR_PROPS,
+
+            // Comparison functions.
+            Eq | NotEq | Lt | Lte | Gt | Gte => cmp::CMP_PROPS,
+
+            // Date and time functions.
+            DatePartTimestamp | DatePartTimestampTz => datetime::DATE_PART_PROPS,
+            DateTruncTimestamp => datetime::DATE_TRUNC_TIMESTAMP_PROPS,
+            DateTruncTimestampTz => datetime::DATE_TRUNC_TIMESTAMPTZ_PROPS,
+            AddDateTime => datetime::ADD_DATE_TIME_PROPS,
+
+            // Decimal functions.
+            AddDecimal | SubDecimal | ModDecimal => decimal::DECIMAL_MATH_PROPS,
+            MulDecimal => decimal::MUL_DECIMAL_PROPS,
+            DivDecimal => decimal::DIV_DECIMAL_PROPS,
+            RoundDecimal(_) => decimal::ROUND_DECIMAL_PROPS,
+
+            // Float functions.
+            AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
+                float::FLOAT32_MATH_PROPS
             }
-            BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
-            BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
-            BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
-            BinaryFunc::JsonbGetInt64 { stringify } => {
-                Ok(eager!(jsonb_get_int64, temp_storage, *stringify))
+            AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
+                float::FLOAT64_MATH_PROPS
             }
-            BinaryFunc::JsonbGetString { stringify } => {
-                Ok(eager!(jsonb_get_string, temp_storage, *stringify))
+
+            // Formatting functions.
+            ToCharTimestamp | ToCharTimestampTz => format::TO_CHAR_PROPS,
+
+            // Integer functions.
+            AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => integer::INT32_MATH_PROPS,
+            AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 => integer::INT64_MATH_PROPS,
+
+            // Interval functions.
+            AddInterval => interval::INTERVAL_MATH_PROPS,
+            AddDateInterval | SubDateInterval => interval::INTERVAL_DATE_MATH_PROPS,
+            AddTimeInterval | SubTimeInterval => interval::INTERVAL_TIME_MATH_PROPS,
+            AddTimestampInterval | SubTimestampInterval => interval::INTERVAL_TIMESTAMP_MATH_PROPS,
+            AddTimestampTzInterval | SubTimestampTzInterval => {
+                interval::INTERVAL_TIMESTAMPTZ_MATH_PROPS
             }
-            BinaryFunc::JsonbContainsString => Ok(eager!(jsonb_contains_string)),
-            BinaryFunc::JsonbConcat => Ok(eager!(jsonb_concat, temp_storage)),
-            BinaryFunc::JsonbContainsJsonb => Ok(eager!(jsonb_contains_jsonb)),
-            BinaryFunc::JsonbDeleteInt64 => Ok(eager!(jsonb_delete_int64, temp_storage)),
-            BinaryFunc::JsonbDeleteString => Ok(eager!(jsonb_delete_string, temp_storage)),
-            BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
-            BinaryFunc::ConvertFrom => eager!(convert_from),
-            BinaryFunc::Trim => Ok(eager!(trim)),
-            BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
-            BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
-            BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
+            SubInterval => interval::INTERVAL_MATH_PROPS,
+            SubDate => interval::INTERVAL_MATH_PROPS,
+            SubTime => interval::INTERVAL_MATH_PROPS,
+            SubTimestamp => interval::INTERVAL_MATH_PROPS,
+            SubTimestampTz => interval::INTERVAL_MATH_PROPS,
+            DatePartInterval => interval::DATE_PART_PROPS,
+
+            // JSONB functions.
+            JsonbGetInt64 { stringify } | JsonbGetString { stringify } => {
+                jsonb::jsonb_get_props(*stringify)
+            }
+            JsonbDeleteInt64 | JsonbDeleteString => jsonb::JSONB_DELETE_PROPS,
+            JsonbContainsString => jsonb::JSONB_CONTAINS_STRING_PROPS,
+            JsonbContainsJsonb => jsonb::JSONB_CONTAINS_JSONB_PROPS,
+            JsonbConcat => jsonb::JSONB_CONCAT_PROPS,
+
+            // String functions.
+            ConvertFrom => string::CONVERT_FROM_PROPS,
+            StringConcat => string::CONCAT_BINARY_PROPS,
+            EncodedBytesCharLength => string::LENGTH_PROPS,
+            Trim | TrimLeading | TrimTrailing => string::TRIM_PROPS,
+            MatchLikePattern => string::MATCH_LIKE_PATTERN_PROPS,
         }
     }
 
     pub fn output_type(&self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
-        use BinaryFunc::*;
-        let in_nullable = input1_type.nullable || input2_type.nullable;
-        let is_div_mod = match self {
-            DivInt32 | ModInt32 | DivInt64 | ModInt64 | DivFloat32 | ModFloat32 | DivFloat64
-            | ModFloat64 | DivDecimal | ModDecimal => true,
-            _ => false,
-        };
-        match self {
-            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte => {
-                ColumnType::new(ScalarType::Bool).nullable(in_nullable)
-            }
-
-            MatchLikePattern => {
-                // The output can be null if the pattern is invalid.
-                ColumnType::new(ScalarType::Bool).nullable(true)
-            }
-
-            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Trim | TrimLeading
-            | TrimTrailing => ColumnType::new(ScalarType::String).nullable(false),
-
-            AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 | EncodedBytesCharLength => {
-                ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
-            }
-
-            AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 => {
-                ColumnType::new(ScalarType::Int64).nullable(in_nullable || is_div_mod)
-            }
-
-            AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
-                ColumnType::new(ScalarType::Float32).nullable(in_nullable || is_div_mod)
-            }
-
-            AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
-            }
-
-            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate => {
-                ColumnType::new(ScalarType::Interval).nullable(in_nullable)
-            }
-
-            // TODO(benesch): we correctly compute types for decimal scale, but
-            // not decimal precision... because nothing actually cares about
-            // decimal precision. Should either remove or fix.
-            AddDecimal | SubDecimal | ModDecimal => {
-                let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
-                    _ => unreachable!(),
-                };
-                assert_eq!(s1, s2);
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, *s1))
-                    .nullable(in_nullable || is_div_mod)
-            }
-            MulDecimal => {
-                let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
-                    _ => unreachable!(),
-                };
-                let s = s1 + s2;
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(in_nullable)
-            }
-            DivDecimal => {
-                let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
-                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
-                    _ => unreachable!(),
-                };
-                let s = s1 - s2;
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
-            }
-
-            CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
-                ScalarType::Decimal(_, s) => {
-                    ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
-                }
-                _ => unreachable!(),
-            },
-
-            RoundDecimal(scale) => {
-                match input1_type.scalar_type {
-                    ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
-                    _ => unreachable!(),
-                }
-                ColumnType::new(input1_type.scalar_type).nullable(in_nullable)
-            }
-
-            AddTimestampInterval
-            | SubTimestampInterval
-            | AddTimestampTzInterval
-            | SubTimestampTzInterval
-            | AddTimeInterval
-            | SubTimeInterval => input1_type,
-
-            AddDateInterval | SubDateInterval | AddDateTime | DateTruncTimestamp => {
-                ColumnType::new(ScalarType::Timestamp).nullable(true)
-            }
-
-            DatePartInterval | DatePartTimestamp | DatePartTimestampTz => {
-                ColumnType::new(ScalarType::Float64).nullable(true)
-            }
-
-            DateTruncTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
-
-            SubTime => ColumnType::new(ScalarType::Interval).nullable(true),
-
-            TextConcat => ColumnType::new(ScalarType::String).nullable(in_nullable),
-
-            JsonbGetInt64 { stringify: true } | JsonbGetString { stringify: true } => {
-                ColumnType::new(ScalarType::String).nullable(true)
-            }
-
-            JsonbGetInt64 { stringify: false }
-            | JsonbGetString { stringify: false }
-            | JsonbConcat
-            | JsonbDeleteInt64
-            | JsonbDeleteString => ColumnType::new(ScalarType::Jsonb).nullable(true),
-
-            JsonbContainsString | JsonbContainsJsonb => {
-                ColumnType::new(ScalarType::Bool).nullable(in_nullable)
-            }
-        }
-    }
-
-    /// Whether the function output is NULL if any of its inputs are NULL.
-    pub fn propagates_nulls(&self) -> bool {
-        match self {
-            BinaryFunc::And | BinaryFunc::Or => false,
-            _ => true,
-        }
+        self.props().output_type(vec![input1_type, input2_type])
     }
 
     pub fn is_infix_op(&self) -> bool {
+        let (_symbol, affixment) = self.display();
+        affixment == Affixment::Infix
+    }
+
+    fn display(&self) -> (&'static str, Affixment) {
+        use Affixment::*;
         use BinaryFunc::*;
+
         match self {
-            And
-            | Or
-            | AddInt32
-            | AddInt64
-            | AddFloat32
-            | AddFloat64
-            | AddTimestampInterval
-            | AddTimestampTzInterval
-            | AddDateTime
-            | AddDateInterval
-            | AddTimeInterval
-            | AddInterval
-            | SubInterval
-            | AddDecimal
-            | SubInt32
-            | SubInt64
-            | SubFloat32
-            | SubFloat64
-            | SubTimestamp
-            | SubTimestampTz
-            | SubTimestampInterval
-            | SubTimestampTzInterval
-            | SubDate
-            | SubDateInterval
-            | SubTime
-            | SubTimeInterval
-            | SubDecimal
-            | MulInt32
-            | MulInt64
-            | MulFloat32
-            | MulFloat64
-            | MulDecimal
-            | DivInt32
-            | DivInt64
-            | DivFloat32
-            | DivFloat64
-            | DivDecimal
-            | ModInt32
-            | ModInt64
-            | ModFloat32
-            | ModFloat64
-            | ModDecimal
-            | Eq
-            | NotEq
-            | Lt
-            | Lte
-            | Gt
-            | Gte
-            | JsonbConcat
-            | JsonbContainsJsonb
-            | JsonbGetInt64 { .. }
-            | JsonbGetString { .. }
-            | JsonbContainsString
-            | JsonbDeleteInt64
-            | JsonbDeleteString
-            | TextConcat => true,
-            MatchLikePattern
-            | ToCharTimestamp
-            | ToCharTimestampTz
-            | DatePartInterval
-            | DatePartTimestamp
-            | DatePartTimestampTz
-            | DateTruncTimestamp
-            | DateTruncTimestampTz
-            | CastFloat32ToDecimal
-            | CastFloat64ToDecimal
-            | RoundDecimal(_)
-            | ConvertFrom
-            | Trim
-            | TrimLeading
-            | TrimTrailing
-            | EncodedBytesCharLength => false,
+            // Boolean functions.
+            And => ("&&", Infix),
+            Or => ("||", Infix),
+
+            // Comparison functions.
+            Eq => ("=", Infix),
+            NotEq => ("!=", Infix),
+            Lt => ("<", Infix),
+            Lte => ("<=", Infix),
+            Gt => (">", Infix),
+            Gte => (">=", Infix),
+
+            // Date and time functions.
+            DatePartTimestamp => ("date_partts", Prefix),
+            DatePartTimestampTz => ("date_parttstz", Prefix),
+            DateTruncTimestamp => ("date_truncts", Prefix),
+            DateTruncTimestampTz => ("date_trunctstz", Prefix),
+            AddDateTime => ("+", Infix),
+
+            // Decimal functions.
+            AddDecimal => ("+", Infix),
+            SubDecimal => ("-", Infix),
+            ModDecimal => ("%", Infix),
+            MulDecimal => ("*", Infix),
+            DivDecimal => ("/", Infix),
+            RoundDecimal(_) => ("round", Prefix),
+
+            // Float functions.
+            AddFloat32 => ("+", Infix),
+            AddFloat64 => ("+", Infix),
+            SubFloat32 => ("-", Infix),
+            SubFloat64 => ("-", Infix),
+            MulFloat32 => ("*", Infix),
+            MulFloat64 => ("*", Infix),
+            DivFloat32 => ("/", Infix),
+            DivFloat64 => ("/", Infix),
+            ModFloat32 => ("%", Infix),
+            ModFloat64 => ("%", Infix),
+
+            // Formatting functions.
+            ToCharTimestamp => ("tocharts", Prefix),
+            ToCharTimestampTz => ("tochartstz", Prefix),
+
+            // Integer functions.
+            AddInt32 => ("+", Infix),
+            AddInt64 => ("+", Infix),
+            SubInt32 => ("-", Infix),
+            SubInt64 => ("-", Infix),
+            MulInt32 => ("*", Infix),
+            MulInt64 => ("*", Infix),
+            DivInt32 => ("/", Infix),
+            DivInt64 => ("/", Infix),
+            ModInt32 => ("%", Infix),
+            ModInt64 => ("%", Infix),
+
+            // Interval functions.
+            AddInterval => ("+", Infix),
+            AddDateInterval => ("+", Infix),
+            AddTimeInterval => ("+", Infix),
+            AddTimestampInterval => ("+", Infix),
+            AddTimestampTzInterval => ("+", Infix),
+            SubInterval => ("-", Infix),
+            SubDateInterval => ("-", Infix),
+            SubTimeInterval => ("-", Infix),
+            SubTimestampInterval => ("-", Infix),
+            SubTimestampTzInterval => ("-", Infix),
+            SubDate => ("-", Infix),
+            SubTime => ("-", Infix),
+            SubTimestamp => ("-", Infix),
+            SubTimestampTz => ("-", Infix),
+            DatePartInterval => ("date_partiv", Prefix),
+
+            // JSONB functions.
+            JsonbGetInt64 { .. } => ("->", Infix),
+            JsonbGetString { .. } => ("->", Infix),
+            JsonbDeleteInt64 => ("-", Infix),
+            JsonbDeleteString => ("-", Infix),
+            JsonbContainsString => ("?", Infix),
+            JsonbContainsJsonb => ("@>", Infix),
+            JsonbConcat => ("||", Infix),
+
+            // String functions.
+            StringConcat => ("||", Infix),
+            ConvertFrom => ("convert_from", Prefix),
+            EncodedBytesCharLength => ("length", Prefix),
+            Trim => ("btrim", Prefix),
+            TrimLeading => ("ltrim", Prefix),
+            TrimTrailing => ("rtrim", Prefix),
+            MatchLikePattern => ("like", Prefix),
         }
     }
 }
 
 impl fmt::Display for BinaryFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            BinaryFunc::And => f.write_str("&&"),
-            BinaryFunc::Or => f.write_str("||"),
-            BinaryFunc::AddInt32 => f.write_str("+"),
-            BinaryFunc::AddInt64 => f.write_str("+"),
-            BinaryFunc::AddFloat32 => f.write_str("+"),
-            BinaryFunc::AddFloat64 => f.write_str("+"),
-            BinaryFunc::AddDecimal => f.write_str("+"),
-            BinaryFunc::AddInterval => f.write_str("+"),
-            BinaryFunc::AddTimestampInterval => f.write_str("+"),
-            BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
-            BinaryFunc::AddDateTime => f.write_str("+"),
-            BinaryFunc::AddDateInterval => f.write_str("+"),
-            BinaryFunc::AddTimeInterval => f.write_str("+"),
-            BinaryFunc::SubInt32 => f.write_str("-"),
-            BinaryFunc::SubInt64 => f.write_str("-"),
-            BinaryFunc::SubFloat32 => f.write_str("-"),
-            BinaryFunc::SubFloat64 => f.write_str("-"),
-            BinaryFunc::SubDecimal => f.write_str("-"),
-            BinaryFunc::SubInterval => f.write_str("-"),
-            BinaryFunc::SubTimestamp => f.write_str("-"),
-            BinaryFunc::SubTimestampTz => f.write_str("-"),
-            BinaryFunc::SubTimestampInterval => f.write_str("-"),
-            BinaryFunc::SubTimestampTzInterval => f.write_str("-"),
-            BinaryFunc::SubDate => f.write_str("-"),
-            BinaryFunc::SubDateInterval => f.write_str("-"),
-            BinaryFunc::SubTime => f.write_str("-"),
-            BinaryFunc::SubTimeInterval => f.write_str("-"),
-            BinaryFunc::MulInt32 => f.write_str("*"),
-            BinaryFunc::MulInt64 => f.write_str("*"),
-            BinaryFunc::MulFloat32 => f.write_str("*"),
-            BinaryFunc::MulFloat64 => f.write_str("*"),
-            BinaryFunc::MulDecimal => f.write_str("*"),
-            BinaryFunc::DivInt32 => f.write_str("/"),
-            BinaryFunc::DivInt64 => f.write_str("/"),
-            BinaryFunc::DivFloat32 => f.write_str("/"),
-            BinaryFunc::DivFloat64 => f.write_str("/"),
-            BinaryFunc::DivDecimal => f.write_str("/"),
-            BinaryFunc::ModInt32 => f.write_str("%"),
-            BinaryFunc::ModInt64 => f.write_str("%"),
-            BinaryFunc::ModFloat32 => f.write_str("%"),
-            BinaryFunc::ModFloat64 => f.write_str("%"),
-            BinaryFunc::ModDecimal => f.write_str("%"),
-            BinaryFunc::Eq => f.write_str("="),
-            BinaryFunc::NotEq => f.write_str("!="),
-            BinaryFunc::Lt => f.write_str("<"),
-            BinaryFunc::Lte => f.write_str("<="),
-            BinaryFunc::Gt => f.write_str(">"),
-            BinaryFunc::Gte => f.write_str(">="),
-            BinaryFunc::MatchLikePattern => f.write_str("like"),
-            BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
-            BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
-            BinaryFunc::DatePartInterval => f.write_str("date_partiv"),
-            BinaryFunc::DatePartTimestamp => f.write_str("date_partts"),
-            BinaryFunc::DatePartTimestampTz => f.write_str("date_parttstz"),
-            BinaryFunc::DateTruncTimestamp => f.write_str("date_truncts"),
-            BinaryFunc::DateTruncTimestampTz => f.write_str("date_trunctstz"),
-            BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
-            BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
-            BinaryFunc::TextConcat => f.write_str("||"),
-            BinaryFunc::JsonbGetInt64 { .. } => f.write_str("->"),
-            BinaryFunc::JsonbGetString { .. } => f.write_str("->"),
-            BinaryFunc::JsonbContainsString => f.write_str("?"),
-            BinaryFunc::JsonbConcat => f.write_str("||"),
-            BinaryFunc::JsonbContainsJsonb => f.write_str("@>"),
-            BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
-            BinaryFunc::JsonbDeleteString => f.write_str("-"),
-            BinaryFunc::RoundDecimal(_) => f.write_str("round"),
-            BinaryFunc::ConvertFrom => f.write_str("convert_from"),
-            BinaryFunc::Trim => f.write_str("btrim"),
-            BinaryFunc::TrimLeading => f.write_str("ltrim"),
-            BinaryFunc::TrimTrailing => f.write_str("rtrim"),
-            BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
-        }
+        let (symbol, _affixment) = self.display();
+        f.write_str(symbol)
     }
-}
-
-fn is_null<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a == Datum::Null)
-}
-
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum UnaryFunc {
-    Not,
-    IsNull,
-    NegInt32,
-    NegInt64,
-    NegFloat32,
-    NegFloat64,
-    NegDecimal,
-    NegInterval,
-    SqrtFloat32,
-    SqrtFloat64,
-    SqrtDec(u8),
-    AbsInt32,
-    AbsInt64,
-    AbsFloat32,
-    AbsFloat64,
-    AbsDecimal,
-    CastBoolToStringExplicit,
-    CastBoolToStringImplicit,
-    CastInt32ToBool,
-    CastInt32ToFloat32,
-    CastInt32ToFloat64,
-    CastInt32ToInt64,
-    CastInt32ToString,
-    CastInt64ToInt32,
-    CastInt32ToDecimal,
-    CastInt64ToBool,
-    CastInt64ToDecimal,
-    CastInt64ToFloat32,
-    CastInt64ToFloat64,
-    CastInt64ToString,
-    CastFloat32ToInt64,
-    CastFloat32ToFloat64,
-    CastFloat32ToString,
-    CastFloat64ToInt32,
-    CastFloat64ToInt64,
-    CastFloat64ToString,
-    CastDecimalToInt32,
-    CastDecimalToInt64,
-    CastDecimalToString(u8),
-    CastSignificandToFloat32,
-    CastSignificandToFloat64,
-    CastStringToBool,
-    CastStringToBytes,
-    CastStringToInt32,
-    CastStringToInt64,
-    CastStringToFloat32,
-    CastStringToFloat64,
-    CastStringToDate,
-    CastStringToTime,
-    CastStringToTimestamp,
-    CastStringToTimestampTz,
-    CastStringToInterval,
-    CastStringToDecimal(u8),
-    CastDateToTimestamp,
-    CastDateToTimestampTz,
-    CastDateToString,
-    CastTimeToInterval,
-    CastTimeToString,
-    CastTimestampToDate,
-    CastTimestampToTimestampTz,
-    CastTimestampToString,
-    CastTimestampTzToDate,
-    CastTimestampTzToTimestamp,
-    CastTimestampTzToString,
-    CastIntervalToString,
-    CastIntervalToTime,
-    CastBytesToString,
-    CastStringToJsonb,
-    CastJsonbToString,
-    CastJsonbOrNullToJsonb,
-    CastJsonbToFloat64,
-    CastJsonbToBool,
-    CeilFloat32,
-    CeilFloat64,
-    CeilDecimal(u8),
-    FloorFloat32,
-    FloorFloat64,
-    FloorDecimal(u8),
-    Ascii,
-    BitLengthBytes,
-    BitLengthString,
-    ByteLengthBytes,
-    ByteLengthString,
-    CharLength,
-    MatchRegex(Regex),
-    DatePartInterval(DateTimeUnits),
-    DatePartTimestamp(DateTimeUnits),
-    DatePartTimestampTz(DateTimeUnits),
-    DateTruncTimestamp(DateTimeUnits),
-    DateTruncTimestampTz(DateTimeUnits),
-    ToTimestamp,
-    JsonbArrayLength,
-    JsonbTypeof,
-    JsonbStripNulls,
-    JsonbPretty,
-    RoundFloat32,
-    RoundFloat64,
-    RoundDecimal(u8),
-    TrimWhitespace,
-    TrimLeadingWhitespace,
-    TrimTrailingWhitespace,
-}
-
-impl UnaryFunc {
-    pub fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a ScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if self.propagates_nulls() && a.is_null() {
-            return Ok(Datum::Null);
-        }
-
-        match self {
-            UnaryFunc::Not => Ok(not(a)),
-            UnaryFunc::IsNull => Ok(is_null(a)),
-            UnaryFunc::NegInt32 => Ok(neg_int32(a)),
-            UnaryFunc::NegInt64 => Ok(neg_int64(a)),
-            UnaryFunc::NegFloat32 => Ok(neg_float32(a)),
-            UnaryFunc::NegFloat64 => Ok(neg_float64(a)),
-            UnaryFunc::NegDecimal => Ok(neg_decimal(a)),
-            UnaryFunc::NegInterval => Ok(neg_interval(a)),
-            UnaryFunc::AbsInt32 => Ok(abs_int32(a)),
-            UnaryFunc::AbsInt64 => Ok(abs_int64(a)),
-            UnaryFunc::AbsFloat32 => Ok(abs_float32(a)),
-            UnaryFunc::AbsFloat64 => Ok(abs_float64(a)),
-            UnaryFunc::AbsDecimal => Ok(abs_decimal(a)),
-            UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
-            UnaryFunc::CastBoolToStringImplicit => Ok(cast_bool_to_string_implicit(a)),
-            UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
-            UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
-            UnaryFunc::CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
-            UnaryFunc::CastInt32ToInt64 => Ok(cast_int32_to_int64(a)),
-            UnaryFunc::CastInt32ToDecimal => Ok(cast_int32_to_decimal(a)),
-            UnaryFunc::CastInt32ToString => Ok(cast_int32_to_string(a, temp_storage)),
-            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32(a),
-            UnaryFunc::CastInt64ToBool => Ok(cast_int64_to_bool(a)),
-            UnaryFunc::CastInt64ToDecimal => Ok(cast_int64_to_decimal(a)),
-            UnaryFunc::CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
-            UnaryFunc::CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
-            UnaryFunc::CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
-            UnaryFunc::CastFloat32ToInt64 => Ok(cast_float32_to_int64(a)),
-            UnaryFunc::CastFloat32ToFloat64 => Ok(cast_float32_to_float64(a)),
-            UnaryFunc::CastFloat32ToString => Ok(cast_float32_to_string(a, temp_storage)),
-            UnaryFunc::CastFloat64ToInt32 => Ok(cast_float64_to_int32(a)),
-            UnaryFunc::CastFloat64ToInt64 => Ok(cast_float64_to_int64(a)),
-            UnaryFunc::CastFloat64ToString => Ok(cast_float64_to_string(a, temp_storage)),
-            UnaryFunc::CastDecimalToInt32 => Ok(cast_decimal_to_int32(a)),
-            UnaryFunc::CastDecimalToInt64 => Ok(cast_decimal_to_int64(a)),
-            UnaryFunc::CastSignificandToFloat32 => Ok(cast_significand_to_float32(a)),
-            UnaryFunc::CastSignificandToFloat64 => Ok(cast_significand_to_float64(a)),
-            UnaryFunc::CastStringToBool => cast_string_to_bool(a),
-            UnaryFunc::CastStringToBytes => cast_string_to_bytes(a, temp_storage),
-            UnaryFunc::CastStringToInt32 => cast_string_to_int32(a),
-            UnaryFunc::CastStringToInt64 => cast_string_to_int64(a),
-            UnaryFunc::CastStringToFloat32 => cast_string_to_float32(a),
-            UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
-            UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
-            UnaryFunc::CastStringToDate => cast_string_to_date(a),
-            UnaryFunc::CastStringToTime => cast_string_to_time(a),
-            UnaryFunc::CastStringToTimestamp => cast_string_to_timestamp(a),
-            UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
-            UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
-            UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
-            UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
-            UnaryFunc::CastDateToString => Ok(cast_date_to_string(a, temp_storage)),
-            UnaryFunc::CastDecimalToString(scale) => {
-                Ok(cast_decimal_to_string(a, *scale, temp_storage))
-            }
-            UnaryFunc::CastTimeToInterval => cast_time_to_interval(a),
-            UnaryFunc::CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
-            UnaryFunc::CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
-            UnaryFunc::CastTimestampToTimestampTz => Ok(cast_timestamp_to_timestamptz(a)),
-            UnaryFunc::CastTimestampToString => Ok(cast_timestamp_to_string(a, temp_storage)),
-            UnaryFunc::CastTimestampTzToDate => Ok(cast_timestamptz_to_date(a)),
-            UnaryFunc::CastTimestampTzToTimestamp => Ok(cast_timestamptz_to_timestamp(a)),
-            UnaryFunc::CastTimestampTzToString => Ok(cast_timestamptz_to_string(a, temp_storage)),
-            UnaryFunc::CastIntervalToString => Ok(cast_interval_to_string(a, temp_storage)),
-            UnaryFunc::CastIntervalToTime => Ok(cast_interval_to_time(a)),
-            UnaryFunc::CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
-            UnaryFunc::CastStringToJsonb => Ok(cast_string_to_jsonb(a, temp_storage)),
-            UnaryFunc::CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
-            UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
-            UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
-            UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
-            UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
-            UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
-            UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
-            UnaryFunc::FloorFloat32 => Ok(floor_float32(a)),
-            UnaryFunc::FloorFloat64 => Ok(floor_float64(a)),
-            UnaryFunc::FloorDecimal(scale) => Ok(floor_decimal(a, *scale)),
-            UnaryFunc::SqrtFloat32 => sqrt_float32(a),
-            UnaryFunc::SqrtFloat64 => sqrt_float64(a),
-            UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
-            UnaryFunc::Ascii => Ok(ascii(a)),
-            UnaryFunc::BitLengthString => bit_length(a.unwrap_str()),
-            UnaryFunc::BitLengthBytes => bit_length(a.unwrap_bytes()),
-            UnaryFunc::ByteLengthString => byte_length(a.unwrap_str()),
-            UnaryFunc::ByteLengthBytes => byte_length(a.unwrap_bytes()),
-            UnaryFunc::CharLength => char_length(a),
-            UnaryFunc::MatchRegex(regex) => Ok(match_regex(a, &regex)),
-            UnaryFunc::DatePartInterval(units) => {
-                date_part_interval_inner(*units, a.unwrap_interval())
-            }
-            UnaryFunc::DatePartTimestamp(units) => {
-                date_part_timestamp_inner(*units, a.unwrap_timestamp())
-            }
-            UnaryFunc::DatePartTimestampTz(units) => {
-                date_part_timestamp_inner(*units, a.unwrap_timestamptz())
-            }
-            UnaryFunc::DateTruncTimestamp(units) => date_trunc_inner(*units, a.unwrap_timestamp()),
-            UnaryFunc::DateTruncTimestampTz(units) => {
-                date_trunc_inner(*units, a.unwrap_timestamptz())
-            }
-            UnaryFunc::ToTimestamp => Ok(to_timestamp(a)),
-            UnaryFunc::JsonbArrayLength => Ok(jsonb_array_length(a)),
-            UnaryFunc::JsonbTypeof => Ok(jsonb_typeof(a)),
-            UnaryFunc::JsonbStripNulls => Ok(jsonb_strip_nulls(a, temp_storage)),
-            UnaryFunc::JsonbPretty => Ok(jsonb_pretty(a, temp_storage)),
-            UnaryFunc::RoundFloat32 => Ok(round_float32(a)),
-            UnaryFunc::RoundFloat64 => Ok(round_float64(a)),
-            UnaryFunc::RoundDecimal(scale) => Ok(round_decimal_unary(a, *scale)),
-            UnaryFunc::TrimWhitespace => Ok(trim_whitespace(a)),
-            UnaryFunc::TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
-            UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
-        }
-    }
-
-    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        use UnaryFunc::*;
-        let in_nullable = input_type.nullable;
-        match self {
-            IsNull | CastInt32ToBool | CastInt64ToBool => ColumnType::new(ScalarType::Bool),
-
-            Ascii | CharLength | BitLengthBytes | BitLengthString | ByteLengthBytes
-            | ByteLengthString => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
-
-            MatchRegex(_) => ColumnType::new(ScalarType::Bool).nullable(in_nullable),
-
-            CastStringToBool => ColumnType::new(ScalarType::Bool).nullable(true),
-            CastStringToBytes => ColumnType::new(ScalarType::Bytes).nullable(true),
-            CastStringToInt32 => ColumnType::new(ScalarType::Int32).nullable(true),
-            CastStringToInt64 => ColumnType::new(ScalarType::Int64).nullable(true),
-            CastStringToFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
-            CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
-            CastStringToDecimal(scale) => {
-                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale)).nullable(true)
-            }
-            CastStringToDate => ColumnType::new(ScalarType::Date).nullable(true),
-            CastStringToTime => ColumnType::new(ScalarType::Time).nullable(true),
-            CastStringToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
-            CastStringToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(true),
-            CastStringToInterval | CastTimeToInterval => {
-                ColumnType::new(ScalarType::Interval).nullable(true)
-            }
-
-            CastBoolToStringExplicit
-            | CastBoolToStringImplicit
-            | CastInt32ToString
-            | CastInt64ToString
-            | CastFloat32ToString
-            | CastFloat64ToString
-            | CastDecimalToString(_)
-            | CastDateToString
-            | CastTimeToString
-            | CastTimestampToString
-            | CastTimestampTzToString
-            | CastIntervalToString
-            | CastBytesToString
-            | TrimWhitespace
-            | TrimLeadingWhitespace
-            | TrimTrailingWhitespace => ColumnType::new(ScalarType::String).nullable(in_nullable),
-
-            CastInt32ToFloat32 | CastInt64ToFloat32 | CastSignificandToFloat32 => {
-                ColumnType::new(ScalarType::Float32).nullable(in_nullable)
-            }
-
-            CastInt32ToFloat64
-            | CastInt64ToFloat64
-            | CastFloat32ToFloat64
-            | CastSignificandToFloat64 => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
-            }
-
-            CastInt64ToInt32 | CastDecimalToInt32 => {
-                ColumnType::new(ScalarType::Int32).nullable(in_nullable)
-            }
-
-            CastFloat64ToInt32 => ColumnType::new(ScalarType::Int32).nullable(true),
-
-            CastInt32ToInt64 | CastDecimalToInt64 | CastFloat32ToInt64 | CastFloat64ToInt64 => {
-                ColumnType::new(ScalarType::Int64).nullable(in_nullable)
-            }
-
-            CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
-            CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
-
-            CastTimestampToDate | CastTimestampTzToDate => {
-                ColumnType::new(ScalarType::Date).nullable(in_nullable)
-            }
-
-            CastIntervalToTime => ColumnType::new(ScalarType::Time).nullable(in_nullable),
-
-            CastDateToTimestamp | CastTimestampTzToTimestamp => {
-                ColumnType::new(ScalarType::Timestamp).nullable(in_nullable)
-            }
-
-            CastDateToTimestampTz | CastTimestampToTimestampTz => {
-                ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
-            }
-
-            // can return null for invalid json
-            CastStringToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(true),
-
-            // converts null to jsonnull
-            CastJsonbOrNullToJsonb => ColumnType::new(ScalarType::Jsonb).nullable(false),
-
-            // can return null for other jsonb types
-            CastJsonbToString => ColumnType::new(ScalarType::String).nullable(true),
-            CastJsonbToFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
-            CastJsonbToBool => ColumnType::new(ScalarType::Bool).nullable(true),
-
-            CeilFloat32 | FloorFloat32 | RoundFloat32 => {
-                ColumnType::new(ScalarType::Float32).nullable(in_nullable)
-            }
-            CeilFloat64 | FloorFloat64 | RoundFloat64 => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
-            }
-            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) | SqrtDec(scale) => {
-                match input_type.scalar_type {
-                    ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
-                    _ => unreachable!(),
-                }
-                ColumnType::new(input_type.scalar_type).nullable(in_nullable)
-            }
-
-            SqrtFloat32 => ColumnType::new(ScalarType::Float32).nullable(true),
-            SqrtFloat64 => ColumnType::new(ScalarType::Float64).nullable(true),
-
-            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
-            | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
-
-            DatePartInterval(_) | DatePartTimestamp(_) | DatePartTimestampTz(_) => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
-            }
-
-            DateTruncTimestamp(_) => ColumnType::new(ScalarType::Timestamp).nullable(true),
-            DateTruncTimestampTz(_) => ColumnType::new(ScalarType::TimestampTz).nullable(true),
-
-            ToTimestamp => ColumnType::new(ScalarType::TimestampTz).nullable(true),
-
-            JsonbArrayLength => ColumnType::new(ScalarType::Int64).nullable(true),
-            JsonbTypeof => ColumnType::new(ScalarType::String).nullable(in_nullable),
-            JsonbStripNulls => ColumnType::new(ScalarType::Jsonb).nullable(true),
-            JsonbPretty => ColumnType::new(ScalarType::String).nullable(in_nullable),
-        }
-    }
-
-    /// Whether the function output is NULL if any of its inputs are NULL.
-    pub fn propagates_nulls(&self) -> bool {
-        match self {
-            UnaryFunc::IsNull | UnaryFunc::CastJsonbOrNullToJsonb => false,
-            _ => true,
-        }
-    }
-
-    /// True iff for x != y, we are assured f(x) != f(y).
-    ///
-    /// This is most often the case for methods that promote to types that
-    /// can contain all the precision of the input type.
-    pub fn preserves_uniqueness(&self) -> bool {
-        match self {
-            UnaryFunc::Not
-            | UnaryFunc::NegInt32
-            | UnaryFunc::NegInt64
-            | UnaryFunc::NegFloat32
-            | UnaryFunc::NegFloat64
-            | UnaryFunc::NegDecimal
-            | UnaryFunc::CastBoolToStringExplicit
-            | UnaryFunc::CastInt32ToInt64
-            | UnaryFunc::CastInt32ToString
-            | UnaryFunc::CastInt64ToString
-            | UnaryFunc::CastFloat32ToFloat64
-            | UnaryFunc::CastFloat32ToString
-            | UnaryFunc::CastFloat64ToString
-            | UnaryFunc::CastStringToBytes
-            | UnaryFunc::CastDateToTimestamp
-            | UnaryFunc::CastDateToTimestampTz
-            | UnaryFunc::CastDateToString
-            | UnaryFunc::CastTimeToInterval
-            | UnaryFunc::CastTimeToString => true,
-            _ => false,
-        }
-    }
-}
-
-impl fmt::Display for UnaryFunc {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            UnaryFunc::Not => f.write_str("!"),
-            UnaryFunc::IsNull => f.write_str("isnull"),
-            UnaryFunc::NegInt32 => f.write_str("-"),
-            UnaryFunc::NegInt64 => f.write_str("-"),
-            UnaryFunc::NegFloat32 => f.write_str("-"),
-            UnaryFunc::NegFloat64 => f.write_str("-"),
-            UnaryFunc::NegDecimal => f.write_str("-"),
-            UnaryFunc::NegInterval => f.write_str("-"),
-            UnaryFunc::AbsInt32 => f.write_str("abs"),
-            UnaryFunc::AbsInt64 => f.write_str("abs"),
-            UnaryFunc::AbsDecimal => f.write_str("abs"),
-            UnaryFunc::AbsFloat32 => f.write_str("abs"),
-            UnaryFunc::AbsFloat64 => f.write_str("abs"),
-            UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
-            UnaryFunc::CastBoolToStringImplicit => f.write_str("booltostrim"),
-            UnaryFunc::CastInt32ToBool => f.write_str("i32tobool"),
-            UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
-            UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),
-            UnaryFunc::CastInt32ToInt64 => f.write_str("i32toi64"),
-            UnaryFunc::CastInt32ToString => f.write_str("i32tostr"),
-            UnaryFunc::CastInt32ToDecimal => f.write_str("i32todec"),
-            UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
-            UnaryFunc::CastInt64ToBool => f.write_str("i64tobool"),
-            UnaryFunc::CastInt64ToDecimal => f.write_str("i64todec"),
-            UnaryFunc::CastInt64ToFloat32 => f.write_str("i64tof32"),
-            UnaryFunc::CastInt64ToFloat64 => f.write_str("i64tof64"),
-            UnaryFunc::CastInt64ToString => f.write_str("i64tostr"),
-            UnaryFunc::CastFloat32ToInt64 => f.write_str("f32toi64"),
-            UnaryFunc::CastFloat32ToFloat64 => f.write_str("f32tof64"),
-            UnaryFunc::CastFloat32ToString => f.write_str("f32tostr"),
-            UnaryFunc::CastFloat64ToInt32 => f.write_str("f64toi32"),
-            UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
-            UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
-            UnaryFunc::CastDecimalToInt32 => f.write_str("dectoi32"),
-            UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
-            UnaryFunc::CastDecimalToString(_) => f.write_str("dectostr"),
-            UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),
-            UnaryFunc::CastSignificandToFloat64 => f.write_str("dectof64"),
-            UnaryFunc::CastStringToBool => f.write_str("strtobool"),
-            UnaryFunc::CastStringToBytes => f.write_str("strtobytes"),
-            UnaryFunc::CastStringToInt32 => f.write_str("strtoi32"),
-            UnaryFunc::CastStringToInt64 => f.write_str("strtoi64"),
-            UnaryFunc::CastStringToFloat32 => f.write_str("strtof32"),
-            UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
-            UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
-            UnaryFunc::CastStringToDate => f.write_str("strtodate"),
-            UnaryFunc::CastStringToTime => f.write_str("strtotime"),
-            UnaryFunc::CastStringToTimestamp => f.write_str("strtots"),
-            UnaryFunc::CastStringToTimestampTz => f.write_str("strtotstz"),
-            UnaryFunc::CastStringToInterval => f.write_str("strtoiv"),
-            UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
-            UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
-            UnaryFunc::CastDateToString => f.write_str("datetostr"),
-            UnaryFunc::CastTimeToInterval => f.write_str("timetoiv"),
-            UnaryFunc::CastTimeToString => f.write_str("timetostr"),
-            UnaryFunc::CastTimestampToDate => f.write_str("tstodate"),
-            UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),
-            UnaryFunc::CastTimestampToString => f.write_str("tstostr"),
-            UnaryFunc::CastTimestampTzToDate => f.write_str("tstodate"),
-            UnaryFunc::CastTimestampTzToTimestamp => f.write_str("tstztots"),
-            UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
-            UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
-            UnaryFunc::CastIntervalToTime => f.write_str("ivtotime"),
-            UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
-            UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
-            UnaryFunc::CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
-            UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
-            UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
-            UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
-            UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
-            UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
-            UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
-            UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
-            UnaryFunc::FloorFloat64 => f.write_str("floorf64"),
-            UnaryFunc::FloorDecimal(_) => f.write_str("floordec"),
-            UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
-            UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
-            UnaryFunc::SqrtDec(_) => f.write_str("sqrtdec"),
-            UnaryFunc::Ascii => f.write_str("ascii"),
-            UnaryFunc::CharLength => f.write_str("char_length"),
-            UnaryFunc::BitLengthBytes => f.write_str("bit_length"),
-            UnaryFunc::BitLengthString => f.write_str("bit_length"),
-            UnaryFunc::ByteLengthBytes => f.write_str("byte_length"),
-            UnaryFunc::ByteLengthString => f.write_str("byte_length"),
-            UnaryFunc::MatchRegex(regex) => write!(f, "\"{}\" ~", regex.as_str()),
-            UnaryFunc::DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
-            UnaryFunc::DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),
-            UnaryFunc::DatePartTimestampTz(units) => write!(f, "date_part_{}_tstz", units),
-            UnaryFunc::DateTruncTimestamp(units) => write!(f, "date_trunc_{}_ts", units),
-            UnaryFunc::DateTruncTimestampTz(units) => write!(f, "date_trunc_{}_tstz", units),
-            UnaryFunc::ToTimestamp => f.write_str("tots"),
-            UnaryFunc::JsonbArrayLength => f.write_str("jsonb_array_length"),
-            UnaryFunc::JsonbTypeof => f.write_str("jsonb_typeof"),
-            UnaryFunc::JsonbStripNulls => f.write_str("jsonb_strip_nulls"),
-            UnaryFunc::JsonbPretty => f.write_str("jsonb_pretty"),
-            UnaryFunc::RoundFloat32 => f.write_str("roundf32"),
-            UnaryFunc::RoundFloat64 => f.write_str("roundf64"),
-            UnaryFunc::RoundDecimal(_) => f.write_str("roundunary"),
-            UnaryFunc::TrimWhitespace => f.write_str("btrim"),
-            UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
-            UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
-        }
-    }
-}
-
-fn coalesce<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [ScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    for e in exprs {
-        let d = e.eval(datums, temp_storage)?;
-        if !d.is_null() {
-            return Ok(d);
-        }
-    }
-    Ok(Datum::Null)
-}
-
-fn text_concat_binary<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    buf.push_str(a.unwrap_str());
-    buf.push_str(b.unwrap_str());
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn text_concat_variadic<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    let mut buf = String::new();
-    for d in datums {
-        if !d.is_null() {
-            buf.push_str(d.unwrap_str());
-        }
-    }
-    Datum::String(temp_storage.push_string(buf))
-}
-
-fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    let string: &'a str = datums[0].unwrap_str();
-    let mut chars = string.chars();
-
-    let start_in_chars = datums[1].unwrap_int64() - 1;
-    let mut start_in_bytes = 0;
-    for _ in 0..cmp::max(start_in_chars, 0) {
-        start_in_bytes += chars.next().map(|char| char.len_utf8()).unwrap_or(0);
-    }
-
-    if datums.len() == 3 {
-        let mut length_in_chars = datums[2].unwrap_int64();
-        if length_in_chars < 0 {
-            return Datum::Null;
-        }
-        if start_in_chars < 0 {
-            length_in_chars += start_in_chars;
-        }
-        let mut length_in_bytes = 0;
-        for _ in 0..cmp::max(length_in_chars, 0) {
-            length_in_bytes += chars.next().map(|char| char.len_utf8()).unwrap_or(0);
-        }
-        Datum::String(&string[start_in_bytes..start_in_bytes + length_in_bytes])
-    } else {
-        Datum::String(&string[start_in_bytes..])
-    }
-}
-
-fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(
-        temp_storage.push_string(
-            datums[0]
-                .unwrap_str()
-                .replace(datums[1].unwrap_str(), datums[2].unwrap_str()),
-        ),
-    )
-}
-
-fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    if datums.iter().any(|datum| datum.is_null()) {
-        // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
-        Datum::Null
-    } else {
-        temp_storage.make_datum(|packer| packer.push_list(datums))
-    }
-}
-
-fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    if datums.iter().any(|datum| datum.is_null()) {
-        // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
-        Datum::Null
-    } else {
-        let mut kvs = datums.chunks(2).collect::<Vec<_>>();
-        kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
-        kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
-        temp_storage.make_datum(|packer| {
-            packer.push_dict(kvs.into_iter().map(|kv| (kv[0].unwrap_str(), kv[1])))
-        })
-    }
-}
-
-fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| packer.push_list(datums))
-}
-
-fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    let year: i32 = match datums[0].unwrap_int64().try_into() {
-        Ok(year) => year,
-        Err(_) => return Datum::Null,
-    };
-    let month: u32 = match datums[1].unwrap_int64().try_into() {
-        Ok(month) => month,
-        Err(_) => return Datum::Null,
-    };
-    let day: u32 = match datums[2].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Datum::Null,
-    };
-    let hour: u32 = match datums[3].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Datum::Null,
-    };
-    let minute: u32 = match datums[4].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Datum::Null,
-    };
-    let second_float = datums[5].unwrap_float64();
-    let second = second_float as u32;
-    let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
-    let date = match NaiveDate::from_ymd_opt(year, month, day) {
-        Some(date) => date,
-        None => return Datum::Null,
-    };
-    let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
-        Some(timestamp) => timestamp,
-        None => return Datum::Null,
-    };
-    Datum::Timestamp(timestamp)
-}
-
-fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_matches(' '))
-}
-
-fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let trim_chars = b.unwrap_str();
-
-    Datum::from(a.unwrap_str().trim_matches(|c| trim_chars.contains(c)))
-}
-
-fn trim_leading_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_start_matches(' '))
-}
-
-fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let trim_chars = b.unwrap_str();
-
-    Datum::from(
-        a.unwrap_str()
-            .trim_start_matches(|c| trim_chars.contains(c)),
-    )
-}
-
-fn trim_trailing_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_str().trim_end_matches(' '))
-}
-
-fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let trim_chars = b.unwrap_str();
-
-    Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
-    Coalesce,
-    Concat,
+    // Date and time functions.
     MakeTimestamp,
-    Substr,
-    Replace,
+
+    // List functions.
+    ListCreate { elem_type: ScalarType },
+
+    // JSONB functions.
     JsonbBuildArray,
     JsonbBuildObject,
-    ListCreate {
-        // we need to know this to type exprs with empty lists
-        elem_type: ScalarType,
-    },
+
+    // Null-handling functions.
+    Coalesce,
+
+    // String functions.
+    Concat,
+    Substr,
+    Replace,
 }
 
 impl VariadicFunc {
@@ -2849,128 +1136,96 @@ impl VariadicFunc {
         temp_storage: &'a RowArena,
         exprs: &'a [ScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
+        use VariadicFunc::*;
+
         macro_rules! eager {
-            ($func:ident $(, $args:expr)*) => {{
+            ($func:expr $(, $args:expr)*) => {{
                 let ds = exprs.iter()
                     .map(|e| e.eval(datums, temp_storage))
                     .collect::<Result<Vec<_>, _>>()?;
-                if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
+                if self.props().propagates_nulls() && ds.iter().any(|d| d.is_null()) {
                     return Ok(Datum::Null);
                 }
-                $func(&ds $(, $args)*)
+                let out = $func(&ds $(, $args)*);
+                self.props()
+                    .check(&ds, &out)
+                    .unwrap_or_else(|e| panic!("{} failed property validation: {}", self, e));
+                out
             }}
         }
 
         match self {
-            VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
-            VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
-            VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
-            VariadicFunc::Substr => Ok(eager!(substr)),
-            VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
-            VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
-            VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
-            VariadicFunc::ListCreate { .. } => Ok(eager!(list_create, temp_storage)),
+            // Date and time functions.
+            MakeTimestamp => eager!(datetime::make_timestamp),
+
+            // List functions.
+            ListCreate { .. } => eager!(list::list_create, temp_storage),
+
+            // JSONB functions.
+            JsonbBuildArray => eager!(jsonb::jsonb_build_array, temp_storage),
+            JsonbBuildObject => eager!(jsonb::jsonb_build_object, temp_storage),
+
+            // Null-handling functions.
+            Coalesce => null::coalesce(datums, temp_storage, exprs),
+
+            // String functions.
+            Concat => eager!(string::concat_variadic, temp_storage),
+            Substr => eager!(string::substr),
+            Replace => eager!(string::replace, temp_storage),
+        }
+    }
+
+    pub fn props(&self) -> FuncProps {
+        use VariadicFunc::*;
+
+        match self {
+            // Date and time functions.
+            MakeTimestamp => datetime::MAKE_TIMESTAMP_PROPS,
+
+            // JSONB functions.
+            JsonbBuildArray => jsonb::JSONB_BUILD_ARRAY_PROPS,
+            JsonbBuildObject => jsonb::JSONB_BUILD_OBJECT_PROPS,
+
+            // List functions.
+            ListCreate { elem_type } => list::list_create_props(elem_type.clone()),
+
+            // Null-handling functions.
+            Coalesce => null::COALESCE_PROPS,
+
+            // String functions.
+            Concat => string::CONCAT_VARIADIC_PROPS,
+            Substr => string::SUBSTR_PROPS,
+            Replace => string::REPLACE_PROPS,
         }
     }
 
     pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
-        use VariadicFunc::*;
-        match self {
-            Coalesce => {
-                assert!(input_types.len() > 0);
-                debug_assert!(
-                    input_types
-                        .windows(2)
-                        .all(|w| w[0].scalar_type == w[1].scalar_type),
-                    "coalesce inputs did not have uniform type: {:?}",
-                    input_types
-                );
-                input_types.into_first().nullable(true)
-            }
-            Concat => ColumnType::new(ScalarType::String).nullable(true),
-            MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
-            Substr => ColumnType::new(ScalarType::String).nullable(true),
-            Replace => ColumnType::new(ScalarType::String).nullable(true),
-            JsonbBuildArray | JsonbBuildObject => ColumnType::new(ScalarType::Jsonb).nullable(true),
-            ListCreate { elem_type } => {
-                debug_assert!(
-                    input_types.iter().all(|t| t.scalar_type == *elem_type),
-                    "Args to ListCreate should have types that are compatible with the elem_type"
-                );
-                ColumnType::new(ScalarType::List(Box::new(elem_type.clone())))
-            }
-        }
-    }
-
-    /// Whether the function output is NULL if any of its inputs are NULL.
-    pub fn propagates_nulls(&self) -> bool {
-        match self {
-            VariadicFunc::Coalesce
-            | VariadicFunc::Concat
-            | VariadicFunc::JsonbBuildArray
-            | VariadicFunc::JsonbBuildObject
-            | VariadicFunc::ListCreate { .. } => false,
-            _ => true,
-        }
+        self.props().output_type(input_types)
     }
 }
 
 impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use VariadicFunc::*;
+
         match self {
-            VariadicFunc::Coalesce => f.write_str("coalesce"),
-            VariadicFunc::Concat => f.write_str("concat"),
-            VariadicFunc::MakeTimestamp => f.write_str("makets"),
-            VariadicFunc::Substr => f.write_str("substr"),
-            VariadicFunc::Replace => f.write_str("replace"),
-            VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
-            VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
-            VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
+            // Date and time functions.
+            MakeTimestamp => f.write_str("makets"),
+
+            // List functions.
+            ListCreate { .. } => f.write_str("list_create"),
+
+            // JSONB functions.
+            JsonbBuildArray => f.write_str("jsonb_build_array"),
+            JsonbBuildObject => f.write_str("jsonb_build_object"),
+
+            // Null-handling functions.
+            Coalesce => f.write_str("coalesce"),
+
+            // String functions.
+            Concat => f.write_str("concat"),
+            Substr => f.write_str("substr"),
+            Replace => f.write_str("replace"),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use chrono::prelude::*;
-
-    use super::*;
-
-    #[test]
-    fn add_interval_months() {
-        let dt = ym(2000, 1);
-
-        assert_eq!(add_timestamp_months(dt, 0), dt);
-        assert_eq!(add_timestamp_months(dt, 1), ym(2000, 2));
-        assert_eq!(add_timestamp_months(dt, 12), ym(2001, 1));
-        assert_eq!(add_timestamp_months(dt, 13), ym(2001, 2));
-        assert_eq!(add_timestamp_months(dt, 24), ym(2002, 1));
-        assert_eq!(add_timestamp_months(dt, 30), ym(2002, 7));
-
-        // and negatives
-        assert_eq!(add_timestamp_months(dt, -1), ym(1999, 12));
-        assert_eq!(add_timestamp_months(dt, -12), ym(1999, 1));
-        assert_eq!(add_timestamp_months(dt, -13), ym(1998, 12));
-        assert_eq!(add_timestamp_months(dt, -24), ym(1998, 1));
-        assert_eq!(add_timestamp_months(dt, -30), ym(1997, 7));
-
-        // and going over a year boundary by less than a year
-        let dt = ym(1999, 12);
-        assert_eq!(add_timestamp_months(dt, 1), ym(2000, 1));
-        let end_of_month_dt = NaiveDate::from_ymd(1999, 12, 31).and_hms(9, 9, 9);
-        assert_eq!(
-            // leap year
-            add_timestamp_months(end_of_month_dt, 2),
-            NaiveDate::from_ymd(2000, 2, 29).and_hms(9, 9, 9),
-        );
-        assert_eq!(
-            // not leap year
-            add_timestamp_months(end_of_month_dt, 14),
-            NaiveDate::from_ymd(2001, 2, 28).and_hms(9, 9, 9),
-        );
-    }
-
-    fn ym(year: i32, month: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd(year, month, 1).and_hms(9, 9, 9)
     }
 }

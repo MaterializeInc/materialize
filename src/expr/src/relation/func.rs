@@ -21,7 +21,7 @@ use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::scalar::func::jsonb_stringify;
+use crate::scalar::func::jsonb::jsonb_stringify;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435

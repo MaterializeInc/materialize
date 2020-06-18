@@ -174,10 +174,7 @@ lazy_static! {
             (Float32, Implicit(Float64)) => CastFloat32ToFloat64,
             (Float32, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
-                let s = ScalarExpr::literal(
-                    Datum::from(i32::from(s)), ColumnType::new(to_type.scalar_type())
-                );
-                e.call_binary(s, BinaryFunc::CastFloat32ToDecimal)
+                e.call_unary(UnaryFunc::CastFloat32ToDecimal(s))
             }),
             (Float32, Explicit(String)) => CastFloat32ToString,
             (Float32, JsonbAny) => CastOp::F(to_jsonb_any_f64_cast),
@@ -187,9 +184,7 @@ lazy_static! {
             (Float64, Explicit(Int64)) => CastFloat64ToInt64,
             (Float64, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
-                let s = ScalarExpr::literal(Datum::from(
-                    i32::from(s)), ColumnType::new(to_type.scalar_type()));
-                e.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
+                e.call_unary(UnaryFunc::CastFloat64ToDecimal(s))
             }),
             (Float64, Explicit(String)) => CastFloat64ToString,
             (Float64, JsonbAny) => CastJsonbOrNullToJsonb,
@@ -208,7 +203,7 @@ lazy_static! {
                 let factor = 10_f32.powi(i32::from(s));
                 let factor =
                     ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float32));
-                e.call_unary(CastSignificandToFloat32)
+                e.call_unary(CastDecimalToFloat32)
                     .call_binary(factor, BinaryFunc::DivFloat32)
             }),
             (Decimal(0, 0), Implicit(Float64)) => CastOp::F(|ecx, e, _to_type| {
@@ -216,7 +211,7 @@ lazy_static! {
                 let factor = 10_f64.powi(i32::from(s));
                 let factor =
                     ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float32));
-                e.call_unary(CastSignificandToFloat64)
+                e.call_unary(CastDecimalToFloat64)
                     .call_binary(factor, BinaryFunc::DivFloat64)
             }),
             (Decimal(0, 0), Implicit(Decimal(0, 0))) => CastOp::F(|ecx, e, to_type| {
