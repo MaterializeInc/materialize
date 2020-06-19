@@ -63,7 +63,11 @@ async fn mysql_debezium_kafka(args: Args) -> Result<(), anyhow::Error> {
                            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
                            ENVELOPE DEBEZIUM;";
     log::info!("creating source=> {}", src_query);
-    mz_client.execute(&*src_query, &[]).await?;
+    // Retry in case the topic has not been created yet.
+    retry::retry_for(Duration::from_secs(30), |_| {
+        mz_client.execute(&*src_query, &[])
+    })
+    .await?;
 
     // Create count materialized view.
     let count_query = "CREATE MATERIALIZED VIEW orderline_count AS
