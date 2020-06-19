@@ -11,6 +11,8 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
@@ -96,12 +98,14 @@ impl SinkMetrics {
 #[derive(Clone)]
 pub struct SinkProducerContext {
     metrics: SinkMetrics,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl SinkProducerContext {
-    pub fn new(metrics: &SinkMetrics) -> Self {
+    pub fn new(metrics: &SinkMetrics, shutdown: &Arc<AtomicBool>) -> Self {
         SinkProducerContext {
             metrics: metrics.clone(),
+            shutdown: shutdown.clone(),
         }
     }
 }
@@ -120,6 +124,7 @@ impl ProducerContext for SinkProducerContext {
                     msg.topic(),
                     e
                 );
+                self.shutdown.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -168,9 +173,14 @@ where
         &id.to_string(),
         &stream.scope().index().to_string(),
     );
+
+    let shutdown = Arc::new(AtomicBool::new(false));
     let producer = Rc::new(RefCell::new(Some(
         config
-            .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(&sink_metrics))
+            .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
+                &sink_metrics,
+                &shutdown,
+            ))
             .expect("creating kafka producer for kafka sinks failed"),
     )));
     let mut queue: VecDeque<(Row, Diff)> = VecDeque::new();
@@ -191,8 +201,17 @@ where
 
             let ret = move |input: &mut FrontieredInputHandle<_, _, _>| {
                 let producer: &RefCell<_> = producer.borrow();
-                let producer = &*producer.borrow();
-                let producer = match producer {
+                let producer_option = &mut *producer.borrow_mut();
+
+                if shutdown.load(Ordering::SeqCst) {
+                    error!(
+                        "encountered irrecoverable error. shutting down sink: {}",
+                        name
+                    );
+                    *producer_option = None;
+                }
+
+                let producer = match producer_option {
                     Some(producer) => producer,
                     None => return false,
                 };
@@ -262,6 +281,10 @@ where
                             encoded_buffer = Some((encoded, count));
                             activator.activate_after(Duration::from_secs(60));
                             return true;
+                        } else {
+                            // We've received an error that is not transient
+                            shutdown.store(true, Ordering::SeqCst);
+                            return false;
                         }
                     } else {
                         sink_metrics.messages_sent_counter.inc();
