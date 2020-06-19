@@ -1616,6 +1616,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "json"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "078e285eafdfb6c4b434e0d31e8cfcb5115b651496faca5749b88fafd4f23bfd"
+
+[[package]]
 name = "kafka-util"
 version = "0.1.0"
 dependencies = [
@@ -1834,6 +1840,22 @@ name = "maybe-uninit"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
+
+[[package]]
+name = "mbtaupsert"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "futures",
+ "getopts",
+ "json",
+ "mz-avro",
+ "ordered-float",
+ "parse_duration",
+ "rdkafka",
+ "reqwest",
+ "serde_json",
+]
 
 [[package]]
 name = "md-5"
