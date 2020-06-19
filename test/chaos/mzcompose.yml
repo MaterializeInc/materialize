@@ -81,11 +81,7 @@ services:
     cap_add:
       - NET_ADMIN
   connector:
-    image: confluentinc/cp-enterprise-kafka:5.3.0
-    volumes:
-      - ./connector/docker-entrypoint.sh:/usr/local/bin/docker-entrypoint.sh
-    entrypoint:
-      - docker-entrypoint.sh
+    build: connector
   mysql:
     image: debezium/example-mysql:1.1
     ports:
