@@ -27,6 +27,10 @@ fn parse_utc_datetime_from_str(s: &str) -> ParseResult<DateTime<Utc>> {
     ))
 }
 
+fn parse_seed(s: &str) -> u64 {
+    s.parse().unwrap_or_else(|_| rand::random())
+}
+
 #[derive(Clone, Debug, StructOpt)]
 pub struct Args {
     /// The materialized host
@@ -71,8 +75,8 @@ pub struct Args {
     pub low_memory: bool,
 
     /// A random seed for generating the records and prices
-    #[structopt(long)]
-    pub seed: Option<u64>,
+    #[structopt(long, default_value = "", parse(from_str = parse_seed))]
+    pub seed: u64,
 
     /// A date to start generating records from. Default is a week before now.
     /// The input time format should be "%Y-%m-%dT%H:%M:%S"
@@ -105,7 +109,17 @@ impl Args {
             message_count: self.message_count,
             message_sleep: self.message_sleep,
             seed: self.seed,
-            start_time: self.start_time,
+            start_time: match self.start_time {
+                Some(start_time) => start_time,
+                None => {
+                    let now = Utc::now() - chrono::Duration::seconds(60 * 60 * 24 * 7);
+                    Utc.ymd(now.year(), now.month(), now.day()).and_hms(
+                        now.hour(),
+                        now.minute(),
+                        now.second(),
+                    )
+                }
+            },
             partitions: self.partitions,
         }
     }
@@ -138,8 +152,8 @@ pub struct KafkaConfig {
     pub topic: String,
     pub message_count: usize,
     pub message_sleep: Option<Duration>,
-    pub seed: Option<u64>,
-    pub start_time: Option<DateTime<Utc>>,
+    pub seed: u64,
+    pub start_time: DateTime<Utc>,
     pub partitions: Option<i32>,
 }
 
@@ -153,7 +167,7 @@ pub struct MzConfig {
     pub csv_file_name: String,
     pub preserve_source: bool,
     pub low_memory: bool,
-    pub seed: Option<u64>,
+    pub seed: u64,
     pub check_sink: bool,
     pub batch_size: Option<u64>,
 }

@@ -56,17 +56,20 @@ async fn run() -> Result<()> {
     let config = Args::from_args();
     env_logger::init();
 
+    let k_config = config.kafka_config();
+    let mz_config = config.mz_config();
+
     log::info!(
-        "starting up message_count={} mzd={}:{} kafka={} preserve_source={}",
+        "starting up message_count={} mzd={}:{} kafka={} preserve_source={} start_time={} seed={}",
         config.message_count,
         config.materialized_host,
         config.materialized_port,
         config.kafka_url(),
-        config.preserve_source
+        config.preserve_source,
+        k_config.start_time.to_rfc3339(),
+        k_config.seed,
     );
 
-    let k_config = config.kafka_config();
-    let mz_config = config.mz_config();
     let mz_client = MzClient::new(&mz_config.host, mz_config.port).await?;
     let check_sink = mz_config.check_sink;
 
@@ -91,13 +94,11 @@ async fn run() -> Result<()> {
 
 async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     use rand::SeedableRng;
-    let rng = &mut if let Some(seed) = config.seed {
-        rand::rngs::StdRng::seed_from_u64(seed)
-    } else {
-        rand::rngs::StdRng::from_seed(rand::random())
-    };
+    let rng = &mut rand::rngs::StdRng::seed_from_u64(config.seed);
 
-    let mut recordstate = randomizer::RecordState::new(config.start_time);
+    let mut recordstate = randomizer::RecordState {
+        last_time: config.start_time,
+    };
 
     let mut k_client =
         kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])
