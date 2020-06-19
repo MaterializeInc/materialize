@@ -7,10 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
+use differential_dataflow::operators::arrange::ShutdownButton;
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::{
@@ -23,6 +27,7 @@ use rdkafka::error::{KafkaError, RDKafkaError};
 use rdkafka::message::Message;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::FrontieredInputHandle;
 use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
@@ -126,7 +131,8 @@ pub fn kafka<G>(
     id: GlobalId,
     connector: KafkaSinkConnector,
     desc: RelationDesc,
-) where
+) -> ShutdownButton<ThreadedProducer<SinkProducerContext>>
+where
     G: Scope<Timestamp = Timestamp>,
 {
     // We want exactly one worker to send all the data to the sink topic. We
@@ -162,9 +168,11 @@ pub fn kafka<G>(
         &id.to_string(),
         &stream.scope().index().to_string(),
     );
-    let producer: ThreadedProducer<_> = config
-        .create_with_context(SinkProducerContext::new(&sink_metrics))
-        .expect("creating kafka producer for kafka sinks failed");
+    let producer = Rc::new(RefCell::new(Some(
+        config
+            .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(&sink_metrics))
+            .expect("creating kafka producer for kafka sinks failed"),
+    )));
     let mut queue: VecDeque<(Row, Diff)> = VecDeque::new();
     let mut vector = Vec::new();
     let mut encoded_buffer = None;
@@ -176,7 +184,19 @@ pub fn kafka<G>(
         &name.clone(),
         |info| {
             let activator = stream.scope().activator_for(&info.address[..]);
-            move |input| {
+            let shutdown_button = ShutdownButton::new(
+                producer.clone(),
+                stream.scope().activator_for(&info.address[..]),
+            );
+
+            let ret = move |input: &mut FrontieredInputHandle<_, _, _>| {
+                let producer: &RefCell<_> = producer.borrow();
+                let producer = &*producer.borrow();
+                let producer = match producer {
+                    Some(producer) => producer,
+                    None => return false,
+                };
+
                 // Grab all of the available Rows and put them in a queue before we
                 // send it over to Kafka. We Even though we want to do bounded work
                 // per sink invocation, we still need to remember all inputs as we
@@ -274,7 +294,9 @@ pub fn kafka<G>(
                 }
 
                 false
-            }
+            };
+
+            (ret, shutdown_button)
         },
     )
 }
