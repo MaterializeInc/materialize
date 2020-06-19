@@ -11,9 +11,6 @@
 
 set -euo pipefail
 
-wait-for-it --timeout=60 zookeeper:2181
-wait-for-it --timeout=60 kafka:9092
-
 topics=(
     mysql.tpcch.warehouse
     mysql.tpcch.district
@@ -30,9 +27,6 @@ topics=(
 )
 
 echo "${topics[@]}" | xargs -n1 -P8 kafka-topics --bootstrap-server kafka:9092 --create --partitions 1 --replication-factor 1 --topic
-
-wait-for-it --timeout=60 connect:8083
-wait-for-it --timeout=60 mysql:3306
 
 curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
   "name": "mysql-connector",
