@@ -959,7 +959,6 @@ dependencies = [
  "encoding",
  "enum-iterator",
  "failure",
- "indexmap",
  "num_enum",
  "ordered-float",
  "ore",
