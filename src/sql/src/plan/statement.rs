@@ -961,7 +961,7 @@ fn handle_create_view(
         view: View {
             create_sql,
             expr: relation_expr,
-            desc,
+            column_names: desc.iter_names().map(|n| n.cloned()).collect(),
             temporary,
         },
         replace,
