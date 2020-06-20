@@ -7,7 +7,10 @@ connector_spec ::=
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
-    'CREATE' 'INDEX' index_name 'ON' view_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
+    'CREATE' (
+        'INDEX' index_name 'ON' obj_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
+        | 'DEFAULT INDEX ON' obj_name
+    )
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |

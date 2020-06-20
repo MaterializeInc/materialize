@@ -41,14 +41,19 @@ For more detail about how different clauses impact memory usage, check out our
 
 ### Indexes
 
-Though most users do not need to be concerned with indexes, for the sake of completeness, they deserve a brief mention.
+Though most users do not need to be concerned with indexes, for the sake of
+completeness, they deserve a brief mention.
 
-Materialize automatically creates an in-memory index which stores all columns in the `SELECT` query's result set; this is the crucial structure that the view maintains to provide low-latency access to your query's results.
+Materialize automatically creates an in-memory index which stores all columns in
+the `SELECT` query's result set; this is the crucial structure that the view
+maintains to provide low-latency access to your query's results.
 
 Some things you might want to do with indexes...
 
 - View the details of a view's indexes through [`SHOW INDEX`](../show-index).
-- If you find that your queries would benefit from other indexes, e.g. you want to join two relations on some foreign key, you can [create indexes](../create-index).
+- If you find that your queries would benefit from other indexes, e.g. you want
+  to join two relations on some foreign key, you can [create
+  indexes](../create-index).
 
 ## Examples
 

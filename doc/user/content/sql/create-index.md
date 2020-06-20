@@ -30,7 +30,7 @@ You might want to create indexes when...
 
 - You want to use non-primary keys (e.g. foreign keys) as a join condition.
   In this case, you could create an index on the columns in the join condition.
-- You want to convert a non-materialized view to a materialized view.
+- You want to convert a non-materialized view or source to a materialized view or source.
 
 ## Syntax
 
@@ -38,8 +38,9 @@ You might want to create indexes when...
 
 Field | Use
 ------|-----
+**DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view) or [**CREATE MATERIALIZED SOURCE**](/sql/create-source). This provides a simple method to convert a non-materialized object to a materialized one.
 _index&lowbar;name_ | A name for the index.
-_view&lowbar;name_ | The name of the source or view on which you want to create an index.
+_obj&lowbar;name_ | The name of the source or view on which you want to create an index.
 _col&lowbar;ref_**...** | The columns to use as the key into the index.
 
 ## Details
