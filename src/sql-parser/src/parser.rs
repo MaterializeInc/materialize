@@ -121,6 +121,8 @@ struct Parser {
     tokens: Vec<(Token, Range<usize>)>,
     /// The index of the first unprocessed token in `self.tokens`
     index: usize,
+    /// Tracks recursion depth.
+    depth: usize,
 }
 
 /// Defines a number of precedence classes operators follow. Since this enum derives Ord, the
@@ -150,6 +152,7 @@ impl Parser {
             sql,
             tokens,
             index: 0,
+            depth: 0,
         }
     }
 
@@ -241,19 +244,21 @@ impl Parser {
 
     /// Parse tokens until the precedence changes
     fn parse_subexpr(&mut self, precedence: Precedence) -> Result<Expr, ParserError> {
-        debug!("parsing expr");
-        let mut expr = self.parse_prefix()?;
-        debug!("prefix: {:?}", expr);
-        loop {
-            let next_precedence = self.get_next_precedence();
-            debug!("next precedence: {:?}", next_precedence);
-            if precedence >= next_precedence {
-                break;
-            }
+        self.check_descent(|parser| {
+            debug!("parsing expr");
+            let mut expr = parser.parse_prefix()?;
+            debug!("prefix: {:?}", expr);
+            loop {
+                let next_precedence = parser.get_next_precedence();
+                debug!("next precedence: {:?}", next_precedence);
+                if precedence >= next_precedence {
+                    break;
+                }
 
-            expr = self.parse_infix(expr, next_precedence)?;
-        }
-        Ok(expr)
+                expr = parser.parse_infix(expr, next_precedence)?;
+            }
+            Ok(expr)
+        })
     }
 
     /// Parse an expression prefix
@@ -2139,46 +2144,48 @@ impl Parser {
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
     /// expect the initial keyword to be already consumed
     fn parse_query(&mut self) -> Result<Query, ParserError> {
-        let ctes = if self.parse_keyword("WITH") {
-            // TODO: optional RECURSIVE
-            self.parse_comma_separated(Parser::parse_cte)?
-        } else {
-            vec![]
-        };
+        self.check_descent(|parser| {
+            let ctes = if parser.parse_keyword("WITH") {
+                // TODO: optional RECURSIVE
+                parser.parse_comma_separated(Parser::parse_cte)?
+            } else {
+                vec![]
+            };
 
-        let body = self.parse_query_body(Precedence::Zero)?;
+            let body = parser.parse_query_body(Precedence::Zero)?;
 
-        let order_by = if self.parse_keywords(vec!["ORDER", "BY"]) {
-            self.parse_comma_separated(Parser::parse_order_by_expr)?
-        } else {
-            vec![]
-        };
+            let order_by = if parser.parse_keywords(vec!["ORDER", "BY"]) {
+                parser.parse_comma_separated(Parser::parse_order_by_expr)?
+            } else {
+                vec![]
+            };
 
-        let limit = if self.parse_keyword("LIMIT") {
-            self.parse_limit()?
-        } else {
-            None
-        };
+            let limit = if parser.parse_keyword("LIMIT") {
+                parser.parse_limit()?
+            } else {
+                None
+            };
 
-        let offset = if self.parse_keyword("OFFSET") {
-            Some(self.parse_offset()?)
-        } else {
-            None
-        };
+            let offset = if parser.parse_keyword("OFFSET") {
+                Some(parser.parse_offset()?)
+            } else {
+                None
+            };
 
-        let fetch = if self.parse_keyword("FETCH") {
-            Some(self.parse_fetch()?)
-        } else {
-            None
-        };
+            let fetch = if parser.parse_keyword("FETCH") {
+                Some(parser.parse_fetch()?)
+            } else {
+                None
+            };
 
-        Ok(Query {
-            ctes,
-            body,
-            limit,
-            order_by,
-            offset,
-            fetch,
+            Ok(Query {
+                ctes,
+                body,
+                limit,
+                order_by,
+                offset,
+                fetch,
+            })
         })
     }
 
@@ -2959,6 +2966,57 @@ impl Parser {
             explainee,
             options,
         })
+    }
+
+    /// Checks whether it is safe to descend another layer of nesting in the
+    /// parse tree, and calls `f` if so.
+    ///
+    /// The nature of a recursive descent parser, like this SQL parser, is that
+    /// deeply nested queries can easily cause a stack overflow, as each level
+    /// of nesting requires a new stack frame of a few dozen bytes, and those
+    /// bytes add up over time. That means that user input can trivially cause a
+    /// process crash, which does not make for a good user experience.
+    ///
+    /// This method uses the [`stacker`] crate to automatically grow the stack
+    /// as necessary. It also enforces a hard but arbitrary limit on the maximum
+    /// depth, as it's good practice to have *some* limit. Real-world queries
+    /// tend not to have more than a dozen or so layers of nesting.
+    ///
+    /// Calls to this function must be manually inserted in the parser at any
+    /// point that mutual recursion occurs; i.e., whenever parsing of a nested
+    /// expression or nested SQL query begins.
+    fn check_descent<F, R>(&mut self, f: F) -> Result<R, ParserError>
+    where
+        F: FnOnce(&mut Parser) -> Result<R, ParserError>,
+    {
+        // NOTE(benesch): this recursion limit was chosen based on the maximum
+        // amount of nesting I've ever seen in a production SQL query (i.e.,
+        // about a dozen) times a healthy factor to be conservative.
+        const RECURSION_LIMIT: usize = 128;
+
+        // The red zone is the amount of stack space that must be available on
+        // the current stack in order to call `f` without allocating a new
+        // stack.
+        const STACK_RED_ZONE: usize = 32 << 10; // 32KiB
+
+        // The size of any freshly-allocated stacks. It was chosen to match the
+        // default stack size for threads in Rust.
+        const STACK_SIZE: usize = 2 << 20; // 2MiB
+
+        if self.depth > RECURSION_LIMIT {
+            return parser_err!(
+                self,
+                self.peek_prev_range(),
+                "query exceeds nested expession limit of {}",
+                RECURSION_LIMIT
+            );
+        }
+
+        self.depth += 1;
+        let out = stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || f(self));
+        self.depth -= 1;
+
+        out
     }
 }
 
