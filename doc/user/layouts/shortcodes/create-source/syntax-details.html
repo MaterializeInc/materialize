@@ -25,10 +25,10 @@ Field | Value type | Description
 ### Materialized source details
 
 Materializing a source keeps data it receives in an in-memory
-[index](../../overview/api-components/#indexes), the presence of which makes the
+[index](/overview/api-components/#indexes), the presence of which makes the
 source directly queryable. In contrast, non-materialized sources cannot process
 queries directly; to access the data the source receives, you need to create
-[materialized views](../../create-materialized-view) that `SELECT` from the
+[materialized views](/sql/create-materialized-view) that `SELECT` from the
 source.
 
 For a mental model, materializing the source is approximately equivalent to
@@ -45,7 +45,7 @@ you refer to the source's name directly in queries.
 
 For more details about the impact of materializing sources (and implicitly
 creating an index), see [`CREATE INDEX`: Details &mdash; Memory
-footprint](../../create-index/#memory-footprint).
+footprint](/sql/create-index/#memory-footprint).
 
 {{ partial (printf "create-source/connector/%s/details" $connector ) (dict "context" . "envelopes" $envelopes) -}}
 

@@ -49,6 +49,11 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.3.1"></span>
 ## 0.3.1 (Unreleased)
 
+- Simplify converting non-materialized views into materialized views with
+  [`CREATE DEFAULT INDEX ON foo`](/sql/create-index). This creates the same
+  [index](/overview/api-components/#indexes) on a view that would have been
+  created if you had used [`CREATE MATERIALIZED
+  VIEW`](/sql/create-materialized-view).
 - Produce runtime errors when casting from string to any other data type, rather
   than producing `NULL` if the cast failed.
 - Add support for PostgreSQL functions `char_length`, `octet_length`, and
