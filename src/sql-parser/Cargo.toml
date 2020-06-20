@@ -7,10 +7,11 @@ publish = false
 
 [dependencies]
 failure = "0.1.8"
+lazy_static = "1.4.0"
 log = "0.4.5"
 ore = { path = "../ore" }
 repr = { path = "../repr" }
-lazy_static = "1.4.0"
+stacker = "0.1.9"
 
 [dev-dependencies]
 datadriven = "0.1.0"

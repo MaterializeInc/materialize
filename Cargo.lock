@@ -2554,6 +2554,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "psm"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85e0cd97c440c06c0ca7f056a27dee4669a723a0b952e065542958bf3ccc8f1c"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3273,6 +3282,7 @@ dependencies = [
  "matches",
  "ore",
  "repr",
+ "stacker",
  "walkabout",
 ]
 
@@ -3302,6 +3312,19 @@ dependencies = [
  "sql-parser",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "stacker"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72dd941b456e1c006d6b9f27c526d5b69281288aeea8cba82c19d3843d8ccdd2"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "psm",
+ "winapi 0.3.8",
 ]
 
 [[package]]
