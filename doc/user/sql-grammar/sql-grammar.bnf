@@ -7,7 +7,10 @@ connector_spec ::=
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
-    'CREATE' 'INDEX' index_name 'ON' view_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
+    'CREATE' (
+        'INDEX' index_name 'ON' obj_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
+        | 'DEFAULT INDEX ON' obj_name
+    )
 create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
@@ -22,68 +25,68 @@ create_sink ::=
    'AVRO OCF' path-prefix
    )
 create_source_avro_file ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'AVRO OCF' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
 create_source_avro_kafka ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' format_spec
   ('ENVELOPE' ('NONE'|'DEBEZIUM'| ('UPSERT' ('FORMAT' format_spec)?)))?
 create_source ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' connector_spec
   'FORMAT' format_spec
   ('ENVELOPE' ('NONE'|'DEBEZIUM'))?
 create_source_csv_file ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_csv_kafka ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_csv_kinesis ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_json_kinesis ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'BYTES'
 create_source_json_kafka ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'BYTES'
 create_source_protobuf_kafka ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'PROTOBUF MESSAGE' message_name
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
 create_source_protobuf_kinesis ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'PROTOBUF MESSAGE' message_name
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
 create_source_text ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' (
@@ -92,7 +95,7 @@ create_source_text ::=
     'BYTES'
   )
 create_source_text_kafka ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
@@ -104,7 +107,7 @@ create_source_text_kafka ::=
     )
   )?
 create_source_text_kinesis ::=
-  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' ('BYTES' | 'TEXT')
