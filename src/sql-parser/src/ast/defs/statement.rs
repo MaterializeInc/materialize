@@ -116,12 +116,13 @@ pub enum Statement {
     },
     /// `CREATE INDEX`
     CreateIndex {
-        /// Index name
-        name: Ident,
+        /// Optional index name.
+        name: Option<Ident>,
         /// `ON` table or view name
         on_name: ObjectName,
-        /// Expressions that form part of the index key
-        key_parts: Vec<Expr>,
+        /// Expressions that form part of the index key. If not included, the
+        /// key_parts will be inferred from the named object.
+        key_parts: Option<Vec<Expr>>,
         if_not_exists: bool,
     },
     /// `ALTER TABLE`
@@ -479,16 +480,25 @@ impl AstDisplay for Statement {
                 key_parts,
                 if_not_exists,
             } => {
-                f.write_str("CREATE INDEX ");
+                f.write_str("CREATE ");
+                if key_parts.is_none() {
+                    f.write_str("DEFAULT ");
+                }
+                f.write_str("INDEX ");
                 if *if_not_exists {
                     f.write_str("IF NOT EXISTS ");
                 }
-                f.write_node(name);
-                f.write_str(" ON ");
+                if let Some(name) = name {
+                    f.write_node(name);
+                    f.write_str(" ");
+                }
+                f.write_str("ON ");
                 f.write_node(&on_name);
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(key_parts));
-                f.write_str(")");
+                if let Some(key_parts) = key_parts {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(key_parts));
+                    f.write_str(")");
+                }
             }
             Statement::AlterTable { name, operation } => {
                 f.write_str("ALTER TABLE ");

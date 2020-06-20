@@ -821,8 +821,12 @@ where
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
         index_name.item += "_primary_idx";
-        let index =
-            auto_generate_src_idx(index_name.item.clone(), name.clone(), &source, source_id);
+        let index = auto_generate_primary_idx(
+            index_name.item.clone(),
+            name.clone(),
+            source_id,
+            &source.desc,
+        );
         match self.catalog_transact(vec![
             catalog::Op::CreateItem {
                 id: source_id,
@@ -882,8 +886,12 @@ where
         let (index_id, index) = if materialized {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index =
-                auto_generate_src_idx(index_name.item.clone(), name.clone(), &source, source_id);
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                name.clone(),
+                source_id,
+                &source.desc,
+            );
             let index_id = self.catalog.allocate_id()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
@@ -1015,8 +1023,13 @@ where
         let (index_id, index) = if materialize {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index =
-                auto_generate_view_idx(index_name.item.clone(), name.clone(), &view, view_id);
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                name.clone(),
+                view_id,
+                &view.desc,
+            );
+
             let index_id = self.catalog.allocate_id()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
@@ -1256,7 +1269,7 @@ where
                     conn_id: None,
                 };
                 self.build_view_collection(&view_id, &view, &mut dataflow);
-                let index = auto_generate_view_idx(index_name, view_name, &view, view_id);
+                let index = auto_generate_primary_idx(index_name, view_name, view_id, &view.desc);
                 self.build_arrangement(&index_id, index.clone(), typ, dataflow);
                 Some(index)
             } else {
@@ -2385,53 +2398,19 @@ impl ViewState {
     }
 }
 
-pub fn auto_generate_src_idx(
-    index_name: String,
-    source_name: FullName,
-    source: &catalog::Source,
-    source_id: GlobalId,
-) -> catalog::Index {
-    auto_generate_primary_idx(
-        index_name,
-        &source.desc.typ().keys,
-        source_name,
-        source_id,
-        &source.desc,
-    )
-}
-
-pub fn auto_generate_view_idx(
-    index_name: String,
-    view_name: FullName,
-    view: &catalog::View,
-    view_id: GlobalId,
-) -> catalog::Index {
-    auto_generate_primary_idx(
-        index_name,
-        &view.optimized_expr.as_ref().typ().keys,
-        view_name,
-        view_id,
-        &view.desc,
-    )
-}
-
 pub fn auto_generate_primary_idx(
     index_name: String,
-    keys: &[Vec<usize>],
     on_name: FullName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
 ) -> catalog::Index {
-    let keys = if let Some(keys) = keys.first() {
-        keys.clone()
-    } else {
-        (0..on_desc.typ().column_types.len()).collect()
-    };
+    let default_key = on_desc.typ().default_key();
+
     catalog::Index {
-        create_sql: index_sql(index_name, on_name, &on_desc, &keys),
+        create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
         plan_cx: PlanContext::default(),
         on: on_id,
-        keys: keys.into_iter().map(ScalarExpr::Column).collect(),
+        keys: default_key.iter().map(|k| ScalarExpr::Column(*k)).collect(),
     }
 }
 
@@ -2446,15 +2425,16 @@ fn index_sql(
     use sql_parser::ast::{Expr, Ident, Value};
 
     Statement::CreateIndex {
-        name: Ident::new(index_name),
+        name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
-        key_parts: keys
-            .iter()
-            .map(|i| match view_desc.get_unambiguous_name(*i) {
-                Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
-                _ => Expr::Value(Value::Number((i + 1).to_string())),
-            })
-            .collect(),
+        key_parts: Some(
+            keys.iter()
+                .map(|i| match view_desc.get_unambiguous_name(*i) {
+                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    _ => Expr::Value(Value::Number((i + 1).to_string())),
+                })
+                .collect(),
+        ),
         if_not_exists: false,
     }
     .to_string()
@@ -2560,11 +2540,11 @@ fn open_catalog(
                             item: log_view.name.into(),
                         };
                         let index_name = format!("{}_primary_idx", log_view.name);
-                        let index = auto_generate_view_idx(
+                        let index = auto_generate_primary_idx(
                             index_name.clone(),
                             view_name.clone(),
-                            &view,
                             log_view.id,
+                            &view.desc,
                         );
                         catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
                         catalog.insert_item(

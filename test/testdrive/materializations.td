@@ -86,7 +86,7 @@ b  ?column?
 2  3
 
 # Materialize data_view.
-> CREATE INDEX data_view_idx on data_view(a)
+> CREATE DEFAULT INDEX ON data_view
 
 > SELECT * FROM data_view
 a  b
@@ -115,7 +115,7 @@ b  max
 2  1
 
 # Unmaterialize data view.
-> DROP INDEX data_view_idx
+> DROP INDEX data_view_primary_idx
 
 # Can continue to select from view that depends on the unmaterialized view.
 > SELECT * FROM test4
@@ -299,10 +299,11 @@ a  b
 3  4
 1  2
 
-# If there exists another index, dropping the primary index will not
-# unmaterialize the source.
+# If there exists another index, dropping the primary index will not #
+# unmaterialize the source. This also tests creating a default index when the
+# default index name is already taken.
 
-> CREATE INDEX mat_data_idx2 ON mat_data(a)
+> CREATE DEFAULT INDEX ON mat_data
 
 > DROP INDEX mat_data_primary_idx
 
@@ -334,7 +335,7 @@ c  d
 -2 -1
 
 # Unmaterialize source.
-> DROP INDEX mat_data_idx2
+> DROP INDEX mat_data_primary_idx1
 
 ! SELECT * from mat_data
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources

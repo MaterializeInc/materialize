@@ -31,7 +31,7 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, ExplainOptions, ExplainStage, Explainee, Format, Ident,
+    AvroSchema, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format, Ident,
     IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
     SqlOption, Statement, Value,
 };
@@ -438,8 +438,7 @@ fn handle_show_objects(
                 .list_items(&scx.resolve_default_database()?, "public")
         };
 
-        let filtered_items =
-            items.filter(|entry| object_type_matches(object_type, entry.item_type()));
+        let filtered_items = items.filter(|entry| object_type == entry.item_type());
 
         if object_type == ObjectType::View || object_type == ObjectType::Source {
             // TODO(justin): we can't handle SHOW ... WHERE here yet because the coordinator adds
@@ -487,8 +486,8 @@ fn handle_show_indexes(
     }
     let from_name = scx.resolve_item(from_name)?;
     let from_entry = scx.catalog.get_item(&from_name);
-    if !object_type_matches(ObjectType::View, from_entry.item_type())
-        && !object_type_matches(ObjectType::Source, from_entry.item_type())
+    if from_entry.item_type() != CatalogItemType::View
+        && from_entry.item_type() != CatalogItemType::Source
     {
         bail!(
             "cannot show indexes on {} because it is a {}",
@@ -496,14 +495,14 @@ fn handle_show_indexes(
             from_entry.item_type(),
         );
     }
+
     let arena = RowArena::new();
     let rows = from_entry
         .used_by()
         .iter()
         .map(|id| scx.catalog.get_item_by_id(id))
         .filter(|entry| {
-            object_type_matches(ObjectType::Index, entry.item_type())
-                && entry.uses() == vec![from_entry.id()]
+            CatalogItemType::Index == entry.item_type() && entry.uses() == vec![from_entry.id()]
         })
         .flat_map(|entry| {
             let (keys, on) = entry.index_details().expect("known to be an index");
@@ -511,7 +510,7 @@ fn handle_show_indexes(
                 .expect("create_sql cannot be invalid")
                 .into_element()
             {
-                Statement::CreateIndex { key_parts, .. } => key_parts,
+                Statement::CreateIndex { key_parts, .. } => key_parts.unwrap(),
                 _ => unreachable!(),
             };
             let mut row_subset = Vec::new();
@@ -753,35 +752,113 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     })
 }
 
-fn handle_create_index(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
-    let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, on_name, key_parts, if_not_exists) = match stmt {
+fn handle_create_index(
+    scx: &StatementContext,
+    mut stmt: Statement,
+) -> Result<Plan, failure::Error> {
+    let (name, on_name, key_parts, if_not_exists) = match &stmt {
         Statement::CreateIndex {
             name,
             on_name,
             key_parts,
             if_not_exists,
-        } => (name, on_name, key_parts, if_not_exists),
+        } => (name, on_name, key_parts, *if_not_exists),
         _ => unreachable!(),
     };
-    let on_name = scx.resolve_item(on_name)?;
+    let on_name = scx.resolve_item(on_name.clone())?;
     let catalog_entry = scx.catalog.get_item(&on_name);
-    let keys = query::plan_index_exprs(scx, catalog_entry.desc()?, &key_parts)?;
-    if !object_type_matches(ObjectType::View, catalog_entry.item_type())
-        && !object_type_matches(ObjectType::Source, catalog_entry.item_type())
+
+    if CatalogItemType::View != catalog_entry.item_type()
+        && CatalogItemType::Source != catalog_entry.item_type()
     {
         bail!(
             "index cannot be created on {} because it is a {}",
             on_name,
             catalog_entry.item_type()
-        );
+        )
     }
-    Ok(Plan::CreateIndex {
-        name: FullName {
+
+    let on_desc = catalog_entry.desc()?;
+
+    let filled_key_parts = match key_parts {
+        Some(kp) => kp.to_vec(),
+        None => {
+            // `key_parts` is None if we're creating a "default" index, i.e.
+            // creating the index as if the index had been created alongside the
+            // view source, e.g. `CREATE MATERIALIZED...`
+            catalog_entry
+                .desc()?
+                .typ()
+                .default_key()
+                .iter()
+                .map(|i| match on_desc.get_unambiguous_name(*i) {
+                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    _ => Expr::Value(Value::Number((i + 1).to_string())),
+                })
+                .collect()
+        }
+    };
+    let keys = query::plan_index_exprs(scx, on_desc, &filled_key_parts)?;
+
+    let index_name = if let Some(name) = name {
+        FullName {
             database: on_name.database.clone(),
             schema: on_name.schema.clone(),
-            item: normalize::ident(name),
-        },
+            item: normalize::ident(name.clone()),
+        }
+    } else {
+        let mut idx_name_base = on_name.clone();
+        if key_parts.is_none() {
+            // We're trying to create the "default" index.
+            idx_name_base.item += "_primary_idx";
+        } else {
+            // Use PG schema for automatically naming indexes:
+            // `<table>_<_-separated indexed expressions>_idx`
+            let index_name_col_suffix = keys
+                .iter()
+                .map(|k| match k {
+                    expr::ScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
+                        Some(col_name) => col_name.to_string(),
+                        None => format!("{}", i + 1),
+                    },
+                    _ => "expr".to_string(),
+                })
+                .join("_");
+            idx_name_base.item += &format!("_{}_idx", index_name_col_suffix);
+            idx_name_base.item = normalize::ident(Ident::new(idx_name_base.item))
+        }
+
+        let mut index_name = idx_name_base.clone();
+        let mut i = 0;
+
+        let mut cat_schema_iter = scx.catalog.list_items(&on_name.database, &on_name.schema);
+
+        // Search for an unused version of the name unless `if_not_exists`.
+        while cat_schema_iter.any(|i| *i.name() == index_name) && !if_not_exists {
+            i += 1;
+            index_name = idx_name_base.clone();
+            index_name.item += &i.to_string();
+            cat_schema_iter = scx.catalog.list_items(&on_name.database, &on_name.schema);
+        }
+
+        index_name
+    };
+
+    // Normalize `stmt`.
+    match &mut stmt {
+        Statement::CreateIndex {
+            name, key_parts, ..
+        } => {
+            *name = Some(Ident::new(index_name.item.clone()));
+            *key_parts = Some(filled_key_parts);
+        }
+        _ => unreachable!(),
+    }
+
+    let create_sql = normalize::create_statement(scx, stmt)?;
+
+    Ok(Plan::CreateIndex {
+        name: index_name,
         index: Index {
             create_sql,
             on: catalog_entry.id(),
@@ -1490,7 +1567,7 @@ fn handle_drop_item(
             name
         );
     }
-    if !object_type_matches(object_type, catalog_entry.item_type()) {
+    if object_type != catalog_entry.item_type() {
         bail!("{} is not of type {}", name, object_type);
     }
     if !cascade {
@@ -1606,14 +1683,22 @@ fn handle_query(
 ///
 /// For now tables are treated as a special kind of source in Materialize, so just
 /// allow `TABLE` to refer to either.
-fn object_type_matches(object_type: ObjectType, item_type: CatalogItemType) -> bool {
-    match item_type {
-        CatalogItemType::Source => {
-            object_type == ObjectType::Source || object_type == ObjectType::Table
+impl PartialEq<ObjectType> for CatalogItemType {
+    fn eq(&self, other: &ObjectType) -> bool {
+        match (self, other) {
+            (CatalogItemType::Source, ObjectType::Source)
+            | (CatalogItemType::Source, ObjectType::Table)
+            | (CatalogItemType::Sink, ObjectType::Sink)
+            | (CatalogItemType::View, ObjectType::View)
+            | (CatalogItemType::Index, ObjectType::Index) => true,
+            (_, _) => false,
         }
-        CatalogItemType::Sink => object_type == ObjectType::Sink,
-        CatalogItemType::View => object_type == ObjectType::View,
-        CatalogItemType::Index => object_type == ObjectType::Index,
+    }
+}
+
+impl PartialEq<CatalogItemType> for ObjectType {
+    fn eq(&self, other: &CatalogItemType) -> bool {
+        other == self
     }
 }
 
