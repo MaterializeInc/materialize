@@ -31,6 +31,7 @@ mod file;
 mod kafka;
 mod kinesis;
 mod util;
+mod general;
 
 use differential_dataflow::Hashable;
 pub use file::{file, read_file_task, FileReadStyle};
