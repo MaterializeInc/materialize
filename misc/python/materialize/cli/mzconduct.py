@@ -1043,16 +1043,24 @@ class ChaosConfirmStep(WorkflowStep):
     """Confirm the status of a Docker service's container at the end of a workflow.
 
     Params:
-        service: Docker service to confirm, will be used to grep for container id
-                 NOTE: service name must be unique to correctly match the container id
-        running: True if it should be running, False otherwise (default: False)
+        service:   Docker service to confirm, will be used to grep for container id
+                   NOTE: service name must be unique to correctly match the container id
+        running:   True if it should be running, False otherwise (default: False)
         exit_code: expected exit code, if not running (default: 0)
+        wait:      True if step should wait for a running container to exit before confirming (default: False)
     """
 
-    def __init__(self, service: str, running: bool = False, exit_code: int = 0) -> None:
+    def __init__(
+        self,
+        service: str,
+        running: bool = False,
+        exit_code: int = 0,
+        wait: bool = False,
+    ) -> None:
         self._service = service
         self._running = running
         self._exit_code = exit_code
+        self._wait = wait
 
     def run(self, comp: Composition, workflow: Workflow) -> None:
         container_id = comp.get_container_id(self._service)
@@ -1060,10 +1068,16 @@ class ChaosConfirmStep(WorkflowStep):
             if not comp.docker_container_is_running(container_id):
                 raise Failed(f"chaos-confirm: container {container_id} is not running")
         else:
-            if comp.docker_container_is_running(container_id):
-                raise Failed(
-                    f"chaos-confirm: expected {container_id} to have exited, is running"
-                )
+            if self._wait:
+                while comp.docker_container_is_running(container_id):
+                    say(f"chaos-confirm: waiting for {self._service} to exit")
+                    time.sleep(60)
+            else:
+                if comp.docker_container_is_running(container_id):
+                    raise Failed(
+                        f"chaos-confirm: expected {container_id} to have exited, is running"
+                    )
+
             actual_exit_code = comp.docker_inspect("{{.State.ExitCode}}", container_id)
             if actual_exit_code != f"'{self._exit_code}'":
                 raise Failed(

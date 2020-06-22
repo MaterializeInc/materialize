@@ -120,6 +120,15 @@ mzconduct:
           workflow: start-everything
         - step: chaos-delay-docker
           container: chaos_kafka_1
+        - step: run
+          service: chaos
+          command: >-
+            --test bytes-to-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 100
+            --message-count 100
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -133,21 +142,15 @@ mzconduct:
           container: chaos_connect_1
         - step: run
           service: chaos
+          daemon: true
           command: >-
             --test mysql-debezium-kafka
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
-            --run-seconds=864000
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: kafka
-          running: true
-        - step: chaos-confirm
-          service: chaos_run
-          exit_code: 0
+            --run-seconds=60
+        - step: workflow
+          workflow: run-netem-and-confirm
 
     # This test is designed to rate limit egress network traffic of the Kafka broker.
     rate-kafka:
@@ -156,6 +159,15 @@ mzconduct:
           workflow: start-everything
         - step: chaos-rate-docker
           container: chaos_kafka_1
+        - step: run
+          service: chaos
+          command: >-
+            --test bytes-to-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 100
+            --message-count 100000000
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -175,15 +187,8 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --run-seconds=864000
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: kafka
-          running: true
-        - step: chaos-confirm
-          service: chaos_run
-          exit_code: 0
+        - step: workflow
+          workflow: run-netem-and-confirm
 
     # This test is designed to test packet loss from the Kafka broker.
     loss-kafka:
@@ -193,6 +198,15 @@ mzconduct:
         - step: chaos-loss-docker
           container: chaos_kafka_1
           percent: 10
+        - step: run
+          service: chaos
+          command: >-
+            --test bytes-to-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 100
+            --message-count 100000000
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -213,15 +227,8 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --run-seconds=864000
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: kafka
-          running: true
-        - step: chaos-confirm
-          service: chaos_run
-          exit_code: 0
+        - step: workflow
+          workflow: run-netem-and-confirm
 
     # This test is designed to test packet loss from the Kafka broker.
     duplicate-kafka:
@@ -231,6 +238,15 @@ mzconduct:
         - step: chaos-duplicate-docker
           container: chaos_kafka_1
           percent: 10
+        - step: run
+          service: chaos
+          command: >-
+            --test bytes-to-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 100
+            --message-count 100000000
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -251,15 +267,8 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --run-seconds=864000
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: kafka
-          running: true
-        - step: chaos-confirm
-          service: chaos_run
-          exit_code: 0
+        - step: workflow
+          workflow: run-netem-and-confirm
 
     # This test is designed to test packet corruption from the Kafka broker.
     corrupt-kafka:
@@ -269,6 +278,15 @@ mzconduct:
         - step: chaos-corrupt-docker
           container: chaos_kafka_1
           percent: 10
+        - step: run
+          service: chaos
+          command: >-
+            --test bytes-to-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 100
+            --message-count 100000000
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -289,15 +307,8 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --run-seconds=864000
-        - step: chaos-confirm
-          service: materialized
-          running: true
-        - step: chaos-confirm
-          service: kafka
-          running: true
-        - step: chaos-confirm
-          service: chaos_run
-          exit_code: 0
+        - step: workflow
+          workflow: run-netem-and-confirm
 
     # These tests are designed to start and stop the specified Docker container.
     pause-kafka:
@@ -443,24 +454,16 @@ mzconduct:
     # - the chaos container completed successfully
     run-netem-and-confirm:
       steps:
-        - step: run
-          service: chaos
-          command: >-
-            --test bytes-to-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 100
-            --message-count 100000000
+        - step: chaos-confirm
+          service: chaos_run
+          wait: true
+          exit_code: 0
         - step: chaos-confirm
           service: materialized
           running: true
         - step: chaos-confirm
-          service: kafka
+          service: chaos_kafka_1
           running: true
-        - step: chaos-confirm
-          service: chaos_run
-          exit_code: 0
 
     # chbench helper workflows
     chbench-chaos-test:
@@ -513,7 +516,7 @@ mzconduct:
             --dsn=mysql --gen-dir=/var/lib/mysql-files
             --analytic-threads=0
             --transactional-threads=1
-            --run-seconds=864000
+            --run-seconds=60
             -l /dev/stdout
             --config-file-path=/etc/chbenchmark/mz-default.cfg
             --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
