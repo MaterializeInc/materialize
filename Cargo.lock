@@ -3090,9 +3090,9 @@ dependencies = [
 
 [[package]]
 name = "serde_regex"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff49f989fad7d5ad77332f42d93100f6268f4a9e2887cfcf0ec3506865c57acb"
+checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
 dependencies = [
  "regex",
  "serde",
