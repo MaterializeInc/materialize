@@ -482,24 +482,24 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
     }
 }
 
+fn plan_join_identity(qcx: &QueryContext) -> (RelationExpr, Scope) {
+    let typ = RelationType::new(vec![]);
+    let expr = RelationExpr::constant(vec![vec![]], typ);
+    let scope = Scope::from_source(
+        None,
+        iter::empty::<Option<ColumnName>>(),
+        Some(qcx.outer_scope.clone()),
+    );
+    (expr, scope)
+}
+
 fn plan_view_select(
     qcx: &QueryContext,
     s: &Select,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     // Step 1. Handle FROM clause, including joins.
-    let (left, left_scope) = {
-        let typ = RelationType::new(vec![]);
-        (
-            RelationExpr::constant(vec![vec![]], typ),
-            Scope::from_source(
-                None,
-                iter::empty::<Option<ColumnName>>(),
-                Some(qcx.outer_scope.clone()),
-            ),
-        )
-    };
     let (mut relation_expr, from_scope) =
-        s.from.iter().fold(Ok((left, left_scope)), |l, twj| {
+        s.from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
             let (left, left_scope) = l?;
             plan_table_with_joins(qcx, left, left_scope, &JoinOperator::CrossJoin, twj)
         })?;
@@ -745,7 +745,15 @@ fn plan_table_factor<'a>(
             plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
         }
         TableFactor::NestedJoin(table_with_joins) => {
-            plan_table_with_joins(qcx, left, left_scope, join_operator, table_with_joins)
+            let (identity, identity_scope) = plan_join_identity(qcx);
+            let (expr, scope) = plan_table_with_joins(
+                qcx,
+                identity,
+                identity_scope,
+                &JoinOperator::CrossJoin,
+                table_with_joins,
+            )?;
+            plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
         }
     }
 }

@@ -239,3 +239,15 @@ SELECT * FROM r WHERE EXISTS (SELECT * from l RIGHT JOIN r as r2 ON l.la = r.ra)
 4  r4
 1  r1
 3  r3
+
+# Regression test for #3426.
+query III colnames
+SELECT * FROM
+    (SELECT 1 AS baz) t1
+    INNER JOIN (
+        (SELECT 1 AS foo) t2
+        INNER JOIN (SELECT 1 AS bar) t3 ON true
+    ) ON foo = bar;
+----
+baz  foo  bar
+1    1    1
