@@ -203,7 +203,7 @@ where
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        while let Some(_) = ready!(Pin::new(&mut self.0).poll_next(cx)) {}
+        while ready!(Pin::new(&mut self.0).poll_next(cx)).is_some() {}
         Poll::Ready(())
     }
 }

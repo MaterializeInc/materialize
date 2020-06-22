@@ -487,7 +487,7 @@ impl ParsedDateTime {
                 let nano: u32 = second
                     .fraction
                     .try_into()
-                    .map_err({ |e| p_err(e, "NANOSECOND") })?;
+                    .map_err(|e| p_err(e, "NANOSECOND"))?;
                 let second: u32 = second.unit.try_into().map_err(|e| p_err(e, "MINUTE"))?;
                 (second, nano)
             }

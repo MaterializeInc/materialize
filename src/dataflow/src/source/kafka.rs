@@ -908,7 +908,7 @@ where
         timestamp_channel,
         timestamping_stopped.clone(),
         scope,
-        &name.clone(),
+        name.clone(),
         move |info| {
             // Create activator for source
             let activator = scope.activator_for(&info.address[..]);

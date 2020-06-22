@@ -9,5 +9,5 @@
 
 //! Module for all generated proto code
 
-pub mod fuzz;
 pub mod benchmark;
+pub mod fuzz;

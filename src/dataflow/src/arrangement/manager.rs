@@ -109,7 +109,7 @@ impl TraceManager {
 pub struct TraceBundle {
     oks: KeysValsHandle,
     errs: ErrsHandle,
-    to_drop: Option<Rc<Box<dyn Any>>>,
+    to_drop: Option<Rc<dyn Any>>,
 }
 
 impl TraceBundle {
@@ -145,7 +145,7 @@ impl TraceBundle {
     }
 
     /// Returns a reference to the `to_drop` tokens.
-    pub fn to_drop(&self) -> &Option<Rc<Box<dyn Any>>> {
+    pub fn to_drop(&self) -> &Option<Rc<dyn Any>> {
         &self.to_drop
     }
 }
