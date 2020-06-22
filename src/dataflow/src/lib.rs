@@ -15,6 +15,7 @@ mod arrangement;
 mod decode;
 mod metrics;
 mod operator;
+mod persistence;
 mod render;
 mod sink;
 
