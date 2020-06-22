@@ -111,6 +111,8 @@ struct CommandsProcessedMetrics {
     enable_feedback: IntCounter,
     shutdown_int: i32,
     shutdown: IntCounter,
+    advance_all_local_inputs_int: i32,
+    advance_all_local_inputs: IntCounter,
 }
 
 impl CommandsProcessedMetrics {
@@ -146,6 +148,9 @@ impl CommandsProcessedMetrics {
             enable_feedback: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_feedback"]),
             shutdown_int: 0,
             shutdown: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "shutdown"]),
+            advance_all_local_inputs_int: 0,
+            advance_all_local_inputs: COMMANDS_PROCESSED_RAW
+                .with_label_values(&[worker, "advance_all_local_inputs"]),
         }
     }
 
@@ -166,6 +171,9 @@ impl CommandsProcessedMetrics {
             }
             SequencedCommand::EnableFeedback(..) => self.enable_feedback_int += 1,
             SequencedCommand::Shutdown { .. } => self.shutdown_int += 1,
+            SequencedCommand::AdvanceAllLocalInputs { .. } => {
+                self.advance_all_local_inputs_int += 1
+            }
         }
     }
 
@@ -225,6 +233,11 @@ impl CommandsProcessedMetrics {
         if self.shutdown_int > 0 {
             self.shutdown.inc_by(self.shutdown_int as i64);
             self.shutdown_int = 0;
+        }
+        if self.advance_all_local_inputs_int > 0 {
+            self.shutdown
+                .inc_by(self.advance_all_local_inputs_int as i64);
+            self.advance_all_local_inputs_int = 0;
         }
     }
 }

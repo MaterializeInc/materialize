@@ -125,9 +125,6 @@ pub enum SequencedCommand {
         index: IndexDesc,
         /// The relation type of the input.
         on_type: RelationType,
-        /// A timestamp to which all local input (including this one)'s capabilities should be
-        /// advanced.
-        advance_to: Timestamp,
     },
     /// Insert `updates` into the local input named `id`.
     Insert {
@@ -135,8 +132,6 @@ pub enum SequencedCommand {
         id: GlobalId,
         /// A list of updates to be introduced to the input.
         updates: Vec<Update>,
-        /// A timestamp to which all local input's capabilities should be advanced.
-        advance_to: Timestamp,
     },
     /// Enable compaction in views.
     ///
@@ -158,6 +153,11 @@ pub enum SequencedCommand {
         timestamp: Timestamp,
         /// TODO(ncrooks)
         offset: MzOffset,
+    },
+    /// ...
+    AdvanceAllLocalInputs {
+        /// TODO
+        advance_to: Timestamp,
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
@@ -628,12 +628,18 @@ where
                 })
             }
 
+            // TODO put this where it belongs
+            SequencedCommand::AdvanceAllLocalInputs { advance_to } => {
+                for (_, local_input) in self.local_inputs.iter_mut() {
+                    local_input.capability.downgrade(&advance_to);
+                }
+            }
+
             SequencedCommand::CreateLocalInput {
                 name,
                 index_id,
                 index,
                 on_type,
-                advance_to,
             } => {
                 render::build_local_input(
                     &mut self.traces,
@@ -646,25 +652,15 @@ where
                 );
                 self.reported_frontiers
                     .insert(index_id, Antichain::from_elem(0));
-                for (_, local_input) in self.local_inputs.iter_mut() {
-                    local_input.capability.downgrade(&advance_to);
-                }
             }
 
-            SequencedCommand::Insert {
-                id,
-                updates,
-                advance_to,
-            } => {
+            SequencedCommand::Insert { id, updates } => {
                 if let Some(input) = self.local_inputs.get_mut(&id) {
                     let mut session = input.handle.session(input.capability.clone());
                     for update in updates {
                         assert!(update.timestamp >= *input.capability.time());
                         session.give((update.row, update.timestamp, update.diff));
                     }
-                }
-                for (_, local_input) in self.local_inputs.iter_mut() {
-                    local_input.capability.downgrade(&advance_to);
                 }
             }
 
