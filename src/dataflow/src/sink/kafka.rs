@@ -200,18 +200,19 @@ where
             );
 
             let ret = move |input: &mut FrontieredInputHandle<_, _, _>| {
-                let producer: &RefCell<_> = producer.borrow();
-                let producer_option = &mut *producer.borrow_mut();
-
                 if shutdown.load(Ordering::SeqCst) {
                     error!(
                         "encountered irrecoverable error. shutting down sink: {}",
                         name
                     );
-                    *producer_option = None;
+                    *producer.borrow_mut() = None;
+                    return false;
                 }
 
-                let producer = match producer_option {
+                let producer: &RefCell<_> = producer.borrow();
+                let producer = &*producer.borrow();
+
+                let producer = match producer {
                     Some(producer) => producer,
                     None => return false,
                 };
