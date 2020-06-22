@@ -13,6 +13,6 @@ log = "0.4.8"
 md-5 = "0.8"
 ore = { path = "../../src/ore" }
 rand = "0.7.3"
-structopt = "0.3.11"
+structopt = "0.3.15"
 test-util = { path = "../test-util" }
 tokio = { version = "0.2.21", features = ["full"] }

@@ -21,7 +21,7 @@ protobuf = "2.8.1"
 protoc = "2.8.1"
 rand = "0.7.3"
 rand_distr = "0.2.2"
-structopt = "0.3.14"
+structopt = "0.3.15"
 test-util = { path = "../../test/test-util" }
 thiserror = "1.0.19"
 tokio = { version = "0.2.21", features = ["full"] }
