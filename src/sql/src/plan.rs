@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
-use repr::{RelationDesc, Row, ScalarType};
+use repr::{ColumnName, RelationDesc, Row, ScalarType};
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
@@ -166,7 +166,7 @@ pub struct Sink {
 pub struct View {
     pub create_sql: String,
     pub expr: ::expr::RelationExpr,
-    pub desc: RelationDesc,
+    pub column_names: Vec<Option<ColumnName>>,
     pub temporary: bool,
 }
 

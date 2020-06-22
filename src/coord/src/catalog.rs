@@ -973,10 +973,7 @@ impl Catalog {
             Plan::CreateView { view, .. } => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
-                let desc = RelationDesc::new(
-                    optimized_expr.as_ref().typ(),
-                    view.desc.iter_names().map(|c| c.cloned()),
-                );
+                let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     plan_cx: pcx,

@@ -1004,10 +1004,7 @@ where
         let view_id = self.catalog.allocate_id()?;
         // Optimize the expression so that we can form an accurately typed description.
         let optimized_expr = self.optimizer.optimize(view.expr, self.catalog.indexes())?;
-        let desc = RelationDesc::new(
-            optimized_expr.as_ref().typ(),
-            view.desc.iter_names().map(|c| c.cloned()),
-        );
+        let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
             plan_cx: pcx,
@@ -2523,10 +2520,8 @@ fn open_catalog(
                         let optimized_expr = optimizer
                             .optimize(view.expr, catalog.indexes())
                             .expect("failed to optimize bootstrap sql");
-                        let desc = RelationDesc::new(
-                            optimized_expr.as_ref().typ(),
-                            view.desc.iter_names().map(|c| c.cloned()),
-                        );
+                        let desc =
+                            RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
                         let view = catalog::View {
                             create_sql: view.create_sql,
                             plan_cx: pcx,
