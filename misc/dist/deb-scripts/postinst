@@ -17,6 +17,6 @@ adduser --system --group --force-badname --no-create-home --quiet _Materialize
 mkdir -p /var/lib/materialize/
 chown _Materialize:_Materialize /var/lib/materialize/
 
-if [ -x /bin/systemctl -a $(ps -h -o comm 1) = "systemd" ]; then
-  systemctl daemon-reload
+if [ -x /bin/systemctl ]; then
+  systemctl daemon-reload 2>&1 > /dev/null || true
 fi
