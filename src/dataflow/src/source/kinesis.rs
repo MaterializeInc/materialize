@@ -94,7 +94,7 @@ where
         ts,
         Arc::new(AtomicBool::new(false)),
         scope,
-        &name.clone(),
+        name.clone(),
         move |info| {
             let activator = scope.activator_for(&info.address[..]);
 

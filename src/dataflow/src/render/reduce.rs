@@ -472,7 +472,7 @@ where
     G::Timestamp: Lattice,
 {
     // Repeatedly apply hierarchical reduction with a progressively coarser key.
-    let mut stage = collection.map({ move |(key, row)| ((key, row.hashed()), row) });
+    let mut stage = collection.map(move |(key, row)| ((key, row.hashed()), row));
     for log_modulus in [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter() {
         stage = build_hierarchical_stage(stage, aggr.clone(), 1u64 << log_modulus);
     }

@@ -12,8 +12,8 @@
 use protobuf::descriptor::FileDescriptorSet;
 use protobuf::RepeatedField;
 
-pub mod simple;
 pub mod billing;
+pub mod simple;
 
 pub fn descriptors() -> FileDescriptorSet {
     let mut fds = FileDescriptorSet::new();

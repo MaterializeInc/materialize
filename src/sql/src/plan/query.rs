@@ -1712,7 +1712,7 @@ fn plan_function<'a>(
     sql_func: &'a Function,
 ) -> Result<ScalarExpr, failure::Error> {
     let name = normalize::function_name(sql_func.name.clone())?;
-    let ident = &*name.to_string();
+    let ident = &*name;
 
     if func::is_aggregate_func(&name) {
         if ecx.allow_aggregates {

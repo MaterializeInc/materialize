@@ -539,7 +539,7 @@ where
         // Cleanly drain any pending messages from the worker before shutting
         // down.
         drop(internal_cmd_tx);
-        while let Some(_) = block_on(messages.next()) {}
+        while block_on(messages.next()).is_some() {}
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for

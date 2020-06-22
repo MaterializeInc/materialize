@@ -181,7 +181,7 @@ where
     sink_reschedule(
         &stream,
         Exchange::new(move |_| sink_hash),
-        &name.clone(),
+        name.clone(),
         |info| {
             let activator = stream.scope().activator_for(&info.address[..]);
             let shutdown_button = ShutdownButton::new(

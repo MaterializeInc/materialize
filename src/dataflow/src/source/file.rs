@@ -347,7 +347,7 @@ where
         ts,
         Arc::new(AtomicBool::new(false)),
         scope,
-        &config.name.clone(),
+        config.name.clone(),
         move |info| {
             let activator = scope.activator_for(&info.address[..]);
             let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);

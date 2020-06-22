@@ -59,7 +59,7 @@ pub fn source<G, D, B, L>(
     timestamp_channel: Option<TimestampChanges>,
     timestamping_flag: Arc<AtomicBool>,
     scope: &G,
-    name: &str,
+    name: String,
     construct: B,
 ) -> (Stream<G, D>, SourceToken)
 where
@@ -73,7 +73,7 @@ where
         + 'static,
 {
     let mut token = None;
-    let stream = timely_source(scope, name, |cap, info| {
+    let stream = timely_source(scope, &name, |cap, info| {
         let cap = Rc::new(RefCell::new(Some(cap)));
 
         // Export a token to the outside word that will keep this source alive.

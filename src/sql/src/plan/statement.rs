@@ -46,7 +46,7 @@ use crate::{normalize, unsupported};
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
-        { RelationDesc::empty().with_nonnull_column("Database", ScalarType::String) };
+        RelationDesc::empty().with_nonnull_column("Database", ScalarType::String);
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::new(
         RelationType::new(vec![
             ColumnType::new(ScalarType::String),

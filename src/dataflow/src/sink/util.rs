@@ -17,7 +17,7 @@ use timely::Data;
 pub fn sink_reschedule<G: Scope, D, B, L, P, T>(
     s: &Stream<G, D>,
     pact: P,
-    name: &str,
+    name: String,
     constructor: B,
 ) -> ShutdownButton<T>
 where
@@ -26,7 +26,7 @@ where
     L: FnMut(&mut FrontieredInputHandle<G::Timestamp, D, P::Puller>) -> bool + 'static,
     P: ParallelizationContract<G::Timestamp, D>,
 {
-    let mut builder = OperatorBuilder::new(name.to_owned(), s.scope());
+    let mut builder = OperatorBuilder::new(name, s.scope());
     let operator_info = builder.operator_info();
     let mut input = builder.new_input(s, pact);
     let (mut logic, button) = constructor(operator_info);
