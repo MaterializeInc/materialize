@@ -128,7 +128,7 @@ mzconduct:
             --materialized-port 6875
             --kafka-url kafka:9092
             --kafka-partitions 100
-            --message-count 100
+            --message-count 100000000
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -148,7 +148,7 @@ mzconduct:
             --materialized-host materialized
             --materialized-port 6875
             --kafka-url kafka:9092
-            --run-seconds=60
+            --run-seconds=864000
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -516,7 +516,7 @@ mzconduct:
             --dsn=mysql --gen-dir=/var/lib/mysql-files
             --analytic-threads=0
             --transactional-threads=1
-            --run-seconds=60
+            --run-seconds=864000
             -l /dev/stdout
             --config-file-path=/etc/chbenchmark/mz-default.cfg
             --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
