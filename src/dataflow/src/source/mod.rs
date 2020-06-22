@@ -62,6 +62,7 @@ pub struct SourceConfig<'a, G> {
     pub timestamp_tx: TimestampChanges,
     /// A source can use Real-Time consistency timestamping or BYO consistency information.
     pub consistency: Consistency,
+    /// Source Type
     /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
     /// downgraded)
     pub timestamp_frequency: Duration,
