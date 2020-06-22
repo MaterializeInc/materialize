@@ -964,7 +964,7 @@ class ChaosNetemStep(WorkflowStep):
             cmd = self.get_cmd().split()
             spawn.runv(cmd)
         except subprocess.CalledProcessError as e:
-            raise Failed(f"Unable to run netem chaos command: {e}")
+            raise Failed(f"Unable to run netem chaos command: {e.stderr}")
 
     def get_cmd(self) -> str:
         pass
@@ -981,7 +981,7 @@ class ChaosDelayDockerStep(ChaosNetemStep):
         self._jitter = jitter
 
     def get_cmd(self) -> str:
-        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem \
+        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem \
                     delay {self._delay}ms {self._jitter}ms distribution normal"
 
 
@@ -994,8 +994,7 @@ class ChaosRateDockerStep(ChaosNetemStep):
         self._container = container
 
     def get_cmd(self) -> str:
-        # todo: what are good defaults here?
-        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem \
+        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem \
                     rate 5kbit 20 100 5"
 
 
@@ -1009,7 +1008,7 @@ class ChaosLossDockerStep(ChaosNetemStep):
         self._percent = percent
 
     def get_cmd(self) -> str:
-        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem loss {self._percent}"
+        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem loss {self._percent}"
 
 
 @Steps.register("chaos-duplicate-docker")
@@ -1022,7 +1021,7 @@ class ChaosDuplicateDockerStep(ChaosNetemStep):
         self._percent = percent
 
     def get_cmd(self) -> str:
-        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem duplicate {self._percent}"
+        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem duplicate {self._percent}"
 
 
 @Steps.register("chaos-corrupt-docker")
@@ -1035,7 +1034,7 @@ class ChaosCorruptDockerStep(ChaosNetemStep):
         self._percent = percent
 
     def get_cmd(self) -> str:
-        return f"docker exec -it {self._container} tc qdisc add dev eth0 root netem corrupt {self._percent}"
+        return f"docker exec -t {self._container} tc qdisc add dev eth0 root netem corrupt {self._percent}"
 
 
 @Steps.register("chaos-confirm")
