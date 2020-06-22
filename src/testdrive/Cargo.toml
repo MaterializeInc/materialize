@@ -48,7 +48,7 @@ tokio = "0.2"
 url = "2.1.0"
 
 [build-dependencies]
-protoc-rust = "2.14"
+protoc-rust = "2.15"
 
 [dev-dependencies]
 assert_cmd = "1.0.1"
