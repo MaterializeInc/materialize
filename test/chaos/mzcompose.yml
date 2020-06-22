@@ -120,15 +120,8 @@ mzconduct:
           workflow: start-everything
         - step: chaos-delay-docker
           container: chaos_kafka_1
-        - step: run
-          service: chaos
-          command: >-
-            --test bytes-to-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 100
-            --message-count 100000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -140,15 +133,8 @@ mzconduct:
           workflow: start-everything
         - step: chaos-delay-docker
           container: chaos_connect_1
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -159,15 +145,8 @@ mzconduct:
           workflow: start-everything
         - step: chaos-rate-docker
           container: chaos_kafka_1
-        - step: run
-          service: chaos
-          command: >-
-            --test bytes-to-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 100
-            --message-count 100000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -179,14 +158,8 @@ mzconduct:
           workflow: start-everything
         - step: chaos-rate-docker
           container: chaos_connect_1
-        - step: run
-          service: chaos
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -198,15 +171,8 @@ mzconduct:
         - step: chaos-loss-docker
           container: chaos_kafka_1
           percent: 10
-        - step: run
-          service: chaos
-          command: >-
-            --test bytes-to-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 100
-            --message-count 100000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -219,14 +185,8 @@ mzconduct:
         - step: chaos-loss-docker
           container: chaos_connect_1
           percent: 10
-        - step: run
-          service: chaos
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -238,15 +198,8 @@ mzconduct:
         - step: chaos-duplicate-docker
           container: chaos_kafka_1
           percent: 10
-        - step: run
-          service: chaos
-          command: >-
-            --test bytes-to-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 100
-            --message-count 100000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -259,14 +212,8 @@ mzconduct:
         - step: chaos-duplicate-docker
           container: chaos_connect_1
           percent: 10
-        - step: run
-          service: chaos
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -278,15 +225,8 @@ mzconduct:
         - step: chaos-corrupt-docker
           container: chaos_kafka_1
           percent: 10
-        - step: run
-          service: chaos
-          command: >-
-            --test bytes-to-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 100
-            --message-count 100000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -299,14 +239,8 @@ mzconduct:
         - step: chaos-corrupt-docker
           container: chaos_connect_1
           percent: 10
-        - step: run
-          service: chaos
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: workflow
           workflow: run-netem-and-confirm
 
@@ -315,15 +249,8 @@ mzconduct:
       steps:
         - step: workflow
           workflow: start-everything
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 5
-            --message-count 1000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: chaos-pause-docker
           service: kafka
           other_service: chaos_run
@@ -334,15 +261,8 @@ mzconduct:
           workflow: chbench-chaos-test
         - step: workflow
           workflow: start-everything
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: chaos-pause-docker
           service: chaos_connect_1
           other_service: chbench
@@ -352,15 +272,8 @@ mzconduct:
       steps:
         - step: workflow
           workflow: start-everything
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 5
-            --message-count 1000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: chaos-stop-docker
           service: kafka
           other_service: chaos_run
@@ -371,15 +284,8 @@ mzconduct:
           workflow: chbench-chaos-test
         - step: workflow
           workflow: start-everything
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: chaos-stop-docker
           service: chaos_connect_1
           other_service: chbench
@@ -389,15 +295,8 @@ mzconduct:
       steps:
         - step: workflow
           workflow: start-everything
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --kafka-partitions 5
-            --message-count 1000000
+        - step: workflow
+          workflow: chaos-bytes-to-kafka
         - step: chaos-kill-docker
           service: kafka
         - step: chaos-confirm
@@ -413,15 +312,8 @@ mzconduct:
           workflow: chbench-chaos-test
         - step: workflow
           workflow: start-everything
-        - step: run
-          service: chaos
-          daemon: true
-          command: >-
-            --test mysql-debezium-kafka
-            --materialized-host materialized
-            --materialized-port 6875
-            --kafka-url kafka:9092
-            --run-seconds=864000
+        - step: workflow
+          workflow: chaos-mysql-debezium-kafka
         - step: chaos-kill-docker
           service: chaos_connect_1
         - step: chaos-confirm
@@ -445,6 +337,33 @@ mzconduct:
         - step: wait-for-tcp
           host: materialized
           port: 6875
+
+    # Chaos test workflows
+    chaos-bytes-to-kafka:
+      steps:
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --test bytes-to-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --kafka-partitions 100
+            --message-count 100000000
+
+    chaos-mysql-debezium-kafka:
+      steps:
+        - step: run
+          service: chaos
+          daemon: true
+          command: >-
+            --test mysql-debezium-kafka
+            --materialized-host materialized
+            --materialized-port 6875
+            --kafka-url kafka:9092
+            --run-seconds=864000
+
 
     # To verify a netem chaos test, we run the chaos container to completion
     # and check the following conditions:
