@@ -18,5 +18,5 @@ mkdir -p /var/lib/materialize/
 chown _Materialize:_Materialize /var/lib/materialize/
 
 if [ -x /bin/systemctl ]; then
-  systemctl daemon-reload
+  systemctl daemon-reload 2>&1 > /dev/null || true
 fi
