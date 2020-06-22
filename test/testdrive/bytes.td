@@ -26,8 +26,8 @@ mz_offset  NO        int8
 > SELECT * FROM data
 data           mz_offset
 ----
-"\\xc2\\xa91"  0
-"\\xc2\\xa92"  1
+"\\xc2\\xa91"  1
+"\\xc2\\xa92"  2
 
 > select convert_from(data, 'utf8') FROM data
 ©1
