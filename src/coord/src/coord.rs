@@ -16,6 +16,7 @@
 //! which the maintained view will be correct, as any timestamps in advance of the frontier
 //! must accumulate to the same value as would an un-compacted trace.
 
+use std::cmp;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::iter;
@@ -125,11 +126,15 @@ where
     log: bool,
     executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
-    /// Remember the last assigned timestamp so that we can ensure monotonicity.
-    last_assigned: Timestamp,
     /// The startup time of the coordinator, from which local input timstamps are generated
     /// relative to.
     start_time: Instant,
+    /// The last timestamp we assigned to a read.
+    read_lower_bound: Timestamp,
+    /// The timestamp that all local inputs have been advanced up to.
+    closed_up_to: Timestamp,
+    /// Whether or not the most recent operation was a read.
+    last_op_was_read: bool,
 }
 
 impl<C> Coordinator<C>
@@ -189,8 +194,10 @@ where
             timestamp_config: config.timestamp,
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
-            last_assigned: 1,
             start_time: Instant::now(),
+            closed_up_to: 1,
+            read_lower_bound: 1,
+            last_op_was_read: false,
         };
 
         let catalog_entries: Vec<_> = coord
@@ -291,21 +298,42 @@ where
         Ok(coord)
     }
 
-    pub fn now(&mut self) -> Timestamp {
-        let mut t = self
+    /// Assign a timestamp for a read.
+    fn get_read_ts(&mut self) -> Timestamp {
+        let ts = self.get_ts();
+        self.last_op_was_read = true;
+        self.read_lower_bound = ts;
+        ts
+    }
+
+    /// Assign a timestamp for a write. Writes following reads must ensure that they are assigned a
+    /// strictly larger timestamp to ensure they are not visible to any real-time earlier reads.
+    fn get_write_ts(&mut self) -> Timestamp {
+        let ts = if self.last_op_was_read {
+            self.last_op_was_read = false;
+            cmp::max(self.get_ts(), self.read_lower_bound + 1)
+        } else {
+            self.get_ts()
+        };
+        self.read_lower_bound = cmp::max(ts, self.closed_up_to);
+        self.read_lower_bound
+    }
+
+    pub fn get_ts(&mut self) -> Timestamp {
+        // This is a hack. In a perfect world we would represent time as having a "real" dimension
+        // and a "coordinator" dimension so that clients always observed linearizability from
+        // things the coordinator did without being related to the real dimension.
+        let ts = self
             .start_time
             .elapsed()
             .as_millis()
             .try_into()
             .expect("system time did not fit in u64");
-        // This is a hack. In a perfect world we would represent time as having a "real" dimension
-        // and a "coordinator" dimension so that clients always observed linearizability from
-        // things the coordinator did without being related to the real dimension.
-        if t <= self.last_assigned {
-            t = self.last_assigned + 1
+        if ts < self.read_lower_bound {
+            self.read_lower_bound
+        } else {
+            ts
         }
-        self.last_assigned = t;
-        t
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
@@ -518,6 +546,20 @@ where
                     self.shutdown();
                     break;
                 }
+            }
+
+            let mut next_ts = self.get_ts();
+            if next_ts <= self.read_lower_bound {
+                next_ts = self.read_lower_bound + 1;
+            }
+            if next_ts > self.closed_up_to {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AdvanceAllLocalInputs {
+                        advance_to: next_ts,
+                    },
+                );
+                self.closed_up_to = next_ts;
             }
         }
 
@@ -830,7 +872,6 @@ where
         ]) {
             Ok(_) => {
                 self.views.insert(source_id, ViewState::new(false, vec![]));
-                let advance_to = self.now();
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateLocalInput {
@@ -841,7 +882,6 @@ where
                             keys: index.keys.clone(),
                         },
                         on_type: source.desc.typ().clone(),
-                        advance_to,
                     },
                 );
                 self.insert_index(index_id, &index, self.logical_compaction_window_ms);
@@ -1409,7 +1449,7 @@ where
         affected_rows: usize,
         kind: MutationKind,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let timestamp = self.last_assigned;
+        let timestamp = self.get_write_ts();
         let updates = updates
             .into_iter()
             .map(|(row, diff)| Update {
@@ -1419,15 +1459,9 @@ where
             })
             .collect();
 
-        let advance_to = self.now();
-
         broadcast(
             &mut self.broadcast_tx,
-            SequencedCommand::Insert {
-                id,
-                updates,
-                advance_to,
-            },
+            SequencedCommand::Insert { id, updates },
         );
 
         Ok(match kind {
@@ -2029,10 +2063,7 @@ where
         if self.symbiosis.is_some() {
             // In symbiosis mode, we enforce serializability by forcing all
             // PEEKs to peek at the latest input time.
-            // TODO(benesch): should this be saturating subtraction, and what should happen
-            // when `self.last_assigned` is zero?
-            assert!(self.last_assigned > 0);
-            return Ok(self.last_assigned - 1);
+            return Ok(self.get_read_ts());
         }
 
         // Each involved trace has a validity interval `[since, upper)`.
