@@ -131,11 +131,11 @@ where
     /// The startup time of the coordinator, from which local input timstamps are generated
     /// relative to.
     start_time: Instant,
-    /// todo
+    /// The last timestamp we assigned to a read.
     last_read_ts: Timestamp,
-    /// todo
+    /// The timestamp that all local inputs have been advanced up to.
     closed_up_to: Timestamp,
-    /// todo
+    /// Whether or not the most recent operation was a read.
     last_op_was_read: bool,
 }
 
@@ -308,11 +308,11 @@ where
     fn get_write_ts(&mut self) -> Timestamp {
         if self.last_op_was_read {
             self.last_op_was_read = false;
-            loop {
-                let ts = self.get_ts();
-                if ts > self.last_read_ts {
-                    break ts;
-                }
+            let ts = self.get_ts();
+            if ts <= self.last_read_ts {
+                self.last_read_ts + 1
+            } else {
+                ts
             }
         } else {
             self.get_ts()
@@ -323,11 +323,17 @@ where
         // This is a hack. In a perfect world we would represent time as having a "real" dimension
         // and a "coordinator" dimension so that clients always observed linearizability from
         // things the coordinator did without being related to the real dimension.
-        self.start_time
+        let ts = self
+            .start_time
             .elapsed()
             .as_millis()
             .try_into()
-            .expect("system time did not fit in u64")
+            .expect("system time did not fit in u64");
+        if ts < self.last_read_ts {
+            self.last_read_ts
+        } else {
+            ts
+        }
     }
 
     pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
@@ -559,7 +565,10 @@ where
                 }
             }
 
-            let next_ts = self.get_ts();
+            let mut next_ts = self.get_ts();
+            if next_ts <= self.last_read_ts {
+                next_ts = self.last_read_ts + 1;
+            }
             if next_ts > self.closed_up_to {
                 broadcast(
                     &mut self.broadcast_tx,

@@ -628,7 +628,6 @@ where
                 })
             }
 
-            // TODO put this where it belongs
             SequencedCommand::AdvanceAllLocalInputs { advance_to } => {
                 for (_, local_input) in self.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
