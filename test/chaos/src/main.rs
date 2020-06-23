@@ -250,8 +250,8 @@ async fn query_materialize(
                     message_count
                 );
 
-                let mut offset: i32 = 0;
-                let limit: i32 = 10_000;
+                let mut offset: usize = 0;
+                let limit: usize = 10_000;
                 let mut vals = Vec::new();
                 loop {
                     let query = format!(
@@ -263,11 +263,11 @@ async fn query_materialize(
                     if rows.len() == 0 {
                         break;
                     }
+                    offset += rows.len();
                     for row in rows {
                         let val: &[u8] = row.get("data");
                         vals.push(val.to_owned());
                     }
-                    offset += limit;
                 }
                 if vals.len() != message_count {
                     return Err(anyhow::Error::msg(format!(
