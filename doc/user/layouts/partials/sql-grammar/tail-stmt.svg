@@ -19,7 +19,7 @@
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="249" y="53">WITH SNAPSHOT</text>
+   <text class="terminal" x="249" y="53">WITHOUT SNAPSHOT</text>
    <rect x="133" y="121" width="60" height="32" rx="10"/>
    <rect x="131"
          y="119"

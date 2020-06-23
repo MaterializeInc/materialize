@@ -42,13 +42,13 @@ Field | Represents
 
 ### AS OF
 
-You can choose a point in time to begin reporting events using `AS OF`.
-If you don't use `AS OF`, Materialize will pick a timestamp itself.
+`AS OF` is the specific point in time to start reporting all events for a given `TAIL`. If you don't
+use `AS OF`, Materialize will pick a timestamp itself.
 
-### WITH SNAPSHOT
+### WITHOUT SNAPSHOT
 
-If you specify `WITH SNAPSHOT`, a snapshot of the state of the system at the chosen timestamp will be reported in addition to any subsequent events.
-This means that you will see any updates that occur up to and including the chosen timestamp.
+By default, each `TAIL` is created with a `SNAPSHOT`: a compacted version of updates up until the moment of the
+`TAIL`'s creation. To only see events after the `TAIL` was created, specify `WITHOUT SNAPSHOT` instead.
 
 ## Example
 
