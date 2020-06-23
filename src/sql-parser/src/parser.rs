@@ -2927,7 +2927,8 @@ impl Parser {
 
     fn parse_tail(&mut self) -> Result<Statement, ParserError> {
         let name = self.parse_object_name()?;
-        let with_snapshot = if self.parse_keyword("WITH") {
+
+        let without_snapshot = if self.parse_keyword("WITHOUT") {
             self.expect_keyword("SNAPSHOT")?;
             true
         } else {
@@ -2941,7 +2942,7 @@ impl Parser {
         };
         Ok(Statement::Tail {
             name,
-            with_snapshot,
+            without_snapshot,
             as_of,
         })
     }

@@ -232,9 +232,9 @@ pub fn handle_statement(
     match stmt {
         Statement::Tail {
             name,
-            with_snapshot,
+            without_snapshot,
             as_of,
-        } => handle_tail(scx, name, with_snapshot, as_of),
+        } => handle_tail(scx, name, without_snapshot, as_of),
         Statement::StartTransaction { .. } => Ok(Plan::StartTransaction),
         Statement::Commit { .. } => Ok(Plan::CommitTransaction),
         Statement::Rollback { .. } => Ok(Plan::AbortTransaction),
@@ -327,7 +327,7 @@ fn handle_show_variable(_: &StatementContext, variable: Ident) -> Result<Plan, f
 fn handle_tail(
     scx: &StatementContext,
     from: ObjectName,
-    with_snapshot: bool,
+    without_snapshot: bool,
     as_of: Option<sql_parser::ast::Expr>,
 ) -> Result<Plan, failure::Error> {
     let from = scx.resolve_item(from)?;
@@ -338,7 +338,7 @@ fn handle_tail(
         CatalogItemType::Source | CatalogItemType::View => Ok(Plan::Tail {
             id: entry.id(),
             ts,
-            with_snapshot,
+            without_snapshot,
         }),
         CatalogItemType::Index | CatalogItemType::Sink => bail!(
             "'{}' cannot be tailed because it is a {}",
