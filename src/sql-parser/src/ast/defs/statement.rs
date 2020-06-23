@@ -91,6 +91,7 @@ pub enum Statement {
         connector: Connector,
         with_options: Vec<SqlOption>,
         format: Option<Format>,
+        as_of: Option<Expr>,
         if_not_exists: bool,
     },
     /// `CREATE VIEW`
@@ -383,6 +384,7 @@ impl AstDisplay for Statement {
                 connector,
                 with_options,
                 format,
+                as_of,
                 if_not_exists,
             } => {
                 f.write_str("CREATE SINK ");
@@ -402,6 +404,10 @@ impl AstDisplay for Statement {
                 if let Some(format) = format {
                     f.write_str(" FORMAT ");
                     f.write_node(format);
+                }
+                if let Some(as_of) = as_of {
+                    f.write_str(" AS OF ");
+                    f.write_node(as_of);
                 }
             }
             Statement::CreateView {

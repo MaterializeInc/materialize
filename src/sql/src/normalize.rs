@@ -198,6 +198,7 @@ pub fn create_statement(
             connector: _,
             with_options: _,
             format: _,
+            as_of: _,
             if_not_exists,
         } => {
             *name = allocate_name(name)?;

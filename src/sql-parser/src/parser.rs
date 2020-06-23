@@ -1436,12 +1436,19 @@ impl Parser {
         } else {
             None
         };
+        let as_of = if self.parse_keyword("AS") {
+            self.expect_keyword("OF")?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
         Ok(Statement::CreateSink {
             name,
             from,
             connector,
             with_options,
             format,
+            as_of,
             if_not_exists,
         })
     }
