@@ -28,11 +28,11 @@ use expr::SourceInstanceId;
 use crate::server::{TimestampChanges, TimestampHistories};
 
 mod file;
+mod general;
 mod kafka;
 mod kafka_info;
 mod kinesis;
 mod util;
-mod general;
 
 use differential_dataflow::Hashable;
 pub use file::{file, read_file_task, FileReadStyle};

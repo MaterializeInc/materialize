@@ -40,8 +40,8 @@ use url::Url;
 use super::util::source;
 use super::{SourceConfig, SourceOutput, SourceStatus, SourceToken};
 use crate::server::{TimestampChanges, TimestampHistories};
+use crate::source::general::{ConsistencyInfo, SourceInfo, SourceMessage};
 use ore::collections::CollectionExt;
-use crate::source::general::{SourceInfo, SourceMessage, ConsistencyInfo};
 
 // Global Kafka metrics.
 lazy_static! {
