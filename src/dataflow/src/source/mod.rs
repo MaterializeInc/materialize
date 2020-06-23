@@ -29,6 +29,7 @@ use crate::server::{TimestampChanges, TimestampHistories};
 
 mod file;
 mod kafka;
+mod kafka_info;
 mod kinesis;
 mod util;
 mod general;
