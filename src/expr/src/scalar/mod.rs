@@ -17,7 +17,7 @@ use repr::adt::regex::Regex;
 use repr::strconv::ParseError;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
+use self::func::{BinaryFunc, NullaryFunc, Nulls, UnaryFunc, VariadicFunc};
 
 pub mod func;
 pub mod like_pattern;
@@ -286,9 +286,41 @@ impl ScalarExpr {
             |e: &ScalarExpr| ScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&relation_type));
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) | ScalarExpr::CallNullary(_) => (),
-            ScalarExpr::CallUnary { expr, .. } => {
+            ScalarExpr::CallUnary { func, expr } => {
                 if expr.is_literal() {
                     *e = eval(e);
+                } else if *func == UnaryFunc::IsNull {
+                    let nested = match &mut **expr {
+                        ScalarExpr::CallUnary { func, expr } => {
+                            Some((func.props(), vec![&mut **expr]))
+                        }
+                        ScalarExpr::CallBinary { func, expr1, expr2 } => {
+                            Some((func.props(), vec![&mut **expr1, &mut **expr2]))
+                        }
+                        ScalarExpr::CallVariadic { func, exprs } => {
+                            Some((func.props(), exprs.iter_mut().collect()))
+                        }
+                        _ => None,
+                    };
+                    if let Some((props, exprs)) = nested {
+                        let lit_false =
+                            ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool));
+                        match props.nulls {
+                            Nulls::Never => *e = lit_false,
+                            Nulls::Sometimes {
+                                introduces_nulls: false,
+                                ..
+                            } => {
+                                *e = exprs.into_iter().fold(lit_false, |memo, expr| {
+                                    memo.call_binary(
+                                        expr.take().call_unary(UnaryFunc::IsNull),
+                                        BinaryFunc::Or,
+                                    )
+                                });
+                            }
+                            _ => (),
+                        }
+                    }
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
@@ -354,19 +386,23 @@ impl ScalarExpr {
                         },
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     }
-                } else if *func == BinaryFunc::And && (expr1.is_literal() || expr2.is_literal()) {
+                } else if *func == BinaryFunc::And {
                     // If we are here, not both inputs are literals.
                     if expr1.is_literal_false() || expr2.is_literal_true() {
                         *e = expr1.take();
                     } else if expr2.is_literal_false() || expr1.is_literal_true() {
                         *e = expr2.take();
+                    } else if expr1 == expr2 {
+                        *e = expr1.take();
                     }
-                } else if *func == BinaryFunc::Or && (expr1.is_literal() || expr2.is_literal()) {
+                } else if *func == BinaryFunc::Or {
                     // If we are here, not both inputs are literals.
                     if expr1.is_literal_true() || expr2.is_literal_false() {
                         *e = expr1.take();
                     } else if expr2.is_literal_true() || expr1.is_literal_false() {
                         *e = expr2.take();
+                    } else if expr1 == expr2 {
+                        *e = expr1.take();
                     }
                 }
             }

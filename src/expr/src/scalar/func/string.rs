@@ -230,7 +230,7 @@ pub const TRIM_PROPS: FuncProps = FuncProps {
     can_error: false,
     preserves_uniqueness: false,
     nulls: Nulls::Sometimes {
-        propagates_nulls: false,
+        propagates_nulls: true,
         introduces_nulls: false,
     },
     output_type: OutputType::Fixed(ScalarType::String),
