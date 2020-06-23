@@ -250,27 +250,40 @@ async fn query_materialize(
                     message_count
                 );
 
-                let query = "SELECT data FROM all;";
-                let rows = mz_client::try_query(&mz_client, query, Duration::from_secs(1)).await?;
-                if message_count != rows.len() {
+                let mut offset: i32 = 0;
+                let limit: i32 = 10_000;
+                let mut vals = Vec::new();
+                loop {
+                    let query = format!(
+                        "SELECT data FROM all ORDER BY data LIMIT {} OFFSET {};",
+                        limit, offset
+                    );
+                    let rows =
+                        mz_client::try_query(&mz_client, &query, Duration::from_secs(1)).await?;
+                    if rows.len() == 0 {
+                        break;
+                    }
+                    for row in rows {
+                        let val: &[u8] = row.get("data");
+                        vals.push(val.to_owned());
+                    }
+                    offset += limit;
+                }
+                if vals.len() != message_count {
                     return Err(anyhow::Error::msg(format!(
                         "Expected {} rows, found {}",
                         message_count,
-                        rows.len()
+                        vals.len()
                     )));
                 }
 
-                let mut vals = Vec::new();
-                for row in rows {
-                    let val: &[u8] = row.get("data");
-                    vals.push(val.to_owned());
-                }
-
                 vals.sort();
+
                 let mut hasher = Md5::new();
                 for val in vals {
                     hasher.input(&val);
                 }
+
                 return Ok(format!("{:x}", hasher.result()));
             }
             _ => unreachable!(),
