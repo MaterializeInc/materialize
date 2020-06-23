@@ -13,7 +13,7 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 
@@ -88,8 +88,8 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
-    pub source_imports: HashMap<SourceInstanceId, SourceDesc>,
-    pub index_imports: HashMap<GlobalId, (IndexDesc, RelationType)>,
+    pub source_imports: BTreeMap<SourceInstanceId, SourceDesc>,
+    pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
     pub objects_to_build: Vec<BuildDesc>,
@@ -100,7 +100,7 @@ pub struct DataflowDesc {
     /// (id of new sink, description of sink)
     pub sink_exports: Vec<(GlobalId, SinkDesc)>,
     /// Maps views to views + indexes needed to generate that view
-    pub dependent_objects: HashMap<GlobalId, Vec<GlobalId>>,
+    pub dependent_objects: BTreeMap<GlobalId, Vec<GlobalId>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
