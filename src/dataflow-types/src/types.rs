@@ -13,7 +13,7 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 
