@@ -11,3 +11,7 @@ name: billing-demo
 pre-image:
   type: cargo-build
   bin: billing-demo
+  extract:
+    krb5-src:
+      - install/bin/kinit
+      - install/bin/kdestroy

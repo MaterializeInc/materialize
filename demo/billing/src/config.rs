@@ -98,6 +98,14 @@ pub struct Args {
     /// The maximum batch size to associate with this source. If none is supplied, Materialize,
     /// Materialize will create a source with no upper bound on batch size
     pub batch_size: Option<u64>,
+
+    /// Path to the Kerberos keystab
+    #[structopt(long)]
+    pub krb5_keytab: Option<String>,
+
+    /// Client's Kerberos principal
+    #[structopt(long)]
+    pub krb5_principal: Option<String>,
 }
 
 impl Args {
@@ -121,6 +129,8 @@ impl Args {
                 }
             },
             partitions: self.partitions,
+            krb5_keytab: self.krb5_keytab.clone(),
+            krb5_principal: self.krb5_principal.clone(),
         }
     }
 
@@ -155,6 +165,8 @@ pub struct KafkaConfig {
     pub seed: u64,
     pub start_time: DateTime<Utc>,
     pub partitions: Option<i32>,
+    pub krb5_keytab: Option<String>,
+    pub krb5_principal: Option<String>,
 }
 
 #[derive(Debug)]

@@ -22,10 +22,12 @@ RUN mkdir /var/lib/secret \
     && kadmin.local -q "add_principal -randkey zookeeper/zookeeper@CI.MATERIALIZE.IO" \
     && kadmin.local -q "add_principal -randkey testdrive@CI.MATERIALIZE.IO" \
     && kadmin.local -q "add_principal -randkey materialized@CI.MATERIALIZE.IO" \
+    && kadmin.local -q "add_principal -randkey billing@CI.MATERIALIZE.IO" \
     && kadmin.local -q "ktadd -k /var/lib/secret/kafka.key -norandkey kafka/kafka@CI.MATERIALIZE.IO " \
     && kadmin.local -q "ktadd -k /var/lib/secret/zookeeper.key -norandkey zookeeper/zookeeper@CI.MATERIALIZE.IO " \
     && kadmin.local -q "ktadd -k /var/lib/secret/testdrive.key -norandkey testdrive@CI.MATERIALIZE.IO " \
     && kadmin.local -q "ktadd -k /var/lib/secret/materialized.key -norandkey materialized@CI.MATERIALIZE.IO " \
+    && kadmin.local -q "ktadd -k /var/lib/secret/billing.key -norandkey billing@CI.MATERIALIZE.IO" \
     && chmod a+r /var/lib/secret/*
 
 CMD ["krb5kdc", "-n"]

@@ -7,13 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:bionic-20200403
-
-RUN apt-get update && apt-get install -qy postgresql-client ca-certificates
-
-COPY kdestroy kinit billing-demo /usr/local/bin/
-
-RUN mkdir -p /share/billing-demo/data && chmod 777 /share/billing-demo/data
-VOLUME /share/billing-demo/data
-
-ENTRYPOINT ["billing-demo"]
+name: kdc

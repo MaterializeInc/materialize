@@ -70,17 +70,18 @@ async fn run() -> Result<()> {
         k_config.seed,
     );
 
-    let mz_client = MzClient::new(&mz_config.host, mz_config.port).await?;
-    let check_sink = mz_config.check_sink;
+    //let mz_client = MzClient::new(&mz_config.host, mz_config.port).await?;
+    //let check_sink = mz_config.check_sink;
 
     let k = tokio::spawn(async move { create_kafka_messages(k_config).await });
 
-    let mz = tokio::spawn(async move { create_materialized_source(mz_config).await });
-    let (k_res, mz_res) = futures::join!(k, mz);
+    //let mz = tokio::spawn(async move { create_materialized_source(mz_config).await });
+    //let (k_res, mz_res) = futures::join!(k, mz);
+    let (k_res,) = futures::join!(k);
     k_res??;
-    mz_res??;
+    //mz_res??;
 
-    if check_sink {
+    /*if check_sink {
         mz_client
             .validate_sink(
                 "check_sink",
@@ -88,7 +89,7 @@ async fn run() -> Result<()> {
                 "invalid_sink_rows",
             )
             .await?;
-    }
+    }*/
     Ok(())
 }
 
@@ -100,9 +101,21 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         last_time: config.start_time,
     };
 
-    let mut k_client =
+    let mut k_client = if let Some(krb5_keytab_path) = config.krb5_keytab {
+        if let Some(krb5_principal) = config.krb5_principal {
+            let add_configs = vec![("security.protocol", "sasl_plaintext"),
+            ("sasl.kerberos.keytab", &krb5_keytab_path),
+            ("sasl.kerberos.service.name", "kafka"),
+            ("sasl.kerberos.principal", &krb5_principal)];
+            kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &add_configs)
+                .map_err(|e| error::Error::from(e.to_string()))?
+        } else {
+            return Err(error::Error::from("krb5-principal must be specified when 'krb5_keytab' is specified."));
+        }
+    } else {
         kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])
-            .map_err(|e| error::Error::from(e.to_string()))?;
+            .map_err(|e| error::Error::from(e.to_string()))?
+    };
 
     if let Some(partitions) = config.partitions {
         k_client
@@ -189,7 +202,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
             exec_query!(client, "drop_index_billing_records");
         }
 
-        let sink_topic = client
+        /*let sink_topic = client
             .create_kafka_sink(
                 &config.kafka_url,
                 config::KAFKA_SINK_TOPIC_NAME,
@@ -208,7 +221,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
                 .await?;
             exec_query!(client, "check_sink");
             exec_query!(client, "invalid_sink_rows");
-        }
+        }*/
     } else {
         log::info!(
             "source '{}' already exists, not recreating",

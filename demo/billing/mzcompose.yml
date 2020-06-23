@@ -15,6 +15,51 @@ x-port-mappings:
 
 version: '3.7'
 services:
+  kdc:
+    mzbuild: kdc
+    volumes:
+      - secrets:/var/lib/secret
+      - ../../test/krb5/kdc/krb5.conf:/etc/krb5.conf
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    depends_on:
+      - kdc
+    volumes:
+      - secrets:/var/lib/secret
+      - ../../test/krb5/kdc/krb5.conf:/etc/krb5.conf
+      - ../../test/krb5/sasl.jaas.config:/etc/zookeeper/sasl.jaas.config
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      # Despite the environment variable name, these are JVM options that are
+      # passed through to Zookeeper.
+      KAFKA_OPTS: >-
+        -Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider
+        -Dzookeeper.sessionRequireClientSASLAuth=true
+        -Djava.security.auth.login.config=/etc/zookeeper/sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
+        -Dsun.security.krb5.debug=true
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - kdc
+      - zookeeper
+    volumes:
+      - secrets:/var/lib/secret
+      - ../../test/krb5/kdc/krb5.conf:/etc/krb5.conf
+      - ../../test/krb5/sasl.jaas.config:/etc/kafka/sasl.jaas.config
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
+      KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_JMX_PORT: 9991
+      KAFKA_OPTS: >-
+        -Dzookeeper.sasl.client.canonicalize.hostname=false
+        -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
+        -Djava.security.krb5.conf=/etc/krb5.conf
   materialized:
     mzbuild: materialized
     volumes:
@@ -26,29 +71,6 @@ services:
     environment:
       - MZ_LOG=dataflow=error,info
       - DIFFERENTIAL_EAGER_MERGE=1000
-  zookeeper:
-    image: confluentinc/cp-zookeeper:5.3.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-  kafka:
-    image: confluentinc/cp-enterprise-kafka:5.3.0
-    ports:
-      - *kafka
-    depends_on: [zookeeper]
-    environment:
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_BROKER_ID: 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_JMX_PORT: 9991
-  schema-registry:
-    image: confluentinc/cp-schema-registry:5.2.1
-    ports:
-     - *schema-registry
-    environment:
-    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
-    - SCHEMA_REGISTRY_HOST_NAME=localhost
-    depends_on: [kafka, zookeeper]
   billing-demo:
     mzbuild: billing-demo
     volumes:
@@ -56,12 +78,14 @@ services:
     environment:
       - RUST_LOG=billing-demo=debug,info
     command: >-
-      --message-count 1000
+      --message-count 30000000
       --materialized-host materialized
       --kafka-host kafka
       --schema-registry-url http://schema-registry:8081
       --csv-file-name /share/billing-demo/data/prices.csv
-    depends_on: [kafka, schema-registry, materialized]
+      --krb5-keytab=/share/secrets/billing.key
+      --krb5-principal=billing@CI.MATERIALIZE.IO
+    depends_on: [kafka, materialized]
   dashboard:
     mzbuild: dashboard
     propagate-uid-gid: true
@@ -80,6 +104,7 @@ services:
 
 volumes:
   db-data:
+  secrets:
 
 mzconduct:
   workflows:
@@ -87,7 +112,6 @@ mzconduct:
       env:
         MZ_PORT: 6875
         KAFKA_PORT: 9092
-        SR_PORT: 8081
       steps:
       - step: workflow
         workflow: start-everything
@@ -95,15 +119,15 @@ mzconduct:
         service: billing-demo
         daemon: false
         command: >-
-          --message-count 100
+          --message-count 30000000
           --materialized-host materialized
           --kafka-host kafka
           --schema-registry-url http://schema-registry:8081
           --csv-file-name /share/billing-demo/data/prices.csv
-          --partitions 10
-          --check-sink
-      - step: down
-        destroy_volumes: true
+          --krb5-keytab=/share/secrets/billing.key
+          --krb5-principal=billing@CI.MATERIALIZE.IO
+          --kafka-topic thirtymil
+          --partitions 30
 
     cloud-load-test:
       env:
@@ -129,13 +153,10 @@ mzconduct:
     start-everything:
       steps:
       - step: start-services
-        services: [materialized, kafka, schema-registry, dashboard]
+        services: [kdc, materialized, kafka, dashboard]
       - step: wait-for-tcp
         host: kafka
         port: 9092
-      - step: wait-for-tcp
-        host: schema-registry
-        port: 8081
       - step: wait-for-tcp
         host: materialized
         port: 6875
