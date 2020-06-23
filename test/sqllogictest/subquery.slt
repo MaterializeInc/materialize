@@ -535,16 +535,16 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 
 %1 =
 | Get %0
-| ArrangeBy ()
+| ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.x (u57)
+| ArrangeBy (#0)
 
 %3 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
-| | demand = (#0, #1)
-| Filter ((#0 = #1) || isnull((#0 != #1)))
+| Join %1 %2 (= #0 #1)
+| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
+| | demand = (#0)
 | Distinct group=(#0)
 
 %4 =
@@ -607,7 +607,7 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Join %1 %2
 | | implementation = Differential %2 %1.()
 | | demand = (#0, #1)
-| Filter ((#0 <= #1) || isnull((#0 > #1)))
+| Filter (#0 <= #1)
 | Distinct group=(#0)
 
 %4 =

@@ -375,3 +375,53 @@ yxytrimyxy
 
 statement error
 SELECT trim('c' 'ccccdogcc');
+
+# Test IS NULL reduction.
+
+mode standard
+
+statement ok
+CREATE TABLE t (
+    a int,
+    b int NOT NULL,
+)
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull(#0)
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull(#0)
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull(#0)
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull(#0)
+| Project (#2)
+
+EOF
