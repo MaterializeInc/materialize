@@ -7,7 +7,7 @@ implemented as `mzconduct` workflows, meaning that they can be run as follows:
 bin/mzconduct up chaos -w delay-kafka
 ```
 
-In this command, `chaos` indicates the name of the target `mzcompose.yml` file and `delay-kafka` 
+In this command, `chaos` indicates the name of the target `mzcompose.yml` file and `delay-kafka`
 indicates the name of the target test. Each test has its own unique workflow.
 
 These tests can be run:
