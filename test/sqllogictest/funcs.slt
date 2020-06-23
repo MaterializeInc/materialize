@@ -375,3 +375,57 @@ yxytrimyxy
 
 statement error
 SELECT trim('c' 'ccccdogcc');
+
+# Test IS NULL reduction.
+
+mode standard
+
+statement ok
+CREATE TABLE t (
+    a int,
+    b int NOT NULL,
+)
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull(#0)
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull(#0)
+| Project (#2)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull(#0)
+| Project (#2)
+
+EOF
+
+# Ensure that (a AND b) IS NULL is *not* reduced, as it is not as simple as
+# rewriting (A IS NULL) OR (b IS NULL). There are probably rewrite rules that
+# exist, but we do not support them yet. Similarly for OR.
+
+query T multiline
+EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
+----
+%0 =
+| Get materialize.public.t (u21)
+| Map isnull((i32tobool(#0) && i32tobool(#1)))
+| Project (#2)
+
+EOF
