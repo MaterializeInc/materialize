@@ -1430,7 +1430,14 @@ impl Parser {
         let from = self.parse_object_name()?;
         self.expect_keyword("INTO")?;
         let connector = self.parse_connector()?;
-        let with_options = self.parse_with_options()?;
+        let mut with_options = vec![];
+        if self.parse_keyword("WITH") {
+            if let Some(Token::LParen) = self.next_token() {
+                self.prev_token();
+                self.prev_token();
+                with_options = self.parse_with_options()?;
+            }
+        }
         let format = if self.parse_keyword("FORMAT") {
             Some(self.parse_format()?)
         } else {

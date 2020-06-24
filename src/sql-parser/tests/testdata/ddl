@@ -473,6 +473,13 @@ CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false }
 
 parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
+=>
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false }
+
+parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES WITH SNAPSHOT
