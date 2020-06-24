@@ -1436,6 +1436,18 @@ impl Parser {
         } else {
             None
         };
+        let with_snapshot = if self.parse_keyword("WITH") {
+            self.expect_keyword("SNAPSHOT")?;
+            true
+        } else if self.parse_keyword("WITHOUT") {
+            self.expect_keyword("SNAPSHOT")?;
+            false
+        } else {
+            // If neither WITH nor WITHOUT SNAPSHOT is provided,
+            // default to WITH SNAPSHOT.
+            true
+        };
+
         let as_of = if self.parse_keyword("AS") {
             self.expect_keyword("OF")?;
             Some(self.parse_expr()?)
@@ -1448,6 +1460,7 @@ impl Parser {
             connector,
             with_options,
             format,
+            with_snapshot,
             as_of,
             if_not_exists,
         })

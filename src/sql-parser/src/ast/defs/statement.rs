@@ -91,6 +91,7 @@ pub enum Statement {
         connector: Connector,
         with_options: Vec<SqlOption>,
         format: Option<Format>,
+        with_snapshot: bool,
         as_of: Option<Expr>,
         if_not_exists: bool,
     },
@@ -384,6 +385,7 @@ impl AstDisplay for Statement {
                 connector,
                 with_options,
                 format,
+                with_snapshot,
                 as_of,
                 if_not_exists,
             } => {
@@ -405,6 +407,12 @@ impl AstDisplay for Statement {
                     f.write_str(" FORMAT ");
                     f.write_node(format);
                 }
+                if *with_snapshot {
+                    f.write_str(" WITH SNAPSHOT");
+                } else {
+                    f.write_str(" WITHOUT SNAPSHOT");
+                }
+
                 if let Some(as_of) = as_of {
                     f.write_str(" AS OF ");
                     f.write_node(as_of);
