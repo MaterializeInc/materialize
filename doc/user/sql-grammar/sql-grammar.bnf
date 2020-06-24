@@ -216,7 +216,7 @@ show_views ::=
   'SHOW' ('MATERIALIZED' | 'FULL')? 'VIEWS' ('FROM' schema_name)?
 tail_stmt ::=
     'TAIL' object_name
-    'WITH SNAPSHOT'?
+    ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
     ('AS OF' timestamp_expression)?
 time_unit ::=
   'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND'

@@ -47,9 +47,9 @@ use `AS OF`, Materialize will pick a timestamp itself.
 
 ### WITH SNAPSHOT or WITHOUT SNAPSHOT
 
-By default, each `TAIL` is created with a `SNAPSHOT`: a compacted version of updates up until the moment of the
-`TAIL`'s creation. This functionality will be observed if the `WITH SNAPSHOT` argument is provided.
-To only see events after the `TAIL` was created, specify `WITHOUT SNAPSHOT` instead.
+By default, each `TAIL` is created with a `SNAPSHOT`: a compacted version of the updates before its
+`AS OF` timestamp. After the `SNAPSHOT`, all uncompacted updates will be sent to the `TAIL`. To only see
+events after the `TAIL` was created instead, specify `WITHOUT SNAPSHOT`.
 
 ## Example
 
