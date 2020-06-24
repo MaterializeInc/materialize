@@ -45,10 +45,11 @@ Field | Represents
 `AS OF` is the specific point in time to start reporting all events for a given `TAIL`. If you don't
 use `AS OF`, Materialize will pick a timestamp itself.
 
-### WITHOUT SNAPSHOT
+### WITH SNAPSHOT or WITHOUT SNAPSHOT
 
 By default, each `TAIL` is created with a `SNAPSHOT`: a compacted version of updates up until the moment of the
-`TAIL`'s creation. To only see events after the `TAIL` was created, specify `WITHOUT SNAPSHOT` instead.
+`TAIL`'s creation. This functionality will be observed if the `WITH SNAPSHOT` argument is provided.
+To only see events after the `TAIL` was created, specify `WITHOUT SNAPSHOT` instead.
 
 ## Example
 
