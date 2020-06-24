@@ -207,22 +207,14 @@ impl Scope {
 
     /// Look to see if there is an already-calculated instance of this expr.
     /// Failing to find one is not an error, so this just returns Option
-    pub fn resolve_expr<'a>(
-        &'a self,
-        expr: &sql_parser::ast::Expr,
-    ) -> Option<(ColumnRef, Option<&'a ScopeItemName>)> {
+    pub fn resolve_expr<'a>(&'a self, expr: &sql_parser::ast::Expr) -> Option<ColumnRef> {
         self.items
             .iter()
             .enumerate()
             .find(|(_, item)| item.expr.as_ref() == Some(expr))
-            .map(|(i, item)| {
-                (
-                    ColumnRef {
-                        level: 0,
-                        column: i,
-                    },
-                    item.names.first(),
-                )
+            .map(|(i, _)| ColumnRef {
+                level: 0,
+                column: i,
             })
     }
 
