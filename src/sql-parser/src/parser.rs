@@ -2954,11 +2954,17 @@ impl Parser {
 
     fn parse_tail(&mut self) -> Result<Statement, ParserError> {
         let name = self.parse_object_name()?;
+
         let with_snapshot = if self.parse_keyword("WITH") {
             self.expect_keyword("SNAPSHOT")?;
             true
-        } else {
+        } else if self.parse_keyword("WITHOUT") {
+            self.expect_keyword("SNAPSHOT")?;
             false
+        } else {
+            // If neither WITH nor WITHOUT SNAPSHOT is provided,
+            // default to WITH SNAPSHOT.
+            true
         };
         let as_of = if self.parse_keyword("AS") {
             self.expect_keyword("OF")?;

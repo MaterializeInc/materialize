@@ -49,6 +49,8 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.3.1"></span>
 ## 0.3.1 (Unreleased)
 
+- Update the [`SNAPSHOT`](/sql/tail/#WITH SNAPSHOT or WITHOUT SNAPSHOT) options for `TAIL`
+  to allow more control over what data `TAIL` will produce.
 - Simplify converting non-materialized views into materialized views with
   [`CREATE DEFAULT INDEX ON foo`](/sql/create-index). This creates the same
   [index](/overview/api-components/#indexes) on a view that would have been
@@ -124,7 +126,7 @@ Wrap your release notes at the 80 character mark.
   This includes support for SSL authentication with Confluent Schema Registries.
 
 - Introduce the [`AS OF`](/sql/tail/#as-of) and
-  [`WITH SNAPSHOT`](/sql/tail/#with-snapshot) options for `TAIL` to provide
+  [`WITH SNAPSHOT`](/sql/tail/#WITH SNAPSHOT or WITHOUT SNAPSHOT) options for `TAIL` to provide
   more control over what data `TAIL` will produce.
 
 - Improve reliability of Kinesis sources by rate-limiting Kinesis API calls.

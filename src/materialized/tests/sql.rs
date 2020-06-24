@@ -158,11 +158,11 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
     assert!(tail_reader.next().is_none());
     drop(tail_reader);
 
-    // Now tail AS OF each timestamp, verifying that when we do so we only see events that occur as
-    // of or later than that timestamp.
+    // Now tail WITHOUT SNAPSHOT AS OF each timestamp, verifying that when we do so we only see events
+    // that occur as of or later than that timestamp.
     for (ts, _) in &events {
         let cancel_token = client.cancel_token();
-        let q = format!("TAIL dynamic_csv AS OF {}", ts - 1);
+        let q = format!("TAIL dynamic_csv WITHOUT SNAPSHOT AS OF {}", ts - 1);
         let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
 
         // Skip by the things we won't be able to see.
@@ -176,11 +176,11 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
         drop(tail_reader);
     }
 
-    // Now tail AS OF WITH SNAPSHOT each timestamp. We should see a batch of updates all at the
+    // Now tail AS OF each timestamp. We should see a batch of updates all at the
     // tailed timestamp, and then updates afterward.
     for (ts, _) in &events {
         let cancel_token = client.cancel_token();
-        let q = format!("TAIL dynamic_csv WITH SNAPSHOT AS OF {}", ts - 1);
+        let q = format!("TAIL dynamic_csv AS OF {}", ts - 1);
         let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
 
         for (_, expected) in events.iter() {

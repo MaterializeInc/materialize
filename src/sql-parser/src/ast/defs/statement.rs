@@ -685,8 +685,11 @@ impl AstDisplay for Statement {
             } => {
                 f.write_str("TAIL ");
                 f.write_node(&name);
+
                 if *with_snapshot {
                     f.write_str(" WITH SNAPSHOT");
+                } else {
+                    f.write_str(" WITHOUT SNAPSHOT");
                 }
                 if let Some(as_of) = as_of {
                     f.write_str(" AS OF ");
