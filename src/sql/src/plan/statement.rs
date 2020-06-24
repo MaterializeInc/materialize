@@ -704,17 +704,33 @@ fn avro_ocf_sink_builder(
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, from, connector, with_options, format, if_not_exists) = match stmt {
-        Statement::CreateSink {
-            name,
-            from,
-            connector,
-            with_options,
-            format,
-            if_not_exists,
-        } => (name, from, connector, with_options, format, if_not_exists),
-        _ => unreachable!(),
-    };
+    let (name, from, connector, with_options, format, _with_snapshot, as_of, if_not_exists) =
+        match stmt {
+            Statement::CreateSink {
+                name,
+                from,
+                connector,
+                with_options,
+                format,
+                with_snapshot,
+                as_of,
+                if_not_exists,
+            } => (
+                name,
+                from,
+                connector,
+                with_options,
+                format,
+                with_snapshot,
+                as_of,
+                if_not_exists,
+            ),
+            _ => unreachable!(),
+        };
+
+    if let Some(_as_of) = as_of {
+        unsupported!("AS OF")
+    }
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.catalog.get_item(&scx.resolve_item(from)?);

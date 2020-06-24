@@ -84,3 +84,9 @@ $ kafka-verify format=avro sink=materialize.public.snk5
 $ kafka-verify format=avro sink=materialize.public.snk6
 {"before": null, "after": {"c": true}}
 {"before": null, "after": {"c": true}}
+
+! CREATE SINK should_fail FROM v4
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk7'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  AS OF 123
+AS OF not yet supported

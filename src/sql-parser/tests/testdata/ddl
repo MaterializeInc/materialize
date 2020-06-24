@@ -468,30 +468,59 @@ Expected NOT, found: EXISTS
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), if_not_exists: false }
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false }
+
+parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' WITH SNAPSHOT FORMAT BYTES
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
+=>
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false }
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' WITH (replication_factor = 7) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic" }, with_options: [SqlOption { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), if_not_exists: false }
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: Kafka { broker: "baz", topic: "topic" }, with_options: [SqlOption { name: Ident("replication_factor"), value: Number("7") }], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: false }
 
 parse-statement
 CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
 ----
-CREATE SINK foo FROM bar INTO AVRO OCF 'baz'
+CREATE SINK foo FROM bar INTO AVRO OCF 'baz' WITH SNAPSHOT
 =>
-CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: AvroOcf { path: "baz" }, with_options: [], format: None, if_not_exists: false }
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: AvroOcf { path: "baz" }, with_options: [], format: None, with_snapshot: true, as_of: None, if_not_exists: false }
 
 parse-statement
 CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
 ----
-CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES
+CREATE SINK IF NOT EXISTS foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), if_not_exists: true }
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: None, if_not_exists: true }
+
+parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF 123
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF 123
+=>
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: Some(Value(Number("123"))), if_not_exists: false }
+
+parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITHOUT SNAPSHOT AS OF 123
+=>
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: false, as_of: Some(Value(Number("123"))), if_not_exists: false }
+
+parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES AS OF now()
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF now()
+=>
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), if_not_exists: false }
+
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'

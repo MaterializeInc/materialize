@@ -1430,9 +1430,34 @@ impl Parser {
         let from = self.parse_object_name()?;
         self.expect_keyword("INTO")?;
         let connector = self.parse_connector()?;
-        let with_options = self.parse_with_options()?;
+        let mut with_options = vec![];
+        if self.parse_keyword("WITH") {
+            if let Some(Token::LParen) = self.next_token() {
+                self.prev_token();
+                self.prev_token();
+                with_options = self.parse_with_options()?;
+            }
+        }
         let format = if self.parse_keyword("FORMAT") {
             Some(self.parse_format()?)
+        } else {
+            None
+        };
+        let with_snapshot = if self.parse_keyword("WITH") {
+            self.expect_keyword("SNAPSHOT")?;
+            true
+        } else if self.parse_keyword("WITHOUT") {
+            self.expect_keyword("SNAPSHOT")?;
+            false
+        } else {
+            // If neither WITH nor WITHOUT SNAPSHOT is provided,
+            // default to WITH SNAPSHOT.
+            true
+        };
+
+        let as_of = if self.parse_keyword("AS") {
+            self.expect_keyword("OF")?;
+            Some(self.parse_expr()?)
         } else {
             None
         };
@@ -1442,6 +1467,8 @@ impl Parser {
             connector,
             with_options,
             format,
+            with_snapshot,
+            as_of,
             if_not_exists,
         })
     }
