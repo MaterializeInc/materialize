@@ -368,10 +368,6 @@ impl Catalog {
         self.storage.lock().expect("lock poisoned")
     }
 
-    pub fn storage_handle(&self) -> Arc<Mutex<storage::Connection>> {
-        self.storage.clone()
-    }
-
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         self.storage().allocate_id()
     }

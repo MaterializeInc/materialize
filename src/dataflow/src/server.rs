@@ -41,8 +41,8 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, Diff, ExternalSourceConnector, IndexDesc, MzOffset,
-    PeekResponse, Timestamp, Update,
+    DataflowDesc, DataflowError, Diff, IndexDesc, MzOffset, PeekResponse, Timestamp,
+    TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -150,14 +150,8 @@ pub enum SequencedCommand {
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
         id: SourceInstanceId,
-        /// TODO(ncrooks)
-        partition_count: i32,
-        /// TODO(ncrooks)
-        pid: PartitionId,
-        /// TODO(ncrooks)
-        timestamp: Timestamp,
-        /// TODO(ncrooks)
-        offset: MzOffset,
+        /// The associated update (RT or BYO)
+        update: TimestampSourceUpdate,
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
@@ -182,7 +176,7 @@ pub enum WorkerFeedback {
     /// The id of a source whose source connector has been dropped
     DroppedSource(SourceInstanceId),
     /// The id of a source whose source connector has been created
-    CreateSource(SourceInstanceId, ExternalSourceConnector),
+    CreateSource(SourceInstanceId),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -245,44 +239,42 @@ where
                 metrics: Metrics::for_worker_id(worker_idx),
                 ts_histories: Default::default(),
                 ts_source_mapping: HashMap::new(),
-                ts_source_drops: Default::default(),
+                ts_source_updates: Default::default(),
             }
             .run()
         })
     })
 }
 
-/// A type wrapper for the number of partitions associated with a source
+/// A type wrapper for the number of partitions associated with a source.
 pub type PartitionCount = i32;
 
-/// A type wrapper for a timestamp update that consists of a PartitionCount, a Timestamp,
-/// and a MzOffset
-pub type TimestampUpdate = (PartitionCount, Timestamp, MzOffset);
-
-/// Map of source ID to per-partition timestamp history.
-///
-/// Timestamp history is a vector of
-/// 1) BYO timestamp updates which are tuples (partition_count, timestamp, offset),
-/// where the correct timestamp for a given offset `x` is the highest timestamp value for
-/// the first offset >= `x`.
-/// 2) RT timestamp updates which are integers (partition_count) which represent the current
-/// partition_count associated with the source
-pub type TimestampHistories =
-    Rc<RefCell<HashMap<SourceInstanceId, HashMap<PartitionId, VecDeque<TimestampUpdate>>>>>;
+/// A type wrapper for a timestamp update
+/// For real-time sources, it consists of a PartitionCount
+/// For BYO sources, it consists of a mapping from PartitionId to a vector of
+/// (PartitionCount, Timestamp, MzOffset) tuple.
+pub enum TimestampDataUpdate {
+    /// RT sources see a current estimate of the number of partitions for the soruce
+    RealTime(PartitionCount),
+    /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
+    BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
+}
+/// Map of source ID to timestamp data updates (RT or BYO).
+pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
 
 /// List of sources that need to start being timestamped or have been dropped and no longer require
 /// timestamping.
-///
-/// A source inserts an ADD request to this vector on source creation, and adds a
-/// DELETE request once the operator for the source is dropped.
-pub type TimestampChanges = Rc<
-    RefCell<
-        Vec<(
-            SourceInstanceId,
-            Option<(ExternalSourceConnector, Consistency)>,
-        )>,
-    >,
->;
+/// A source inserts a StartTimestamping to this vector on source creation, and adds a
+/// StopTimestamping request once the operator for the source is dropped.
+pub type TimestampMetadataUpdates = Rc<RefCell<Vec<TimestampMetadataUpdate>>>;
+
+/// Possible timestamping metadata information messages that get sent from workers to coordinator
+pub enum TimestampMetadataUpdate {
+    /// Requests to start timestamping a source with given id
+    StartTimestamping(SourceInstanceId),
+    /// Request to stop timestamping a source wth given id
+    StopTimestamping(SourceInstanceId),
+}
 
 /// State maintained for each worker thread.
 ///
@@ -302,8 +294,8 @@ where
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
     ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
-    ts_histories: TimestampHistories,
-    ts_source_drops: TimestampChanges,
+    ts_histories: TimestampDataUpdates,
+    ts_source_updates: TimestampMetadataUpdates,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     metrics: Metrics,
 }
@@ -421,7 +413,7 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
 
-            self.report_source_drops();
+            self.report_source_modifications();
 
             // Handle any received commands.
             let mut cmds = vec![];
@@ -443,28 +435,31 @@ where
         }
     }
 
-    /// Send source drop notifications to the coordinator
-    fn report_source_drops(&mut self) {
-        let mut updates = self.ts_source_drops.borrow_mut();
-        for (id, ksc) in updates.iter() {
-            if ksc.is_none() {
-                // A source was deleted
-                self.ts_histories.borrow_mut().remove(id);
-                self.ts_source_mapping.remove(id);
-                let connector = self.feedback_tx.as_mut().unwrap();
-                block_on(connector.send(WorkerFeedbackWithMeta {
-                    worker_id: self.inner.index(),
-                    message: WorkerFeedback::DroppedSource(*id),
-                }))
-                .unwrap();
-            } else {
-                // A source was created
-                let connector = self.feedback_tx.as_mut().unwrap();
-                block_on(connector.send(WorkerFeedbackWithMeta {
-                    worker_id: self.inner.index(),
-                    message: WorkerFeedback::CreateSource(*id, ksc.as_ref().unwrap().0.clone()),
-                }))
-                .unwrap();
+    /// Report source drops or creations to the coordinator
+    fn report_source_modifications(&mut self) {
+        let mut updates = self.ts_source_updates.borrow_mut();
+        for source_update in updates.iter() {
+            match source_update {
+                TimestampMetadataUpdate::StopTimestamping(id) => {
+                    // A source was deleted
+                    self.ts_histories.borrow_mut().remove(id);
+                    self.ts_source_mapping.remove(id);
+                    let connector = self.feedback_tx.as_mut().unwrap();
+                    block_on(connector.send(WorkerFeedbackWithMeta {
+                        worker_id: self.inner.index(),
+                        message: WorkerFeedback::DroppedSource(*id),
+                    }))
+                    .unwrap();
+                }
+                TimestampMetadataUpdate::StartTimestamping(id) => {
+                    // A source was created
+                    let connector = self.feedback_tx.as_mut().unwrap();
+                    block_on(connector.send(WorkerFeedbackWithMeta {
+                        worker_id: self.inner.index(),
+                        message: WorkerFeedback::CreateSource(*id),
+                    }))
+                    .unwrap();
+                }
             }
         }
         updates.clear();
@@ -529,7 +524,7 @@ where
                         &mut self.sink_tokens,
                         &mut self.ts_source_mapping,
                         self.ts_histories.clone(),
-                        self.ts_source_drops.clone(),
+                        self.ts_source_updates.clone(),
                         &mut self.materialized_logger,
                     );
                 }
@@ -693,31 +688,56 @@ where
                 self.traces.del_all_traces();
                 self.shutdown_logging();
             }
-            SequencedCommand::AdvanceSourceTimestamp {
-                id,
-                partition_count,
-                pid,
-                timestamp,
-                offset,
-            } => {
+            SequencedCommand::AdvanceSourceTimestamp { id, update } => {
                 let mut timestamps = self.ts_histories.borrow_mut();
-                if let Some(entries) = timestamps.get_mut(&id) {
-                    let ts = entries.entry(pid).or_insert_with(VecDeque::new);
-                    let (_, last_ts, last_offset) =
-                        ts.back().unwrap_or(&(0, 0, MzOffset { offset: 0 }));
-                    assert!(
-                        offset >= *last_offset,
-                        "offset should not go backwards, but {} < {}",
-                        offset,
-                        last_offset
-                    );
-                    assert!(
-                        timestamp > *last_ts,
-                        "timestamp should move forwards, but {} <= {}",
-                        timestamp,
-                        last_ts
-                    );
-                    ts.push_back((partition_count, timestamp, offset));
+                if let Some(ts_entries) = timestamps.get_mut(&id) {
+                    match ts_entries {
+                        TimestampDataUpdate::BringYourOwn(entries) => {
+                            if let TimestampSourceUpdate::BringYourOwn(
+                                partition_count,
+                                pid,
+                                timestamp,
+                                offset,
+                            ) = update
+                            {
+                                let partition_entries =
+                                    entries.entry(pid).or_insert_with(VecDeque::new);
+                                let (_, last_ts, last_offset) = partition_entries
+                                    .back()
+                                    .unwrap_or(&(0, 0, MzOffset { offset: 0 }));
+                                assert!(
+                                    offset >= *last_offset,
+                                    "offset should not go backwards, but {} < {}",
+                                    offset,
+                                    last_offset
+                                );
+                                assert!(
+                                    timestamp > *last_ts,
+                                    "timestamp should move forwards, but {} <= {}",
+                                    timestamp,
+                                    last_ts
+                                );
+                                partition_entries.push_back((partition_count, timestamp, offset));
+                            } else {
+                                panic!("Unexpected message type. Expected BYO update.")
+                            }
+                        }
+                        TimestampDataUpdate::RealTime(current_partition_count) => {
+                            if let TimestampSourceUpdate::RealTime(partition_count) = update {
+                                assert!(
+                                    *current_partition_count <= partition_count,
+                                    "The number of partititions\
+                            for source {} decreased from {} to {}",
+                                    id,
+                                    partition_count,
+                                    current_partition_count
+                                );
+                                *current_partition_count = partition_count;
+                            } else {
+                                panic!("Expected message type. Expected RT update.");
+                            }
+                        }
+                    }
                     let source = self
                         .ts_source_mapping
                         .get(&id)

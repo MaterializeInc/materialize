@@ -8,14 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-
+use std::convert::TryInto;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use failure::ResultExt;
 use log::error;
@@ -25,14 +24,12 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{
-    ExternalSourceConnector, FileSourceConnector, MzOffset, SourceError, Timestamp,
-};
+use dataflow_types::{Consistency, MzOffset, SourceError, Timestamp};
 use expr::{PartitionId, SourceInstanceId};
 
 use super::SourceOutput;
 use crate::operator::StreamExt;
-use crate::server::TimestampHistories;
+use crate::server::{TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate};
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
 
@@ -219,64 +216,122 @@ pub fn read_file_task<Ctor, I, Out, Err>(
 /// (even across partitions). This means that once we see a timestamp with ts x, no entry with
 /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
 /// partitions
+/// TODO(ncrooks): Refactor control plane information as in kafka.rs
+#[allow(clippy::too_many_arguments)]
 fn downgrade_capability(
     id: &SourceInstanceId,
     cap: &mut Capability<Timestamp>,
     last_processed_offset: &mut MzOffset,
     last_closed_ts: &mut u64,
-    timestamp_histories: &TimestampHistories,
+    time_since_downgrade: &mut Instant,
+    downgrade_capability_frequency: u64,
+    consistency: &Consistency,
+    timestamp_histories: &TimestampDataUpdates,
 ) {
     let mut changed = false;
-    match timestamp_histories.borrow_mut().get_mut(id) {
-        None => {}
-        Some(entries) => {
-            // Files do not have partitions. There should never be more than
-            // one entry here
-            for entries in entries.values_mut() {
-                // Check whether timestamps can be closed on this partition
-                while let Some((_, ts, offset)) = entries.front() {
-                    if *last_processed_offset == *offset {
-                        // We have now seen all messages corresponding to this timestamp.  We
-                        // can close the timestamp and remove the associated metadata.
-                        *last_closed_ts = *ts;
-                        entries.pop_front();
-                        changed = true;
-                    } else {
-                        // Offset isn't at a timestamp boundary, we take no action
-                        break;
+
+    if let Consistency::BringYourOwn(_) = consistency {
+        match timestamp_histories.borrow_mut().get_mut(id) {
+            None => {}
+            Some(TimestampDataUpdate::BringYourOwn(entries)) => {
+                // Files do not have partitions. There should never be more than
+                // one entry here
+                for entries in entries.values_mut() {
+                    // Check whether timestamps can be closed on this partition
+                    while let Some((_, ts, offset)) = entries.front() {
+                        if *last_processed_offset == *offset {
+                            // We have now seen all messages corresponding to this timestamp.  We
+                            // can close the timestamp and remove the associated metadata.
+                            *last_closed_ts = *ts;
+                            entries.pop_front();
+                            changed = true;
+                        } else {
+                            // Offset isn't at a timestamp boundary, we take no action
+                            break;
+                        }
                     }
                 }
             }
+            _ => panic!("Unexpected message type. Expected BYO update."),
+        }
+        // Downgrade capability to new minimum open timestamp (which corresponds to last_closed_ts + 1).
+        if changed && (*last_closed_ts > 0) {
+            cap.downgrade(&(*last_closed_ts + 1));
+        }
+    } else {
+        // This a RT source. It is always possible to close the timestamp and downgrade the
+        // capability
+        if time_since_downgrade.elapsed().as_millis()
+            > downgrade_capability_frequency.try_into().unwrap()
+        {
+            let ts = generate_next_timestamp(last_closed_ts);
+            if let Some(ts) = ts {
+                cap.downgrade(&(&ts + 1));
+            }
+            *time_since_downgrade = Instant::now();
         }
     }
-    // Downgrade capability to new minimum open timestamp (which corresponds to last_closed_ts + 1).
-    if changed && (*last_closed_ts > 0) {
-        cap.downgrade(&(*last_closed_ts + 1));
+}
+
+/// Generates a timestamp that is guaranteed to be monotonically increasing.
+/// This may require multiple calls to the underlying now() system method, which is not
+/// guaranteed to increase monotonically
+fn generate_next_timestamp(last_closed_ts: &mut u64) -> Option<u64> {
+    let mut new_ts = 0;
+    while new_ts <= *last_closed_ts {
+        let start = SystemTime::now();
+        new_ts = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as u64;
+        if new_ts < *last_closed_ts && *last_closed_ts - new_ts > 1000 {
+            // If someone resets their system clock to be too far in the past, this could cause
+            // Materialize to block and not give control to other operators. We thus give up
+            // on timestamping this message
+            error!("The new timestamp is more than 1 second behind the last assigned timestamp. To\
+                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please\
+                consider resetting your system time.");
+            return None;
+        }
     }
+    assert!(new_ts > *last_closed_ts);
+    *last_closed_ts = new_ts;
+    Some(*last_closed_ts)
 }
 
 /// For a given offset, returns an option type returning the matching timestamp or None
 /// if no timestamp can be assigned. The timestamp history contains a sequence of
 /// (timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
 /// for which offset>=x.
+/// TODO(ncrooks): refactor to take ControlPlaneInfo and DataPlaneInfo as in kafka.rs
 fn find_matching_timestamp(
     id: &SourceInstanceId,
     offset: MzOffset,
-    timestamp_histories: &TimestampHistories,
+    source_type: &Consistency,
+    last_closed_ts: u64,
+    timestamp_histories: &TimestampDataUpdates,
 ) -> Option<Timestamp> {
-    match timestamp_histories.borrow().get(id) {
-        None => None,
-        Some(entries) => match entries.get(&PartitionId::File) {
-            Some(entries) => {
-                for (_, ts, max_offset) in entries {
-                    if offset <= *max_offset {
-                        return Some(ts.clone());
-                    }
-                }
-                None
-            }
+    if let Consistency::RealTime = source_type {
+        // Simply assign to this message the next timestamp that is not closed
+        Some(last_closed_ts + 1)
+    } else {
+        match timestamp_histories.borrow().get(id) {
             None => None,
-        },
+            Some(TimestampDataUpdate::BringYourOwn(entries)) => {
+                match entries.get(&PartitionId::File) {
+                    Some(entries) => {
+                        for (_, ts, max_offset) in entries {
+                            if offset <= *max_offset {
+                                return Some(ts.clone());
+                            }
+                        }
+                        None
+                    }
+                    None => None,
+                }
+            }
+            _ => panic!("Unexpected format in TimestampDataUpdates. Expected a BYO message."),
+        }
     }
 }
 
@@ -303,26 +358,38 @@ where
     const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
     const MAX_RECORDS_PER_INVOCATION: usize = 1024;
 
-    let ts = if config.active {
-        let prev = config
-            .timestamp_histories
-            .borrow_mut()
-            .insert(config.id.clone(), HashMap::new());
-        assert!(prev.is_none());
-        config.timestamp_tx.as_ref().borrow_mut().push((
-            config.id,
-            Some((
-                ExternalSourceConnector::File(FileSourceConnector {
-                    path: path.clone(),
-                    tail: read_style == FileReadStyle::TailFollowFd,
-                }),
-                config.consistency,
-            )),
-        ));
-        Some(config.timestamp_tx)
+    let ts = if let Consistency::BringYourOwn(_) = config.consistency {
+        if config.active {
+            let prev = config.timestamp_histories.borrow_mut().insert(
+                config.id.clone(),
+                TimestampDataUpdate::BringYourOwn(HashMap::new()),
+            );
+            assert!(prev.is_none());
+            config
+                .timestamp_tx
+                .as_ref()
+                .borrow_mut()
+                .push(TimestampMetadataUpdate::StartTimestamping(config.id));
+            Some(config.timestamp_tx)
+        } else {
+            None
+        }
     } else {
         None
     };
+
+    // TODO(ncrooks): refactor this information into separate ControlPlaneInfo and DataPlaneInfo
+    // as in kafka.rs
+
+    let SourceConfig {
+        id,
+        active,
+        scope,
+        timestamp_histories,
+        consistency,
+        timestamp_frequency,
+        ..
+    } = config;
 
     // Buffer placeholder for buffering messages for which we did not have a timestamp
     let mut buffer: Option<Result<Out, failure::Error>> = None;
@@ -330,131 +397,131 @@ where
     let mut last_processed_offset = MzOffset { offset: 0 };
     // Index of the current message's offset
     let mut current_msg_offset = MzOffset { offset: 0 };
-    // Records closed timestamps. It corresponds to the smallest timestamp that is still
-    // open
+    // Records closed timestamps. It corresponds to the smallest timestamp that is still open
     let mut last_closed_ts: u64 = 0;
+    // At at which the capability was last downgraded
+    let mut time_since_downgrade: Instant = Instant::now();
+    // Safe conversion: statement.rs checks that value specified fits in u64
+    let downgrade_capability_frequency = timestamp_frequency.as_millis().try_into().unwrap();
 
-    let SourceConfig {
-        id,
-        active,
-        scope,
-        timestamp_histories,
-        ..
-    } = config;
+    let (stream, capability) = source(id, ts, scope, config.name.clone(), move |info| {
+        let activator = scope.activator_for(&info.address[..]);
+        let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);
+        if active {
+            let activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
+            thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
+        }
+        let mut dead = false;
+        move |cap, output| {
+            // If nothing else causes us to wake up, do so after a specified amount of time.
+            let mut next_activation_duration = HEARTBEAT;
+            // Number of records read for this particular activation
+            let mut records_read = 0;
 
-    let (stream, capability) = source(
-        id,
-        ts,
-        Arc::new(AtomicBool::new(false)),
-        scope,
-        config.name.clone(),
-        move |info| {
-            let activator = scope.activator_for(&info.address[..]);
-            let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);
+            assert!(
+                !dead,
+                "A file source should not be scheduled again after erroring."
+            );
+
             if active {
-                let activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
-                thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
-            }
-            let mut dead = false;
-            move |cap, output| {
-                // If nothing else causes us to wake up, do so after a specified amount of time.
-                let mut next_activation_duration = HEARTBEAT;
-                // Number of records read for this particular activation
-                let mut records_read = 0;
-
-                assert!(
-                    !dead,
-                    "A file source should not be scheduled again after erroring."
+                // Check if the capability can be downgraded (this is independent of whether
+                // there are new messages that can be processed) as timestamps can become
+                // closed in the absence of messages
+                downgrade_capability(
+                    &id,
+                    cap,
+                    &mut last_processed_offset,
+                    &mut last_closed_ts,
+                    &mut time_since_downgrade,
+                    downgrade_capability_frequency,
+                    &consistency,
+                    &timestamp_histories,
                 );
 
-                if active {
-                    // Check if the capability can be downgraded (this is independent of whether
-                    // there are new messages that can be processed) as timestamps can become
-                    // closed in the absence of messages
-                    downgrade_capability(
-                        &id,
-                        cap,
-                        &mut last_processed_offset,
-                        &mut last_closed_ts,
-                        &timestamp_histories,
-                    );
-
-                    // Check if there was a message buffered. If yes, use this message. Else,
-                    // attempt to process the next message
-                    if buffer.is_none() {
-                        match rx.try_recv() {
-                            Ok(result) => {
-                                records_read += 1;
-                                current_msg_offset.offset += 1;
-                                buffer = Some(result);
-                            }
-                            Err(TryRecvError::Empty) => {
-                                // nothing to read, go to sleep
-                            }
-                            Err(TryRecvError::Disconnected) => {
-                                return SourceStatus::Done;
-                            }
+                // Check if there was a message buffered. If yes, use this message. Else,
+                // attempt to process the next message
+                if buffer.is_none() {
+                    match rx.try_recv() {
+                        Ok(result) => {
+                            records_read += 1;
+                            current_msg_offset.offset += 1;
+                            buffer = Some(result);
                         }
-                    }
-
-                    while let Some(message) = buffer.take() {
-                        let ts =
-                            find_matching_timestamp(&id, current_msg_offset, &timestamp_histories);
-                        let message = match message {
-                            Ok(message) => message,
-                            Err(err) => {
-                                output.session(&cap).give(Err(err.to_string()));
-                                dead = true;
-                                return SourceStatus::Done;
-                            }
-                        };
-                        match ts {
-                            None => {
-                                // We have not yet decided on a timestamp for this message,
-                                // we need to buffer the message
-                                buffer = Some(Ok(message));
-                                activator.activate();
-                                return SourceStatus::Alive;
-                            }
-                            Some(ts) => {
-                                last_processed_offset = current_msg_offset;
-                                let ts_cap = cap.delayed(&ts);
-                                output.session(&ts_cap).give(Ok(SourceOutput::new(
-                                    vec![],
-                                    message,
-                                    Some(last_processed_offset.offset),
-                                )));
-                                downgrade_capability(
-                                    &id,
-                                    cap,
-                                    &mut last_processed_offset,
-                                    &mut last_closed_ts,
-                                    &timestamp_histories,
-                                );
-                            }
+                        Err(TryRecvError::Empty) => {
+                            // nothing to read, go to sleep
                         }
-
-                        if records_read == MAX_RECORDS_PER_INVOCATION {
-                            next_activation_duration = Default::default();
-                            break;
-                        }
-
-                        buffer = match rx.try_recv() {
-                            Ok(record) => {
-                                records_read += 1;
-                                current_msg_offset.offset += 1;
-                                Some(record)
-                            }
-                            Err(TryRecvError::Empty) => None,
-                            Err(TryRecvError::Disconnected) => return SourceStatus::Done,
+                        Err(TryRecvError::Disconnected) => {
+                            return SourceStatus::Done;
                         }
                     }
                 }
-                activator.activate_after(next_activation_duration);
-                SourceStatus::Alive
+
+                while let Some(message) = buffer.take() {
+                    let ts = find_matching_timestamp(
+                        &id,
+                        current_msg_offset,
+                        &consistency,
+                        last_closed_ts,
+                        &timestamp_histories,
+                    );
+                    let message = match message {
+                        Ok(message) => message,
+                        Err(err) => {
+                            output.session(&cap).give(Err(err.to_string()));
+                            dead = true;
+                            return SourceStatus::Done;
+                        }
+                    };
+                    match ts {
+                        None => {
+                            // We have not yet decided on a timestamp for this message,
+                            // we need to buffer the message
+                            buffer = Some(Ok(message));
+                            activator.activate();
+                            return SourceStatus::Alive;
+                        }
+                        Some(ts) => {
+                            last_processed_offset = current_msg_offset;
+                            let ts_cap = cap.delayed(&ts);
+                            output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                vec![],
+                                message,
+                                Some(last_processed_offset.offset),
+                            )));
+
+                            downgrade_capability(
+                                &id,
+                                cap,
+                                &mut last_processed_offset,
+                                &mut last_closed_ts,
+                                &mut time_since_downgrade,
+                                downgrade_capability_frequency,
+                                &consistency,
+                                &timestamp_histories,
+                            );
+                        }
+                    }
+
+                    if records_read == MAX_RECORDS_PER_INVOCATION {
+                        next_activation_duration = Default::default();
+                        break;
+                    }
+
+                    buffer = match rx.try_recv() {
+                        Ok(record) => {
+                            records_read += 1;
+                            current_msg_offset.offset += 1;
+                            Some(record)
+                        }
+                        Err(TryRecvError::Empty) => None,
+                        Err(TryRecvError::Disconnected) => return SourceStatus::Done,
+                    }
+                }
             }
-        },
-    );
+            activator.activate_after(next_activation_duration);
+            SourceStatus::Alive
+        }
+    });
 
     let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
 

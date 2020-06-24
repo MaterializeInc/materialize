@@ -36,11 +36,11 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, MzOffset, PeekResponse,
-    PeekWhen, SinkConnector, TailSinkConnector, Timestamp, Update,
+    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
+    SinkConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
-    GlobalId, Id, IdHumanizer, NullaryFunc, PartitionId, RelationExpr, RowSetFinishing, ScalarExpr,
+    GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
     SourceInstanceId,
 };
 use ore::collections::CollectionExt;
@@ -66,10 +66,7 @@ pub enum Message {
     Worker(WorkerFeedbackWithMeta),
     AdvanceSourceTimestamp {
         id: SourceInstanceId,
-        partition_count: i32,
-        pid: PartitionId,
-        timestamp: u64,
-        offset: MzOffset,
+        update: TimestampSourceUpdate,
     },
     StatementReady {
         session: Session,
@@ -323,12 +320,8 @@ where
         });
 
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-        let mut timestamper = Timestamper::new(
-            &self.timestamp_config,
-            self.catalog.storage_handle(),
-            internal_cmd_tx.clone(),
-            ts_rx,
-        );
+        let mut timestamper =
+            Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
         let executor = self.executor.clone();
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
@@ -494,7 +487,7 @@ where
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
-                    message: WorkerFeedback::CreateSource(source_id, _sc),
+                    message: WorkerFeedback::CreateSource(source_id),
                 }) => {
                     if let Some(entry) = self.catalog.try_get_by_id(source_id.sid) {
                         if let CatalogItem::Source(s) = entry.item() {
@@ -509,25 +502,12 @@ where
                     }
                 }
 
-                Message::AdvanceSourceTimestamp {
-                    id,
-                    partition_count,
-                    pid,
-                    timestamp,
-                    offset,
-                } => {
+                Message::AdvanceSourceTimestamp { id, update } => {
                     broadcast(
                         &mut self.broadcast_tx,
-                        SequencedCommand::AdvanceSourceTimestamp {
-                            id,
-                            partition_count,
-                            pid,
-                            timestamp,
-                            offset,
-                        },
+                        SequencedCommand::AdvanceSourceTimestamp { id, update },
                     );
                 }
-
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
                     self.shutdown();

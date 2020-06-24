@@ -139,7 +139,7 @@ use crate::decode::{decode_avro_values, decode_upsert, decode_values};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
-use crate::server::{TimestampChanges, TimestampHistories};
+use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
 use source::SourceOutput;
 
 mod arrange_by;
@@ -201,8 +201,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
     global_source_mappings: &mut HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
-    timestamp_histories: TimestampHistories,
-    timestamp_channel: TimestampChanges,
+    timestamp_histories: TimestampDataUpdates,
+    timestamp_channel: TimestampMetadataUpdates,
     logger: &mut Option<Logger>,
 ) {
     let worker_index = worker.index();

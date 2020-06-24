@@ -11,8 +11,6 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -25,7 +23,7 @@ use timely::{scheduling::Activator, Data};
 use dataflow_types::{Consistency, Timestamp};
 use expr::SourceInstanceId;
 
-use crate::server::{TimestampChanges, TimestampHistories};
+use crate::server::{TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates};
 
 mod file;
 mod kafka;
@@ -56,9 +54,9 @@ pub struct SourceConfig<'a, G> {
     pub worker_count: usize,
     // Timestamping fields.
     /// Data-timestamping updates: information about (timestamp, source offset)
-    pub timestamp_histories: TimestampHistories,
+    pub timestamp_histories: TimestampDataUpdates,
     /// Control-timestamping updates: information about when to start/stop timestamping a source
-    pub timestamp_tx: TimestampChanges,
+    pub timestamp_tx: TimestampMetadataUpdates,
     /// A source can use Real-Time consistency timestamping or BYO consistency information.
     pub consistency: Consistency,
     /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
@@ -135,10 +133,7 @@ pub struct SourceToken {
     activator: Activator,
     /// A reference to the timestamper control channel. Inserts a timestamp drop message
     /// when this source token is dropped
-    timestamp_drop: Option<TimestampChanges>,
-    /// A boolean flag that is set to true when this source token is dropped and timestamping
-    /// should stop
-    stop_timestamping: Arc<AtomicBool>,
+    timestamp_drop: Option<TimestampMetadataUpdates>,
 }
 
 impl SourceToken {
@@ -157,9 +152,8 @@ impl Drop for SourceToken {
                 .as_ref()
                 .unwrap()
                 .borrow_mut()
-                .push((self.id, None));
+                .push(TimestampMetadataUpdate::StopTimestamping(self.id));
         }
-        self.stop_timestamping.store(true, Ordering::SeqCst);
     }
 }
 

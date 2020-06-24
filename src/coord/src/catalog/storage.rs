@@ -199,14 +199,6 @@ impl Connection {
             .collect()
     }
 
-    pub fn prepare(&self, sql: &str) -> rusqlite::Result<rusqlite::Statement> {
-        self.inner.prepare(sql)
-    }
-
-    pub fn prepare_cached(&self, sql: &str) -> rusqlite::Result<rusqlite::CachedStatement> {
-        self.inner.prepare_cached(sql)
-    }
-
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
