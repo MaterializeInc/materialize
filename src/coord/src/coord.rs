@@ -719,9 +719,9 @@ where
             Plan::Tail {
                 id,
                 ts,
-                without_snapshot,
+                with_snapshot,
             } => tx.send(
-                self.sequence_tail(session.conn_id(), id, without_snapshot, ts),
+                self.sequence_tail(session.conn_id(), id, with_snapshot, ts),
                 session,
             ),
 
@@ -1321,7 +1321,7 @@ where
         &mut self,
         conn_id: u32,
         source_id: GlobalId,
-        without_snapshot: bool,
+        with_snapshot: bool,
         ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, failure::Error> {
         // Determine the frontier of updates to tail *from*.
@@ -1372,7 +1372,7 @@ where
             SinkConnector::Tail(TailSinkConnector {
                 tx,
                 frontier: frontier.clone(),
-                strict: without_snapshot,
+                strict: !with_snapshot,
             }),
             frontier,
         );

@@ -176,6 +176,32 @@ fn test_tail() -> Result<(), Box<dyn Error>> {
         drop(tail_reader);
     }
 
+    // Now tail WITH SNAPSHOT AS OF each timestamp. We should see a batch of updates all at the
+    // tailed timestamp, and then updates afterward.
+    for (ts, _) in &events {
+        let cancel_token = client.cancel_token();
+        let q = format!("TAIL dynamic_csv AS OF {}", ts - 1);
+        let mut tail_reader = client.copy_out(q.as_str())?.split(b'\n');
+
+        for (_, expected) in events.iter() {
+            let mut expected_ts = extract_ts(expected).unwrap();
+            if expected_ts < ts - 1 {
+                // If the thing we initially got was before the timestamp, it should have gotten
+                // fast-forwarded up to the timestamp.
+                expected_ts = ts - 1;
+            }
+
+            let actual = tail_reader.next().unwrap()?;
+            let actual_ts = extract_ts(&actual).unwrap();
+
+            assert_eq!(expected_ts, actual_ts);
+        }
+
+        cancel_token.cancel_query(postgres::NoTls)?;
+        assert!(tail_reader.next().is_none());
+        drop(tail_reader);
+    }
+
     // Now tail AS OF each timestamp. We should see a batch of updates all at the
     // tailed timestamp, and then updates afterward.
     for (ts, _) in &events {

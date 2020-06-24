@@ -124,7 +124,7 @@ pub enum Plan {
     },
     Tail {
         id: GlobalId,
-        without_snapshot: bool,
+        with_snapshot: bool,
         ts: Option<Timestamp>,
     },
     SendRows(Vec<Row>),

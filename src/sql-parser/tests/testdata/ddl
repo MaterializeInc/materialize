@@ -682,30 +682,30 @@ DropObjects { object_type: Index, if_exists: true, names: [ObjectName([Ident("my
 parse-statement
 TAIL foo.bar
 ----
-TAIL foo.bar
+TAIL foo.bar WITH SNAPSHOT
 =>
-Tail { name: ObjectName([Ident("foo"), Ident("bar")]), without_snapshot: false, as_of: None }
+Tail { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: None }
 
 parse-statement
 TAIL foo.bar AS OF 123
 ----
-TAIL foo.bar AS OF 123
+TAIL foo.bar WITH SNAPSHOT AS OF 123
 =>
-Tail { name: ObjectName([Ident("foo"), Ident("bar")]), without_snapshot: false, as_of: Some(Value(Number("123"))) }
+Tail { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: Some(Value(Number("123"))) }
 
 parse-statement
 TAIL foo.bar AS OF now()
 ----
-TAIL foo.bar AS OF now()
+TAIL foo.bar WITH SNAPSHOT AS OF now()
 =>
-Tail { name: ObjectName([Ident("foo"), Ident("bar")]), without_snapshot: false, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) }
+Tail { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) }
 
 parse-statement
 TAIL foo.bar WITHOUT SNAPSHOT AS OF now()
 ----
 TAIL foo.bar WITHOUT SNAPSHOT AS OF now()
 =>
-Tail { name: ObjectName([Ident("foo"), Ident("bar")]), without_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) }
+Tail { name: ObjectName([Ident("foo"), Ident("bar")]), with_snapshot: false, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })) }
 
 parse-statement
 CREATE TABLE public.customer (

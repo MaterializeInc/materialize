@@ -231,7 +231,7 @@ pub enum Statement {
     /// `TAIL`
     Tail {
         name: ObjectName,
-        without_snapshot: bool,
+        with_snapshot: bool,
         as_of: Option<Expr>,
     },
     /// `EXPLAIN [ DATAFLOW | PLAN ] FOR`
@@ -666,13 +666,15 @@ impl AstDisplay for Statement {
             }
             Statement::Tail {
                 name,
-                without_snapshot,
+                with_snapshot,
                 as_of,
             } => {
                 f.write_str("TAIL ");
                 f.write_node(&name);
 
-                if *without_snapshot {
+                if *with_snapshot {
+                    f.write_str(" WITH SNAPSHOT");
+                } else {
                     f.write_str(" WITHOUT SNAPSHOT");
                 }
                 if let Some(as_of) = as_of {
