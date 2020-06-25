@@ -704,7 +704,7 @@ fn avro_ocf_sink_builder(
 
 fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
-    let (name, from, connector, with_options, format, _with_snapshot, as_of, if_not_exists) =
+    let (name, from, connector, with_options, format, with_snapshot, as_of, if_not_exists) =
         match stmt {
             Statement::CreateSink {
                 name,
@@ -728,10 +728,6 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             _ => unreachable!(),
         };
 
-    if let Some(_as_of) = as_of {
-        unsupported!("AS OF")
-    }
-
     let name = scx.allocate_name(normalize::object_name(name)?);
     let from = scx.catalog.get_item(&scx.resolve_item(from)?);
     let suffix = format!(
@@ -743,6 +739,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
         scx.catalog.nonce()
     );
 
+    let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic } => kafka_sink_builder(
@@ -764,6 +761,8 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
             from: from.id(),
             connector_builder,
         },
+        with_snapshot,
+        as_of,
         if_not_exists,
     })
 }

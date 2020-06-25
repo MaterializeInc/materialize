@@ -20,19 +20,24 @@ use dataflow_types::{
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
+use timely::progress::Antichain;
 
 pub async fn build(
     builder: SinkConnectorBuilder,
+    with_snapshot: bool,
+    frontier: Antichain<u64>,
     id: GlobalId,
 ) -> Result<SinkConnector, failure::Error> {
     match builder {
-        SinkConnectorBuilder::Kafka(k) => build_kafka(k, id).await,
-        SinkConnectorBuilder::AvroOcf(a) => build_avro_ocf(a, id),
+        SinkConnectorBuilder::Kafka(k) => build_kafka(k, with_snapshot, frontier, id).await,
+        SinkConnectorBuilder::AvroOcf(a) => build_avro_ocf(a, with_snapshot, frontier, id),
     }
 }
 
 async fn build_kafka(
     builder: KafkaSinkConnectorBuilder,
+    with_snapshot: bool,
+    frontier: Antichain<u64>,
     id: GlobalId,
 ) -> Result<SinkConnector, failure::Error> {
     let topic = format!("{}-{}-{}", builder.topic_prefix, id, builder.topic_suffix);
@@ -80,11 +85,15 @@ async fn build_kafka(
         topic,
         url: builder.broker_url,
         fuel: builder.fuel,
+        frontier,
+        strict: !with_snapshot,
     }))
 }
 
 fn build_avro_ocf(
     builder: AvroOcfSinkConnectorBuilder,
+    with_snapshot: bool,
+    frontier: Antichain<u64>,
     id: GlobalId,
 ) -> Result<SinkConnector, failure::Error> {
     let mut name = match builder.path.file_stem() {
@@ -117,5 +126,9 @@ fn build_avro_ocf(
                 e
             )
         })?;
-    Ok(SinkConnector::AvroOcf(AvroOcfSinkConnector { path }))
+    Ok(SinkConnector::AvroOcf(AvroOcfSinkConnector {
+        path,
+        frontier,
+        strict: !with_snapshot,
+    }))
 }

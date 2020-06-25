@@ -588,11 +588,25 @@ pub struct KafkaSinkConnector {
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
+    pub frontier: Antichain<Timestamp>,
+    pub strict: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AvroOcfSinkConnector {
     pub path: PathBuf,
+    pub frontier: Antichain<Timestamp>,
+    pub strict: bool,
+}
+
+impl SinkConnector {
+    pub fn get_frontier(&self) -> Antichain<Timestamp> {
+        match self {
+            SinkConnector::AvroOcf(avro) => avro.frontier.clone(),
+            SinkConnector::Kafka(kafka) => kafka.frontier.clone(),
+            SinkConnector::Tail(tail) => tail.frontier.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

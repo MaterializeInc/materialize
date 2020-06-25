@@ -52,7 +52,16 @@ pub fn avro_ocf<G>(
             let avro_writer = avro_writer.as_mut().expect("avro writer known to exist");
 
             input.for_each(|_, rows| {
-                for (row, _time, diff) in rows.iter() {
+                for (row, time, diff) in rows.iter() {
+                    let should_emit = if connector.strict {
+                        connector.frontier.less_than(&time)
+                    } else {
+                        connector.frontier.less_equal(&time)
+                    };
+                    if !should_emit {
+                        continue;
+                    }
+
                     let diff_pair = if *diff < 0 {
                         DiffPair {
                             before: Some(row),
