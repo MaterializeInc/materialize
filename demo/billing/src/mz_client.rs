@@ -126,7 +126,7 @@ impl MzClient {
 
         let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
-             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
+             WITH (consistency = true) FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
              sink = sink_name,
              kafka_url = kafka_url,
              topic = sink_topic_name,
