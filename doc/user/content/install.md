@@ -14,8 +14,8 @@ weight: 2
 You can access Materialize through the `materialized` binary, which you can
 install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
 instructions install the latest release of Materialize, **{{< version >}}**. The latest (unstable)
-developer builds are available at https://mtrlz.dev/. For prior releases, 
-see the [Versions page](/versions). 
+developer builds are available at https://mtrlz.dev/. For prior releases,
+see the [Versions page](/versions).
 
 **Have any questions?** [Contact us](https://materialize.io/contact/)
 
