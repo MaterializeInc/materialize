@@ -31,15 +31,13 @@ pub async fn build(
     }
 }
 
-async fn build_kafka(
-    builder: KafkaSinkConnectorBuilder,
-    id: GlobalId,
-) -> Result<SinkConnector, failure::Error> {
-    let topic = format!("{}-{}-{}", builder.topic_prefix, id, builder.topic_suffix);
-
-    // Create Kafka topic with single partition.
-    let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &builder.broker_url.to_string());
+async fn register_kafka_topic(
+    config: &mut ClientConfig,
+    topic: &str,
+    replication_factor: i32,
+    ccsr: &ccsr::Client,
+    schema: &str,
+) -> Result<i32, failure::Error> {
     let res = config
         .create::<AdminClient<_>>()
         .expect("creating admin kafka client failed")
@@ -47,7 +45,7 @@ async fn build_kafka(
             &[NewTopic::new(
                 &topic,
                 1,
-                TopicReplication::Fixed(builder.replication_factor as i32),
+                TopicReplication::Fixed(replication_factor),
             )],
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
         )
@@ -69,16 +67,41 @@ async fn build_kafka(
     // TODO(benesch): do we need to delete the Kafka topic if publishing the
     // schema fails?
     // TODO(sploiselle): support SSL auth'ed sinks
-    let schema_id = ccsr::ClientConfig::new(builder.schema_registry_url)
-        .build()
-        .publish_schema(&format!("{}-value", topic), &builder.value_schema)
+    let schema_id = ccsr
+        .publish_schema(&format!("{}-value", topic), schema)
         .await
         .with_context(|e| format!("unable to publish schema to registry in kafka sink: {}", e))?;
+
+    Ok(schema_id)
+}
+
+async fn build_kafka(
+    builder: KafkaSinkConnectorBuilder,
+    id: GlobalId,
+) -> Result<SinkConnector, failure::Error> {
+    let topic = format!("{}-{}-{}", builder.topic_prefix, id, builder.topic_suffix);
+
+    // Create Kafka topic with single partition.
+    let mut config = ClientConfig::new();
+    config.set("bootstrap.servers", &builder.broker_url.to_string());
+    // TODO(sploiselle): support SSL auth'ed sinks
+    let ccsr = ccsr::ClientConfig::new(builder.schema_registry_url).build();
+
+    let schema_id = register_kafka_topic(
+        &mut config,
+        &topic,
+        builder.replication_factor as i32,
+        &ccsr,
+        &builder.value_schema,
+    )
+    .await
+    .with_context(|e| format!("error registering kafka topic for sink: {}", e))?;
 
     Ok(SinkConnector::Kafka(KafkaSinkConnector {
         schema_id,
         topic,
         url: builder.broker_url,
+        consistency: None,
         fuel: builder.fuel,
     }))
 }
