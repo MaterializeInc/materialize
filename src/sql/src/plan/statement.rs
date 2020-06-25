@@ -162,6 +162,15 @@ pub fn describe_statement(
             vec![],
         ),
 
+        Statement::ShowCreateIndex { .. } => (
+            Some(
+                RelationDesc::empty()
+                    .with_nonnull_column("Index", ScalarType::String)
+                    .with_nonnull_column("Create Index", ScalarType::String),
+            ),
+            vec![],
+        ),
+
         Statement::ShowColumns { .. } => (Some(SHOW_COLUMNS_DESC.clone()), vec![]),
 
         Statement::ShowIndexes { .. } => (Some(SHOW_INDEXES_DESC.clone()), vec![]),
@@ -287,6 +296,7 @@ pub fn handle_statement(
         Statement::ShowCreateView { view_name } => handle_show_create_view(scx, view_name),
         Statement::ShowCreateSource { source_name } => handle_show_create_source(scx, source_name),
         Statement::ShowCreateSink { sink_name } => handle_show_create_sink(scx, sink_name),
+        Statement::ShowCreateIndex { index_name } => handle_show_create_index(scx, index_name),
         Statement::Explain {
             stage,
             explainee,
@@ -623,6 +633,22 @@ fn handle_show_create_sink(
         ])]))
     } else {
         bail!("'{}' is not a sink", name);
+    }
+}
+
+fn handle_show_create_index(
+    scx: &StatementContext,
+    name: ObjectName,
+) -> Result<Plan, failure::Error> {
+    let name = scx.resolve_item(name)?;
+    let entry = scx.catalog.get_item(&name);
+    if let CatalogItemType::Index = entry.item_type() {
+        Ok(Plan::SendRows(vec![Row::pack(&[
+            Datum::String(&name.to_string()),
+            Datum::String(entry.create_sql()),
+        ])]))
+    } else {
+        bail!("'{}' is not an index", name);
     }
 }
 
