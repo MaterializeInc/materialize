@@ -73,7 +73,7 @@ pub fn avro_ocf<G>(
                             after: Some(row),
                         }
                     };
-                    let value = encoder.diff_pair_to_avro(diff_pair);
+                    let value = encoder.diff_pair_to_avro(diff_pair, None);
                     for _ in 0..diff.abs() {
                         let res = avro_writer.append(value.clone());
 

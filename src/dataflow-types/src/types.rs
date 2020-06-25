@@ -581,10 +581,17 @@ pub enum SinkConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkConsistencyConnector {
+    pub topic: String,
+    pub schema_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnector {
     pub url: Url,
     pub topic: String,
     pub schema_id: i32,
+    pub consistency: Option<KafkaSinkConsistencyConnector>,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
@@ -637,6 +644,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub topic_suffix: String,
     pub replication_factor: u32,
     pub fuel: usize,
+    pub consistency_value_schema: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

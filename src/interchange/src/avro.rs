@@ -897,9 +897,51 @@ fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
             {
                 "name": "after",
                 "type": ["null", "row"]
+            },
+            {
+                "name": "transaction",
+                "type": [
+                    "null",
+                    {
+                        "name": "transaction_metadata",
+                        "type": "record",
+                        "fields": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                            }
+                        ]
+                    }
+                ]
             }
         ]
     });
+    Schema::parse(&schema).expect("valid schema constructed")
+}
+
+fn get_consistency_schema() -> Schema {
+    let schema = json!({
+        "type": "record",
+        "name": "envelope",
+        "fields": [
+            {
+                "name": "id",
+                "type": "string"
+            },
+            {
+                "name": "status",
+                "type": "string"
+            },
+            {
+                "name": "event_count",
+                "type": [
+                  "null",
+                  "long"
+                ]
+            }
+        ]
+    });
+
     Schema::parse(&schema).expect("valid schema constructed")
 }
 
@@ -907,6 +949,7 @@ fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
 pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
+    consistency_schema: Schema,
 }
 
 impl fmt::Debug for Encoder {
@@ -946,9 +989,11 @@ impl Encoder {
         }
 
         let writer_schema = build_schema(&columns);
+        let consistency_schema = get_consistency_schema();
         Encoder {
             columns,
             writer_schema,
+            consistency_schema,
         }
     }
 
@@ -956,14 +1001,52 @@ impl Encoder {
         &self.writer_schema
     }
 
-    pub fn encode_unchecked(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
+    pub fn consistency_schema(&self) -> &Schema {
+        &self.consistency_schema
+    }
+
+    pub fn encode_unchecked(
+        &self,
+        schema_id: i32,
+        diff_pair: DiffPair<&Row>,
+        transaction_id: Option<String>,
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.write_u8(0).expect("writing to vec cannot fail");
         buf.write_i32::<NetworkEndian>(schema_id)
             .expect("writing to vec cannot fail");
-        let avro = self.diff_pair_to_avro(diff_pair);
+        let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
         debug_assert!(avro.validate(self.writer_schema.top_node()));
         avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
+        buf
+    }
+
+    pub fn encode_transaction_unchecked(
+        &self,
+        schema_id: i32,
+        id: &str,
+        status: &str,
+        message_count: Option<i64>,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.write_u8(0).expect("writing to vec cannot fail");
+        buf.write_i32::<NetworkEndian>(schema_id)
+            .expect("writing to vec cannot fail");
+
+        let transaction_id = Value::String(id.to_owned());
+        let status = Value::String(status.to_owned());
+        let event_count = match message_count {
+            None => Value::Union(0, Box::new(Value::Null)),
+            Some(count) => Value::Union(1, Box::new(Value::Long(count))),
+        };
+
+        let avro = Value::Record(vec![
+            ("id".into(), transaction_id),
+            ("status".into(), status),
+            ("event_count".into(), event_count),
+        ]);
+        debug_assert!(avro.validate(self.consistency_schema.top_node()));
+        avro::encode_unchecked(&avro, &self.consistency_schema, &mut buf);
         buf
     }
 
@@ -981,14 +1064,18 @@ impl Encoder {
             .expect("writing to vec cannot fail");
         avro::write_avro_datum(
             &self.writer_schema,
-            self.diff_pair_to_avro(diff_pair),
+            self.diff_pair_to_avro(diff_pair, None),
             &mut buf,
         )
         .expect("schema constructed to match val");
         buf
     }
 
-    pub fn diff_pair_to_avro(&self, diff_pair: DiffPair<&Row>) -> Value {
+    pub fn diff_pair_to_avro(
+        &self,
+        diff_pair: DiffPair<&Row>,
+        transaction_id: Option<String>,
+    ) -> Value {
         let before = match diff_pair.before {
             None => Value::Union(0, Box::new(Value::Null)),
             Some(row) => {
@@ -1003,7 +1090,19 @@ impl Encoder {
                 Value::Union(1, Box::new(row))
             }
         };
-        Value::Record(vec![("before".into(), before), ("after".into(), after)])
+
+        let transaction = match transaction_id {
+            None => Value::Union(0, Box::new(Value::Null)),
+            Some(transaction_id) => {
+                let id = Value::String(transaction_id);
+                Value::Union(1, Box::new(Value::Record(vec![("id".into(), id)])))
+            }
+        };
+        Value::Record(vec![
+            ("before".into(), before),
+            ("after".into(), after),
+            ("transaction".into(), transaction),
+        ])
     }
 
     fn row_to_avro(&self, row: Vec<Datum>) -> Value {

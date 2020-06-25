@@ -40,10 +40,10 @@ $ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.data_sink
-{"before": null, "after": {"a": 1, "b": 1}}
-{"before": null, "after": {"a": 1, "b": 2}}
-{"before": null, "after": {"a": 2, "b": 1}}
-{"before": null, "after": {"a": 3, "b": 1}}
+{"before": null, "after": {"a": 1, "b": 1}, "transaction": null}
+{"before": null, "after": {"a": 1, "b": 2}, "transaction": null}
+{"before": null, "after": {"a": 2, "b": 1}, "transaction": null}
+{"before": null, "after": {"a": 3, "b": 1}, "transaction": null}
 
 # Test date/time types.
 
@@ -56,8 +56,8 @@ $ kafka-verify format=avro sink=materialize.public.data_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.datetime_data_sink
-{"before": null, "after": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}
-{"before": null, "after": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}
+{"before": null, "after": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}, "transaction": null}
+{"before": null, "after": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}, "transaction": null}
 
 > CREATE VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
 
@@ -66,5 +66,5 @@ $ kafka-verify format=avro sink=materialize.public.datetime_data_sink
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.time_data_sink
-{"before": null, "after": {"time": 3723000000}}
-{"before": null, "after": {"time": 3724000000}}
+{"before": null, "after": {"time": 3723000000}, "transaction": null}
+{"before": null, "after": {"time": 3724000000}, "transaction": null}
