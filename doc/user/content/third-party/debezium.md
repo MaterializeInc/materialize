@@ -6,7 +6,7 @@ menu:
     parent: 'third-party'
 ---
 
-Debezium works with Materialize in two capacities:
+[Debezium](https://debezium.io/) works with Materialize in two capacities:
 
 - Debezium adds change data capture (CDC) to MySQL or PostgreSQL databases,
   which lets you propagate data from your database to Materialize
@@ -33,3 +33,11 @@ For example:
 ALTER TABLE foo
 REPLICA IDENTITY FULL;
 ```
+
+### Kafka-less setup
+
+Users who wish to connect a database to Materialize without having to use Kafka can
+do so with [tb](https://github.com/MaterializeInc/tb). tb is a tool built by Materialize
+that lets you send Debezium data to Materialize using Avro OCF files, bypassing the need
+for Kafka. For more information and instructions, see
+[tb's GitHub page](https://github.com/MaterializeInc/tb).
