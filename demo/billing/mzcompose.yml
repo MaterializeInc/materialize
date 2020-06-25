@@ -55,7 +55,6 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
       KAFKA_SASL_KERBEROS_SERVICE_NAME: kafka
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_JMX_PORT: 9991
       KAFKA_OPTS: >-
         -Dzookeeper.sasl.client.canonicalize.hostname=false
         -Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config
@@ -64,6 +63,8 @@ services:
     mzbuild: materialized
     volumes:
       - db-data:/share/billing-demo/data
+      - secrets:/share/secret
+      - ../../test/krb5/kdc/krb5.conf:/etc/krb5.conf
     ports:
      - *materialized
     init: true
@@ -75,16 +76,18 @@ services:
     mzbuild: billing-demo
     volumes:
       - db-data:/share/billing-demo/data
+      - secrets:/share/secret
+      - ../../test/krb5/kdc/krb5.conf:/etc/krb5.conf
     environment:
       - RUST_LOG=billing-demo=debug,info
     command: >-
       --message-count 30000000
       --materialized-host materialized
-      --kafka-host kafka
+      --kafka-host SASL_PLAINTEXT://kafka
       --schema-registry-url http://schema-registry:8081
       --csv-file-name /share/billing-demo/data/prices.csv
-      --krb5-keytab=/share/secrets/billing.key
-      --krb5-principal=billing@CI.MATERIALIZE.IO
+      --krb5-keytab=/share/secret/billing.key
+      --krb5-principal=billing-demo@CI.MATERIALIZE.IO
     depends_on: [kafka, materialized]
   dashboard:
     mzbuild: dashboard
@@ -121,11 +124,11 @@ mzconduct:
         command: >-
           --message-count 30000000
           --materialized-host materialized
-          --kafka-host kafka
+          --kafka-host SASL_PLAINTEXT://kafka
           --schema-registry-url http://schema-registry:8081
           --csv-file-name /share/billing-demo/data/prices.csv
-          --krb5-keytab=/share/secrets/billing.key
-          --krb5-principal=billing@CI.MATERIALIZE.IO
+          --krb5-keytab=/share/secret/billing.key
+          --krb5-principal=billing-demo@CI.MATERIALIZE.IO
           --kafka-topic thirtymil
           --partitions 30
 
