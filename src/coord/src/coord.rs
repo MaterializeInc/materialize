@@ -132,7 +132,7 @@ where
     /// relative to.
     start_time: Instant,
     /// The last timestamp we assigned to a read.
-    last_read_ts: Timestamp,
+    read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
     closed_up_to: Timestamp,
     /// Whether or not the most recent operation was a read.
@@ -198,7 +198,7 @@ where
             feedback_rx: Some(rx),
             start_time: Instant::now(),
             closed_up_to: 1,
-            last_read_ts: 1,
+            read_lower_bound: 1,
             last_op_was_read: false,
         };
 
@@ -299,7 +299,7 @@ where
     fn get_read_ts(&mut self) -> Timestamp {
         let ts = self.get_ts();
         self.last_op_was_read = true;
-        self.last_read_ts = ts;
+        self.read_lower_bound = ts;
         ts
     }
 
@@ -309,9 +309,10 @@ where
         if self.last_op_was_read {
             self.last_op_was_read = false;
             let ts = self.get_ts();
-            if ts <= self.last_read_ts {
-                self.last_read_ts + 1
+            if ts <= self.read_lower_bound {
+                self.read_lower_bound + 1
             } else {
+                self.read_lower_bound = ts;
                 ts
             }
         } else {
@@ -329,8 +330,8 @@ where
             .as_millis()
             .try_into()
             .expect("system time did not fit in u64");
-        if ts < self.last_read_ts {
-            self.last_read_ts
+        if ts < self.read_lower_bound {
+            self.read_lower_bound
         } else {
             ts
         }
@@ -566,8 +567,8 @@ where
             }
 
             let mut next_ts = self.get_ts();
-            if next_ts <= self.last_read_ts {
-                next_ts = self.last_read_ts + 1;
+            if next_ts <= self.read_lower_bound {
+                next_ts = self.read_lower_bound + 1;
             }
             if next_ts > self.closed_up_to {
                 broadcast(
