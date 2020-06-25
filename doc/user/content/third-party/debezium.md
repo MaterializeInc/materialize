@@ -33,3 +33,9 @@ For example:
 ALTER TABLE foo
 REPLICA IDENTITY FULL;
 ```
+
+### Kafka-less setup
+
+Users who wish to connect a database to Materialize without a Kafka stream 
+can do so via [tb](https://github.com/MaterializeInc/tb). Tb embeds 
+[Debezium](https://debezium.io/) and streams database writes to an Avro file.
