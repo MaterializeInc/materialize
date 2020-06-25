@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -129,6 +129,29 @@ impl ProducerContext for SinkProducerContext {
     }
 }
 
+pub struct SinkConsistencyInfo {
+    topic: String,
+    schema_id: i32,
+    timestamp_counts: HashMap<Timestamp, usize>,
+}
+
+impl SinkConsistencyInfo {
+    pub fn new(topic: String, schema_id: i32) -> Self {
+        SinkConsistencyInfo {
+            topic,
+            schema_id,
+            timestamp_counts: HashMap::new(),
+        }
+    }
+
+    pub fn update_timestamp_count(&mut self, time: Timestamp, count: usize) {
+        if let Some(c) = self.timestamp_counts.get_mut(&time) {
+            *c += count;
+        } else {
+            self.timestamp_counts.insert(time, count as usize);
+        }
+    }
+}
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
 pub fn kafka<G>(
     stream: &Stream<G, (Row, Timestamp, Diff)>,
@@ -186,6 +209,15 @@ where
     let mut vector = Vec::new();
     let mut encoded_buffer = None;
 
+    let mut consistency = if let Some(consistency) = &connector.consistency {
+        Some(SinkConsistencyInfo::new(
+            consistency.topic.clone(),
+            consistency.schema_id,
+        ))
+    } else {
+        None
+    };
+
     let name = format!("kafka-{}", id);
     sink_reschedule(
         &stream,
@@ -224,6 +256,13 @@ where
 
                     for (row, time, diff) in vector.drain(..) {
                         queue.push_back((row, time.to_string(), diff));
+                        if let Some(consistency) = &mut consistency {
+                            // Note that since a single differential message
+                            // turns into |diff| messages we need to increment
+                            // message counts by |diff| instead of just 1 for
+                            // the consistency topic
+                            consistency.update_timestamp_count(time, diff.abs() as usize);
+                        }
                     }
                 });
 
