@@ -38,4 +38,4 @@ REPLICA IDENTITY FULL;
 
 [tb allows you to](https://github.com/MaterializeInc/tb) easily connect a database to 
 Materialize without a Kafka stream. It works by embedding [Debezium](https://debezium.io/) 
-and streams database changes directly to an Avro file.
+and streaming database changes directly to an Avro file.
