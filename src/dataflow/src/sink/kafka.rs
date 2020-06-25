@@ -182,7 +182,7 @@ where
             ))
             .expect("creating kafka producer for kafka sinks failed"),
     )));
-    let mut queue: VecDeque<(Row, Diff)> = VecDeque::new();
+    let mut queue: VecDeque<(Row, String, Diff)> = VecDeque::new();
     let mut vector = Vec::new();
     let mut encoded_buffer = None;
 
@@ -198,7 +198,7 @@ where
                 stream.scope().activator_for(&info.address[..]),
             );
 
-            let ret = move |input: &mut FrontieredInputHandle<_, _, _>| {
+            let ret = move |input: &mut FrontieredInputHandle<_, (Row, Timestamp, Diff), _>| {
                 if shutdown.load(Ordering::SeqCst) {
                     error!(
                         "encountered irrecoverable error. shutting down sink: {}",
@@ -222,8 +222,8 @@ where
                 input.for_each(|_, rows| {
                     rows.swap(&mut vector);
 
-                    for (row, _time, diff) in vector.drain(..) {
-                        queue.push_back((row, diff));
+                    for (row, time, diff) in vector.drain(..) {
+                        queue.push_back((row, time.to_string(), diff));
                     }
                 });
 
@@ -234,7 +234,7 @@ where
                     let (encoded, count) = if let Some((encoded, count)) = encoded_buffer.take() {
                         // We still need to send more copies of this record.
                         (encoded, count)
-                    } else if let Some((row, diff)) = queue.pop_front() {
+                    } else if let Some((row, time, diff)) = queue.pop_front() {
                         // Convert a previously queued (Row, Diff) to a Avro diff
                         // envelope record
                         if diff == 0 {
@@ -254,7 +254,8 @@ where
                             }
                         };
 
-                        let buf = encoder.encode_unchecked(connector.schema_id, diff_pair);
+                        let buf =
+                            encoder.encode_unchecked(connector.schema_id, diff_pair, Some(time));
                         // For diffs other than +/- 1, we send repeated copies of the
                         // Avro record [diff] times. Since the format and envelope
                         // capture the "polarity" of the update, we need to remember
