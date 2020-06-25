@@ -1325,10 +1325,16 @@ where
             .get(&source_id)
             .map(|view_state| &view_state.default_idx)
         {
-            self.indexes
+            let upper = self
+                .indexes
                 .upper_of(index_id)
-                .expect("name missing at coordinator")
-                .to_owned()
+                .expect("name missing at coordinator");
+
+            if let Some(ts) = upper.get(0) {
+                Antichain::from_elem(ts.saturating_sub(1))
+            } else {
+                Antichain::from_elem(Timestamp::max_value())
+            }
         } else {
             // TODO: This should more carefully consider `since` frontiers of its input.
             // This will be forcibly corrected if any inputs are compacted.
