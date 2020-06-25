@@ -918,10 +918,37 @@ fn build_schema(desc: &RelationDesc) -> Schema {
     Schema::parse(&schema).expect("valid schema constructed")
 }
 
+fn get_consistency_schema() -> Schema {
+    let schema = json!({
+        "type": "record",
+        "name": "envelope",
+        "fields": [
+            {
+                "name": "id",
+                "type": "string"
+            },
+            {
+                "name": "status",
+                "type": "string"
+            },
+            {
+                "name": "event_count",
+                "type": [
+                  "null",
+                  "long"
+                ]
+            }
+        ]
+    });
+
+    Schema::parse(&schema).expect("valid schema constructed")
+}
+
 /// Manages encoding of Avro-encoded bytes.
 pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
+    consistency_schema: Schema,
 }
 
 impl fmt::Debug for Encoder {
@@ -935,6 +962,7 @@ impl fmt::Debug for Encoder {
 impl Encoder {
     pub fn new(desc: RelationDesc) -> Self {
         let writer_schema = build_schema(&desc);
+        let consistency_schema = get_consistency_schema();
         // Invent names for columns that don't have a name.
         let columns = desc
             .into_iter()
@@ -947,11 +975,16 @@ impl Encoder {
         Encoder {
             columns,
             writer_schema,
+            consistency_schema,
         }
     }
 
     pub fn writer_schema(&self) -> &Schema {
         &self.writer_schema
+    }
+
+    pub fn consistency_schema(&self) -> &Schema {
+        &self.consistency_schema
     }
 
     pub fn encode_unchecked(

@@ -612,7 +612,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub topic_suffix: String,
     pub replication_factor: u32,
     pub fuel: usize,
-    pub emit_consistency: bool,
+    pub consistency_value_schema: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

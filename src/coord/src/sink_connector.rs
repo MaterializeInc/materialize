@@ -16,7 +16,7 @@ use rdkafka::config::ClientConfig;
 
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, SinkConnector, SinkConnectorBuilder,
+    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, SinkConnector, SinkConnectorBuilder,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -84,7 +84,6 @@ async fn build_kafka(
     // Create Kafka topic with single partition.
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &builder.broker_url.to_string());
-    // TODO(sploiselle): support SSL auth'ed sinks
     let ccsr = ccsr::ClientConfig::new(builder.schema_registry_url).build();
 
     let schema_id = register_kafka_topic(
@@ -97,11 +96,31 @@ async fn build_kafka(
     .await
     .with_context(|e| format!("error registering kafka topic for sink: {}", e))?;
 
+    let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
+        let consistency_topic = format!("{}-consistency", topic);
+        let consistency_schema_id = register_kafka_topic(
+            &mut config,
+            &consistency_topic,
+            builder.replication_factor as i32,
+            &ccsr,
+            &consistency_value_schema,
+        )
+        .await
+        .with_context(|e| format!("error registering kafka consistency topic for sink: {}", e))?;
+
+        Some(KafkaSinkConsistencyConnector {
+            topic: consistency_topic,
+            schema_id: consistency_schema_id,
+        })
+    } else {
+        None
+    };
+
     Ok(SinkConnector::Kafka(KafkaSinkConnector {
         schema_id,
         topic,
         url: builder.broker_url,
-        consistency: None,
+        consistency,
         fuel: builder.fuel,
     }))
 }

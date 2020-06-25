@@ -665,6 +665,18 @@ fn kafka_sink_builder(
         bail!("replication factor for sink topics has to be greater than zero");
     }
 
+    let consistency_value_schema = match with_options.remove("consistency") {
+        None => None,
+        Some(Value::Boolean(b)) => {
+            if b == true {
+                Some(encoder.consistency_schema().canonical_form())
+            } else {
+                None
+            }
+        }
+        Some(_) => bail!("consistency must be a boolean"),
+    };
+
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_url,
         schema_registry_url,
@@ -673,7 +685,7 @@ fn kafka_sink_builder(
         topic_suffix,
         replication_factor,
         fuel: 10000,
-        emit_consistency: false,
+        consistency_value_schema,
     }))
 }
 
