@@ -777,6 +777,7 @@ where
                 self.stream_rows(session, row_desc, rx).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
+            ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
         }
     }
 

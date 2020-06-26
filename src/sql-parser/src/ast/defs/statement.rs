@@ -20,8 +20,7 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AlterTableOperation, ColumnDef, Connector, Envelope, Expr, Format, Ident, ObjectName, Query,
-    TableConstraint, Value,
+    ColumnDef, Connector, Envelope, Expr, Format, Ident, ObjectName, Query, TableConstraint, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -130,11 +129,12 @@ pub enum Statement {
         key_parts: Option<Vec<Expr>>,
         if_not_exists: bool,
     },
-    /// `ALTER TABLE`
-    AlterTable {
-        /// Table name
+    /// `ALTER <OBJECT> ... RENAME TO`
+    AlterObjectRename {
+        object_type: ObjectType,
+        if_exists: bool,
         name: ObjectName,
-        operation: AlterTableOperation,
+        to_item_name: Ident,
     },
     DropDatabase {
         name: Ident,
@@ -527,11 +527,21 @@ impl AstDisplay for Statement {
                     f.write_str(")");
                 }
             }
-            Statement::AlterTable { name, operation } => {
-                f.write_str("ALTER TABLE ");
-                f.write_node(&name);
+            Statement::AlterObjectRename {
+                object_type,
+                if_exists,
+                name,
+                to_item_name,
+            } => {
+                f.write_str("ALTER ");
+                f.write_node(object_type);
                 f.write_str(" ");
-                f.write_node(operation);
+                if *if_exists {
+                    f.write_str("IF EXISTS ");
+                }
+                f.write_node(&name);
+                f.write_str(" RENAME TO ");
+                f.write_node(to_item_name);
             }
             Statement::DropDatabase { name, if_exists } => {
                 f.write_str("DROP DATABASE ");
