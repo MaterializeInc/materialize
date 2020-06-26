@@ -966,7 +966,7 @@ where
         let frontier = match self.determine_frontier(as_of, sink.from) {
             Ok(frontier) => frontier,
             Err(e) => {
-                tx.send(Err(e.into()), session);
+                tx.send(Err(e), session);
                 return;
             }
         };

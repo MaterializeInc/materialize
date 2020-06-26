@@ -16,7 +16,7 @@ use rdkafka::config::ClientConfig;
 
 use dataflow_types::{
     AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, SinkConnector, SinkConnectorBuilder,
+    KafkaSinkConnectorBuilder, SinkConnector, SinkConnectorBuilder, Timestamp,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -25,7 +25,7 @@ use timely::progress::Antichain;
 pub async fn build(
     builder: SinkConnectorBuilder,
     with_snapshot: bool,
-    frontier: Antichain<u64>,
+    frontier: Antichain<Timestamp>,
     id: GlobalId,
 ) -> Result<SinkConnector, failure::Error> {
     match builder {
@@ -37,7 +37,7 @@ pub async fn build(
 async fn build_kafka(
     builder: KafkaSinkConnectorBuilder,
     with_snapshot: bool,
-    frontier: Antichain<u64>,
+    frontier: Antichain<Timestamp>,
     id: GlobalId,
 ) -> Result<SinkConnector, failure::Error> {
     let topic = format!("{}-{}-{}", builder.topic_prefix, id, builder.topic_suffix);
@@ -93,7 +93,7 @@ async fn build_kafka(
 fn build_avro_ocf(
     builder: AvroOcfSinkConnectorBuilder,
     with_snapshot: bool,
-    frontier: Antichain<u64>,
+    frontier: Antichain<Timestamp>,
     id: GlobalId,
 ) -> Result<SinkConnector, failure::Error> {
     let mut name = match builder.path.file_stem() {

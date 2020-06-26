@@ -85,8 +85,34 @@ $ kafka-verify format=avro sink=materialize.public.snk6
 {"before": null, "after": {"c": true}}
 {"before": null, "after": {"c": true}}
 
-! CREATE SINK should_fail FROM v4
+# Test AS OF and WITH/WITHOUT SNAPSHOT.
+> CREATE MATERIALIZED SOURCE dynamic_src
+  FROM FILE '${testdrive.temp-dir}/test.csv' WITH (tail = true)
+  FORMAT CSV WITH HEADER
+
+# Ensure the data is read into the source before creating sinks from it
+# to correctly test WITH/WITHOUT SNAPSHOT.
+> SELECT * FROM dynamic_src
+jack jill 2
+goofus gallant 3
+
+> CREATE SINK snk7 FROM dynamic_src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk7'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  AS OF 123
-AS OF not yet supported
+  WITHOUT SNAPSHOT
+
+> CREATE SINK snk8 FROM dynamic_src
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk8'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH SNAPSHOT
+
+$ file-append path=test.csv
+extra,row
+
+$ kafka-verify format=avro sink=materialize.public.snk7
+{"before": null, "after": {"a": "extra", "b": "row", "mz_line_no": 4}}
+
+$ kafka-verify format=avro sink=materialize.public.snk8
+{"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
+{"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
+{"before": null, "after": {"a": "extra", "b": "row", "mz_line_no": 4}}
