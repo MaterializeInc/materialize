@@ -419,11 +419,6 @@ CREATE TABLE foo (bar int)
 CREATE TABLE foo (bar int)
 
 parse-statement roundtrip
-ALTER TABLE foo ADD CONSTRAINT bar PRIMARY KEY (baz)
-----
-ALTER TABLE foo ADD CONSTRAINT bar PRIMARY KEY (baz)
-
-parse-statement roundtrip
 SELECT * FROM fn(1, 2) AS foo, schema.bar AS bar WITH (nolock)
 ----
 SELECT * FROM fn(1, 2) AS foo, schema.bar AS bar WITH (nolock)

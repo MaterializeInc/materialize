@@ -76,15 +76,6 @@ CREATE TABLE t ()
 CreateTable { name: ObjectName([Ident("t")]), columns: [], constraints: [], with_options: [], if_not_exists: false }
 
 parse-statement
-ALTER TABLE tab ADD
-----
-error:
-Parse error:
-ALTER TABLE tab ADD
-                   ^
-Expected a constraint in ALTER TABLE .. ADD, found: EOF
-
-parse-statement
 CREATE TABLE tab (foo int,
 ----
 error:
@@ -94,25 +85,11 @@ CREATE TABLE tab (foo int,
 Expected column name or constraint definition, found: EOF
 
 parse-statement
-ALTER TABLE tab ADD CONSTRAINT address_pkey PRIMARY KEY (address_id)
-----
-ALTER TABLE tab ADD CONSTRAINT address_pkey PRIMARY KEY (address_id)
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true }) }
-
-parse-statement
 CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 ----
 CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 =>
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true }], with_options: [], if_not_exists: false }
-
-parse-statement
-ALTER TABLE tab ADD CONSTRAINT uk_task UNIQUE (report_date, task_id)
-----
-ALTER TABLE tab ADD CONSTRAINT uk_task UNIQUE (report_date, task_id)
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false }) }
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE (report_date, task_id))
@@ -122,25 +99,11 @@ CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false }], with_options: [], if_not_exists: false }
 
 parse-statement
-ALTER TABLE tab ADD CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id)
-----
-ALTER TABLE tab ADD CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id)
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: ObjectName([Ident("public"), Ident("address")]), referred_columns: [Ident("address_id")] }) }
-
-parse-statement
 CREATE TABLE foo (id int, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 ----
 CREATE TABLE foo (id int, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 =>
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: ObjectName([Ident("public"), Ident("address")]), referred_columns: [Ident("address_id")] }], with_options: [], if_not_exists: false }
-
-parse-statement
-ALTER TABLE tab ADD CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> '')
-----
-ALTER TABLE tab ADD CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> '')
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Check { name: Some(Ident("ck")), expr: BinaryOp { left: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), op: NotEq, right: Value(String("")) } }) }
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
@@ -150,25 +113,11 @@ CREATE TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: BinaryOp { left: Function(Function { name: ObjectName([Ident("rtrim")]), args: Args([Function(Function { name: ObjectName([Ident("ltrim")]), args: Args([Identifier([Ident("ref_code")])]), filter: None, over: None, distinct: false })]), filter: None, over: None, distinct: false }), op: NotEq, right: Value(String("")) } }], with_options: [], if_not_exists: false }
 
 parse-statement
-ALTER TABLE tab ADD PRIMARY KEY (foo, bar)
-----
-ALTER TABLE tab ADD PRIMARY KEY (foo, bar)
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true }) }
-
-parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
 ----
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
 =>
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true }], with_options: [], if_not_exists: false }
-
-parse-statement
-ALTER TABLE tab ADD UNIQUE (id)
-----
-ALTER TABLE tab ADD UNIQUE (id)
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Unique { name: None, columns: [Ident("id")], is_primary: false }) }
 
 parse-statement
 CREATE TABLE foo (id int, UNIQUE (id))
@@ -178,25 +127,11 @@ CREATE TABLE foo (id int, UNIQUE (id))
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false }], with_options: [], if_not_exists: false }
 
 parse-statement
-ALTER TABLE tab ADD FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar)
-----
-ALTER TABLE tab ADD FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar)
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: ObjectName([Ident("anothertable")]), referred_columns: [Ident("foo"), Ident("bar")] }) }
-
-parse-statement
 CREATE TABLE foo (id int, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 ----
 CREATE TABLE foo (id int, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 =>
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: ObjectName([Ident("anothertable")]), referred_columns: [Ident("foo"), Ident("bar")] }], with_options: [], if_not_exists: false }
-
-parse-statement
-ALTER TABLE tab ADD CHECK (end_date > start_date OR end_date IS NULL)
-----
-ALTER TABLE tab ADD CHECK (end_date > start_date OR end_date IS NULL)
-=>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Check { name: None, expr: BinaryOp { left: BinaryOp { left: Identifier([Ident("end_date")]), op: Gt, right: Identifier([Ident("start_date")]) }, op: Or, right: IsNull { expr: Identifier([Ident("end_date")]), negated: false } } }) }
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
