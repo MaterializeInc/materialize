@@ -184,3 +184,8 @@ Source_or_view                Key_name                                   Column_
 ---------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view  materialize.public.data_view_primary_idx   <null>       "b - a"     false             1
 materialize.public.data_view  materialize.public.data_view_primary_idx   a            <null>      false             2
+
+> SHOW CREATE INDEX materialize.public.data_view_primary_idx
+Index                                    Create Index
+--------------------------------------------------------------------------------------------------------------------------------------
+materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"

@@ -214,6 +214,10 @@ pub enum Statement {
     ShowCreateSink {
         sink_name: ObjectName,
     },
+    /// `SHOW CREATE INDEX <index>`
+    ShowCreateIndex {
+        index_name: ObjectName,
+    },
     /// `{ BEGIN [ TRANSACTION | WORK ] | START TRANSACTION } ...`
     StartTransaction {
         modes: Vec<TransactionMode>,
@@ -651,6 +655,10 @@ impl AstDisplay for Statement {
             Statement::ShowCreateSink { sink_name } => {
                 f.write_str("SHOW CREATE SINK ");
                 f.write_node(&sink_name);
+            }
+            Statement::ShowCreateIndex { index_name } => {
+                f.write_str("SHOW CREATE INDEX ");
+                f.write_node(&index_name);
             }
             Statement::StartTransaction { modes } => {
                 f.write_str("START TRANSACTION");

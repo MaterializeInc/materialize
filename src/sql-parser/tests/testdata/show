@@ -180,6 +180,13 @@ SHOW CREATE SINK foo
 ShowCreateSink { sink_name: ObjectName([Ident("foo")]) }
 
 parse-statement
+SHOW CREATE INDEX foo
+----
+SHOW CREATE INDEX foo
+=>
+ShowCreateIndex { index_name: ObjectName([Ident("foo")]) }
+
+parse-statement
 SHOW COLUMNS FROM mytable
 ----
 SHOW COLUMNS FROM mytable

@@ -2516,6 +2516,10 @@ impl Parser {
             Ok(Statement::ShowCreateSink {
                 sink_name: self.parse_object_name()?,
             })
+        } else if self.parse_keywords(vec!["CREATE", "INDEX"]) {
+            Ok(Statement::ShowCreateIndex {
+                index_name: self.parse_object_name()?,
+            })
         } else {
             Ok(Statement::ShowVariable {
                 variable: self.parse_identifier()?,
