@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::iter::Iterator;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedPro
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::FrontieredInputHandle;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::frontier::MutableAntichain;
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
@@ -151,7 +153,24 @@ impl SinkConsistencyInfo {
             self.timestamp_counts.insert(time, count as usize);
         }
     }
+
+    pub fn get_complete_timestamps(
+        &mut self,
+        frontier: &MutableAntichain<Timestamp>,
+    ) -> Vec<(Timestamp, usize)> {
+        let closed_timestamps = self
+            .timestamp_counts
+            .iter()
+            .filter(|(k, _)| !frontier.less_equal(k))
+            .map(|(&k, &v)| (k, v))
+            .collect();
+
+        self.timestamp_counts.retain(|k, _| frontier.less_equal(k));
+
+        closed_timestamps
+    }
 }
+
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
 pub fn kafka<G>(
     stream: &Stream<G, (Row, Timestamp, Diff)>,
@@ -265,6 +284,16 @@ where
                         }
                     }
                 });
+
+                if let Some(consistency) = &mut consistency {
+                    // Find the timestamps that are now complete (meaning all
+                    // timestamps t !<= input_frontier. For each consistency
+                    // send a pair of BEGIN / END messages in the consistency topic
+                    consistency
+                        .get_complete_timestamps(input.frontier())
+                        .iter()
+                        .for_each(|(k, v)| println!("timestamp {} produced {} messages", k, v));
+                }
 
                 // Send a bounded number of records to Kafka from the queue. This
                 // loop has explicitly been designed so that each iteration sends
