@@ -13,7 +13,7 @@ use std::pin::Pin;
 use derivative::Derivative;
 
 use dataflow_types::{PeekResponse, Update};
-use sql::ast::Statement;
+use sql::ast::{ObjectType, Statement};
 
 use crate::session::Session;
 
@@ -77,22 +77,38 @@ pub enum StartupMessage {
 pub enum ExecuteResponse {
     /// The active transaction was rolled back.
     AbortedTransaction,
+    // The requested object was altered.
+    AlteredObject(ObjectType),
     /// The active transaction was committed.
     CommittedTransaction,
     /// The requested database was created.
-    CreatedDatabase { existed: bool },
+    CreatedDatabase {
+        existed: bool,
+    },
     /// The requested schema was created.
-    CreatedSchema { existed: bool },
+    CreatedSchema {
+        existed: bool,
+    },
     /// The requested index was created.
-    CreatedIndex { existed: bool },
+    CreatedIndex {
+        existed: bool,
+    },
     /// The requested sink was created.
-    CreatedSink { existed: bool },
+    CreatedSink {
+        existed: bool,
+    },
     /// The requested source was created.
-    CreatedSource { existed: bool },
+    CreatedSource {
+        existed: bool,
+    },
     /// The requested table was created.
-    CreatedTable { existed: bool },
+    CreatedTable {
+        existed: bool,
+    },
     /// The requested view was created.
-    CreatedView { existed: bool },
+    CreatedView {
+        existed: bool,
+    },
     /// The specified number of rows were deleted from the requested table.
     Deleted(usize),
     /// The requested database was dropped.
@@ -116,7 +132,9 @@ pub enum ExecuteResponse {
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.
-    SetVariable { name: String },
+    SetVariable {
+        name: String,
+    },
     /// A new transaction was started.
     StartedTransaction,
     /// Updates to the requested source or view will be streamed to the

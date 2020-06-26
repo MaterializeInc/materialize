@@ -51,7 +51,7 @@ use sql::ast::{ExplainOptions, ObjectType, Statement};
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, Plan, PlanContext};
-use sql_parser::ast::ExplainStage;
+use sql_parser::ast::{display::AstDisplay, ExplainStage};
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
@@ -794,6 +794,15 @@ where
                 self.sequence_show_views(ids, full, show_queryable, limit_materialized),
                 session,
             ),
+
+            Plan::AlterItemRename {
+                id,
+                to_name,
+                object_type,
+            } => tx.send(
+                self.sequence_alter_item_rename(id, to_name, object_type),
+                session,
+            ),
         }
     }
 
@@ -1519,6 +1528,23 @@ where
             .collect::<Vec<_>>();
         rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
         Ok(send_immediate_rows(rows))
+    }
+
+    fn sequence_alter_item_rename(
+        &mut self,
+        id: Option<GlobalId>,
+        to_name: String,
+        object_type: ObjectType,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let id = match id {
+            Some(id) => id,
+            None => return Ok(ExecuteResponse::AlteredObject(object_type)),
+        };
+        let op = catalog::Op::RenameItem { id, to_name };
+        match self.catalog_transact(vec![op]) {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(object_type)),
+            Err(err) => Err(err),
+        }
     }
 
     fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), failure::Error> {
@@ -2469,7 +2495,7 @@ fn index_sql(
         ),
         if_not_exists: false,
     }
-    .to_string()
+    .to_ast_string_stable()
 }
 
 fn open_catalog(

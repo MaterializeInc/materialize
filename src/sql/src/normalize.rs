@@ -16,8 +16,8 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement, TableFactor,
-    Value,
+    Expr, Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement,
+    TableFactor, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -108,6 +108,20 @@ pub fn create_statement(
     }
 
     impl<'a, 'ast> VisitMut<'ast> for QueryNormalizer<'a> {
+        fn visit_expr_mut(&mut self, e: &'ast mut Expr) {
+            match e {
+                // Needs to be resolved to qualified name because of `ALTER
+                // <foo> RENAME...`.
+                Expr::QualifiedWildcard(i) => {
+                    let o = ObjectName(i.clone());
+                    match self.scx.resolve_item(o) {
+                        Ok(full_name) => *i = unresolve(full_name).0,
+                        Err(e) => self.err = Some(e),
+                    };
+                }
+                _ => visit_mut::visit_expr_mut(self, e),
+            }
+        }
         fn visit_function_mut(&mut self, func: &'ast mut Function) {
             // Don't visit the function name, because function names are not
             // (yet) object names we can resolve.

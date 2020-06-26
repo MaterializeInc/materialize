@@ -26,6 +26,7 @@ use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
 use sql::names::{DatabaseSpecifier, FullName, PartialName};
 use sql::plan::{Params, Plan, PlanContext};
+use sql_parser::ast::display::AstDisplay;
 use transform::Optimizer;
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -212,6 +213,44 @@ impl CatalogItem {
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
         self.conn_id().is_some()
+    }
+
+    /// Returns a clone of `self` with all instances of `from` renamed to `to`
+    /// or errors if request is ambiguous.
+    pub fn rename_in_create_sql(
+        &self,
+        from: &FullName,
+        to: &FullName,
+    ) -> Result<CatalogItem, String> {
+        let do_rewrite = |create_sql: String| -> Result<String, String> {
+            let mut create_sql_stmt = sql::parse::parse(create_sql).unwrap().into_element();
+            // Determination of what constitutes an ambiguous request is done here.
+            crate::transform_ast::rename_in_create_stmt(&mut create_sql_stmt, from, to)?;
+            Ok(create_sql_stmt.to_ast_string_stable())
+        };
+
+        match self {
+            CatalogItem::Index(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Index(i))
+            }
+            CatalogItem::Sink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Sink(i))
+            }
+            CatalogItem::Source(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Source(i))
+            }
+            CatalogItem::View(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::View(i))
+            }
+        }
     }
 }
 
@@ -732,6 +771,11 @@ impl Catalog {
                 schema_name: String,
             },
             DropItem(GlobalId),
+            UpdateItem {
+                id: GlobalId,
+                name: FullName,
+                item: CatalogItem,
+            },
         }
 
         let temporary_ids = self.temporary_ids(&ops)?;
@@ -739,11 +783,11 @@ impl Catalog {
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
         for op in ops {
-            actions.push(match op {
-                Op::CreateDatabase { name } => Action::CreateDatabase {
+            let mut ops = match op {
+                Op::CreateDatabase { name } => vec![Action::CreateDatabase {
                     id: tx.insert_database(&name)?,
                     name,
-                },
+                }],
                 Op::CreateSchema {
                     database_name,
                     schema_name,
@@ -757,11 +801,11 @@ impl Catalog {
                             return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
-                    Action::CreateSchema {
+                    vec![Action::CreateSchema {
                         id: tx.insert_schema(database_id, &schema_name)?,
                         database_name,
                         schema_name,
-                    }
+                    }]
                 }
                 Op::CreateItem { id, name, item } => {
                     if item.is_temporary() {
@@ -792,11 +836,11 @@ impl Catalog {
                         tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
                     }
 
-                    Action::CreateItem { id, name, item }
+                    vec![Action::CreateItem { id, name, item }]
                 }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
-                    Action::DropDatabase { name }
+                    vec![Action::DropDatabase { name }]
                 }
                 Op::DropSchema {
                     database_name,
@@ -809,18 +853,69 @@ impl Catalog {
                         }
                     };
                     tx.remove_schema(database_id, &schema_name)?;
-                    Action::DropSchema {
+                    vec![Action::DropSchema {
                         database_name,
                         schema_name,
-                    }
+                    }]
                 }
                 Op::DropItem(id) => {
                     if !self.get_by_id(&id).item().is_temporary() {
                         tx.remove_item(id)?;
                     }
-                    Action::DropItem(id)
+                    vec![Action::DropItem(id)]
                 }
-            })
+                Op::RenameItem { id, to_name } => {
+                    let mut actions = Vec::new();
+
+                    let entry = self.by_id.get(&id).unwrap();
+                    let mut to_full_name = entry.name.clone();
+                    to_full_name.item = to_name;
+
+                    let item = match entry.item.rename_in_create_sql(&entry.name, &to_full_name) {
+                        Ok(i) => i,
+                        Err(e) => {
+                            return Err(Error::new(ErrorKind::AmbiguousRename(format!(
+                                "in {}, {}",
+                                entry.name, e
+                            ))))
+                        }
+                    };
+                    let serialized_item = self.serialize_item(&item);
+
+                    for id in entry.used_by() {
+                        let dependent_item = self.by_id.get(&id).unwrap();
+                        let updated_item = match dependent_item
+                            .item
+                            .rename_in_create_sql(&entry.name, &to_full_name)
+                        {
+                            Ok(i) => i,
+                            Err(e) => {
+                                return Err(Error::new(ErrorKind::AmbiguousRename(format!(
+                                    "in {}, which uses {}, {}",
+                                    dependent_item.name, entry.name, e
+                                ))))
+                            }
+                        };
+
+                        let serialized_item = self.serialize_item(&updated_item);
+
+                        tx.update_item(id.clone(), &dependent_item.name.item, &serialized_item)?;
+                        actions.push(Action::UpdateItem {
+                            id: id.clone(),
+                            name: dependent_item.name.clone(),
+                            item: updated_item,
+                        });
+                    }
+                    tx.update_item(id.clone(), &to_full_name.item, &serialized_item)?;
+                    actions.push(Action::UpdateItem {
+                        id,
+                        name: to_full_name,
+                        item,
+                    });
+                    actions
+                }
+            };
+            actions.append(&mut ops);
         }
         tx.commit()?;
         drop(storage); // release immutable borrow on `self` so we can borrow mutably below
@@ -916,6 +1011,22 @@ impl Catalog {
                         indexes.remove(i);
                     }
                     OpStatus::DroppedItem(metadata)
+                }
+
+                Action::UpdateItem { id, name, item } => {
+                    let mut entry = self.by_id.remove(&id).unwrap();
+                    let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+                    let schema_items = &mut self
+                        .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
+                        .expect("catalog out of sync")
+                        .items;
+                    schema_items.remove(&entry.name.item);
+                    entry.name = name;
+                    entry.item = item;
+                    schema_items.insert(entry.name.item.clone(), id);
+                    self.by_id.insert(id.clone(), entry);
+
+                    OpStatus::UpdatedItem
                 }
             })
             .collect())
@@ -1053,6 +1164,10 @@ pub enum Op {
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
     /// may be violated.
     DropItem(GlobalId),
+    RenameItem {
+        id: GlobalId,
+        to_name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1063,6 +1178,7 @@ pub enum OpStatus {
     DroppedDatabase,
     DroppedSchema,
     DroppedItem(CatalogEntry),
+    UpdatedItem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

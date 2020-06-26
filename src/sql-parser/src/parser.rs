@@ -1842,29 +1842,33 @@ impl Parser {
     }
 
     fn parse_alter(&mut self) -> Result<Statement, ParserError> {
-        self.expect_keyword("TABLE")?;
-        let _ = self.parse_keyword("ONLY");
-        let table_name = self.parse_object_name()?;
-        let operation = if self.parse_keyword("ADD") {
-            if let Some(constraint) = self.parse_optional_table_constraint()? {
-                AlterTableOperation::AddConstraint(constraint)
-            } else {
-                return self.expected(
-                    self.peek_range(),
-                    "a constraint in ALTER TABLE .. ADD",
-                    self.peek_token(),
-                );
-            }
-        } else {
-            return self.expected(
-                self.peek_range(),
-                "ADD after ALTER TABLE",
-                self.peek_token(),
-            );
-        };
-        Ok(Statement::AlterTable {
-            name: table_name,
-            operation,
+        let object_type =
+            match self.expect_one_of_keywords(&["INDEX", "SCHEMA", "SINK", "SOURCE", "VIEW"])? {
+                "INDEX" => ObjectType::Index,
+                "SCHEMA" => {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_range(),
+                        "ALTER SCHEMA not yet supported".to_string()
+                    )
+                }
+                "SINK" => ObjectType::Sink,
+                "SOURCE" => ObjectType::Source,
+                "VIEW" => ObjectType::View,
+                _ => unreachable!(),
+            };
+
+        let if_exists = self.parse_if_exists()?;
+        let name = self.parse_object_name()?;
+        // `RENAME` is the only `ALTER` clause we currently support.
+        self.expect_keywords(&["RENAME", "TO"])?;
+        let to_item_name = self.parse_identifier()?;
+
+        Ok(Statement::AlterObjectRename {
+            object_type,
+            if_exists,
+            name,
+            to_item_name,
         })
     }
 

@@ -34,6 +34,7 @@ pub(crate) enum ErrorKind {
     InvalidTemporarySchema,
     UnsatisfiableLoggingDependency { depender_name: String },
     Storage(rusqlite::Error),
+    AmbiguousRename(String),
 }
 
 impl Error {
@@ -67,7 +68,8 @@ impl std::error::Error for Error {
             | ErrorKind::SchemaNotEmpty(_)
             | ErrorKind::InvalidTemporaryDependency(_)
             | ErrorKind::InvalidTemporarySchema
-            | ErrorKind::UnsatisfiableLoggingDependency { .. } => None,
+            | ErrorKind::UnsatisfiableLoggingDependency { .. }
+            | ErrorKind::AmbiguousRename(_) => None,
             ErrorKind::Storage(e) => Some(e),
         }
     }
@@ -109,6 +111,7 @@ impl fmt::Display for Error {
                 depender_name
             ),
             ErrorKind::Storage(e) => write!(f, "sqlite error: {}", e),
+            ErrorKind::AmbiguousRename(e) => write!(f, "renaming conflict: {}", e),
         }
     }
 }

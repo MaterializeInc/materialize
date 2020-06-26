@@ -25,6 +25,7 @@ mod command;
 mod coord;
 mod sink_connector;
 mod timestamp;
+mod transform_ast;
 mod util;
 
 pub mod session;
