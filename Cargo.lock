@@ -3007,9 +3007,9 @@ dependencies = [
 
 [[package]]
 name = "sasl2-sys"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da5e12ca9e939ce187fc0fd9b682256e2b722728afc2da436a8574ef5b7859ec"
+checksum = "4362c3cf63a4361e092127c910516238e735a0c260632480e721e1bc8951ed7d"
 dependencies = [
  "cc",
  "duct",
