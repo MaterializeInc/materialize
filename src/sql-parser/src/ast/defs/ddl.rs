@@ -354,7 +354,14 @@ impl AstDisplay for ColumnDef {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.name);
         f.write_str(" ");
-        f.write_node(&self.data_type);
+        let mut list_depth = 0;
+        let mut dt = &self.data_type;
+        while let DataType::List(t) = dt {
+            dt = t;
+            list_depth += 1;
+        }
+        f.write_node(dt);
+        f.write_str(" list".repeat(list_depth));
         for option in &self.options {
             f.write_str(" ");
             f.write_node(option);

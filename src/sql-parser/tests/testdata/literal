@@ -222,3 +222,25 @@ parse-scalar
 INTERVAL '01:01:01.111111111' SECOND (5)
 ----
 Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Year, precision_low: Second, fsec_max_precision: Some(5) }))
+
+# Lists`
+
+parse-scalar
+LIST[1, 2]
+----
+List([Value(Number("1")), Value(Number("2"))])
+
+parse-scalar
+LIST[[1, 2], [3]]
+----
+List([List([Value(Number("1")), Value(Number("2"))]), List([Value(Number("3"))])])
+
+parse-scalar
+LIST[[1, 2], LIST[3]]
+----
+List([List([Value(Number("1")), Value(Number("2"))]), List([Value(Number("3"))])])
+
+parse-scalar
+LIST[[[[1], [2]]], [[[3]]]]
+----
+List([List([List([List([Value(Number("1"))]), List([Value(Number("2"))])])]), List([List([List([Value(Number("3"))])])])])

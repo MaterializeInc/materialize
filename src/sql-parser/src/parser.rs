@@ -282,7 +282,7 @@ impl Parser {
         // in fact is a valid expression that should parse as the column name
         // "date".
         maybe!(self.maybe_parse(|parser| {
-            match parser.parse_data_type()? {
+            match parser.parse_data_type(false)? {
                 DataType::Interval => parser.parse_literal_interval(),
                 data_type => Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
@@ -551,7 +551,7 @@ impl Parser {
         self.expect_token(&Token::LParen)?;
         let expr = self.parse_expr()?;
         self.expect_keyword("AS")?;
-        let data_type = self.parse_data_type()?;
+        let data_type = self.parse_data_type(true)?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Cast {
             expr: Box::new(expr),
@@ -893,7 +893,7 @@ impl Parser {
     fn parse_pg_cast(&mut self, expr: Expr) -> Result<Expr, ParserError> {
         Ok(Expr::Cast {
             expr: Box::new(expr),
-            data_type: self.parse_data_type()?,
+            data_type: self.parse_data_type(true)?,
         })
     }
 
@@ -1668,7 +1668,7 @@ impl Parser {
                 constraints.push(constraint);
             } else if let Some(Token::Word(column_name)) = self.peek_token() {
                 self.next_token();
-                let data_type = self.parse_data_type()?;
+                let data_type = self.parse_data_type(true)?;
                 let collation = if self.parse_keyword("COLLATE") {
                     Some(self.parse_object_name()?)
                 } else {
@@ -1941,7 +1941,12 @@ impl Parser {
             if let Some(Token::RBracket) = self.peek_token() {
                 break;
             }
-            exprs.push(self.parse_expr()?);
+            let expr = if let Some(Token::LBracket) = self.peek_token() {
+                self.parse_list()?
+            } else {
+                self.parse_expr()?
+            };
+            exprs.push(expr);
             if !self.consume_token(&Token::Comma) {
                 break;
             }
@@ -1981,8 +1986,13 @@ impl Parser {
         }
     }
 
-    /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
+    /// Parse a SQL datatype (in the context of a CREATE TABLE statement for
+    /// example)
+    ///
+    /// # Arguments
+    /// - `allow_vector` specifies whether the caller accepts vector data types,
+    ///   e.g. `INT LIST`, and in the future `INT ARRAY`.
+    fn parse_data_type(&mut self, allow_vector: bool) -> Result<DataType, ParserError> {
         let mut data_type = match self.next_token() {
             Some(Token::Word(k)) => match k.keyword.as_ref() {
                 "BOOL" | "BOOLEAN" => DataType::Boolean,
@@ -2045,13 +2055,16 @@ impl Parser {
             },
             other => self.expected(self.peek_prev_range(), "a data type name", other)?,
         };
-        loop {
-            match &self.peek_token() {
-                Some(Token::Word(k)) if &k.keyword == "LIST" => {
-                    self.next_token();
-                    data_type = DataType::List(Box::new(data_type));
+
+        if allow_vector {
+            loop {
+                match &self.peek_token() {
+                    Some(Token::Word(k)) if &k.keyword == "LIST" => {
+                        self.next_token();
+                        data_type = DataType::List(Box::new(data_type));
+                    }
+                    _ => break,
                 }
-                _ => break,
             }
         }
         Ok(data_type)
