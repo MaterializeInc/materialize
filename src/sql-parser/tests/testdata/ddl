@@ -55,6 +55,20 @@ CREATE TABLE foo (bar int)
 CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: Int, collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false }
 
 parse-statement
+CREATE TABLE foo (bar int list)
+----
+CREATE TABLE foo (bar int list)
+=>
+CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(Int), collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false }
+
+parse-statement
+CREATE TABLE foo (bar int list list)
+----
+CREATE TABLE foo (bar int list list)
+=>
+CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(List(Int)), collation: None, options: [] }], constraints: [], with_options: [], if_not_exists: false }
+
+parse-statement
 CREATE TABLE t ()
 ----
 CREATE TABLE t ()

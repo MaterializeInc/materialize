@@ -286,9 +286,8 @@ impl AstDisplay for DataType {
             DataType::Text => f.write_str("text"),
             DataType::Bytea => f.write_str("bytea"),
             DataType::List(ty) => {
-                f.write_str("list(");
                 f.write_node(&ty);
-                f.write_str(")")
+                f.write_str(" list");
             }
             DataType::Jsonb => f.write_str("jsonb"),
         }
