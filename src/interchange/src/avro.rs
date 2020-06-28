@@ -1003,6 +1003,35 @@ impl Encoder {
         buf
     }
 
+    pub fn encode_transaction_unchecked(
+        &self,
+        schema_id: i32,
+        id: &str,
+        status: &str,
+        message_count: Option<i64>,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.write_u8(0).expect("writing to vec cannot fail");
+        buf.write_i32::<NetworkEndian>(schema_id)
+            .expect("writing to vec cannot fail");
+
+        let transaction_id = Value::String(id.to_owned());
+        let status = Value::String(status.to_owned());
+        let event_count = match message_count {
+            None => Value::Union(0, Box::new(Value::Null)),
+            Some(count) => Value::Union(1, Box::new(Value::Long(count))),
+        };
+
+        let avro = Value::Record(vec![
+            ("id".into(), transaction_id),
+            ("status".into(), status),
+            ("event_count".into(), event_count),
+        ]);
+        debug_assert!(avro.validate(self.consistency_schema.top_node()));
+        avro::encode_unchecked(&avro, &self.consistency_schema, &mut buf);
+        buf
+    }
+
     /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
     /// See function implementation for Confluent-specific details.
     pub fn encode(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
@@ -1048,7 +1077,7 @@ impl Encoder {
             None => Value::Union(0, Box::new(Value::Null)),
             Some(transaction_id) => {
                 let id = Value::String(transaction_id.to_owned());
-                Value::Record(vec![("id".into(), id)])
+                Value::Union(1, Box::new(Value::Record(vec![("id".into(), id)])))
             }
         };
         Value::Record(vec![

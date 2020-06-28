@@ -131,6 +131,7 @@ impl ProducerContext for SinkProducerContext {
     }
 }
 
+#[derive(Debug)]
 pub struct SinkConsistencyInfo {
     topic: String,
     schema_id: i32,
@@ -292,7 +293,32 @@ where
                     consistency
                         .get_complete_timestamps(input.frontier())
                         .iter()
-                        .for_each(|(k, v)| println!("timestamp {} produced {} messages", k, v));
+                        .for_each(|(k, v)| {
+                            println!("timestamp {} produced {} messages", k, v);
+                            let transaction_id = k.to_string();
+                            let begin = encoder.encode_transaction_unchecked(
+                                consistency.schema_id,
+                                &transaction_id,
+                                "BEGIN".into(),
+                                None,
+                            );
+                            let end = encoder.encode_transaction_unchecked(
+                                consistency.schema_id,
+                                &transaction_id,
+                                "END".into(),
+                                Some(*v as i64),
+                            );
+                            let begin_record =
+                                BaseRecord::<&Vec<u8>, _>::to(&consistency.topic).payload(&begin);
+                            let end_record =
+                                BaseRecord::<&Vec<u8>, _>::to(&consistency.topic).payload(&end);
+                            producer
+                                .send(begin_record)
+                                .expect("TODO: handle error correctly");
+                            producer
+                                .send(end_record)
+                                .expect("TODO: handle error correctly");
+                        });
                 }
 
                 // Send a bounded number of records to Kafka from the queue. This
