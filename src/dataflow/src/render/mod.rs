@@ -390,7 +390,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
                             let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                            (
+                           (
                                 decode_avro_values(
                                     &source,
                                     &envelope,

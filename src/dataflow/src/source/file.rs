@@ -174,7 +174,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         timestamp_data_updates: TimestampDataUpdates,
         timestamp_metadata_channel: TimestampMetadataUpdates,
     ) -> Option<TimestampMetadataUpdates> {
-        if active {
+       if active {
             let prev = if let Consistency::BringYourOwn(_) = consistency {
                 timestamp_data_updates.borrow_mut().insert(
                     id.clone(),
@@ -270,7 +270,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                 Err(TryRecvError::Empty) => Ok(None),
                 //TODO(ncrooks): add mechanism to return SourceStatus::Done
                 Err(TryRecvError::Disconnected) => Ok(None),
-            }
+           }
         }
     }
 

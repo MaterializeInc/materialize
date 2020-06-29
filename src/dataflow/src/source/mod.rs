@@ -241,7 +241,7 @@ impl Length for Value {
     }
 }
 
-/// Each source must implement this trait. Sources will then get created as part of the
+// Each source must implement this trait. Sources will then get created as part of the
 /// [`create_source`] function.
 pub trait SourceInfo<Out> {
     /// Activates timestamping for a given source. The actions
@@ -863,14 +863,14 @@ where
                         }
                         Err(e) => {
                             output.session(&cap).give(Err(e.to_string()));
-                            consistency_info.downgrade_capability(
+                           consistency_info.downgrade_capability(
                                 &id,
                                 cap,
                                 &mut source_info,
                                 &timestamp_histories,
                             );
                             return SourceStatus::Done;
-                        }
+                       }
                     }
                 }
 
