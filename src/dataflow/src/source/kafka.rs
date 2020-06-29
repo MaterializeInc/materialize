@@ -1095,7 +1095,11 @@ fn downgrade_capability(
         if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
             match entries {
                 TimestampDataUpdate::RealTime(partition_count) => {
-                    dp_info.ensure_partition(cp_info, *partition_count)
+                    // This timestamp update informs us that the source now contains
+                    // partition_count partitions. Partition IDs are assigned contiguously
+                    // starting from zero, so seeing a `partition_count` of N means
+                    // that we should have partitions up to N-1.
+                    dp_info.ensure_partition(cp_info, *partition_count - 1)
                 }
                 _ => panic!("Unexpected timestamp message. Expected RT update."),
             }
