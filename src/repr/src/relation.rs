@@ -139,6 +139,11 @@ impl ColumnName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Returns a mutable reference to the string underlying this column name.
+    pub fn as_mut_str(&mut self) -> &mut String {
+        &mut self.0
+    }
 }
 
 impl fmt::Display for ColumnName {
