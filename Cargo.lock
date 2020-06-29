@@ -2521,27 +2521,25 @@ dependencies = [
 
 [[package]]
 name = "prometheus"
-version = "0.8.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#9a1ba74a7bc64db614a8526180ccdf0fa2c9931b"
+version = "0.9.0"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6ccb92ec25f2c126c4e06f27d5c3f29f2aa26ec9"
 dependencies = [
  "cfg-if",
  "fnv",
  "lazy_static",
  "libc",
+ "parking_lot",
  "procfs",
- "spin",
  "thiserror",
 ]
 
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#9a1ba74a7bc64db614a8526180ccdf0fa2c9931b"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6ccb92ec25f2c126c4e06f27d5c3f29f2aa26ec9"
 dependencies = [
- "lazy_static",
- "proc-macro2",
- "quote",
- "syn",
+ "proc-macro-hack",
+ "static-metric-proc-macros",
 ]
 
 [[package]]
@@ -3265,12 +3263,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spin"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
-
-[[package]]
 name = "sql"
 version = "0.1.0"
 dependencies = [
@@ -3365,6 +3357,18 @@ name = "standback"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e4b8c631c998468961a9ea159f064c5c8499b95b5e4a34b77849d45949d540"
+
+[[package]]
+name = "static-metric-proc-macros"
+version = "0.1.0"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6ccb92ec25f2c126c4e06f27d5c3f29f2aa26ec9"
+dependencies = [
+ "lazy_static",
+ "proc-macro-hack",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "stdweb"
