@@ -18,7 +18,7 @@ futures = "0.3"
 itertools = "0.9"
 lazy_static = "1.4.0"
 log = "0.4.8"
-openssl = { version = "0.10.29", features = ["vendored"] }
+openssl = { version = "0.10.30", features = ["vendored"] }
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
