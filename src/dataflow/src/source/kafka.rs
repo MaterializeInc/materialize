@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dataflow_types::{
-    Consistency, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
+    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
 use log::{error, info, log_enabled, warn};
@@ -30,7 +30,9 @@ use url::Url;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
-use crate::source::{ConsistencyInfo, PartitionMetrics, SourceInfo, SourceMessage};
+use crate::source::{
+    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+};
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceInfo {
@@ -55,15 +57,18 @@ pub struct KafkaSourceInfo {
     worker_count: i32,
 }
 
-impl SourceInfo for KafkaSourceInfo {
+impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
+        _active: bool,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: Arc<Mutex<SyncActivator>>,
         connector: ExternalSourceConnector,
-    ) -> Self {
+        _: &mut ConsistencyInfo,
+        _: DataEncoding,
+    ) -> KafkaSourceInfo {
         match connector {
             ExternalSourceConnector::Kafka(kc) => KafkaSourceInfo::new(
                 source_name,
@@ -76,7 +81,9 @@ impl SourceInfo for KafkaSourceInfo {
             _ => unreachable!(),
         }
     }
+}
 
+impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     fn activate_source_timestamping(
         id: &SourceInstanceId,
         consistency: &Consistency,
@@ -241,7 +248,7 @@ impl SourceInfo for KafkaSourceInfo {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Option<SourceMessage> {
+    ) -> Result<Option<SourceMessage<Vec<u8>>>, failure::Error> {
         let mut next_message = None;
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;
@@ -309,10 +316,10 @@ impl SourceInfo for KafkaSourceInfo {
             self.get_partition_consumers_count(),
             self.get_worker_partition_count()
         );
-        next_message
+        Ok(next_message)
     }
 
-    fn buffer_message(&mut self, message: SourceMessage) {
+    fn buffer_message(&mut self, message: SourceMessage<Vec<u8>>) {
         // Guaranteed to exist as we just read from this consumer
         let mut consumer = self.partition_consumers.back_mut().unwrap();
         assert_eq!(message.partition, PartitionId::Kafka(consumer.pid));
@@ -551,7 +558,7 @@ fn create_kafka_config(
     kafka_config
 }
 
-impl<'a> From<&BorrowedMessage<'a>> for SourceMessage {
+impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Vec<u8>> {
     fn from(msg: &BorrowedMessage<'a>) -> Self {
         let kafka_offset = KafkaOffset {
             offset: msg.offset(),
@@ -572,9 +579,8 @@ struct PartitionConsumer {
     /// the partition id with which this consumer is associated
     pid: i32,
     /// A buffer to store messages that cannot be timestamped yet
-    buffer: Option<SourceMessage>,
-    /// The underlying Kafka consumer. This consumer is assigned to read from one partition
-    /// exclusively
+    buffer: Option<SourceMessage<Vec<u8>>>,
+    /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
 }
 
@@ -590,7 +596,7 @@ impl PartitionConsumer {
 
     /// Returns the next message to process for this partition (if any).
     /// Either reads from the buffer or polls from the consumer
-    fn get_next_message(&mut self) -> Option<SourceMessage> {
+    fn get_next_message(&mut self) -> Option<SourceMessage<Vec<u8>>> {
         if let Some(message) = self.buffer.take() {
             assert_eq!(message.partition, PartitionId::Kafka(self.pid));
             Some(message)

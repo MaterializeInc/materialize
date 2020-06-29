@@ -7,32 +7,371 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::server::{
+    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+};
+use crate::source::{
+    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+};
+use avro::{AvroRead, Schema, Skip};
+use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
+use expr::{PartitionId, SourceInstanceId};
+use failure::Error;
 use std::collections::HashMap;
-use std::convert::TryInto;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::path::PathBuf;
-use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use timely::scheduling::{Activator, SyncActivator};
 
+use avro::types::Value;
 use failure::ResultExt;
 use log::error;
 #[cfg(not(target_os = "macos"))]
 use notify::{RecursiveMode, Watcher};
-use timely::dataflow::operators::Capability;
-use timely::dataflow::Scope;
-use timely::scheduling::SyncActivator;
 
-use dataflow_types::{Consistency, MzOffset, SourceError, Timestamp};
-use expr::{PartitionId, SourceInstanceId};
+/// Contains all information necessary to ingest data from file sources (either
+/// regular sources, or Avro OCF sources)
+pub struct FileSourceInfo<Out> {
+    /// Source Name
+    name: String,
+    /// Unique source ID
+    id: SourceInstanceId,
+    /// Field is set if this operator is responsible for ingesting data
+    is_activated_reader: bool,
+    /// Receiver channel that ingests records
+    receiver_stream: Receiver<Result<Out, Error>>,
+    /// Buffer: store message that cannot yet be timestamped
+    buffer: Option<SourceMessage<Out>>,
+    /// Current File Offset. This corresponds to the offset of last processed message
+    /// (initially 0 if no records have been processed)
+    current_file_offset: FileOffset,
+}
 
-use super::SourceOutput;
-use crate::operator::StreamExt;
-use crate::server::{TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate};
-use crate::source::util::source;
-use crate::source::{SourceConfig, SourceStatus, SourceToken};
-use avro::{AvroRead, Skip};
+#[derive(Copy, Clone)]
+/// Represents an index into a file. Files are 1-indexed by Unix convention
+pub struct FileOffset {
+    pub offset: i64,
+}
+
+/// Convert from FileOffset to MzOffset (1-indexed)
+impl From<FileOffset> for MzOffset {
+    fn from(file_offset: FileOffset) -> Self {
+        MzOffset {
+            offset: file_offset.offset,
+        }
+    }
+}
+
+impl SourceConstructor<Value> for FileSourceInfo<Value> {
+    fn new(
+        name: String,
+        source_id: SourceInstanceId,
+        active: bool,
+        _: usize,
+        _: usize,
+        consumer_activator: Arc<Mutex<SyncActivator>>,
+        connector: ExternalSourceConnector,
+        consistency_info: &mut ConsistencyInfo,
+        encoding: DataEncoding,
+    ) -> FileSourceInfo<Value> {
+        let receiver = match connector {
+            ExternalSourceConnector::AvroOcf(oc) => {
+                let reader_schema = match &encoding {
+                    DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                    _ => unreachable!(
+                        "Internal error: \
+                                         Avro OCF schema should have already been resolved.\n\
+                                        Encoding is: {:?}",
+                        encoding
+                    ),
+                };
+                let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                let ctor = { move |file| avro::Reader::with_schema(&reader_schema, file) };
+                let tail = if oc.tail {
+                    FileReadStyle::TailFollowFd
+                } else {
+                    FileReadStyle::ReadOnce
+                };
+                let (tx, rx) = std::sync::mpsc::sync_channel(10000 as usize);
+                std::thread::spawn(move || {
+                    read_file_task(oc.path, tx, Some(consumer_activator), tail, ctor);
+                });
+                rx
+            }
+            _ => panic!("Only OCF sources are supported with Avro encoding of values."),
+        };
+
+        consistency_info.partition_metrics.insert(
+            PartitionId::File,
+            PartitionMetrics::new(&name, &source_id.to_string(), ""),
+        );
+        consistency_info.update_partition_metadata(PartitionId::File);
+
+        FileSourceInfo {
+            name,
+            id: source_id,
+            is_activated_reader: active,
+            receiver_stream: receiver,
+            buffer: None,
+            current_file_offset: FileOffset { offset: 0 },
+        }
+    }
+}
+
+impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
+    fn new(
+        name: String,
+        source_id: SourceInstanceId,
+        active: bool,
+        _: usize,
+        _: usize,
+        consumer_activator: Arc<Mutex<SyncActivator>>,
+        connector: ExternalSourceConnector,
+        consistency_info: &mut ConsistencyInfo,
+        _: DataEncoding,
+    ) -> FileSourceInfo<Vec<u8>> {
+        let receiver = match connector {
+            ExternalSourceConnector::File(fc) => {
+                let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
+                let (tx, rx) = std::sync::mpsc::sync_channel(10000);
+                let tail = if fc.tail {
+                    FileReadStyle::TailFollowFd
+                } else {
+                    FileReadStyle::ReadOnce
+                };
+                std::thread::spawn(move || {
+                    read_file_task(fc.path, tx, Some(consumer_activator), tail, ctor);
+                });
+                rx
+            }
+            _ => panic!(
+                "Only File sources are supported with File/OCF connectors and Vec<u8> encodings"
+            ),
+        };
+        consistency_info.partition_metrics.insert(
+            PartitionId::File,
+            PartitionMetrics::new(&name, &source_id.to_string(), ""),
+        );
+        consistency_info.update_partition_metadata(PartitionId::File);
+
+        FileSourceInfo {
+            name,
+            id: source_id,
+            is_activated_reader: active,
+            receiver_stream: receiver,
+            buffer: None,
+            current_file_offset: FileOffset { offset: 0 },
+        }
+    }
+}
+
+impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
+    fn activate_source_timestamping(
+        id: &SourceInstanceId,
+        consistency: &Consistency,
+        active: bool,
+        timestamp_data_updates: TimestampDataUpdates,
+        timestamp_metadata_channel: TimestampMetadataUpdates,
+    ) -> Option<TimestampMetadataUpdates> {
+        if active {
+            let prev = if let Consistency::BringYourOwn(_) = consistency {
+                timestamp_data_updates.borrow_mut().insert(
+                    id.clone(),
+                    TimestampDataUpdate::BringYourOwn(HashMap::new()),
+                )
+            } else {
+                timestamp_data_updates
+                    .borrow_mut()
+                    .insert(id.clone(), TimestampDataUpdate::RealTime(1))
+            };
+            // Check that this is the first time this source id is registered
+            assert!(prev.is_none());
+            timestamp_metadata_channel
+                .as_ref()
+                .borrow_mut()
+                .push(TimestampMetadataUpdate::StartTimestamping(*id));
+            Some(timestamp_metadata_channel)
+        } else {
+            None
+        }
+    }
+
+    fn can_close_timestamp(
+        &self,
+        consistency_info: &ConsistencyInfo,
+        pid: &PartitionId,
+        offset: MzOffset,
+    ) -> bool {
+        if !self.is_activated_reader {
+            true
+        } else {
+            // Guaranteed to exist if we receive a message from this partition
+            let last_offset = consistency_info
+                .partition_metadata
+                .get(&pid)
+                .unwrap()
+                .offset;
+            last_offset >= offset
+        }
+    }
+
+    fn get_worker_partition_count(&self) -> i32 {
+        1
+    }
+
+    fn has_partition(&self, _: PartitionId) -> bool {
+        self.is_activated_reader
+    }
+
+    fn ensure_has_partition(&mut self, consistency_info: &mut ConsistencyInfo, pid: PartitionId) {
+        if consistency_info.partition_metrics.len() == 0 {
+            consistency_info.partition_metrics.insert(
+                pid,
+                PartitionMetrics::new(&self.name, &self.id.to_string(), ""),
+            );
+        }
+    }
+
+    fn update_partition_count(
+        &mut self,
+        consistency_info: &mut ConsistencyInfo,
+        partition_count: i32,
+    ) {
+        if partition_count > 1 {
+            error!("Files cannot have multiple partitions");
+        }
+        self.ensure_has_partition(consistency_info, PartitionId::File);
+    }
+
+    fn get_next_message(
+        &mut self,
+        _consistency_info: &mut ConsistencyInfo,
+        _activator: &Activator,
+    ) -> Result<Option<SourceMessage<Out>>, failure::Error> {
+        if let Some(message) = self.buffer.take() {
+            Ok(Some(message))
+        } else {
+            match self.receiver_stream.try_recv() {
+                Ok(Ok(record)) => {
+                    self.current_file_offset.offset += 1;
+                    let message = SourceMessage {
+                        partition: PartitionId::File,
+                        offset: self.current_file_offset.into(),
+                        key: None,
+                        payload: Some(record),
+                    };
+                    Ok(Some(message))
+                }
+                Ok(Err(e)) => {
+                    error!("Failed to read file for {}. Error: {}.", self.id, e);
+                    Err(e)
+                }
+                Err(TryRecvError::Empty) => Ok(None),
+                //TODO(ncrooks): add mechanism to return SourceStatus::Done
+                Err(TryRecvError::Disconnected) => Ok(None),
+            }
+        }
+    }
+
+    fn buffer_message(&mut self, message: SourceMessage<Out>) {
+        self.buffer = Some(message);
+    }
+}
+
+/// Blocking logic to read from a file, intended for its own thread.
+pub fn read_file_task<Ctor, I, Out, Err>(
+    path: PathBuf,
+    tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
+    activator: Option<Arc<Mutex<SyncActivator>>>,
+    read_style: FileReadStyle,
+    iter_ctor: Ctor,
+) where
+    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
+    Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
+    Err: Into<failure::Error>,
+{
+    let file = match std::fs::File::open(&path).with_context(|e| {
+        format!(
+            "file source: unable to open file at path {}: {}",
+            path.to_string_lossy(),
+            e
+        )
+    }) {
+        Ok(file) => file,
+        Err(err) => {
+            let _ = tx.send(Err(err.into()));
+            return;
+        }
+    };
+
+    let iter = match read_style {
+        FileReadStyle::ReadOnce => iter_ctor(Box::new(file)),
+        FileReadStyle::TailFollowFd => {
+            // FSEvents doesn't raise events until you close the file, making it
+            // useless for tailing log files that are kept open by the daemon
+            // writing to them.
+            //
+            // Avoid this issue by just waking up and polling the file on macOS
+            // every 100ms. We don't want to use notify::PollWatcher, since that
+            // occasionally misses updates if the file is changed twice within
+            // one second (it uses an mtime granularity of 1s). Plus it's not
+            // actually more efficient; our call to poll_read will be as fast as
+            // the PollWatcher's call to stat, and it actually saves a syscall
+            // if the file has data available.
+            //
+            // https://github.com/notify-rs/notify/issues/240
+            #[cfg(target_os = "macos")]
+            let (file_events_stream, handle) = {
+                let (timer_tx, timer_rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    while let Ok(()) = timer_tx.send(()) {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                });
+                (timer_rx, ())
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let (file_events_stream, handle) = {
+                let (notice_tx, notice_rx) = std::sync::mpsc::channel();
+                let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
+                    Ok(w) => w,
+                    Err(err) => {
+                        error!("file source: failed to create notify watcher: {}", err);
+                        return;
+                    }
+                };
+                if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
+                    error!("file source: failed to add watch: {}", err);
+                    return;
+                }
+                (notice_rx, w)
+            };
+
+            let file = ForeverTailedFile {
+                rx: file_events_stream,
+                inner: file,
+                _h: handle,
+            };
+
+            iter_ctor(Box::new(file))
+        }
+    };
+
+    match iter.map_err(Into::into).with_context(|e| {
+        format!(
+            "Failed to obtain records from file at path {}: {}",
+            path.to_string_lossy(),
+            e
+        )
+    }) {
+        Ok(i) => send_records(i, tx, activator),
+        Err(e) => {
+            let _ = tx.send(Err(e.into()));
+        }
+    };
+}
 
 /// Strategies for streaming content from a file.
 #[derive(PartialEq, Eq)]
@@ -113,429 +452,5 @@ fn send_records<I, Out, Err>(
                 .activate()
                 .expect("activation failed");
         }
-    }
-}
-
-/// Blocking logic to read from a file, intended for its own thread.
-pub fn read_file_task<Ctor, I, Out, Err>(
-    path: PathBuf,
-    tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
-    activator: Option<Arc<Mutex<SyncActivator>>>,
-    read_style: FileReadStyle,
-    iter_ctor: Ctor,
-) where
-    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
-    Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
-    Err: Into<failure::Error>,
-{
-    let file = match std::fs::File::open(&path).with_context(|e| {
-        format!(
-            "file source: unable to open file at path {}: {}",
-            path.to_string_lossy(),
-            e
-        )
-    }) {
-        Ok(file) => file,
-        Err(err) => {
-            let _ = tx.send(Err(err.into()));
-            return;
-        }
-    };
-
-    let iter = match read_style {
-        FileReadStyle::ReadOnce => iter_ctor(Box::new(file)),
-        FileReadStyle::TailFollowFd => {
-            // FSEvents doesn't raise events until you close the file, making it
-            // useless for tailing log files that are kept open by the daemon
-            // writing to them.
-            //
-            // Avoid this issue by just waking up and polling the file on macOS
-            // every 100ms. We don't want to use notify::PollWatcher, since that
-            // occasionally misses updates if the file is changed twice within
-            // one second (it uses an mtime granularity of 1s). Plus it's not
-            // actually more efficient; our call to poll_read will be as fast as
-            // the PollWatcher's call to stat, and it actually saves a syscall
-            // if the file has data available.
-            //
-            // https://github.com/notify-rs/notify/issues/240
-            #[cfg(target_os = "macos")]
-            let (file_events_stream, handle) = {
-                let (timer_tx, timer_rx) = std::sync::mpsc::channel();
-                thread::spawn(move || {
-                    while let Ok(()) = timer_tx.send(()) {
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                });
-                (timer_rx, ())
-            };
-
-            #[cfg(not(target_os = "macos"))]
-            let (file_events_stream, handle) = {
-                let (notice_tx, notice_rx) = std::sync::mpsc::channel();
-                let mut w = match notify::RecommendedWatcher::new_raw(notice_tx) {
-                    Ok(w) => w,
-                    Err(err) => {
-                        error!("file source: failed to create notify watcher: {}", err);
-                        return;
-                    }
-                };
-                if let Err(err) = w.watch(&path, RecursiveMode::NonRecursive) {
-                    error!("file source: failed to add watch: {}", err);
-                    return;
-                }
-                (notice_rx, w)
-            };
-
-            let file = ForeverTailedFile {
-                rx: file_events_stream,
-                inner: file,
-                _h: handle,
-            };
-
-            iter_ctor(Box::new(file))
-        }
-    };
-
-    match iter.map_err(Into::into).with_context(|e| {
-        format!(
-            "Failed to obtain records from file at path {}: {}",
-            path.to_string_lossy(),
-            e
-        )
-    }) {
-        Ok(i) => send_records(i, tx, activator),
-        Err(e) => {
-            let _ = tx.send(Err(e.into()));
-        }
-    };
-}
-
-/// Timestamp history map is of format [pid1: (ts1, offset1), (ts2, offset2), pid2: (ts1, offset)...].
-/// For a given partition pid, messages in interval [0,offset1] get assigned ts1, all messages in interval [offset1+1,offset2]
-/// get assigned ts2, etc.
-/// When receive message with offset1, it is safe to downgrade the capability to the next
-/// timestamp, which is either
-/// 1) the timestamp associated with the next highest offset if it exists
-/// 2) max(timestamp, offset1) + 1. The timestamp_history map can contain multiple timestamps for
-/// the same offset. We pick the greatest one + 1
-/// (the next message we generate will necessarily have timestamp timestamp + 1)
-///
-/// This method assumes that timestamps are inserted in increasing order in the hashmap
-/// (even across partitions). This means that once we see a timestamp with ts x, no entry with
-/// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
-/// partitions
-/// TODO(ncrooks): Refactor control plane information as in kafka.rs
-#[allow(clippy::too_many_arguments)]
-fn downgrade_capability(
-    id: &SourceInstanceId,
-    cap: &mut Capability<Timestamp>,
-    last_processed_offset: &mut MzOffset,
-    last_closed_ts: &mut u64,
-    time_since_downgrade: &mut Instant,
-    downgrade_capability_frequency: u64,
-    consistency: &Consistency,
-    timestamp_histories: &TimestampDataUpdates,
-) {
-    let mut changed = false;
-
-    if let Consistency::BringYourOwn(_) = consistency {
-        match timestamp_histories.borrow_mut().get_mut(id) {
-            None => {}
-            Some(TimestampDataUpdate::BringYourOwn(entries)) => {
-                // Files do not have partitions. There should never be more than
-                // one entry here
-                for entries in entries.values_mut() {
-                    // Check whether timestamps can be closed on this partition
-                    while let Some((_, ts, offset)) = entries.front() {
-                        if *last_processed_offset == *offset {
-                            // We have now seen all messages corresponding to this timestamp.  We
-                            // can close the timestamp and remove the associated metadata.
-                            *last_closed_ts = *ts;
-                            entries.pop_front();
-                            changed = true;
-                        } else {
-                            // Offset isn't at a timestamp boundary, we take no action
-                            break;
-                        }
-                    }
-                }
-            }
-            _ => panic!("Unexpected message type. Expected BYO update."),
-        }
-        // Downgrade capability to new minimum open timestamp (which corresponds to last_closed_ts + 1).
-        if changed && (*last_closed_ts > 0) {
-            cap.downgrade(&(*last_closed_ts + 1));
-        }
-    } else {
-        // This a RT source. It is always possible to close the timestamp and downgrade the
-        // capability
-        if time_since_downgrade.elapsed().as_millis()
-            > downgrade_capability_frequency.try_into().unwrap()
-        {
-            let ts = generate_next_timestamp(last_closed_ts);
-            if let Some(ts) = ts {
-                cap.downgrade(&(&ts + 1));
-            }
-            *time_since_downgrade = Instant::now();
-        }
-    }
-}
-
-/// Generates a timestamp that is guaranteed to be monotonically increasing.
-/// This may require multiple calls to the underlying now() system method, which is not
-/// guaranteed to increase monotonically
-fn generate_next_timestamp(last_closed_ts: &mut u64) -> Option<u64> {
-    let mut new_ts = 0;
-    while new_ts <= *last_closed_ts {
-        let start = SystemTime::now();
-        new_ts = start
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_millis() as u64;
-        if new_ts < *last_closed_ts && *last_closed_ts - new_ts > 1000 {
-            // If someone resets their system clock to be too far in the past, this could cause
-            // Materialize to block and not give control to other operators. We thus give up
-            // on timestamping this message
-            error!("The new timestamp is more than 1 second behind the last assigned timestamp. To\
-                avoid unnecessary blocking, Materialize will not attempt to downgrade the capability. Please\
-                consider resetting your system time.");
-            return None;
-        }
-    }
-    assert!(new_ts > *last_closed_ts);
-    *last_closed_ts = new_ts;
-    Some(*last_closed_ts)
-}
-
-/// For a given offset, returns an option type returning the matching timestamp or None
-/// if no timestamp can be assigned. The timestamp history contains a sequence of
-/// (timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
-/// for which offset>=x.
-/// TODO(ncrooks): refactor to take ControlPlaneInfo and DataPlaneInfo as in kafka.rs
-fn find_matching_timestamp(
-    id: &SourceInstanceId,
-    offset: MzOffset,
-    source_type: &Consistency,
-    last_closed_ts: u64,
-    timestamp_histories: &TimestampDataUpdates,
-) -> Option<Timestamp> {
-    if let Consistency::RealTime = source_type {
-        // Simply assign to this message the next timestamp that is not closed
-        Some(last_closed_ts + 1)
-    } else {
-        match timestamp_histories.borrow().get(id) {
-            None => None,
-            Some(TimestampDataUpdate::BringYourOwn(entries)) => {
-                match entries.get(&PartitionId::File) {
-                    Some(entries) => {
-                        for (_, ts, max_offset) in entries {
-                            if offset <= *max_offset {
-                                return Some(ts.clone());
-                            }
-                        }
-                        None
-                    }
-                    None => None,
-                }
-            }
-            _ => panic!("Unexpected format in TimestampDataUpdates. Expected a BYO message."),
-        }
-    }
-}
-
-/// Create a file-based timely dataflow source operator.
-pub fn file<G, Ctor, I, Out, Err>(
-    config: SourceConfig<G>,
-    path: PathBuf,
-    read_style: FileReadStyle,
-    iter_ctor: Ctor,
-) -> (
-    (
-        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Out>>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
-    Option<SourceToken>,
-)
-where
-    G: Scope<Timestamp = Timestamp>,
-    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
-    Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err> + Send + 'static,
-    Err: Into<failure::Error> + Send + 'static,
-    Out: Send + Clone + 'static,
-{
-    const HEARTBEAT: Duration = Duration::from_secs(1); // Update the capability every second if there are no new changes.
-    const MAX_RECORDS_PER_INVOCATION: usize = 1024;
-
-    let ts = if let Consistency::BringYourOwn(_) = config.consistency {
-        if config.active {
-            let prev = config.timestamp_histories.borrow_mut().insert(
-                config.id.clone(),
-                TimestampDataUpdate::BringYourOwn(HashMap::new()),
-            );
-            assert!(prev.is_none());
-            config
-                .timestamp_tx
-                .as_ref()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StartTimestamping(config.id));
-            Some(config.timestamp_tx)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // TODO(ncrooks): refactor this information into separate ControlPlaneInfo and DataPlaneInfo
-    // as in kafka.rs
-
-    let SourceConfig {
-        id,
-        active,
-        scope,
-        timestamp_histories,
-        consistency,
-        timestamp_frequency,
-        ..
-    } = config;
-
-    // Buffer placeholder for buffering messages for which we did not have a timestamp
-    let mut buffer: Option<Result<Out, failure::Error>> = None;
-    // Index of the last offset that we have already processed (and assigned a timestamp to)
-    let mut last_processed_offset = MzOffset { offset: 0 };
-    // Index of the current message's offset
-    let mut current_msg_offset = MzOffset { offset: 0 };
-    // Records closed timestamps. It corresponds to the smallest timestamp that is still open
-    let mut last_closed_ts: u64 = 0;
-    // At at which the capability was last downgraded
-    let mut time_since_downgrade: Instant = Instant::now();
-    // Safe conversion: statement.rs checks that value specified fits in u64
-    let downgrade_capability_frequency = timestamp_frequency.as_millis().try_into().unwrap();
-
-    let (stream, capability) = source(id, ts, scope, config.name.clone(), move |info| {
-        let activator = scope.activator_for(&info.address[..]);
-        let (tx, rx) = std::sync::mpsc::sync_channel(MAX_RECORDS_PER_INVOCATION);
-        if active {
-            let activator = Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..])));
-            thread::spawn(|| read_file_task(path, tx, Some(activator), read_style, iter_ctor));
-        }
-        let mut dead = false;
-        move |cap, output| {
-            // If nothing else causes us to wake up, do so after a specified amount of time.
-            let mut next_activation_duration = HEARTBEAT;
-            // Number of records read for this particular activation
-            let mut records_read = 0;
-
-            assert!(
-                !dead,
-                "A file source should not be scheduled again after erroring."
-            );
-
-            if active {
-                // Check if the capability can be downgraded (this is independent of whether
-                // there are new messages that can be processed) as timestamps can become
-                // closed in the absence of messages
-                downgrade_capability(
-                    &id,
-                    cap,
-                    &mut last_processed_offset,
-                    &mut last_closed_ts,
-                    &mut time_since_downgrade,
-                    downgrade_capability_frequency,
-                    &consistency,
-                    &timestamp_histories,
-                );
-
-                // Check if there was a message buffered. If yes, use this message. Else,
-                // attempt to process the next message
-                if buffer.is_none() {
-                    match rx.try_recv() {
-                        Ok(result) => {
-                            records_read += 1;
-                            current_msg_offset.offset += 1;
-                            buffer = Some(result);
-                        }
-                        Err(TryRecvError::Empty) => {
-                            // nothing to read, go to sleep
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            return SourceStatus::Done;
-                        }
-                    }
-                }
-
-                while let Some(message) = buffer.take() {
-                    let ts = find_matching_timestamp(
-                        &id,
-                        current_msg_offset,
-                        &consistency,
-                        last_closed_ts,
-                        &timestamp_histories,
-                    );
-                    let message = match message {
-                        Ok(message) => message,
-                        Err(err) => {
-                            output.session(&cap).give(Err(err.to_string()));
-                            dead = true;
-                            return SourceStatus::Done;
-                        }
-                    };
-                    match ts {
-                        None => {
-                            // We have not yet decided on a timestamp for this message,
-                            // we need to buffer the message
-                            buffer = Some(Ok(message));
-                            activator.activate();
-                            return SourceStatus::Alive;
-                        }
-                        Some(ts) => {
-                            last_processed_offset = current_msg_offset;
-                            let ts_cap = cap.delayed(&ts);
-                            output.session(&ts_cap).give(Ok(SourceOutput::new(
-                                vec![],
-                                message,
-                                Some(last_processed_offset.offset),
-                            )));
-
-                            downgrade_capability(
-                                &id,
-                                cap,
-                                &mut last_processed_offset,
-                                &mut last_closed_ts,
-                                &mut time_since_downgrade,
-                                downgrade_capability_frequency,
-                                &consistency,
-                                &timestamp_histories,
-                            );
-                        }
-                    }
-
-                    if records_read == MAX_RECORDS_PER_INVOCATION {
-                        next_activation_duration = Default::default();
-                        break;
-                    }
-
-                    buffer = match rx.try_recv() {
-                        Ok(record) => {
-                            records_read += 1;
-                            current_msg_offset.offset += 1;
-                            Some(record)
-                        }
-                        Err(TryRecvError::Empty) => None,
-                        Err(TryRecvError::Disconnected) => return SourceStatus::Done,
-                    }
-                }
-            }
-            activator.activate_after(next_activation_duration);
-            SourceStatus::Alive
-        }
-    });
-
-    let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
-
-    if config.active {
-        ((ok_stream, err_stream), Some(capability))
-    } else {
-        ((ok_stream, err_stream), None)
     }
 }
