@@ -9,7 +9,7 @@ publish = false
 avro = { path = "../avro" }
 aws-util = { path = "../aws-util" }
 backtrace = "0.3.48"
-bincode = { version = "1.2", optional = true }
+bincode = { version = "1.3", optional = true }
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
 comm = { path = "../comm" }
