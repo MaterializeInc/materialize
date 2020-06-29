@@ -33,7 +33,6 @@ pub enum Expr {
     /// Identifier e.g. table name or column name
     Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
-    /// (Same caveats apply to `QualifiedWildcard` as to `Wildcard`.)
     QualifiedWildcard(Vec<Ident>),
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),

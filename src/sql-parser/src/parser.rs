@@ -2801,17 +2801,10 @@ impl Parser {
         if self.consume_token(&Token::Mult) {
             return Ok(SelectItem::Wildcard);
         }
-        let expr = self.parse_expr()?;
-        if let Expr::QualifiedWildcard(prefix) = expr {
-            Ok(SelectItem::QualifiedWildcard(ObjectName(prefix)))
-        } else {
-            // `expr` is a regular SQL expression and can be followed by an alias
-            if let Some(alias) = self.parse_optional_alias(keywords::RESERVED_FOR_COLUMN_ALIAS)? {
-                Ok(SelectItem::ExprWithAlias { expr, alias })
-            } else {
-                Ok(SelectItem::UnnamedExpr(expr))
-            }
-        }
+        Ok(SelectItem::Expr {
+            expr: self.parse_expr()?,
+            alias: self.parse_optional_alias(keywords::RESERVED_FOR_COLUMN_ALIAS)?,
+        })
     }
 
     /// Parse an expression, optionally followed by ASC or DESC (used in ORDER BY)

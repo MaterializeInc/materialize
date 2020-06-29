@@ -251,35 +251,35 @@ CREATE VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateView { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
+CreateView { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
 
 parse-statement
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false }
+CreateView { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false }
 
 parse-statement
 CREATE TEMP VIEW myview AS SELECT foo FROM bar
 ----
 CREATE TEMPORARY VIEW myview AS SELECT foo FROM bar
 =>
-CreateView { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false }
+CreateView { name: ObjectName([Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: true, materialized: false }
 
 parse-statement
 CREATE OR REPLACE VIEW v AS SELECT 1
 ----
 CREATE OR REPLACE VIEW v AS SELECT 1
 =>
-CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Replace, temporary: false, materialized: false }
+CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Replace, temporary: false, materialized: false }
 
 parse-statement
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 ----
 CREATE VIEW IF NOT EXISTS v AS SELECT 1
 =>
-CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: false }
+CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: false }
 
 parse-statement
 CREATE OR REPLACE VIEW IF NOT EXISTS v AS SELECT 1
@@ -295,28 +295,28 @@ CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 ----
 CREATE VIEW v WITH (foo = 'bar', a = 123) AS SELECT 1
 =>
-CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [SqlOption { name: Ident("foo"), value: String("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
+CreateView { name: ObjectName([Ident("v")]), columns: [], with_options: [SqlOption { name: Ident("foo"), value: String("bar") }, SqlOption { name: Ident("a"), value: Number("123") }], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
 
 parse-statement
 CREATE VIEW v (has, cols) AS SELECT 1, 2
 ----
 CREATE VIEW v (has, cols) AS SELECT 1, 2
 =>
-CreateView { name: ObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("1"))), UnnamedExpr(Value(Number("2")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
+CreateView { name: ObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: false }
 
 parse-statement
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateView { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: true }
+CreateView { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Error, temporary: false, materialized: true }
 
 parse-statement
 CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 =>
-CreateView { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("foo")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: true }
+CreateView { name: ObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, if_exists: Skip, temporary: false, materialized: true }
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
@@ -543,7 +543,7 @@ CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop W
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNotNull(Identifier([Ident("a")])), Nested(Exists(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("y")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("boop"), Ident("z")]), op: Eq, right: Identifier([Ident("z")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), if_not_exists: false }
+CreateIndex { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNotNull(Identifier([Ident("a")])), Nested(Exists(Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("boop"), Ident("z")]), op: Eq, right: Identifier([Ident("z")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), if_not_exists: false }
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))

@@ -204,28 +204,21 @@ impl_display!(Cte);
 /// One item of the comma-separated list following `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SelectItem {
-    /// Any expression, not followed by `[ AS ] alias`
-    UnnamedExpr(Expr),
-    /// An expression, followed by `[ AS ] alias`
-    ExprWithAlias { expr: Expr, alias: Ident },
-    /// `alias.*` or even `schema.table.*`
-    QualifiedWildcard(ObjectName),
-    /// An unqualified `*`
+    /// An expression, optionally followed by `[ AS ] alias`.
+    Expr { expr: Expr, alias: Option<Ident> },
+    /// An unqualified `*`.
     Wildcard,
 }
 
 impl AstDisplay for SelectItem {
     fn fmt(&self, f: &mut AstFormatter) {
         match &self {
-            SelectItem::UnnamedExpr(expr) => f.write_node(expr),
-            SelectItem::ExprWithAlias { expr, alias } => {
+            SelectItem::Expr { expr, alias } => {
                 f.write_node(expr);
-                f.write_str(" AS ");
-                f.write_node(alias);
-            }
-            SelectItem::QualifiedWildcard(prefix) => {
-                f.write_node(prefix);
-                f.write_str(".*");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
             }
             SelectItem::Wildcard => f.write_str("*"),
         }

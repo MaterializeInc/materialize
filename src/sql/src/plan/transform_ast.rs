@@ -216,10 +216,13 @@ impl FuncRewriter {
 
 impl<'ast> VisitMut<'ast> for FuncRewriter {
     fn visit_select_item_mut(&mut self, item: &'ast mut SelectItem) {
-        if let SelectItem::UnnamedExpr(expr) = item {
+        if let SelectItem::Expr { expr, alias: None } = item {
             visit_mut::visit_expr_mut(self, expr);
             if let Some((alias, expr)) = Self::rewrite_expr(expr) {
-                *item = SelectItem::ExprWithAlias { expr, alias }
+                *item = SelectItem::Expr {
+                    expr,
+                    alias: Some(alias),
+                };
             }
         } else {
             visit_mut::visit_select_item_mut(self, item);
