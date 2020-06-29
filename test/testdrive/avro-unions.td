@@ -10,8 +10,6 @@
 # Test how Avro unions of varying sizes and nullabilities are converted
 # to Materialize types.
 
-$ set-sql-timeout duration=200ms
-
 $ set writer-schema={
     "name": "row",
     "type": "record",

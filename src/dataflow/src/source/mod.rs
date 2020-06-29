@@ -9,6 +9,7 @@
 
 //! Types related to the creation of dataflow sources.
 
+use avro::types::Value;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,7 +22,9 @@ use timely::dataflow::{
     operators::Capability,
 };
 
-use dataflow_types::{Consistency, ExternalSourceConnector, MzOffset, Timestamp};
+use dataflow_types::{
+    Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
+};
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::error;
@@ -31,11 +34,12 @@ use prometheus::{
     register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 
 use super::source::util::source;
+use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
@@ -46,7 +50,9 @@ mod kinesis;
 mod util;
 
 use differential_dataflow::Hashable;
-pub use file::{file, read_file_task, FileReadStyle};
+pub use file::read_file_task;
+pub use file::FileReadStyle;
+pub use file::FileSourceInfo;
 pub use kafka::KafkaSourceInfo;
 pub use kinesis::kinesis;
 
@@ -75,6 +81,8 @@ pub struct SourceConfig<'a, G> {
     pub timestamp_frequency: Duration,
     /// Whether this worker has been chosen to actually receive data.
     pub active: bool,
+    /// Data encoding
+    pub encoding: DataEncoding,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -184,23 +192,60 @@ lazy_static! {
         register_int_counter!("mz_bytes_read_total", "Count of bytes read from sources").unwrap();
 }
 
-/// Each source must implement this trait. Sources will then get created as part of the
-/// [`create_source`] function.
-pub trait SourceInfo {
-    /// Creates a new specialised SourceInfo object for a given source
+/// Creates a specific source, parameterised by 'Out'. Out denotes the encoding
+/// of the ingested data (Vec<u8> or Value).
+pub trait SourceConstructor<Out> {
+    /// Constructor for source creation
+    #[allow(clippy::too_many_arguments)]
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
+        active: bool,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: Arc<Mutex<SyncActivator>>,
         connector: ExternalSourceConnector,
+        consistency_info: &mut ConsistencyInfo,
+        encoding: DataEncoding,
     ) -> Self
     where
-        Self: Sized;
+        Self: Sized + SourceInfo<Out>;
+}
 
-    /// This function notifies timestamper and relevant datastructures that a source has
-    /// been created and must be timestamped
+/// Types that implement this trait expose a length function
+pub trait Length {
+    /// Returns the size of the object
+    fn len(&self) -> usize;
+    /// Returns true if the object is empty
+    fn is_empty(&self) -> bool;
+}
+
+impl Length for Vec<u8> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl Length for Value {
+    ///TODO(natacha): implement len() function for Value types
+    fn len(&self) -> usize {
+        0
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+/// Each source must implement this trait. Sources will then get created as part of the
+/// [`create_source`] function.
+pub trait SourceInfo<Out> {
+    /// Activates timestamping for a given source. The actions
+    /// take are a function of the source type and the consistency
     fn activate_source_timestamping(
         id: &SourceInstanceId,
         consistency: &Consistency,
@@ -248,15 +293,15 @@ pub trait SourceInfo {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Option<SourceMessage>;
+    ) -> Option<SourceMessage<Out>>;
 
     /// Buffer a message that cannot get timestamped
-    fn buffer_message(&mut self, message: SourceMessage);
+    fn buffer_message(&mut self, message: SourceMessage<Out>);
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage {
+pub struct SourceMessage<Out> {
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -264,7 +309,7 @@ pub struct SourceMessage {
     /// Optional key
     pub key: Option<Vec<u8>>,
     /// Optional payload
-    pub payload: Option<Vec<u8>>,
+    pub payload: Option<Out>,
 }
 
 /// Consistency information. Each partition contains information about
@@ -394,11 +439,11 @@ impl ConsistencyInfo {
     /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
     /// partitions. This is guaranteed by the [coord::timestamp::is_valid_ts] method.
     ///
-    fn downgrade_capability(
+    fn downgrade_capability<Out: Send + Clone + 'static>(
         &mut self,
         id: &SourceInstanceId,
         cap: &mut Capability<Timestamp>,
-        source: &mut dyn SourceInfo,
+        source: &mut dyn SourceInfo<Out>,
         timestamp_histories: &TimestampDataUpdates,
     ) {
         let mut changed = false;
@@ -640,16 +685,20 @@ impl PartitionMetrics {
 
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
 /// type of source that should be created
-pub fn create_source<G, S: 'static>(
+pub fn create_source<G, S: 'static, Out>(
     config: SourceConfig<G>,
     source_connector: ExternalSourceConnector,
 ) -> (
-    Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    (
+        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Out>>,
+        timely::dataflow::Stream<G, SourceError>,
+    ),
     Option<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceInfo,
+    S: SourceInfo<Out> + SourceConstructor<Out>,
+    Out: Clone + Send + Default + Length + 'static,
 {
     let SourceConfig {
         name,
@@ -662,6 +711,7 @@ where
         consistency,
         timestamp_frequency,
         active,
+        encoding,
         ..
     } = config;
 
@@ -676,18 +726,6 @@ where
     let (stream, capability) = source(id, timestamp_channel, scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
-        // Create source information (this function is specific to a specific
-        // source
-        // Create source information (this function is specific to a specific
-        // source
-        let mut source_info: S = S::new(
-            name.clone(),
-            id,
-            worker_id,
-            worker_count,
-            Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
-            source_connector.clone(),
-        );
 
         // Create control plane information (Consistency-related information)
         let mut consistency_info = ConsistencyInfo::new(
@@ -697,6 +735,20 @@ where
             consistency,
             timestamp_frequency,
             &source_connector,
+        );
+
+        // Create source information (this function is specific to a specific
+        // source
+        let mut source_info: S = SourceConstructor::<Out>::new(
+            name.clone(),
+            id,
+            active,
+            worker_id,
+            worker_count,
+            Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
+            source_connector.clone(),
+            &mut consistency_info,
+            encoding,
         );
 
         move |cap, output| {
@@ -719,12 +771,17 @@ where
                     let partition = message.partition.clone();
                     let offset = message.offset;
 
+                    println!("Received message {} {}", partition, offset);
+
                     // Update ingestion metrics
-                    // Entry is guaranteed to exist as it gets created when we initialise the partition.
                     consistency_info
                         .partition_metrics
                         .get_mut(&partition)
-                        .unwrap()
+                        .unwrap_or(&mut PartitionMetrics::new(
+                            &name,
+                            &id.to_string(),
+                            &partition.to_string(),
+                        ))
                         .offset_received
                         .set(offset.offset);
 
@@ -752,6 +809,7 @@ where
                         Some(ts) => {
                             // Note: empty and null payload/keys are currently
                             // treated as the same thing.
+                            println!("Assigning timestamp: {} ", ts);
                             let key = message.key.unwrap_or_default();
                             let out = message.payload.unwrap_or_default();
                             // Entry for partition_metadata is guaranteed to exist as messages
@@ -765,15 +823,15 @@ where
                             bytes_read += key.len() as i64;
                             bytes_read += out.len() as i64;
                             let ts_cap = cap.delayed(&ts);
-                            output.session(&ts_cap).give(SourceOutput::new(
+                            output.session(&ts_cap).give(Ok(SourceOutput::new(
                                 key,
                                 out,
                                 Some(offset.offset),
-                            ));
+                            )));
 
                             // Update ingestion metrics
                             // Entry is guaranteed to exist as it gets created when we initialise the partition
-                            let partition_metrics = &mut consistency_info
+                            let partition_metrics = consistency_info
                                 .partition_metrics
                                 .get_mut(&partition)
                                 .unwrap();
@@ -819,10 +877,12 @@ where
         }
     });
 
+    let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
+
     if active {
-        (stream, Some(capability))
+        ((ok_stream, err_stream), Some(capability))
     } else {
         // Immediately drop the capability if worker is not an active reader for source
-        (stream, None)
+        ((ok_stream, err_stream), None)
     }
 }

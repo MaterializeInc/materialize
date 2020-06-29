@@ -77,7 +77,6 @@ a   b   mz_line_no
 a   b   mz_line_no
 --------------
 1   1  2
-2   2  3
 
 $ file-append path=data-consistency.csv
 \${testdrive.temp-dir}/data.csv,1,0,2,5
