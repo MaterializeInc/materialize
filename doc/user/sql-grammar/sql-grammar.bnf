@@ -24,6 +24,8 @@ create_sink ::=
     kafka_connector |
    'AVRO OCF' path-prefix
    )
+   ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
+   ('AS OF' timestamp_expression)?
 create_source_avro_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?

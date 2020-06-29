@@ -216,14 +216,22 @@ where
                 };
 
                 // Grab all of the available Rows and put them in a queue before we
-                // send it over to Kafka. We Even though we want to do bounded work
+                // send it over to Kafka. Even though we want to do bounded work
                 // per sink invocation, we still need to remember all inputs as we
-                // receive them
+                // receive them.
                 input.for_each(|_, rows| {
                     rows.swap(&mut vector);
 
-                    for (row, _time, diff) in vector.drain(..) {
-                        queue.push_back((row, diff));
+                    for (row, time, diff) in vector.drain(..) {
+                        let should_emit = if connector.strict {
+                            connector.frontier.less_than(&time)
+                        } else {
+                            connector.frontier.less_equal(&time)
+                        };
+
+                        if should_emit {
+                            queue.push_back((row, diff));
+                        }
                     }
                 });
 

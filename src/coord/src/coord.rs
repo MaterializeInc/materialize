@@ -224,8 +224,13 @@ where
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = block_on(sink_connector::build(builder, id))
-                        .with_context(|e| format!("recreating sink {}: {}", name, e))?;
+                    let connector = block_on(sink_connector::build(
+                        builder,
+                        sink.with_snapshot,
+                        coord.determine_frontier(sink.as_of, sink.from)?,
+                        id,
+                    ))
+                    .with_context(|e| format!("recreating sink {}: {}", name, e))?;
                     coord.handle_sink_connector_ready(id, connector);
                 }
                 CatalogItem::Index(index) => match id {
@@ -607,6 +612,8 @@ where
             Plan::CreateSink {
                 name,
                 sink,
+                with_snapshot,
+                as_of,
                 if_not_exists,
             } => self.sequence_create_sink(
                 pcx,
@@ -615,6 +622,8 @@ where
                 session,
                 name,
                 sink,
+                with_snapshot,
+                as_of,
                 if_not_exists,
             ),
 
@@ -911,6 +920,8 @@ where
         session: Session,
         name: FullName,
         sink: sql::plan::Sink,
+        with_snapshot: bool,
+        as_of: Option<u64>,
         if_not_exists: bool,
     ) {
         // First try to allocate an ID. If that fails, we're done.
@@ -936,6 +947,8 @@ where
                 plan_cx: pcx,
                 from: sink.from,
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
+                with_snapshot,
+                as_of,
             }),
         };
         match self.catalog_transact(vec![op]) {
@@ -950,6 +963,13 @@ where
             }
         }
 
+        let frontier = match self.determine_frontier(as_of, sink.from) {
+            Ok(frontier) => frontier,
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
+            }
+        };
         // Now we're ready to create the sink connector. Arrange to notify the
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
@@ -959,7 +979,8 @@ where
                     session,
                     tx,
                     id,
-                    result: sink_connector::build(connector_builder, id).await,
+                    result: sink_connector::build(connector_builder, with_snapshot, frontier, id)
+                        .await,
                 })
                 .await
                 .expect("sending to internal_cmd_tx cannot fail");
@@ -1306,41 +1327,7 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
-        let frontier = if let Some(ts) = ts {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &RelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
-        }
-        // TODO: The logic that follows is at variance from PEEK logic which consults the
-        // "queryable" state of its inputs. We might want those to line up, but it is only
-        // a "might".
-        else if let Some(Some((index_id, _))) = self
-            .views
-            .get(&source_id)
-            .map(|view_state| &view_state.default_idx)
-        {
-            let upper = self
-                .indexes
-                .upper_of(index_id)
-                .expect("name missing at coordinator");
-
-            if let Some(ts) = upper.get(0) {
-                Antichain::from_elem(ts.saturating_sub(1))
-            } else {
-                Antichain::from_elem(Timestamp::max_value())
-            }
-        } else {
-            // TODO: This should more carefully consider `since` frontiers of its input.
-            // This will be forcibly corrected if any inputs are compacted.
-            Antichain::from_elem(0)
-        };
-
+        let frontier = self.determine_frontier(ts, source_id)?;
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
@@ -1357,10 +1344,9 @@ where
             source_id,
             SinkConnector::Tail(TailSinkConnector {
                 tx,
-                frontier: frontier.clone(),
+                frontier,
                 strict: !with_snapshot,
             }),
-            frontier,
         );
         Ok(ExecuteResponse::Tailing { rx })
     }
@@ -1542,7 +1528,7 @@ where
                                         }),
                                     );
                                 }
-                                SinkConnector::AvroOcf(AvroOcfSinkConnector { path }) => {
+                                SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
                                     broadcast(
                                         &mut self.broadcast_tx,
                                         SequencedCommand::AppendLog(
@@ -1815,16 +1801,7 @@ where
             .transact(ops)
             .expect("replacing a sink cannot fail");
 
-        // Create the sink dataflow.
-        // TODO: The frontier should be more intentionally chosen based on `since` frontiers.
-        // The current choice will likely be overwritten by dataflow validation.
-        self.create_sink_dataflow(
-            name.to_string(),
-            id,
-            sink.from,
-            connector,
-            Antichain::from_elem(0),
-        )
+        self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
     }
 
     fn create_sink_dataflow(
@@ -1833,7 +1810,6 @@ where
         id: GlobalId,
         from: GlobalId,
         connector: SinkConnector,
-        as_of: Antichain<Timestamp>,
     ) {
         #[allow(clippy::single_match)]
         match &connector {
@@ -1847,7 +1823,7 @@ where
                     }),
                 );
             }
-            SinkConnector::AvroOcf(AvroOcfSinkConnector { path }) => {
+            SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::AppendLog(MaterializedEvent::AvroOcfSink {
@@ -1860,7 +1836,8 @@ where
             _ => (),
         }
         let mut dataflow = DataflowDesc::new(name);
-        dataflow.set_as_of(as_of);
+        // let as_of = ;
+        dataflow.set_as_of(connector.get_frontier());
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
@@ -2162,6 +2139,51 @@ where
                 invalid
             );
         }
+    }
+
+    /// todo: docs.
+    fn determine_frontier(
+        &mut self,
+        as_of: Option<u64>,
+        source_id: GlobalId,
+    ) -> Result<Antichain<u64>, failure::Error> {
+        // Determine the frontier of updates to start *from*.
+        // Updates greater or equal to this frontier will be produced.
+        let frontier = if let Some(ts) = as_of {
+            // If a timestamp was explicitly requested, use that.
+            Antichain::from_elem(self.determine_timestamp(
+                &RelationExpr::Get {
+                    id: Id::Global(source_id),
+                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
+                    typ: RelationType::empty(),
+                },
+                PeekWhen::AtTimestamp(ts),
+            )?)
+        }
+        // TODO: The logic that follows is at variance from PEEK logic which consults the
+        // "queryable" state of its inputs. We might want those to line up, but it is only
+        // a "might".
+        else if let Some(Some((index_id, _))) = self
+            .views
+            .get(&source_id)
+            .map(|view_state| &view_state.default_idx)
+        {
+            let upper = self
+                .indexes
+                .upper_of(index_id)
+                .expect("name missing at coordinator");
+
+            if let Some(ts) = upper.get(0) {
+                Antichain::from_elem(ts.saturating_sub(1))
+            } else {
+                Antichain::from_elem(Timestamp::max_value())
+            }
+        } else {
+            // TODO: This should more carefully consider `since` frontiers of its input.
+            // This will be forcibly corrected if any inputs are compacted.
+            Antichain::from_elem(0)
+        };
+        Ok(frontier)
     }
 
     /// Updates the upper frontier of a named view.

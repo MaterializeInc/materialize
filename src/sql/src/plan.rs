@@ -74,6 +74,8 @@ pub enum Plan {
     CreateSink {
         name: FullName,
         sink: Sink,
+        with_snapshot: bool,
+        as_of: Option<Timestamp>,
         if_not_exists: bool,
     },
     CreateTable {

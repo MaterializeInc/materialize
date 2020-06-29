@@ -135,6 +135,8 @@ pub struct Sink {
     pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
+    pub with_snapshot: bool,
+    pub as_of: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -984,11 +986,18 @@ impl Catalog {
                 on: index.on,
                 keys: index.keys,
             }),
-            Plan::CreateSink { sink, .. } => CatalogItem::Sink(Sink {
+            Plan::CreateSink {
+                sink,
+                with_snapshot,
+                as_of,
+                ..
+            } => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
+                with_snapshot,
+                as_of,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })

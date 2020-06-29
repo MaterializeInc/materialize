@@ -47,6 +47,17 @@ Field | Value type | Description
 ------|------------|------------
 `replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
 
+### AS OF
+
+`AS OF` is the specific point in time to start emitting all events for a given `SINK`. If you don't
+use `AS OF`, Materialize will pick a timestamp itself.
+
+### WITH SNAPSHOT or WITHOUT SNAPSHOT
+
+By default, each `SINK` is created with a `SNAPSHOT` which contains the results of the query at its `AS OF` timestamp.
+Any further updates to these results are produced at the time when they occur. To only see results after the
+`AS OF` timestamp, specify `WITHOUT SNAPSHOT`.
+
 ## Detail
 
 - Materialize currently only supports Avro formatted sinks that write to either a single partition topic or a Avro object container file.
