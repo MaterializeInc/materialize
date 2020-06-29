@@ -836,28 +836,47 @@ fn plan_select_item<'a>(
     select_all_mapping: &BTreeMap<usize, usize>,
 ) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
     match s {
-        SelectItem::UnnamedExpr(sql_expr) => {
-            let name = invent_column_name(sql_expr);
-            let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
-            let scope_item = ScopeItem {
-                names: name.into_iter().collect(),
-                expr: Some(sql_expr.clone()),
-                nameable: true,
-            };
-            Ok(vec![(expr, scope_item)])
+        SelectItem::Expr {
+            expr: Expr::QualifiedWildcard(table_name),
+            alias: _,
+        } => {
+            let table_name = normalize::object_name(ObjectName(table_name.clone()))?;
+            let out = select_all_scope
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_i, item)| item.is_from_table(&table_name))
+                .map(|(i, item)| {
+                    let expr = ScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: *select_all_mapping.get(&i).ok_or_else(|| {
+                            format_err!("internal error: unable to resolve scope item {:?}", item)
+                        })?,
+                    });
+                    let mut out_item = item.clone();
+                    out_item.expr = None;
+                    Ok((expr, out_item))
+                })
+                .collect::<Result<Vec<_>, failure::Error>>()?;
+            if out.is_empty() {
+                bail!("no table named '{}' in scope", table_name);
+            }
+            Ok(out)
         }
-        SelectItem::ExprWithAlias {
+        SelectItem::Expr {
             expr: sql_expr,
             alias,
         } => {
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
-            let scope_item = ScopeItem {
-                names: iter::once(ScopeItemName {
+            let names: Vec<_> = match alias {
+                None => invent_column_name(sql_expr).into_iter().collect(),
+                Some(alias) => vec![ScopeItemName {
                     table_name: None,
                     column_name: Some(normalize::column_name(alias.clone())),
-                })
-                .chain(invent_column_name(sql_expr).into_iter())
-                .collect(),
+                }],
+            };
+            let scope_item = ScopeItem {
+                names,
                 expr: Some(sql_expr.clone()),
                 nameable: true,
             };
@@ -882,30 +901,6 @@ fn plan_select_item<'a>(
                 .collect::<Result<Vec<_>, failure::Error>>()?;
             if out.is_empty() {
                 bail!("SELECT * with no tables specified is not valid");
-            }
-            Ok(out)
-        }
-        SelectItem::QualifiedWildcard(table_name) => {
-            let table_name = normalize::object_name(table_name.clone())?;
-            let out = select_all_scope
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_i, item)| item.is_from_table(&table_name))
-                .map(|(i, item)| {
-                    let expr = ScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: *select_all_mapping.get(&i).ok_or_else(|| {
-                            format_err!("internal error: unable to resolve scope item {:?}", item)
-                        })?,
-                    });
-                    let mut out_item = item.clone();
-                    out_item.expr = None;
-                    Ok((expr, out_item))
-                })
-                .collect::<Result<Vec<_>, failure::Error>>()?;
-            if out.is_empty() {
-                bail!("no table named '{}' in scope", table_name);
             }
             Ok(out)
         }
