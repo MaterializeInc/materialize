@@ -61,20 +61,6 @@ pub struct PartialName {
     pub item: String,
 }
 
-impl PartialEq for PartialName {
-    fn eq(&self, other: &Self) -> bool {
-        match (&self.database, &other.database) {
-            (Some(d1), Some(d2)) if d1 != d2 => return false,
-            _ => (),
-        }
-        match (&self.schema, &other.schema) {
-            (Some(s1), Some(s2)) if s1 != s2 => return false,
-            _ => (),
-        }
-        self.item == other.item
-    }
-}
-
 impl fmt::Display for PartialName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {

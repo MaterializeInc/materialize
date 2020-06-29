@@ -26,16 +26,35 @@
 
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
+use std::fmt;
+
 use failure::bail;
 
 use repr::ColumnName;
 
 use super::expr::ColumnRef;
-use crate::names::PartialName;
+use crate::names::FullName;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Provenance {
+    Anonymous,
+    Local(String),
+    Global(FullName),
+}
+
+impl fmt::Display for Provenance {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Provenance::Anonymous => f.write_str("subquery"),
+            Provenance::Local(s) => f.write_str(s),
+            Provenance::Global(n) => write!(f, "{}", n),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItemName {
-    pub table_name: Option<PartialName>,
+    pub provenance: Provenance,
     pub column_name: Option<ColumnName>,
 }
 
@@ -65,7 +84,7 @@ impl ScopeItem {
     pub fn from_column_name(column_name: Option<ColumnName>) -> Self {
         ScopeItem {
             names: vec![ScopeItemName {
-                table_name: None,
+                provenance: Provenance::Anonymous,
                 column_name,
             }],
             expr: None,
@@ -73,10 +92,10 @@ impl ScopeItem {
         }
     }
 
-    pub fn is_from_table(&self, table_name: &PartialName) -> bool {
+    pub fn has_provenance(&self, provenance: &Provenance) -> bool {
         self.names
             .iter()
-            .any(|n| n.table_name.as_ref() == Some(&table_name))
+            .any(|n| &n.provenance == provenance)
     }
 }
 
@@ -89,7 +108,7 @@ impl Scope {
     }
 
     pub fn from_source<I, N>(
-        table_name: Option<PartialName>,
+        provenance: Provenance,
         column_names: I,
         outer_scope: Option<Scope>,
     ) -> Self
@@ -102,7 +121,7 @@ impl Scope {
             .into_iter()
             .map(|column_name| ScopeItem {
                 names: vec![ScopeItemName {
-                    table_name: table_name.clone(),
+                    provenance: provenance.clone(),
                     column_name: column_name.map(|n| n.into()),
                 }],
                 expr: None,
@@ -151,7 +170,7 @@ impl Scope {
         &'a self,
         matches: Matches,
         name_in_error: &str,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error>
+    ) -> Result<ColumnRef, failure::Error>
     where
         Matches: Fn(&ScopeItemName) -> bool,
     {
@@ -173,7 +192,7 @@ impl Scope {
                     })
                     .is_none()
                 {
-                    Ok((ColumnRef { level, column }, name))
+                    Ok(ColumnRef { level, column })
                 } else {
                     bail!("Column name {} is ambiguous", name_in_error)
                 }
@@ -184,7 +203,7 @@ impl Scope {
     pub fn resolve_column<'a>(
         &'a self,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
+    ) -> Result<ColumnRef, failure::Error> {
         self.resolve(
             |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
             column_name.as_str(),
@@ -193,15 +212,15 @@ impl Scope {
 
     pub fn resolve_table_column<'a>(
         &'a self,
-        table_name: &PartialName,
+        provenance: &Provenance,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
+    ) -> Result<ColumnRef, failure::Error> {
         self.resolve(
             |item: &ScopeItemName| {
-                item.table_name.as_ref() == Some(table_name)
+                &item.provenance == provenance
                     && item.column_name.as_ref() == Some(column_name)
             },
-            &format!("{}.{}", table_name, column_name),
+            &format!("{}.{}", provenance, column_name),
         )
     }
 

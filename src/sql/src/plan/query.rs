@@ -41,13 +41,13 @@ use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
 };
 
-use crate::names::PartialName;
+use crate::names::{FullName, DatabaseSpecifier};
 use crate::plan::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
     JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
-use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
+use crate::plan::scope::{Provenance, Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastTo, CoerceTo};
@@ -121,7 +121,7 @@ pub fn plan_show_where(
             ShowStatementFilter::Where(selection) => selection,
         };
         let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-        let scope = Scope::from_source(None, names, None);
+        let scope = Scope::from_source(Provenance::Anonymous, names, None);
         let ecx = ExprContext {
             qcx: &qcx,
             name: "SHOW WHERE clause",
@@ -153,7 +153,7 @@ pub fn plan_show_where(
 /// Evaluates an expression in the AS OF position of a TAIL statement.
 pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp, failure::Error> {
     let scope = Scope::from_source(
-        None,
+        Provenance::Anonymous,
         iter::empty::<Option<ColumnName>>(),
         Some(Scope::empty(None)),
     );
@@ -192,7 +192,7 @@ pub fn plan_index_exprs<'a>(
     on_desc: &RelationDesc,
     exprs: &[Expr],
 ) -> Result<Vec<::expr::ScalarExpr>, failure::Error> {
-    let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
+    let scope = Scope::from_source(Provenance::Anonymous, on_desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext::root(scx, QueryLifetime::Static);
     let ecx = &ExprContext {
         qcx: &qcx,
@@ -396,7 +396,7 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
                 }
             };
             let scope = Scope::from_source(
-                None,
+                Provenance::Anonymous,
                 // Column names are taken from the left, as in Postgres.
                 left_scope.column_names(),
                 Some(qcx.outer_scope.clone()),
@@ -475,7 +475,7 @@ fn plan_join_identity(qcx: &QueryContext) -> (RelationExpr, Scope) {
     let typ = RelationType::new(vec![]);
     let expr = RelationExpr::constant(vec![vec![]], typ);
     let scope = Scope::from_source(
-        None,
+        Provenance::Anonymous,
         iter::empty::<Option<ColumnName>>(),
         Some(qcx.outer_scope.clone()),
     );
@@ -576,7 +576,7 @@ fn plan_view_select(
             aggregates.push(plan_aggregate(ecx, sql_function)?);
             group_scope.items.push(ScopeItem {
                 names: vec![ScopeItemName {
-                    table_name: None,
+                    provenance: Provenance::Anonymous,
                     column_name: Some(sql_function.name.to_string().into()),
                 }],
                 expr: Some(Expr::Function(sql_function.clone())),
@@ -700,7 +700,7 @@ fn plan_table_factor<'a>(
                     typ: item.desc()?.typ().clone(),
                 };
                 let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
-                let scope = plan_table_alias(qcx, alias.as_ref(), Some(name.into()), column_names)?;
+                let scope = plan_table_alias(qcx, alias.as_ref(), Provenance::Global(name), column_names)?;
                 plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
             }
         }
@@ -713,9 +713,8 @@ fn plan_table_factor<'a>(
                 unsupported!(3111, "LATERAL derived tables");
             }
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
-            let table_name = None;
             let column_names = scope.column_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(qcx, alias.as_ref(), table_name, column_names)?;
+            let scope = plan_table_alias(qcx, alias.as_ref(), Provenance::Anonymous, column_names)?;
             plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
         }
         TableFactor::NestedJoin(table_with_joins) => {
@@ -750,28 +749,19 @@ fn plan_table_function(
         func: tf.func,
         exprs: tf.exprs,
     };
-    let name = PartialName {
-        database: None,
-        schema: None,
-        item: ident,
-    };
-    let scope = plan_table_alias(ecx.qcx, alias, Some(name), tf.column_names)?;
+    let scope = plan_table_alias(ecx.qcx, alias, Provenance::Local(ident), tf.column_names)?;
     Ok((call, ecx.scope.clone().product(scope)))
 }
 
 fn plan_table_alias(
     qcx: &QueryContext,
     alias: Option<&TableAlias>,
-    inherent_table_name: Option<PartialName>,
+    inherent_provenance: Provenance,
     inherent_column_names: Vec<Option<ColumnName>>,
 ) -> Result<Scope, failure::Error> {
-    let table_name = match alias {
-        None => inherent_table_name,
-        Some(TableAlias { name, .. }) => Some(PartialName {
-            database: None,
-            schema: None,
-            item: normalize::ident(name.to_owned()),
-        }),
+    let provenance = match alias {
+        None => inherent_provenance,
+        Some(TableAlias { name, .. }) => Provenance::Local(normalize::ident(name.clone())),
     };
     let column_names = match alias {
         None => inherent_column_names,
@@ -779,10 +769,7 @@ fn plan_table_alias(
         Some(TableAlias { columns, .. }) if columns.len() > inherent_column_names.len() => {
             bail!(
                 "{} has {} columns available but {} columns specified",
-                table_name
-                    .map(|n| n.to_string())
-                    .as_deref()
-                    .unwrap_or("subquery"),
+                provenance,
                 inherent_column_names.len(),
                 columns.len()
             );
@@ -795,7 +782,7 @@ fn plan_table_alias(
             .collect(),
     };
     Ok(Scope::from_source(
-        table_name,
+        provenance,
         column_names,
         Some(qcx.outer_scope.clone()),
     ))
@@ -815,7 +802,7 @@ fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
         _ => return None,
     };
     name.map(|n| ScopeItemName {
-        table_name: None,
+        provenance: Provenance::Anonymous,
         column_name: Some(n),
     })
 }
@@ -844,7 +831,7 @@ fn plan_select_item<'a>(
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
             let scope_item = ScopeItem {
                 names: iter::once(ScopeItemName {
-                    table_name: None,
+                    provenance: Provenance::Anonymous,
                     column_name: Some(normalize::column_name(alias.clone())),
                 })
                 .chain(invent_column_name(sql_expr).into_iter())
@@ -877,12 +864,17 @@ fn plan_select_item<'a>(
             Ok(out)
         }
         SelectItem::QualifiedWildcard(table_name) => {
-            let table_name = normalize::object_name(table_name.clone())?;
+            let mut names = table_name.0.clone();
+            let provenance = Provenance::Global(FullName {
+                item:names.pop().unwrap().to_string(),
+                schema:names.pop().unwrap().to_string(),
+                database: DatabaseSpecifier::Name(names.pop().unwrap().to_string()),
+            });
             let out = select_all_scope
                 .items
                 .iter()
                 .enumerate()
-                .filter(|(_i, item)| item.is_from_table(&table_name))
+                .filter(|(_i, item)| item.has_provenance(&provenance))
                 .map(|(i, item)| {
                     let expr = ScalarExpr::Column(ColumnRef {
                         level: 0,
@@ -1069,9 +1061,7 @@ fn plan_using_constraint(
     let mut new_items = vec![];
     let mut dropped_columns = HashSet::new();
     for column_name in column_names {
-        let (l, _) = left_scope.resolve_column(column_name)?;
-        let (r, _) = right_scope.resolve_column(column_name)?;
-        let l = match l {
+        let l = match left_scope.resolve_column(column_name)? {
             ColumnRef {
                 level: 0,
                 column: l,
@@ -1081,7 +1071,7 @@ fn plan_using_constraint(
                 column_name
             ),
         };
-        let r = match r {
+        let r = match right_scope.resolve_column(column_name)? {
             ColumnRef {
                 level: 0,
                 column: r,
@@ -1178,12 +1168,21 @@ pub fn plan_expr<'a>(
         Ok(match e {
             Expr::Identifier(names) => {
                 let mut names = names.clone();
-                let col_name = normalize::column_name(names.pop().unwrap());
-                let (i, _) = if names.is_empty() {
-                    ecx.scope.resolve_column(&col_name)?
-                } else {
-                    let table_name = normalize::object_name(ObjectName(names))?;
-                    ecx.scope.resolve_table_column(&table_name, &col_name)?
+                let i = match names.len() {
+                    2 => {
+                        let col_name = ColumnName::from(names.pop().unwrap().to_string());
+                        ecx.scope.resolve_column(&col_name)?
+                    }
+                    4 => {
+                        let col_name = ColumnName::from(names.pop().unwrap().to_string());
+                        let provenance = Provenance::Global(FullName {
+                            item: names.pop().unwrap().to_string(),
+                            schema: names.pop().unwrap().to_string(),
+                            database: DatabaseSpecifier::Name(names.pop().unwrap().to_string()),
+                        });
+                        ecx.scope.resolve_table_column(&provenance, &col_name)?
+                    }
+                    _ => panic!("name resolution failed to normalize identifier: {}", e),
                 };
                 ScalarExpr::Column(i).into()
             }
@@ -1387,7 +1386,7 @@ fn plan_any_or_all<'a>(
     let right_name = format!("right_{}", Uuid::new_v4());
     scope.items.push(ScopeItem {
         names: vec![ScopeItemName {
-            table_name: None,
+            provenance: Provenance::Anonymous,
             column_name: Some(ColumnName::from(right_name.clone())),
         }],
         expr: None,
