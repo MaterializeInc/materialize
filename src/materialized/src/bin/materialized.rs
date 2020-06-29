@@ -187,10 +187,19 @@ fn run() -> Result<(), failure::Error> {
                 warn!("--threads is deprecated and will stop working in the future. Please use --workers.");
                 val
             }
-            None => match env::var("MZ_THREADS") {
+            None => match env::var("MZ_WORKERS") {
                 Ok(val) => val.parse()?,
-                Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_THREADS"),
-                Err(VarError::NotPresent) => 0,
+                Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_WORKERS"),
+                Err(VarError::NotPresent) => match env::var("MZ_THREADS") {
+                    Ok(val) => {
+                        warn!("MZ_THREADS is a deprecated alias for MZ_WORKERS");
+                        val.parse()?
+                    }
+                    Err(VarError::NotUnicode(_)) => {
+                        bail!("non-unicode character found in MZ_THREADS")
+                    }
+                    Err(VarError::NotPresent) => 0,
+                },
             },
         },
     };
@@ -199,7 +208,7 @@ fn run() -> Result<(), failure::Error> {
             "'--workers' must be specified and greater than 0\n\
             hint: As a starting point, set the number of threads to half of the number of\n\
             cores on your system. Then, further adjust based on your performance needs.\n\
-            hint: You may also set the environment variable MZ_THREADS to the desired number\n\
+            hint: You may also set the environment variable MZ_WORKERS to the desired number\n\
             of threads."
         );
     }

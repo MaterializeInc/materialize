@@ -268,7 +268,7 @@ fancy_1         | 🎩 load
 materialized_1  | materialized: '--workers' must be specified and greater than 0
 materialized_1  | hint: As a starting point, set the number of threads to half of the number of
 materialized_1  | cores on your system. Then, further adjust based on your performance needs.
-materialized_1  | hint: You may also set the environment variable MZ_THREADS to the desired number
+materialized_1  | hint: You may also set the environment variable MZ_WORKERS to the desired number
 materialized_1  | of threads.
 fancy_fancy_1 exited with code 0
 fancy_materialized_1 exited with code 1
