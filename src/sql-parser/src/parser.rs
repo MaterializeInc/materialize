@@ -194,7 +194,10 @@ impl Parser {
                 Token::Word(ref w) if w.keyword != "" => match w.keyword.as_ref() {
                     "SELECT" | "WITH" | "VALUES" => {
                         self.prev_token();
-                        Ok(Statement::Query(Box::new(self.parse_query()?)))
+                        Ok(Statement::Select {
+                            query: Box::new(self.parse_query()?),
+                            as_of: self.parse_optional_as_of()?,
+                        })
                     }
                     "CREATE" => Ok(self.parse_create()?),
                     "DROP" => Ok(self.parse_drop()?),
@@ -225,7 +228,10 @@ impl Parser {
                 },
                 Token::LParen => {
                     self.prev_token();
-                    Ok(Statement::Query(Box::new(self.parse_query()?)))
+                    Ok(Statement::Select {
+                        query: Box::new(self.parse_query()?),
+                        as_of: None, // Only the outermost SELECT may have an AS OF clause.
+                    })
                 }
                 unexpected => self.expected(
                     self.peek_prev_range(),
@@ -234,6 +240,16 @@ impl Parser {
                 ),
             },
             None => self.expected(self.peek_prev_range(), "SQL statement", None),
+        }
+    }
+
+    /// Parse `AS OF`, if present.
+    fn parse_optional_as_of(&mut self) -> Result<Option<Expr>, ParserError> {
+        if self.parse_keyword("AS") {
+            self.expect_keyword("OF")?;
+            Ok(Some(self.parse_expr()?))
+        } else {
+            Ok(None)
         }
     }
 
@@ -2071,6 +2087,12 @@ impl Parser {
             // which may start a construct allowed in this position, to be parsed as aliases.
             // (For example, in `FROM t1 JOIN` the `JOIN` will always be parsed as a keyword,
             // not an alias.)
+            Some(Token::Word(ref w)) if w.value == "OF" => {
+                // If we find `AS OF`, return.
+                self.prev_token();
+                self.prev_token();
+                Ok(None)
+            }
             Some(Token::Word(ref w))
                 if after_as || !reserved_kwds.contains(&w.keyword.as_str()) =>
             {

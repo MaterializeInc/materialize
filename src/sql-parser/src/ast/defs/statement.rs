@@ -29,7 +29,10 @@ use crate::ast::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Statement {
     /// `SELECT`
-    Query(Box<Query>),
+    Select {
+        query: Box<Query>,
+        as_of: Option<Expr>,
+    },
     /// `INSERT`
     Insert {
         /// TABLE
@@ -251,7 +254,13 @@ pub enum Statement {
 impl AstDisplay for Statement {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Statement::Query(s) => f.write_node(&s),
+            Statement::Select { query, as_of } => {
+                f.write_node(&query);
+                if let Some(as_of) = as_of {
+                    f.write_str(" AS OF ");
+                    f.write_node(as_of);
+                }
+            }
             Statement::Insert {
                 table_name,
                 columns,

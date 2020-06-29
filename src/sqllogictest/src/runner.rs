@@ -575,7 +575,7 @@ impl State {
         };
         match statement {
             Statement::CreateView { .. }
-            | Statement::Query { .. }
+            | Statement::Select { .. }
             | Statement::ShowIndexes { .. } => (),
             _ => {
                 if output.is_err() {
