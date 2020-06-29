@@ -132,10 +132,17 @@ impl ProducerContext for SinkProducerContext {
 }
 
 #[derive(Debug)]
+pub enum SinkConsistencyState {
+    Begin,
+    End,
+}
+
+#[derive(Debug)]
 pub struct SinkConsistencyInfo {
     topic: String,
     schema_id: i32,
-    timestamp_counts: HashMap<Timestamp, usize>,
+    timestamp_counts: HashMap<Timestamp, i64>,
+    queue: VecDeque<(SinkConsistencyState, Timestamp, Option<i64>)>,
 }
 
 impl SinkConsistencyInfo {
@@ -144,21 +151,29 @@ impl SinkConsistencyInfo {
             topic,
             schema_id,
             timestamp_counts: HashMap::new(),
+            queue: VecDeque::new(),
         }
     }
 
-    pub fn update_timestamp_count(&mut self, time: Timestamp, count: usize) {
+    // Updates the number of messages associated with time by count, and returns
+    // true if this was the first time we observed time.
+    pub fn update_timestamp_count(&mut self, time: Timestamp, count: i64) -> bool {
         if let Some(c) = self.timestamp_counts.get_mut(&time) {
             *c += count;
+            return false;
         } else {
-            self.timestamp_counts.insert(time, count as usize);
+            self.timestamp_counts.insert(time, count);
         }
+
+        true
     }
 
     pub fn get_complete_timestamps(
         &mut self,
         frontier: &MutableAntichain<Timestamp>,
-    ) -> Vec<(Timestamp, usize)> {
+    ) -> Vec<(Timestamp, i64)> {
+        // A timestamp is closed if there is no element in the frontier that is
+        // less than or equal to that timestamp.
         let closed_timestamps = self
             .timestamp_counts
             .iter()
@@ -225,7 +240,7 @@ where
             ))
             .expect("creating kafka producer for kafka sinks failed"),
     )));
-    let mut queue: VecDeque<(Row, String, Diff)> = VecDeque::new();
+    let mut queue: VecDeque<(Row, Timestamp, Diff)> = VecDeque::new();
     let mut vector = Vec::new();
     let mut encoded_buffer = None;
 
@@ -244,6 +259,7 @@ where
         Exchange::new(move |_| sink_hash),
         name.clone(),
         |info| {
+            // Setup activator and shutdown buttons for this operator
             let activator = stream.scope().activator_for(&info.address[..]);
             let shutdown_button = ShutdownButton::new(
                 producer.clone(),
@@ -275,13 +291,22 @@ where
                     rows.swap(&mut vector);
 
                     for (row, time, diff) in vector.drain(..) {
-                        queue.push_back((row, time.to_string(), diff));
+                        queue.push_back((row, time, diff));
                         if let Some(consistency) = &mut consistency {
                             // Note that since a single differential message
                             // turns into |diff| messages we need to increment
                             // message counts by |diff| instead of just 1 for
                             // the consistency topic
-                            consistency.update_timestamp_count(time, diff.abs() as usize);
+                            let insert =
+                                consistency.update_timestamp_count(time, diff.abs() as i64);
+
+                            if insert {
+                                consistency.queue.push_back((
+                                    SinkConsistencyState::Begin,
+                                    time,
+                                    None,
+                                ));
+                            }
                         }
                     }
                 });
@@ -295,30 +320,56 @@ where
                         .iter()
                         .for_each(|(k, v)| {
                             println!("timestamp {} produced {} messages", k, v);
-                            let transaction_id = k.to_string();
-                            let begin = encoder.encode_transaction_unchecked(
-                                consistency.schema_id,
-                                &transaction_id,
-                                "BEGIN".into(),
-                                None,
-                            );
-                            let end = encoder.encode_transaction_unchecked(
-                                consistency.schema_id,
-                                &transaction_id,
-                                "END".into(),
-                                Some(*v as i64),
-                            );
-                            let begin_record =
-                                BaseRecord::<&Vec<u8>, _>::to(&consistency.topic).payload(&begin);
-                            let end_record =
-                                BaseRecord::<&Vec<u8>, _>::to(&consistency.topic).payload(&end);
-                            producer
-                                .send(begin_record)
-                                .expect("TODO: handle error correctly");
-                            producer
-                                .send(end_record)
-                                .expect("TODO: handle error correctly");
+                            consistency
+                                .queue
+                                .push_back((SinkConsistencyState::End, *k, Some(*v)));
                         });
+
+                    // Send a bounded number of queued consistency messages to
+                    // the consistency topic
+                    for _ in 0..connector.fuel {
+                        let (encoded, state, time, count) =
+                            if let Some((state, time, count)) = consistency.queue.pop_front() {
+                                let state_str = match state {
+                                    SinkConsistencyState::Begin => "BEGIN",
+                                    SinkConsistencyState::End => "END",
+                                };
+
+                                let transaction_id = time.to_string();
+                                (
+                                    encoder.encode_transaction_unchecked(
+                                        consistency.schema_id,
+                                        &transaction_id,
+                                        state_str,
+                                        count,
+                                    ),
+                                    state,
+                                    time,
+                                    count,
+                                )
+                            } else {
+                                // Nothing more to do here
+                                break;
+                            };
+
+                        let record =
+                            BaseRecord::<&Vec<u8>, _>::to(&consistency.topic).payload(&encoded);
+                        if let Err((e, _)) = producer.send(record) {
+                            error!("unable to produce consistency message in {}: {}", name, e);
+
+                            if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
+                                // Repopulate the queue with the data we just took
+                                // out so we can retry later
+                                consistency.queue.push_front((state, time, count));
+                                activator.activate_after(Duration::from_secs(60));
+                                return true;
+                            } else {
+                                // We've received an error that is not transient
+                                shutdown.store(true, Ordering::SeqCst);
+                                return false;
+                            }
+                        }
+                    }
                 }
 
                 // Send a bounded number of records to Kafka from the queue. This
@@ -336,6 +387,11 @@ where
                             continue;
                         };
 
+                        let time = match consistency {
+                            Some(_) => Some(time.to_string()),
+                            None => None,
+                        };
+
                         let diff_pair = if diff < 0 {
                             DiffPair {
                                 before: Some(&row),
@@ -348,8 +404,7 @@ where
                             }
                         };
 
-                        let buf =
-                            encoder.encode_unchecked(connector.schema_id, diff_pair, Some(time));
+                        let buf = encoder.encode_unchecked(connector.schema_id, diff_pair, time);
                         // For diffs other than +/- 1, we send repeated copies of the
                         // Avro record [diff] times. Since the format and envelope
                         // capture the "polarity" of the update, we need to remember
@@ -400,6 +455,15 @@ where
                     // items that we need to send to Kafka
                     activator.activate();
                     return true;
+                }
+
+                if let Some(consistency) = &consistency {
+                    if !consistency.queue.is_empty() {
+                        // We still have pending consistency messages to send to
+                        // Kafka and need to reschedule this operator
+                        activator.activate();
+                        return true;
+                    }
                 }
 
                 if in_flight > 0 {

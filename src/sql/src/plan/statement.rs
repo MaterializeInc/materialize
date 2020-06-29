@@ -668,7 +668,7 @@ fn kafka_sink_builder(
     let consistency_value_schema = match with_options.remove("consistency") {
         None => None,
         Some(Value::Boolean(b)) => {
-            if b == true {
+            if b {
                 Some(encoder.consistency_schema().canonical_form())
             } else {
                 None

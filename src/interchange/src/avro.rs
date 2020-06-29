@@ -1076,7 +1076,7 @@ impl Encoder {
         let transaction = match transaction_id {
             None => Value::Union(0, Box::new(Value::Null)),
             Some(transaction_id) => {
-                let id = Value::String(transaction_id.to_owned());
+                let id = Value::String(transaction_id);
                 Value::Union(1, Box::new(Value::Record(vec![("id".into(), id)])))
             }
         };
