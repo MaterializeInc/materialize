@@ -88,6 +88,7 @@ impl RelationExpr {
     pub fn decorrelate(mut self) -> expr::RelationExpr {
         let mut id_gen = expr::IdGen::default();
         transform_expr::split_subquery_predicates(&mut self);
+        transform_expr::try_simplify_quantified_comparisons(&mut self);
         expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
             .let_in(&mut id_gen, |id_gen, get_outer| {
                 self.applied_to(id_gen, get_outer, &ColumnMap::empty())

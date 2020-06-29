@@ -161,7 +161,7 @@ query BBBBBBBBBBBBBBB
   NULL < ANY(VALUES (2), (NULL))
 ))
 ----
-false  false  false  true  NULL  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+false  false  false  true  NULL  NULL  true  false  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
 query BBBBBBBBBBBBBBB
 (VALUES (
@@ -182,7 +182,7 @@ query BBBBBBBBBBBBBBB
   NULL < ALL(VALUES (2), (NULL))
 ))
 ----
-true  false  false  true  false  false  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL
+true  false  false  true  false  false  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
 statement ok
 CREATE TABLE s1 (a int NOT NULL)
@@ -524,16 +524,16 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 
 %1 =
 | Get %0
-| ArrangeBy (#0)
+| ArrangeBy ()
 
 %2 =
 | Get materialize.public.x (u55)
-| ArrangeBy (#0)
 
 %3 =
-| Join %1 %2 (= #0 #1)
-| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
-| | demand = (#0)
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0, #1)
+| Filter ((#0 = #1) || isnull((#0 != #1)))
 | Distinct group=(#0)
 
 %4 =
@@ -596,7 +596,7 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Join %1 %2
 | | implementation = Differential %2 %1.()
 | | demand = (#0, #1)
-| Filter (#0 <= #1)
+| Filter ((#0 <= #1) || isnull((#0 > #1)))
 | Distinct group=(#0)
 
 %4 =
