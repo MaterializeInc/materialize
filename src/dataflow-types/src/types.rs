@@ -477,7 +477,10 @@ impl ExternalSourceConnector {
                 "mz_line_no".into(),
                 ColumnType::new(ScalarType::Int64, false),
             )],
-            Self::Kinesis(_) => vec![],
+            Self::Kinesis(_) => vec![(
+                "mz_offset".into(),
+                ColumnType::new(ScalarType::Int64, false),
+            )],
             Self::AvroOcf(_) => vec![(
                 "mz_obj_no".into(),
                 ColumnType::new(ScalarType::Int64, false),
