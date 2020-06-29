@@ -35,7 +35,7 @@ use backtrace::Backtrace;
 use chrono::Utc;
 use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
-use log::{info, trace};
+use log::{info, trace, warn};
 use once_cell::sync::OnceCell;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -68,7 +68,13 @@ fn run() -> Result<(), failure::Error> {
     }
 
     // Timely and Differential worker options.
-    opts.optopt("w", "threads", "number of per-process worker threads", "N");
+    opts.optopt(
+        "w",
+        "workers",
+        "number of per-process timely worker threads",
+        "N",
+    );
+    opts.optopt("", "threads", "deprecated alias for --workers", "N");
     opts.optopt(
         "p",
         "process",
@@ -174,17 +180,23 @@ fn run() -> Result<(), failure::Error> {
     }
 
     // Configure Timely and Differential workers.
-    let threads = match popts.opt_get::<usize>("threads")? {
+    let threads = match popts.opt_get::<usize>("workers")? {
         Some(val) => val,
-        None => match env::var("MZ_THREADS") {
-            Ok(val) => val.parse()?,
-            Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_THREADS"),
-            Err(VarError::NotPresent) => 0,
+        None => match popts.opt_get::<usize>("threads")? {
+            Some(val) => {
+                warn!("--threads is deprecated and will stop working in the future. Please use --workers.");
+                val
+            }
+            None => match env::var("MZ_THREADS") {
+                Ok(val) => val.parse()?,
+                Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_THREADS"),
+                Err(VarError::NotPresent) => 0,
+            },
         },
     };
     if threads == 0 {
         bail!(
-            "'--threads' must be specified and greater than 0\n\
+            "'--workers' must be specified and greater than 0\n\
             hint: As a starting point, set the number of threads to half of the number of\n\
             cores on your system. Then, further adjust based on your performance needs.\n\
             hint: You may also set the environment variable MZ_THREADS to the desired number\n\
@@ -416,8 +428,6 @@ fn adjust_rlimits() {
     // platforms, even with the rlimit wrapper crate that we use. This function
     // is chattier than normal at the trace log level in an attempt to ease
     // debugging of such differences.
-
-    use log::warn;
 
     let (soft, hard) = match rlimit::Resource::NOFILE.get() {
         Ok(limits) => limits,

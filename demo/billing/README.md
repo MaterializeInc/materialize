@@ -41,11 +41,11 @@ $ docker-compose up
 From the repository root start Materialize with:
 
 ```shell session
-$ cargo run --release -- --threads 8
+$ cargo run --release -- --workers 8
 ```
 
 Note that this runs a release build of Materialize, which is essential for performance
-testing but can be slow to compile. Also note that `--threads 8` starts Materialize with
+testing but can be slow to compile. Also note that `--workers 8` starts Materialize with
 8 worker threads which improves the throughput of update processing but loads the system
 more. Generally its best to run with no more than `ncpus - 2` threads.
 

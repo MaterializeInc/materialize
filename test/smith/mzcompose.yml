@@ -14,7 +14,7 @@ services:
     ports:
      - 6875
     init: true
-    command: --threads 1
+    command: --workers 1
     environment:
       - MZ_LOG=dataflow=error,info
       - DIFFERENTIAL_EAGER_MERGE=1000

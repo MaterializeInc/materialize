@@ -26,7 +26,7 @@ fn cmd() -> Command {
 fn test_threads() {
     let assert_fail = |cmd: &mut Command| {
         cmd.assert().failure().stderr(predicate::str::starts_with(
-            "materialized: '--threads' must be specified and greater than 0",
+            "materialized: '--workers' must be specified and greater than 0",
         ))
     };
     assert_fail(&mut cmd());

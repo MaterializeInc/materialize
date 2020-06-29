@@ -105,7 +105,7 @@ Materialize is fully integrated with Cargo, so building it is dead simple:
 ```shell
 git clone git@github.com:MaterializeInc/materialize.git
 cd materialize
-cargo run --release -- --threads 2
+cargo run --release -- --workers 2
 ```
 
 Because the MaterializeInc organization requires two-factor authentication
