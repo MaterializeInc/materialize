@@ -1184,6 +1184,7 @@ pub fn plan_expr<'a>(
             }
             Expr::Value(val) => plan_literal(val)?,
             Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
+            Expr::FieldAccess { .. } => bail!("record field access is not yet supported"),
             Expr::Parameter(n) => {
                 if !ecx.allow_subqueries {
                     bail!("{} does not allow subqueries", ecx.name)
