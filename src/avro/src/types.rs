@@ -193,6 +193,12 @@ impl<S: Serialize> ToAvro for S {
 }
 */
 
+impl Default for Value {
+    fn default() -> Self {
+        Value::Null
+    }
+}
+
 /// Utility interface to build `Value::Record` objects.
 #[derive(Debug, Clone)]
 pub struct Record<'a> {
