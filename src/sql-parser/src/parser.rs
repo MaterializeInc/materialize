@@ -1941,7 +1941,12 @@ impl Parser {
             if let Some(Token::RBracket) = self.peek_token() {
                 break;
             }
-            exprs.push(self.parse_expr()?);
+            let expr = if let Some(Token::LBracket) = self.peek_token() {
+                self.parse_list()?
+            } else {
+                self.parse_expr()?
+            };
+            exprs.push(expr);
             if !self.consume_token(&Token::Comma) {
                 break;
             }

@@ -243,3 +243,14 @@ Parse error:
 SELECT E'\u&&&&'
        ^^^^^^^^
 invalid unicode escape sequence
+
+# List literal expressions must begin with `LIST` before interior lists can
+# omit it.
+parse-statement
+SELECT [1, 2]
+----
+error:
+Parse error:
+SELECT [1, 2]
+       ^
+Expected an expression, found: [

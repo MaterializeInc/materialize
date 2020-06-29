@@ -18,7 +18,7 @@ query error Cannot create list with mixed types
 select LIST[1,LIST[2,3]]
 
 query T
-select LIST[LIST[1],LIST[2,3]]
+select LIST[[1],[2,3]]
 ----
 {{1},{2,3}}
 
@@ -44,6 +44,21 @@ query T
 select LIST[1, null] :: INT LIST
 ----
 {1,NULL}
+
+query T
+select LIST[[1, null], []] :: INT LIST LIST
+----
+{{1,NULL},{}}
+
+# Lists support arbitrarily deep nesting
+query T
+SELECT LIST[[[[1], [2]]], [[[3]]]]
+----
+{{{{1},{2}}},{{{3}}}}
+
+# List(Int) cannot be cast to List(List(Int))
+query error Cannot create list with mixed types
+select LIST[1, null] :: INT LIST LIST
 
 query error
 select LIST[1, null] :: TEXT LIST
