@@ -22,7 +22,7 @@ services:
     ports:
      - *materialized
     init: true
-    command: --threads 1
+    command: --threads ${MZ_THREADS:-1}
     environment:
       - MZ_LOG=dataflow=error,info
       - DIFFERENTIAL_EAGER_MERGE=1000
@@ -117,7 +117,24 @@ mzconduct:
         service: billing-demo
         daemon: true
         command: >-
-          --message-count 10000000
+          --message-count ${BILLING_MESSAGE_COUNT:-10000000}
+          --materialized-host materialized
+          --kafka-host kafka
+          --schema-registry-url http://schema-registry:8081
+          --csv-file-name /share/billing-demo/data/prices.csv
+          --partitions 10
+
+    load-test:
+      steps:
+      - step: workflow
+        workflow: start-everything
+      - step: start-services
+        services: [dashboard]
+      - step: run
+        service: billing-demo
+        daemon: true
+        command: >-
+          --message-count ${BILLING_MESSAGE_COUNT:-10000}
           --materialized-host materialized
           --kafka-host kafka
           --schema-registry-url http://schema-registry:8081
