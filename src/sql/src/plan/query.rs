@@ -1194,6 +1194,8 @@ pub fn plan_expr<'a>(
             ScalarExpr::Column(i).into()
         }
         Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
+        Expr::FieldAccess { .. } => unsupported!("record field access"),
+        Expr::WildcardAccess(_) => unsupported!("wildcard field access"),
 
         // Literals.
         Expr::Value(val) => plan_literal(val)?,

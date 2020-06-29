@@ -314,15 +314,17 @@ impl Desugarer {
                         strict: true,
                     },
                 ))
-                .project(SelectItem::UnnamedExpr(
-                    left.take()
+                .project(SelectItem::Expr {
+                    expr: left
+                        .take()
                         .binop(op.clone(), Expr::Identifier(vec![binding]))
                         .call_unary(match expr {
                             Expr::Any { .. } => "internal_any",
                             Expr::All { .. } => "internal_all",
                             _ => unreachable!(),
                         }),
-                ));
+                    alias: None,
+                });
             *expr = Expr::Subquery(Box::new(Query::select(select)));
         }
 

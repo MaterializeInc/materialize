@@ -117,6 +117,31 @@ SELECT foo.* FROM foo
 =>
 Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: QualifiedWildcard([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("foo")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
+parse-statement
+SELECT (x).a, (x).a.b.c
+----
+SELECT (x).a, (x).a.b.c
+=>
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, alias: None }, Expr { expr: FieldAccess { expr: FieldAccess { expr: FieldAccess { expr: Nested(Identifier([Ident("x")])), field: Ident("a") }, field: Ident("b") }, field: Ident("c") }, alias: None }], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+
+parse-statement
+SELECT (1.a)
+----
+error:
+Parse error:
+SELECT (1.a)
+          ^
+Expected ), found: a
+
+parse-statement
+SELECT (x).*.*
+----
+error:
+Parse error:
+SELECT (x).*.*
+            ^
+Expected end of statement, found: .
+
 parse-statement roundtrip
 SELECT count(employee.*) FROM "order" JOIN employee ON "order".employee = employee.id
 ----

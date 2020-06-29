@@ -386,7 +386,7 @@ impl Parser {
                 }
             })),
             Token::LParen => {
-                let expr = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
+                let mut expr = if self.parse_keyword("SELECT") || self.parse_keyword("WITH") {
                     self.prev_token();
                     Expr::Subquery(Box::new(self.parse_query()?))
                 } else {
@@ -398,6 +398,27 @@ impl Parser {
                     }
                 };
                 self.expect_token(&Token::RParen)?;
+                while self.consume_token(&Token::Period) {
+                    match self.next_token() {
+                        Some(Token::Word(w)) => {
+                            expr = Expr::FieldAccess {
+                                expr: Box::new(expr),
+                                field: w.to_ident(),
+                            };
+                        }
+                        Some(Token::Mult) => {
+                            expr = Expr::WildcardAccess(Box::new(expr));
+                            break;
+                        }
+                        unexpected => {
+                            return self.expected(
+                                self.peek_prev_range(),
+                                "an identifier or a '*' after '.'",
+                                unexpected,
+                            );
+                        }
+                    }
+                }
                 Ok(expr)
             }
             unexpected => self.expected(self.peek_prev_range(), "an expression", Some(unexpected)),
