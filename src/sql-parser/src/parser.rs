@@ -782,10 +782,7 @@ impl Parser {
         let op_range = self.peek_prev_range();
 
         if let Some(op) = regular_binary_operator {
-            let any = self.parse_keyword("ANY");
-            let some = !any && self.parse_keyword("SOME");
-            let all = !any && !some && self.parse_keyword("ALL");
-            if any || some || all {
+            if let Some(kw) = self.parse_one_of_keywords(&["ANY", "SOME", "ALL"]) {
                 use BinaryOperator::*;
                 match op {
                     Eq | NotEq | Gt | GtEq | Lt | LtEq => (),
@@ -794,12 +791,11 @@ impl Parser {
                 self.expect_token(&Token::LParen)?;
                 let query = self.parse_query()?;
                 self.expect_token(&Token::RParen)?;
-                if any || some {
+                if kw == "ANY" || kw == "SOME" {
                     Ok(Expr::Any {
                         left: Box::new(expr),
                         op,
                         right: Box::new(query),
-                        some,
                     })
                 } else {
                     Ok(Expr::All {

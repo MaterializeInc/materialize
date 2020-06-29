@@ -113,7 +113,6 @@ pub enum Expr {
         left: Box<Expr>,
         op: BinaryOperator,
         right: Box<Query>,
-        some: bool, // just tracks which syntax was used
     },
     /// `<expr> <op> ALL (<query>)`
     All {
@@ -292,17 +291,11 @@ impl AstDisplay for Expr {
                 left,
                 op,
                 right,
-                some,
             } => {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
-                if *some {
-                    f.write_str(" SOME ");
-                } else {
-                    f.write_str(" ANY ");
-                }
-                f.write_str("(");
+                f.write_str("ANY (");
                 f.write_node(&right);
                 f.write_str(")");
             }
