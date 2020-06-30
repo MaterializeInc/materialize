@@ -22,18 +22,30 @@ use crate::action::{Action, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
 
+pub enum SinkConsistencyFormat {
+    Debezium,
+}
+
 pub struct VerifyAction {
     sink: String,
+    consistency: Option<SinkConsistencyFormat>,
     expected_messages: Vec<String>,
 }
 
 pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
     let _format = cmd.args.string("format")?;
     let sink = cmd.args.string("sink")?;
+    let consistency = match cmd.args.opt_string("consistency").as_deref() {
+        Some("debezium") => Some(SinkConsistencyFormat::Debezium),
+        Some(s) => return Err(format!("unknown sink consistency format {}", s)),
+        None => None,
+    };
+
     let expected_messages = cmd.input;
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,
+        consistency,
         expected_messages,
     })
 }
@@ -45,7 +57,7 @@ impl Action for VerifyAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let topic: String = retry::retry_for(Duration::from_secs(8), |_| async {
+        let topic_prefix: String = retry::retry_for(Duration::from_secs(8), |_| async {
             let row = state
                 .pgclient
                 .query_one(
@@ -58,6 +70,11 @@ impl Action for VerifyAction {
             Ok::<_, String>(row.get("topic"))
         })
         .await?;
+
+        let topic = match self.consistency {
+            Some(SinkConsistencyFormat::Debezium) => format!("{}-consistency", topic_prefix),
+            None => topic_prefix,
+        };
 
         println!("Verifying results in Kafka topic {}", topic);
 
