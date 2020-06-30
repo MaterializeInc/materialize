@@ -18,16 +18,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// An SQL expression of any type.
-///
-/// The parser does not distinguish between expressions of different types
-/// (e.g. boolean vs string), so the caller must handle expressions of
-/// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
+use std::mem;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     BinaryOperator, DataType, Ident, ObjectName, OrderByExpr, Query, UnaryOperator, Value,
 };
 
+/// An SQL expression of any type.
+///
+/// The parser does not distinguish between expressions of different types
+/// (e.g. boolean vs string), so the caller must handle expressions of
+/// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// Identifier e.g. table name or column name
@@ -287,11 +289,7 @@ impl AstDisplay for Expr {
                 f.write_node(&s);
                 f.write_str(")");
             }
-            Expr::Any {
-                left,
-                op,
-                right,
-            } => {
+            Expr::Any { left, op, right } => {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
@@ -330,6 +328,67 @@ impl Expr {
         } else {
             false
         }
+    }
+
+    pub fn null() -> Expr {
+        Expr::Value(Value::Null)
+    }
+
+    pub fn number<S>(n: S) -> Expr
+    where
+        S: Into<String>,
+    {
+        Expr::Value(Value::Number(n.into()))
+    }
+
+    pub fn binop(self, op: BinaryOperator, right: Expr) -> Expr {
+        Expr::BinaryOp {
+            left: Box::new(self),
+            op,
+            right: Box::new(right),
+        }
+    }
+
+    pub fn equals(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Eq, right)
+    }
+
+    pub fn minus(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Minus, right)
+    }
+
+    pub fn multiply(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Multiply, right)
+    }
+
+    pub fn modulo(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Modulus, right)
+    }
+
+    pub fn divide(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Divide, right)
+    }
+
+    pub fn call(name: &str, args: Vec<Expr>) -> Expr {
+        Expr::Function(Function {
+            name: ObjectName(vec![name.into()]),
+            args: FunctionArgs::Args(args),
+            filter: None,
+            over: None,
+            distinct: false,
+        })
+    }
+
+    pub fn call_nullary(name: &str) -> Expr {
+        Expr::call(name, vec![])
+    }
+
+    pub fn call_unary(self, name: &str) -> Expr {
+        Expr::call(name, vec![self])
+    }
+
+    pub fn take(&mut self) -> Expr {
+        mem::replace(self, Expr::Identifier(vec![]))
     }
 }
 

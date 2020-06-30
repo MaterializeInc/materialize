@@ -1258,11 +1258,9 @@ pub fn plan_expr<'a>(
                 }
                 expr.select().into()
             }
-            Expr::Any {
-                left,
-                op,
-                right,
-            } => plan_any_or_all(ecx, left, op, right, AggregateFunc::Any)?.into(),
+            Expr::Any { left, op, right } => {
+                plan_any_or_all(ecx, left, op, right, AggregateFunc::Any)?.into()
+            }
             Expr::All { left, op, right } => {
                 plan_any_or_all(ecx, left, op, right, AggregateFunc::All)?.into()
             }
