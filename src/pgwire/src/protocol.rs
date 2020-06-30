@@ -61,8 +61,7 @@ lazy_static! {
         "mz_command_durations",
         "how long individual commands took",
         &["command", "status"],
-        ore::stats::HISTOGRAM_BUCKETS.to_vec(),
-        expose_decumulated => true
+        ore::stats::HISTOGRAM_BUCKETS.to_vec()
     )
     .unwrap();
     static ref ROWS_RETURNED: prometheus::IntCounter = register_int_counter!(
