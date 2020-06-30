@@ -243,16 +243,6 @@ impl Parser {
         }
     }
 
-    /// Parse `AS OF`, if present.
-    fn parse_optional_as_of(&mut self) -> Result<Option<Expr>, ParserError> {
-        if self.parse_keyword("AS") {
-            self.expect_keyword("OF")?;
-            Ok(Some(self.parse_expr()?))
-        } else {
-            Ok(None)
-        }
-    }
-
     /// Parse a new expression
     fn parse_expr(&mut self) -> Result<Expr, ParserError> {
         self.parse_subexpr(Precedence::Zero)
@@ -1470,13 +1460,7 @@ impl Parser {
             // default to WITH SNAPSHOT.
             true
         };
-
-        let as_of = if self.parse_keyword("AS") {
-            self.expect_keyword("OF")?;
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
+        let as_of = self.parse_optional_as_of()?;
         Ok(Statement::CreateSink {
             name,
             from,
@@ -2082,17 +2066,18 @@ impl Parser {
     ) -> Result<Option<Ident>, ParserError> {
         let after_as = self.parse_keyword("AS");
         match self.next_token() {
-            // Accept any identifier after `AS` (though many dialects have restrictions on
-            // keywords that may appear here). If there's no `AS`: don't parse keywords,
-            // which may start a construct allowed in this position, to be parsed as aliases.
-            // (For example, in `FROM t1 JOIN` the `JOIN` will always be parsed as a keyword,
-            // not an alias.)
+            // Do not accept `AS OF`, which is reserved for providing timestamp information
+            // to queries.
             Some(Token::Word(ref w)) if w.value == "OF" => {
-                // If we find `AS OF`, return.
                 self.prev_token();
                 self.prev_token();
                 Ok(None)
             }
+            // Accept any other identifier after `AS` (though many dialects have restrictions on
+            // keywords that may appear here). If there's no `AS`: don't parse keywords,
+            // which may start a construct allowed in this position, to be parsed as aliases.
+            // (For example, in `FROM t1 JOIN` the `JOIN` will always be parsed as a keyword,
+            // not an alias.)
             Some(Token::Word(ref w))
                 if after_as || !reserved_kwds.contains(&w.keyword.as_str()) =>
             {
@@ -2818,6 +2803,23 @@ impl Parser {
         }
     }
 
+    /// Parse `AS OF`, if present.
+    fn parse_optional_as_of(&mut self) -> Result<Option<Expr>, ParserError> {
+        if self.parse_keyword("AS") {
+            self.expect_keyword("OF")?;
+            match self.parse_expr() {
+                Ok(expr) => Ok(Some(expr)),
+                Err(e) => self.expected(
+                    e.range,
+                    "a timestamp value after 'AS OF'",
+                    self.peek_token(),
+                ),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Parse a comma-delimited list of projections after SELECT
     fn parse_select_item(&mut self) -> Result<SelectItem, ParserError> {
         if self.consume_token(&Token::Mult) {
@@ -2992,12 +2994,7 @@ impl Parser {
             // default to WITH SNAPSHOT.
             true
         };
-        let as_of = if self.parse_keyword("AS") {
-            self.expect_keyword("OF")?;
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
+        let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail {
             name,
             with_snapshot,

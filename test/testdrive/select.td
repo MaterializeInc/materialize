@@ -11,3 +11,7 @@
 
 ! SELECT * FROM data AS OF now()
 SELECT AS OF not yet supported
+
+# Don't parse 'AS OF' as a table alias.
+! SELECT * FROM data AS OF;
+Expected a timestamp value after 'AS OF', found: EOF
