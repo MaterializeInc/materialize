@@ -83,9 +83,6 @@ EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 %0 =
 | Constant ()
 | FlatMap generate_series(-(2), 2)
-| Map #0
-| Project (#1)
-| Map
 
 EOF
 
@@ -163,17 +160,8 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | Get materialize.public.x (u5)
-
-%2 =
-| InnerJoin %0 %1 on true
 | FlatMap generate_series(1, #0)
-| Map #0, #1, #2
-| Project (#3..#5)
-| Map
 
 EOF
 
@@ -181,17 +169,8 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 ----
 %0 =
-| Constant ()
-
-%1 =
 | Get materialize.public.x (u5)
-
-%2 =
-| InnerJoin %0 %1 on true
 | FlatMap generate_series(i32toi64(100), i32toi64(#0))
-| Map #0, #1, #2
-| Project (#3..#5)
-| Map
 
 EOF
 

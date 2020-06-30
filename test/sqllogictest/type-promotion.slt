@@ -73,8 +73,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map ((i32todec(1) * 10dec) > 11dec)
-| Project (#0)
-| Map
 
 EOF
 
@@ -86,8 +84,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map ((i64todec(i32toi64(1)) * 100000dec) > 111111dec)
-| Project (#0)
-| Map
 
 EOF
 
@@ -99,8 +95,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map (i64tof64(i32toi64(1)) > (dectof64(111111dec) / 100000))
-| Project (#0)
-| Map
 
 EOF
 
@@ -112,8 +106,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map ((dectof64(11dec) / 10) > i32tof64(1))
-| Project (#0)
-| Map
 
 EOF
 
@@ -125,8 +117,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map (11dec > 11dec)
-| Project (#0)
-| Map
 
 EOF
 
@@ -138,8 +128,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map (i32tof64(1) > i32tof64(1))
-| Project (#0)
-| Map
 
 EOF
 
@@ -151,8 +139,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map floorf64(i32tof64(1))
-| Project (#0)
-| Map
 
 EOF
 
@@ -176,8 +162,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map coalesce(i32tof64(1), (dectof64(i32todec(1)) / 1), i32tof64(1))
-| Project (#0)
-| Map
 
 EOF
 
@@ -201,8 +185,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map (strtotstz("2001 03-04") - datetotstz(strtodate("2002 03-04")))
-| Project (#0)
-| Map
 
 EOF
 
@@ -214,8 +196,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map (strtotstz("2001 03-04") - tstotstz(strtots("2002 03-04")))
-| Project (#0)
-| Map
 
 EOF
 
@@ -227,8 +207,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map (strtots("2001 03-04") - datetots(strtodate("2002 03-04")))
-| Project (#0)
-| Map
 
 EOF
 
@@ -240,8 +218,6 @@ EXPLAIN RAW PLAN FOR
 %0 =
 | Constant ()
 | Map coalesce(datetotstz(strtodate("2001")), tstotstz(strtots("2002")), strtotstz("2003"))
-| Project (#0)
-| Map
 
 EOF
 

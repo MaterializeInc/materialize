@@ -318,13 +318,7 @@ fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope),
             offset: finishing.offset,
         };
     }
-    Ok((
-        RelationExpr::Project {
-            input: Box::new(expr),
-            outputs: finishing.project,
-        },
-        scope,
-    ))
+    Ok((expr.project(finishing.project), scope))
 }
 
 fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope), failure::Error> {
@@ -625,8 +619,12 @@ fn plan_view_select(
                 allow_subqueries: true,
             };
             for (expr, scope_item) in plan_select_item(ecx, p, &from_scope, &select_all_mapping)? {
-                project_key.push(group_scope.len() + project_exprs.len());
-                project_exprs.push(expr);
+                if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
+                    project_key.push(column);
+                } else {
+                    project_key.push(group_scope.len() + project_exprs.len());
+                    project_exprs.push(expr);
+                }
                 project_scope.items.push(scope_item);
             }
         }
