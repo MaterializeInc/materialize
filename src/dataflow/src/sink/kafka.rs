@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::iter::Iterator;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -141,7 +141,7 @@ pub enum SinkConsistencyState {
 pub struct SinkConsistencyInfo {
     topic: String,
     schema_id: i32,
-    timestamp_counts: HashMap<Timestamp, i64>,
+    timestamp_counts: BTreeMap<Timestamp, i64>,
     queue: VecDeque<(SinkConsistencyState, Timestamp, Option<i64>)>,
 }
 
@@ -150,7 +150,7 @@ impl SinkConsistencyInfo {
         SinkConsistencyInfo {
             topic,
             schema_id,
-            timestamp_counts: HashMap::new(),
+            timestamp_counts: BTreeMap::new(),
             queue: VecDeque::new(),
         }
     }
@@ -174,14 +174,16 @@ impl SinkConsistencyInfo {
     ) -> Vec<(Timestamp, i64)> {
         // A timestamp is closed if there is no element in the frontier that is
         // less than or equal to that timestamp.
-        let closed_timestamps = self
+        let closed_timestamps: Vec<(Timestamp, i64)> = self
             .timestamp_counts
             .iter()
             .filter(|(k, _)| !frontier.less_equal(k))
             .map(|(&k, &v)| (k, v))
             .collect();
 
-        self.timestamp_counts.retain(|k, _| frontier.less_equal(k));
+        for (time, _) in closed_timestamps.iter() {
+            self.timestamp_counts.remove(time);
+        }
 
         closed_timestamps
     }
@@ -329,7 +331,6 @@ where
                         .get_complete_timestamps(input.frontier())
                         .iter()
                         .for_each(|(k, v)| {
-                            println!("timestamp {} produced {} messages", k, v);
                             consistency
                                 .queue
                                 .push_back((SinkConsistencyState::End, *k, Some(*v)));
