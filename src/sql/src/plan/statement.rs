@@ -129,7 +129,14 @@ pub fn describe_statement(
             )),
             match explainee {
                 Explainee::Query(q) => {
-                    describe_statement(catalog, Statement::Query(Box::new(q)))?.1
+                    describe_statement(
+                        catalog,
+                        Statement::Select {
+                            query: Box::new(q),
+                            as_of: None,
+                        },
+                    )?
+                    .1
                 }
                 _ => vec![],
             },
@@ -214,7 +221,7 @@ pub fn describe_statement(
             (Some(sql_object.desc()?.clone()), vec![])
         }
 
-        Statement::Query(query) => {
+        Statement::Select { query, .. } => {
             // TODO(benesch): ideally we'd save `relation_expr` and `finishing`
             // somewhere, so we don't have to reanalyze the whole query when
             // `handle_statement` is called. This will require a complicated
@@ -266,7 +273,7 @@ pub fn handle_statement(
             names,
             cascade,
         } => handle_drop_objects(scx, object_type, if_exists, names, cascade),
-        Statement::Query(query) => handle_select(scx, *query, params),
+        Statement::Select { query, as_of } => handle_select(scx, *query, as_of, params),
         Statement::SetVariable {
             local,
             variable,
@@ -1632,9 +1639,14 @@ fn handle_drop_item(
 fn handle_select(
     scx: &StatementContext,
     query: Query,
+    as_of: Option<Expr>,
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
+    if let Some(_as_of) = as_of {
+        unsupported!("SELECT AS OF");
+    }
+
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
