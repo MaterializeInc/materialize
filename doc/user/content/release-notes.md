@@ -49,6 +49,9 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.3.1"></span>
 ## 0.3.1 (Unreleased)
 
+- Introduce the [`AS OF`](/sql/create-sink/#as-of) and
+  [`WITH SNAPSHOT`](/sql/create-sink/#WITH SNAPSHOT or WITHOUT SNAPSHOT) options for `CREATE SINK` to provide
+  more control over what data the `SINK` will produce.
 - Update the [`SNAPSHOT`](/sql/tail/#WITH SNAPSHOT or WITHOUT SNAPSHOT) options for `TAIL`
   to allow more control over what data `TAIL` will produce.
 - Simplify converting non-materialized views into materialized views with
