@@ -26,12 +26,12 @@ fn cmd() -> Command {
 fn test_threads() {
     let assert_fail = |cmd: &mut Command| {
         cmd.assert().failure().stderr(predicate::str::starts_with(
-            "materialized: '--threads' must be specified and greater than 0",
+            "materialized: '--workers' must be specified and greater than 0",
         ))
     };
     assert_fail(&mut cmd());
     assert_fail(cmd().arg("-w0"));
-    assert_fail(cmd().env("MZ_THREADS", "0"));
+    assert_fail(cmd().env("MZ_WORKERS", "0"));
 
     cmd()
         .arg("-w")
@@ -43,14 +43,14 @@ fn test_threads() {
         ));
 
     cmd()
-        .env("MZ_THREADS", OsStr::from_bytes(&[0xc2, 0xc2]))
+        .env("MZ_WORKERS", OsStr::from_bytes(&[0xc2, 0xc2]))
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            "materialized: non-unicode character found in MZ_THREADS",
+            "materialized: non-unicode character found in MZ_WORKERS",
         ));
 
-    // NOTE: we don't test the successful case, where `MZ_THREADS` or `-w` is
+    // NOTE: we don't test the successful case, where `MZ_WORKERS` or `-w` is
     // specified correctly, because it's presently hard to check if Materialized
     // has started correctly, since it runs forever. The success code path is
     // well exercised by integration tests, so it's not a big deal.

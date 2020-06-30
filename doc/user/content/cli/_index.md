@@ -19,7 +19,7 @@ Flag | Default | Modifies
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
-[`--threads`](#worker-threads) | 1 | Dataflow worker threads
+[`--workers`](#worker-threads) | 1 | Dataflow worker threads
 [`--w`](#worker-threads) | 1 |  Dataflow worker threads
 `-v` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
@@ -38,7 +38,7 @@ found.
 
 A `materialized` instance runs a specified number of timely dataflow worker
 threads. By default, `materialized` runs with a single worker thread. Worker
-threads can only be specified at startup by setting the `--threads` flag, and
+threads can only be specified at startup by setting the `--workers` flag, and
 cannot be changed without shutting down `materialized` and restarting. In the
 future, dynamically changing the number of worker threads will be possible over
 distributed clusters, see

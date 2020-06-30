@@ -21,7 +21,7 @@ commit message. They should complete the sentence, "This release will...".
 
 Good release notes:
 
-  - [This release will...] Require the `-w` / `--threads` command-line option.
+  - [This release will...] Require the `-w` / `--workers` command-line option.
   - [This release will...] In the event of a crash, print the stack trace.
 
 Misbehaved release notes:
@@ -45,6 +45,13 @@ Use relative links (/path/to/doc), not absolute links
 
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
+
+<span id="v0.3.2"></span>
+## 0.3.2 (Unreleased)
+
+- Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
+  reflects timely workers and does not limit the number of threads that materialized may
+  start.
 
 <span id="v0.3.1"></span>
 ## 0.3.1 (Unreleased)
