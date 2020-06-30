@@ -815,9 +815,15 @@ impl Parser {
             match k.keyword.as_ref() {
                 "IS" => {
                     if self.parse_keyword("NULL") {
-                        Ok(Expr::IsNull(Box::new(expr)))
+                        Ok(Expr::IsNull {
+                            expr: Box::new(expr),
+                            negated: false,
+                        })
                     } else if self.parse_keywords(vec!["NOT", "NULL"]) {
-                        Ok(Expr::IsNotNull(Box::new(expr)))
+                        Ok(Expr::IsNull {
+                            expr: Box::new(expr),
+                            negated: true,
+                        })
                     } else {
                         self.expected(
                             self.peek_range(),

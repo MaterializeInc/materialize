@@ -278,7 +278,7 @@ SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 ----
 SELECT * FROM t WHERE 1 BETWEEN 1 + 2 AND 3 + 4 IS NULL
 =>
-Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(IsNull(Between { expr: Value(Number("1")), negated: false, low: BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("2")) }, high: BinaryOp { left: Value(Number("3")), op: Plus, right: Value(Number("4")) } })), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("t")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(IsNull { expr: Between { expr: Value(Number("1")), negated: false, low: BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("2")) }, high: BinaryOp { left: Value(Number("3")), op: Plus, right: Value(Number("4")) } }, negated: false }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
 parse-statement
 SELECT * FROM t WHERE 1 = 1 AND 1 + x BETWEEN 1 AND 2

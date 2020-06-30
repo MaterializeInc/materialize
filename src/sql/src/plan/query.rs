@@ -1181,105 +1181,110 @@ pub fn plan_expr<'a>(
     e: &Expr,
 ) -> Result<CoercibleScalarExpr, failure::Error> {
     if let Some(i) = ecx.scope.resolve_expr(e) {
-        // surprise - we already calculated this expr before
-        Ok(ScalarExpr::Column(i).into())
-    } else {
-        Ok(match e {
-            Expr::Identifier(names) => {
-                let mut names = names.clone();
-                let col_name = normalize::column_name(names.pop().unwrap());
-                let (i, _) = if names.is_empty() {
-                    ecx.scope.resolve_column(&col_name)?
-                } else {
-                    let table_name = normalize::object_name(ObjectName(names))?;
-                    ecx.scope.resolve_table_column(&table_name, &col_name)?
-                };
-                ScalarExpr::Column(i).into()
-            }
-            Expr::Value(val) => plan_literal(val)?,
-            Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
-            Expr::Parameter(n) => {
-                if !ecx.allow_subqueries {
-                    bail!("{} does not allow subqueries", ecx.name)
-                }
-                if *n == 0 || *n > 65536 {
-                    bail!("there is no parameter ${}", n);
-                }
-                if ecx.qcx.param_types.borrow().contains_key(n) {
-                    ScalarExpr::Parameter(*n).into()
-                } else {
-                    CoercibleScalarExpr::Parameter(*n)
-                }
-            }
-            // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            Expr::IsNull(expr) => plan_is_null_expr(ecx, expr, false)?.into(),
-            Expr::IsNotNull(expr) => plan_is_null_expr(ecx, expr, true)?.into(),
-            Expr::UnaryOp { op, expr } => func::plan_unary_op(ecx, op, expr)?.into(),
-            Expr::BinaryOp { op, left, right } => {
-                func::plan_binary_op(ecx, op, left, right)?.into()
-            }
-            Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => plan_case(ecx, operand, conditions, results, else_result)?.into(),
-            Expr::Cast { expr, data_type } => {
-                let to_scalar_type = scalar_type_from_sql(data_type)?;
-                let expr = plan_expr(ecx, expr)?;
-                let expr =
-                    typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(to_scalar_type.clone()))?;
-                typeconv::plan_cast("CAST", ecx, expr, CastTo::Explicit(to_scalar_type))?.into()
-            }
-            Expr::Function(func) => plan_function(ecx, func)?.into(),
-            Expr::Exists(query) => {
-                if !ecx.allow_subqueries {
-                    bail!("{} does not allow subqueries", ecx.name)
-                }
-                let qcx = ecx.derived_query_context();
-                let (expr, _scope) = plan_subquery(&qcx, query)?;
-                expr.exists().into()
-            }
-            Expr::Subquery(query) => {
-                if !ecx.allow_subqueries {
-                    bail!("{} does not allow subqueries", ecx.name)
-                }
-                let qcx = ecx.derived_query_context();
-                let (expr, _scope) = plan_subquery(&qcx, query)?;
-                let column_types = qcx.relation_type(&expr).column_types;
-                if column_types.len() != 1 {
-                    bail!(
-                        "Expected subselect to return 1 column, got {} columns",
-                        column_types.len()
-                    );
-                }
-                expr.select().into()
-            }
-            Expr::Row { .. } => bail!("ROW constructors are not supported yet"),
-            Expr::Collate { .. } => unsupported!("COLLATE"),
-            Expr::Coalesce { exprs } => {
-                assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: plan_homogeneous_exprs("coalesce", ecx, exprs)?,
-                };
-                expr.into()
-            }
-            Expr::List(exprs) => {
-                let mut out = vec![];
-                for e in exprs {
-                    out.push(plan_expr(ecx, e)?);
-                }
-                CoercibleScalarExpr::LiteralList(out)
-            }
-            Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
-            Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
-            Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
-            Expr::Any { .. } => unreachable!("Expr::Any not desugared"),
-            Expr::All { .. } => unreachable!("Expr::All not desugared"),
-            Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
-        })
+        // We've already calculated this expression.
+        return Ok(ScalarExpr::Column(i).into());
     }
+
+    Ok(match e {
+        // Names.
+        Expr::Identifier(names) => {
+            let mut names = names.clone();
+            let col_name = normalize::column_name(names.pop().unwrap());
+            let (i, _) = if names.is_empty() {
+                ecx.scope.resolve_column(&col_name)?
+            } else {
+                let table_name = normalize::object_name(ObjectName(names))?;
+                ecx.scope.resolve_table_column(&table_name, &col_name)?
+            };
+            ScalarExpr::Column(i).into()
+        }
+        Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
+
+        // Literals.
+        Expr::Value(val) => plan_literal(val)?,
+        Expr::Parameter(n) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            if *n == 0 || *n > 65536 {
+                bail!("there is no parameter ${}", n);
+            }
+            if ecx.qcx.param_types.borrow().contains_key(n) {
+                ScalarExpr::Parameter(*n).into()
+            } else {
+                CoercibleScalarExpr::Parameter(*n)
+            }
+        }
+        Expr::List(exprs) => {
+            let mut out = vec![];
+            for e in exprs {
+                out.push(plan_expr(ecx, e)?);
+            }
+            CoercibleScalarExpr::LiteralList(out)
+        }
+        Expr::Row { .. } => unsupported!("ROW constructors are not supported yet"),
+
+        // Generalized functions, operators, and casts.
+        Expr::UnaryOp { op, expr } => func::plan_unary_op(ecx, op, expr)?.into(),
+        Expr::BinaryOp { op, left, right } => func::plan_binary_op(ecx, op, left, right)?.into(),
+        Expr::Cast { expr, data_type } => {
+            let to_scalar_type = scalar_type_from_sql(data_type)?;
+            let expr = plan_expr(ecx, expr)?;
+            let expr = typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(to_scalar_type.clone()))?;
+            typeconv::plan_cast("CAST", ecx, expr, CastTo::Explicit(to_scalar_type))?.into()
+        }
+        Expr::Function(func) => plan_function(ecx, func)?.into(),
+
+        // Special functions and operators.
+        Expr::IsNull { expr, negated } => plan_is_null_expr(ecx, expr, *negated)?.into(),
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => plan_case(ecx, operand, conditions, results, else_result)?.into(),
+        Expr::Coalesce { exprs } => {
+            assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::Coalesce,
+                exprs: plan_homogeneous_exprs("coalesce", ecx, exprs)?,
+            };
+            expr.into()
+        }
+
+        // Subqueries.
+        Expr::Exists(query) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            let qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&qcx, query)?;
+            expr.exists().into()
+        }
+        Expr::Subquery(query) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            let qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&qcx, query)?;
+            let column_types = qcx.relation_type(&expr).column_types;
+            if column_types.len() != 1 {
+                bail!(
+                    "Expected subselect to return 1 column, got {} columns",
+                    column_types.len()
+                );
+            }
+            expr.select().into()
+        }
+
+        Expr::Collate { .. } => unsupported!("COLLATE"),
+        Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
+        Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
+        Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
+        Expr::Any { .. } => unreachable!("Expr::Any not desugared"),
+        Expr::All { .. } => unreachable!("Expr::All not desugared"),
+        Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
+    })
 }
 
 /// Plans a list of expressions such that all input expressions will be cast to

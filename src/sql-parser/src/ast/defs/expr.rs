@@ -40,9 +40,7 @@ pub enum Expr {
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// `IS NULL` expression
-    IsNull(Box<Expr>),
-    /// `IS NOT NULL` expression
-    IsNotNull(Box<Expr>),
+    IsNull { expr: Box<Expr>, negated: bool },
     /// `[ NOT ] IN (val1, val2, ...)`
     InList {
         expr: Box<Expr>,
@@ -135,13 +133,13 @@ impl AstDisplay for Expr {
                 f.write_str(".*");
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
-            Expr::IsNull(ast) => {
-                f.write_node(&ast);
-                f.write_str(" IS NULL");
-            }
-            Expr::IsNotNull(ast) => {
-                f.write_node(&ast);
-                f.write_str(" IS NOT NULL");
+            Expr::IsNull { expr, negated } => {
+                f.write_node(&expr);
+                f.write_str(" IS");
+                if *negated {
+                    f.write_str(" NOT");
+                }
+                f.write_str(" NULL");
             }
             Expr::InList {
                 expr,

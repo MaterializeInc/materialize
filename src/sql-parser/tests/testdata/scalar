@@ -53,12 +53,12 @@ BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("
 parse-scalar
 name LIKE '%a' IS NULL
 ----
-IsNull(BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) })
+IsNull { expr: BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) }, negated: false }
 
 parse-scalar
 name NOT LIKE '%a' IS NULL
 ----
-IsNull(BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) })
+IsNull { expr: BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) }, negated: false }
 
 # Casts
 
