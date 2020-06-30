@@ -846,7 +846,7 @@ fn handle_create_index(
                 .collect()
         }
     };
-    let keys = query::plan_index_exprs(scx, on_desc, &filled_key_parts)?;
+    let keys = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
         FullName {

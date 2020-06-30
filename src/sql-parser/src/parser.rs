@@ -2109,7 +2109,11 @@ impl Parser {
         match self.parse_optional_alias(reserved_kwds)? {
             Some(name) => {
                 let columns = self.parse_parenthesized_column_list(Optional)?;
-                Ok(Some(TableAlias { name, columns }))
+                Ok(Some(TableAlias {
+                    name,
+                    columns,
+                    strict: false,
+                }))
             }
             None => Ok(None),
         }
@@ -2253,6 +2257,7 @@ impl Parser {
         let alias = TableAlias {
             name: self.parse_identifier()?,
             columns: self.parse_parenthesized_column_list(Optional)?,
+            strict: false,
         };
         self.expect_keyword("AS")?;
         self.expect_token(&Token::LParen)?;

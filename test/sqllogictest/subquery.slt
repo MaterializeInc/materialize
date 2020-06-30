@@ -10,6 +10,9 @@
 mode cockroach
 
 statement ok
+CREATE TABLE nullary ()
+
+statement ok
 CREATE TABLE peeps (
   peep text
 )
@@ -184,6 +187,14 @@ query BBBBBBBBBBBBBBB
 ----
 true  false  false  true  false  false  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
+# TODO(benesch): this should yield a nullary result set, but presently
+# fails.
+# query error subquery has too few columns
+# SELECT 1 < ALL(SELECT * FROM nullary)
+
+query error subquery has 2 columns available but 1 columns specified
+SELECT 1 < ALL(SELECT 1, 2)
+
 statement ok
 CREATE TABLE s1 (a int NOT NULL)
 
@@ -241,10 +252,10 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
 %0 =
-| Get materialize.public.t1 (u37)
+| Get materialize.public.t1 (u39)
 
 %1 =
-| Get materialize.public.t2 (u39)
+| Get materialize.public.t2 (u41)
 | Distinct group=()
 | ArrangeBy ()
 
@@ -259,14 +270,14 @@ query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
 %0 =
-| Get materialize.public.t1 (u37)
+| Get materialize.public.t1 (u39)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.t3 (u41)
+| Get materialize.public.t3 (u43)
 
 %2 =
-| Get materialize.public.t2 (u39)
+| Get materialize.public.t2 (u41)
 | Distinct group=()
 | ArrangeBy ()
 
@@ -282,11 +293,11 @@ query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
 %0 =
-| Get materialize.public.t1 (u37)
+| Get materialize.public.t1 (u39)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.t3 (u41)
+| Get materialize.public.t3 (u43)
 
 %2 =
 | Join %0 %1 (= #0 #1)
@@ -302,7 +313,7 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 | ArrangeBy (#0)
 
 %5 =
-| Get materialize.public.t2 (u39)
+| Get materialize.public.t2 (u41)
 | ArrangeBy (#0)
 
 %6 =
@@ -337,12 +348,12 @@ SELECT age, ascii_num * 2 as result FROM (
 )
 ----
 %0 =
-| Get materialize.public.likes (u3)
+| Get materialize.public.likes (u5)
 | Filter !(isnull(#0))
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.age (u21)
+| Get materialize.public.age (u23)
 | Filter !(isnull(#0))
 
 %2 =
@@ -458,7 +469,7 @@ query T multiline
 EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 ----
 %0 =
-| Get materialize.public.y (u57)
+| Get materialize.public.y (u59)
 | Distinct group=(#0)
 
 %1 =
@@ -466,7 +477,7 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | ArrangeBy (#0)
 
 %2 =
-| Get materialize.public.x (u55)
+| Get materialize.public.x (u57)
 | ArrangeBy (#0)
 
 %3 =
@@ -476,7 +487,7 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u57)
+| Get materialize.public.y (u59)
 | ArrangeBy (#0)
 
 %5 =
@@ -519,7 +530,7 @@ query T multiline
 EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 ----
 %0 =
-| Get materialize.public.y (u57)
+| Get materialize.public.y (u59)
 | Distinct group=(#0)
 
 %1 =
@@ -527,7 +538,7 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.x (u55)
+| Get materialize.public.x (u57)
 
 %3 =
 | Join %1 %2
@@ -537,7 +548,7 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u57)
+| Get materialize.public.y (u59)
 | ArrangeBy (#0)
 
 %5 =
@@ -582,7 +593,7 @@ query T multiline
 EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 ----
 %0 =
-| Get materialize.public.y (u57)
+| Get materialize.public.y (u59)
 | Distinct group=(#0)
 
 %1 =
@@ -590,7 +601,7 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | ArrangeBy ()
 
 %2 =
-| Get materialize.public.x (u55)
+| Get materialize.public.x (u57)
 
 %3 =
 | Join %1 %2
@@ -600,7 +611,7 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Distinct group=(#0)
 
 %4 =
-| Get materialize.public.y (u57)
+| Get materialize.public.y (u59)
 | ArrangeBy (#0)
 
 %5 =

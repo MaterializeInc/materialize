@@ -341,12 +341,43 @@ impl Expr {
         Expr::Value(Value::Number(n.into()))
     }
 
+    pub fn negate(self) -> Expr {
+        Expr::UnaryOp {
+            expr: Box::new(self),
+            op: UnaryOperator::Not,
+        }
+    }
+
     pub fn binop(self, op: BinaryOperator, right: Expr) -> Expr {
         Expr::BinaryOp {
             left: Box::new(self),
             op,
             right: Box::new(right),
         }
+    }
+
+    pub fn and(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::And, right)
+    }
+
+    pub fn or(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Or, right)
+    }
+
+    pub fn lt(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Lt, right)
+    }
+
+    pub fn lt_eq(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::LtEq, right)
+    }
+
+    pub fn gt(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Gt, right)
+    }
+
+    pub fn gt_eq(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::GtEq, right)
     }
 
     pub fn equals(self, right: Expr) -> Expr {

@@ -13,14 +13,35 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use uuid::Uuid;
+
 use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{Expr, Function, FunctionArgs, Ident, ObjectName, Query, SelectItem};
+use sql_parser::ast::{
+    BinaryOperator, Expr, Function, FunctionArgs, Ident, ObjectName, Query, Select, SelectItem,
+    TableAlias, TableWithJoins, Value,
+};
 
 use crate::normalize;
 
-pub fn transform(query: &mut Query) {
-    FuncRewriter.visit_query_mut(query);
-    IdentFuncRewriter.visit_query_mut(query);
+pub fn transform_query<'a>(query: &'a mut Query) -> Result<(), failure::Error> {
+    run_transforms(|t, query| t.visit_query_mut(query), query)
+}
+
+pub fn transform_expr(expr: &mut Expr) -> Result<(), failure::Error> {
+    run_transforms(|t, expr| t.visit_expr_mut(expr), expr)
+}
+
+fn run_transforms<F, A>(mut f: F, ast: &mut A) -> Result<(), failure::Error>
+where
+    F: for<'ast> FnMut(&mut dyn VisitMut<'ast>, &'ast mut A),
+{
+    f(&mut FuncRewriter, ast);
+
+    f(&mut IdentFuncRewriter, ast);
+
+    let mut desugarer = Desugarer::new();
+    f(&mut desugarer, ast);
+    desugarer.status
 }
 
 // Transforms various functions to forms that are more easily handled by the
@@ -185,5 +206,124 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
                 *expr = Expr::call_nullary("current_timestamp");
             }
         }
+    }
+}
+
+/// Removes syntax sugar to simplify the planner.
+///
+/// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
+/// (<subquery>)`.
+struct Desugarer {
+    status: Result<(), failure::Error>,
+}
+
+impl<'ast> VisitMut<'ast> for Desugarer {
+    fn visit_expr_mut(&mut self, expr: &'ast mut Expr) {
+        if self.status.is_ok() {
+            self.status = self.visit_expr_mut_internal(expr);
+        }
+    }
+}
+
+impl Desugarer {
+    fn new() -> Desugarer {
+        Desugarer { status: Ok(()) }
+    }
+
+    fn visit_expr_mut_internal(&mut self, expr: &mut Expr) -> Result<(), failure::Error> {
+        // `(<expr>)` => `<expr>`
+        while let Expr::Nested(e) = expr {
+            *expr = e.take();
+        }
+
+        // `<expr> BETWEEN <low> AND <high>` => `<expr> >= <low> AND <expr> <= <low>`
+        // `<expr> NOT BETWEEN <low> AND <high>` => `<expr> < <low> OR <expr> > <low>`
+        if let Expr::Between {
+            expr: e,
+            low,
+            high,
+            negated,
+        } = expr
+        {
+            if *negated {
+                *expr = e.clone().lt(low.take()).or(e.take().gt(high.take()));
+            } else {
+                *expr = e.clone().gt_eq(low.take()).and(e.take().lt_eq(high.take()));
+            }
+        }
+
+        // `<expr> IN (<e_1>, <e_2>, ..., <e_n>)`
+        // =>
+        // `<expr> = <e_1> OR <expr> = <e_2> OR ... OR <expr> = <e_n>`
+        if let Expr::InList {
+            expr: e,
+            list,
+            negated,
+        } = expr
+        {
+            let mut cond = Expr::Value(Value::Boolean(false));
+            for l in list {
+                cond = cond.or(e.clone().equals(l.take()));
+            }
+            if *negated {
+                *expr = cond.negate();
+            } else {
+                *expr = cond;
+            }
+        }
+
+        // `<expr> IN (<subquery>)` => `<expr> = ANY (<subquery>)`
+        // `<expr> NOT IN (<subquery>)` => `<expr> <> ALL (<subquery>)`
+        if let Expr::InSubquery {
+            expr: e,
+            subquery,
+            negated,
+        } = expr
+        {
+            if *negated {
+                *expr = Expr::All {
+                    left: Box::new(e.take()),
+                    op: BinaryOperator::NotEq,
+                    right: Box::new(subquery.take()),
+                };
+            } else {
+                *expr = Expr::Any {
+                    left: Box::new(e.take()),
+                    op: BinaryOperator::Eq,
+                    right: Box::new(subquery.take()),
+                };
+            }
+        }
+
+        // `<expr> = ALL (<subquery>)`
+        // =>
+        // `(SELECT internal_all(<expr> = <binding>) FROM (<subquery>) AS _ (<binding>))
+        //
+        // and analogously for other operators and ANY.
+        if let Expr::Any { left, op, right } | Expr::All { left, op, right } = expr {
+            let binding = Ident::new(format!("right_{}", Uuid::new_v4()));
+            let select = Select::default()
+                .from(TableWithJoins::subquery(
+                    right.take(),
+                    TableAlias {
+                        name: Ident::new("subquery"),
+                        columns: vec![binding.clone()],
+                        strict: true,
+                    },
+                ))
+                .project(SelectItem::UnnamedExpr(
+                    left.take()
+                        .binop(op.clone(), Expr::Identifier(vec![binding]))
+                        .call_unary(match expr {
+                            Expr::Any { .. } => "internal_any",
+                            Expr::All { .. } => "internal_all",
+                            _ => unreachable!(),
+                        }),
+                ));
+            *expr = Expr::Subquery(Box::new(Query::select(select)));
+        }
+
+        visit_mut::visit_expr_mut(self, expr);
+        Ok(())
     }
 }

@@ -18,6 +18,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::mem;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{Expr, FunctionArgs, Ident, ObjectName};
 
@@ -67,6 +69,33 @@ impl AstDisplay for Query {
     }
 }
 impl_display!(Query);
+
+impl Query {
+    pub fn select(select: Select) -> Query {
+        Query {
+            ctes: vec![],
+            body: SetExpr::Select(Box::new(select)),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+            fetch: None,
+        }
+    }
+
+    pub fn take(&mut self) -> Query {
+        mem::replace(
+            self,
+            Query {
+                ctes: vec![],
+                order_by: vec![],
+                body: SetExpr::Values(Values(vec![])),
+                limit: None,
+                offset: None,
+                fetch: None,
+            },
+        )
+    }
+}
 
 /// A node in a tree, representing a "query body" expression, roughly:
 /// `SELECT ... [ {UNION|EXCEPT|INTERSECT} SELECT ...]`
@@ -139,7 +168,7 @@ impl_display!(SetOperator);
 /// A restricted variant of `SELECT` (without CTEs/`ORDER BY`), which may
 /// appear either as the only body item of an `SQLQuery`, or as an operand
 /// to a set operation like `UNION`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct Select {
     pub distinct: bool,
     /// projection expressions
@@ -180,6 +209,18 @@ impl AstDisplay for Select {
     }
 }
 impl_display!(Select);
+
+impl Select {
+    pub fn from(mut self, twj: TableWithJoins) -> Select {
+        self.from.push(twj);
+        self
+    }
+
+    pub fn project(mut self, select_item: SelectItem) -> Select {
+        self.projection.push(select_item);
+        self
+    }
+}
 
 /// A single CTE (used after `WITH`): `alias [(col1, col2, ...)] AS ( query )`
 /// The names in the column list before `AS`, when specified, replace the names
@@ -248,6 +289,19 @@ impl AstDisplay for TableWithJoins {
     }
 }
 impl_display!(TableWithJoins);
+
+impl TableWithJoins {
+    pub fn subquery(query: Query, alias: TableAlias) -> TableWithJoins {
+        TableWithJoins {
+            relation: TableFactor::Derived {
+                lateral: false,
+                subquery: Box::new(query),
+                alias: Some(alias),
+            },
+            joins: vec![],
+        }
+    }
+}
 
 /// A table name or a parenthesized subquery with an optional alias
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -328,6 +382,12 @@ impl_display!(TableFactor);
 pub struct TableAlias {
     pub name: Ident,
     pub columns: Vec<Ident>,
+    /// Whether the number of aliased columns must exactly match the number of
+    /// columns in the underlying table.
+    ///
+    /// TODO(benesch): this shouldn't really live in the AST (it's a HIR
+    /// concern), but it will have to do for now.
+    pub strict: bool,
 }
 
 impl AstDisplay for TableAlias {
