@@ -878,6 +878,12 @@ fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
             "type": field_type,
         }));
     }
+
+    // TODO(rkhaitan): this schema omits the total_order and data collection_order
+    // fields found in Debezium's transaction metadata struct. We chose to omit
+    // those because the order is not stable across reruns and has no semantic
+    // meaning for records within a timestamp in Materialize. These fields may
+    // be useful in the future for deduplication.
     let schema = json!({
         "type": "record",
         "name": "envelope",
@@ -919,6 +925,12 @@ fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
 }
 
 fn get_consistency_schema() -> Schema {
+    // TODO(rkhaitan): this schema intentionally omits the data_collections field
+    // that is typically present in Debezium transaction metadata topics. See
+    // https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata
+    // for more information. We chose to omit this field because it is redundant
+    // for sinks where each consistency topic corresponds to exactly one sink.
+    // We will need to add it in order to be able to reingest sinked topics.
     let schema = json!({
         "type": "record",
         "name": "envelope",
