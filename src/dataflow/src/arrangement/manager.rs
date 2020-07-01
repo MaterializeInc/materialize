@@ -30,21 +30,73 @@ pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 pub type ErrsHandle = TraceKeyHandle<DataflowError, Timestamp, Diff>;
 
-/// A `TraceManager` stores maps from global identifiers to the primary arranged
-/// representation of that collection.
-pub struct TraceManager {
-    pub traces: HashMap<GlobalId, TraceBundle>,
+use lazy_static::lazy_static;
+use prometheus::core::{AtomicF64, AtomicU64};
+use prometheus::{
+    register_counter_vec, register_uint_gauge_vec, CounterVec, DeleteOnDropCounter,
+    DeleteOnDropGauge, UIntGaugeVec,
+};
+use std::time::Instant;
+
+struct MaintenanceMetrics {
+    /// 1 if maintenance is happening; 0 if not.
+    /// if maintenance turns out to take a very long time, this will allow us
+    /// to gain a sense that materialize is stuck on maintenance before the
+    /// maintenance completes
+    doing_maintenance: DeleteOnDropGauge<'static, AtomicU64>,
+    /// total time spent doing maintenance. More useful in the general case.
+    total_maintenance_time: DeleteOnDropCounter<'static, AtomicF64>,
 }
 
-impl Default for TraceManager {
-    fn default() -> Self {
-        TraceManager {
-            traces: HashMap::new(),
+impl MaintenanceMetrics {
+    fn new(worker_id: &str, arrangement_id: &str) -> Self {
+        lazy_static! {
+            static ref DOING_MAINTENANCE: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_arrangement_maintenance_active_info",
+                "Whether or not maintenance is occuring",
+                &["worker_id", "arrangement_id"]
+            )
+            .unwrap();
+            static ref TOTAL_MAINTENANCE_TIME: CounterVec = register_counter_vec!(
+                "mz_arrangement_maintenance_seconds_total",
+                "The total time spent maintaining an arrangement",
+                &["worker_id", "arrangement_id"]
+            )
+            .unwrap();
+        }
+        let labels = &[worker_id, arrangement_id];
+        MaintenanceMetrics {
+            doing_maintenance: DeleteOnDropGauge::new_with_error_handler(
+                DOING_MAINTENANCE.with_label_values(labels),
+                &DOING_MAINTENANCE,
+                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+            ),
+            total_maintenance_time: DeleteOnDropCounter::new_with_error_handler(
+                TOTAL_MAINTENANCE_TIME.with_label_values(labels),
+                &TOTAL_MAINTENANCE_TIME,
+                |e, v| log::warn!("unable to delete metric {}: {}", v.fq_name(), e),
+            ),
         }
     }
 }
 
+/// A `TraceManager` stores maps from global identifiers to the primary arranged
+/// representation of that collection.
+pub struct TraceManager {
+    pub traces: HashMap<GlobalId, TraceBundle>,
+    worker_id: usize,
+    maintenance_metrics: HashMap<GlobalId, MaintenanceMetrics>,
+}
+
 impl TraceManager {
+    pub fn new(worker_id: usize) -> Self {
+        TraceManager {
+            traces: HashMap::new(),
+            worker_id,
+            maintenance_metrics: HashMap::new(),
+        }
+    }
+
     /// Performs maintenance work on the managed traces.
     ///
     /// In particular, this method enables the physical merging of batches, so that at most a logarithmic
@@ -54,11 +106,25 @@ impl TraceManager {
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
         let mut antichain = Antichain::new();
-        for bundle in self.traces.values_mut() {
+        for (arrangement_id, bundle) in self.traces.iter_mut() {
+            // Update maintenance metrics
+            // Entry is guaranteed to exist as it gets created when we initialize the partition.
+            let maintenance_metrics = self.maintenance_metrics.get_mut(arrangement_id).unwrap();
+
+            //signal that maintenance is happening
+            maintenance_metrics.doing_maintenance.set(1);
+            let now = Instant::now();
+
             bundle.oks.read_upper(&mut antichain);
             bundle.oks.distinguish_since(antichain.borrow());
             bundle.errs.read_upper(&mut antichain);
             bundle.errs.distinguish_since(antichain.borrow());
+
+            maintenance_metrics
+                .total_maintenance_time
+                .inc_by(now.elapsed().as_secs_f64());
+            // signal that maintenance has ended
+            maintenance_metrics.doing_maintenance.set(0);
         }
     }
 
@@ -88,11 +154,16 @@ impl TraceManager {
 
     /// Binds the arrangement for `id` to `trace`.
     pub fn set(&mut self, id: GlobalId, trace: TraceBundle) {
+        self.maintenance_metrics.insert(
+            id,
+            MaintenanceMetrics::new(&self.worker_id.to_string(), &id.to_string()),
+        );
         self.traces.insert(id, trace);
     }
 
     /// Removes the trace for `id`.
     pub fn del_trace(&mut self, id: &GlobalId) -> bool {
+        self.maintenance_metrics.remove(id);
         self.traces.remove(&id).is_some()
     }
 

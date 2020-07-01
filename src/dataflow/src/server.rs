@@ -228,7 +228,7 @@ where
             Worker {
                 inner: timely_worker,
                 pending_peeks: Vec::new(),
-                traces: TraceManager::default(),
+                traces: TraceManager::new(worker_idx),
                 logging_config: logging_config.clone(),
                 feedback_tx: None,
                 command_rx,
