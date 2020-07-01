@@ -644,27 +644,17 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
     let encoding_name = b.unwrap_str().to_lowercase().replace("_", "-");
 
-    match encoding_from_whatwg_label(&encoding_name) {
-        Some(enc) => {
-            // todo@jldlaughlin: #2282
-            if enc.name() != "utf-8" {
-                return Err(EvalError::InvalidEncodingName(encoding_name));
-            }
-        }
-        None => return Err(EvalError::InvalidEncodingName(encoding_name)),
+    // Supporting other encodings is tracked by #2282.
+    if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
+        return Err(EvalError::InvalidEncodingName(encoding_name));
     }
 
-    let bytes = a.unwrap_bytes();
-    match str::from_utf8(bytes) {
+    match str::from_utf8(a.unwrap_bytes()) {
         Ok(from) => Ok(Datum::String(from)),
-        Err(e) => {
-            let mut byte_sequence = String::new();
-            strconv::format_bytes(&mut byte_sequence, &bytes);
-            Err(EvalError::InvalidByteSequence {
-                byte_sequence: e.to_string(),
-                encoding_name,
-            })
-        }
+        Err(e) => Err(EvalError::InvalidByteSequence {
+            byte_sequence: e.to_string(),
+            encoding_name,
+        }),
     }
 }
 
@@ -1882,7 +1872,7 @@ impl BinaryFunc {
             }
 
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Trim | TrimLeading
-            | TrimTrailing => ColumnType::new(ScalarType::String).nullable(false),
+            | TrimTrailing => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 | EncodedBytesCharLength => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)

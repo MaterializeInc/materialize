@@ -77,3 +77,27 @@ SELECT bit_length('DEADBEEF'::text);
 
 statement error
 SELECT length('deadbeef'::text, 'utf-8')
+
+query IT rowsort
+SELECT ord, b::text FROM test
+----
+0 \x68656c6c6f
+1 \xe4bda0e5a5bd
+2 NULL
+3 \x
+4 \x6e6f6e7072696e7461626c65636861723a06
+
+query IT rowsort
+SELECT ord, convert_from(b, 'utf-8') FROM test
+----
+0 hello
+1 你好
+2 NULL
+3 (empty)
+4 nonprintablechar:
+
+query error invalid encoding name 'invalid encoding'
+SELECT convert_from(b, 'invalid encoding') FROM test
+
+query error invalid utf-8 sequence of 1 bytes
+SELECT convert_from('\x00ff', 'utf-8')
