@@ -116,3 +116,23 @@ $ kafka-verify format=avro sink=materialize.public.snk8
 {"before": null, "after": {"a": "jack", "b": "jill", "mz_line_no": 2}}
 {"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
 {"before": null, "after": {"a": "extra", "b": "row", "mz_line_no": 4}}
+
+# Test that we are correctly handling WITH/WITHOUT SNAPSHOT.
+> CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
+
+> CREATE SINK sink9 FROM foo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink9'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITHOUT SNAPSHOT
+
+$ kafka-verify format=avro sink=materialize.public.sink9
+
+> CREATE SINK sink10 FROM foo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink10'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH SNAPSHOT
+
+$ kafka-verify format=avro sink=materialize.public.sink10
+{"before": null, "after": {"column1": 1}}
+{"before": null, "after": {"column1": 2}}
+{"before": null, "after": {"column1": 3}}
