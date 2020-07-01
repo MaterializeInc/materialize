@@ -120,12 +120,6 @@ $ kafka-verify format=avro sink=materialize.public.snk8
 # Test that we are correctly handling WITH/WITHOUT SNAPSHOT.
 > CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
 
-# Make sure data is read into view before we TAIL it.
-> SELECT * FROM foo;
-1
-2
-3
-
 > CREATE SINK sink9 FROM foo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink9'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
