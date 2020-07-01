@@ -31,10 +31,10 @@ pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 pub type ErrsHandle = TraceKeyHandle<DataflowError, Timestamp, Diff>;
 
 use lazy_static::lazy_static;
-use prometheus::core::AtomicU64;
+use prometheus::core::{AtomicF64, AtomicU64};
 use prometheus::{
-    register_uint_counter_vec, register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge,
-    UIntCounterVec, UIntGaugeVec,
+    register_counter_vec, register_uint_gauge_vec, CounterVec, DeleteOnDropCounter,
+    DeleteOnDropGauge, UIntGaugeVec,
 };
 use std::time::Instant;
 
@@ -45,20 +45,20 @@ struct MaintenanceMetrics {
     /// maintenance completes
     doing_maintenance: DeleteOnDropGauge<'static, AtomicU64>,
     /// total time spent doing maintenance. More useful in the general case.
-    total_maintenance_time: DeleteOnDropCounter<'static, AtomicU64>,
+    total_maintenance_time: DeleteOnDropCounter<'static, AtomicF64>,
 }
 
 impl MaintenanceMetrics {
     fn new(worker_id: &str, arrangement_id: &str) -> Self {
         lazy_static! {
             static ref DOING_MAINTENANCE: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_active_maintenance",
+                "mz_arrangement_maintenance_active_info",
                 "Whether or not maintenance is occuring",
                 &["worker_id", "arrangement_id"]
             )
             .unwrap();
-            static ref TOTAL_MAINTENANCE_TIME: UIntCounterVec = register_uint_counter_vec!(
-                "mz_total_maintenance_time",
+            static ref TOTAL_MAINTENANCE_TIME: CounterVec = register_counter_vec!(
+                "mz_arrangement_maintenance_seconds_total",
                 "The total time spent maintaining an arrangement",
                 &["worker_id", "arrangement_id"]
             )
@@ -122,7 +122,7 @@ impl TraceManager {
 
             maintenance_metrics
                 .total_maintenance_time
-                .inc_by(now.elapsed().as_millis() as u64);
+                .inc_by(now.elapsed().as_secs_f64());
             // signal that maintenance has ended
             maintenance_metrics.doing_maintenance.set(0);
         }
