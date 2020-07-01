@@ -139,9 +139,15 @@ pub enum SinkConsistencyState {
 
 #[derive(Debug)]
 pub struct SinkConsistencyInfo {
+    // Name of the consistency topic
     topic: String,
+    // Schema id for the consistency topic
+    // Note that multiple consistency topics with the same schema will have different
+    // schema ids
     schema_id: i32,
+    // The total number of data messages that will be generated for each timestamp
     timestamp_counts: BTreeMap<Timestamp, i64>,
+    // Pending consistency messages that need to be sent to the consistency topic
     queue: VecDeque<(SinkConsistencyState, Timestamp, Option<i64>)>,
 }
 
@@ -155,7 +161,7 @@ impl SinkConsistencyInfo {
         }
     }
 
-    // Updates the number of messages associated with time by count, and returns
+    // Updates the number of messages associated with `time` by `count`, and returns
     // true if this was the first time we observed time.
     pub fn update_timestamp_count(&mut self, time: Timestamp, count: i64) -> bool {
         if let Some(c) = self.timestamp_counts.get_mut(&time) {
@@ -313,6 +319,8 @@ where
                                 consistency.update_timestamp_count(time, diff.abs() as i64);
 
                             if insert {
+                                // Send a BEGIN message for a timestamp the first
+                                // time we encounter it
                                 consistency.queue.push_back((
                                     SinkConsistencyState::Begin,
                                     time,
@@ -325,8 +333,8 @@ where
 
                 if let Some(consistency) = &mut consistency {
                     // Find the timestamps that are now complete (meaning all
-                    // timestamps t !<= input_frontier. For each consistency
-                    // send a pair of BEGIN / END messages in the consistency topic
+                    // timestamps t !<= input_frontier. For each closed timestamp
+                    // send a END message in the consistency topic
                     consistency
                         .get_complete_timestamps(input.frontier())
                         .iter()
