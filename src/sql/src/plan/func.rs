@@ -75,6 +75,7 @@ impl TypeCategory {
             | ScalarType::Int64 => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::String => Self::String,
+            ScalarType::Record { .. } => Self::Pseudo,
         }
     }
 

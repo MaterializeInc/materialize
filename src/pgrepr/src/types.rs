@@ -35,6 +35,8 @@ pub enum Type {
     List(Box<Type>),
     /// An arbitrary precision number.
     Numeric,
+    /// A sequence of heterogeneous values.
+    Record(Vec<Type>),
     /// A variable-length string.
     Text,
     /// A time of day without a day.
@@ -76,6 +78,7 @@ impl Type {
             Type::Timestamp => &postgres_types::Type::TIMESTAMP,
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::List(_) => &LIST,
+            Type::Record(_) => &postgres_types::Type::RECORD,
         }
     }
 
@@ -110,6 +113,7 @@ impl Type {
             Type::Timestamp => 8,
             Type::TimestampTz => 8,
             Type::List(_) => -1,
+            Type::Record(_) => -1,
         }
     }
 }
@@ -132,6 +136,9 @@ impl From<&ScalarType> for Type {
             ScalarType::String => Type::Text,
             ScalarType::Jsonb => Type::Jsonb,
             ScalarType::List(t) => Type::List(Box::new(From::from(&**t))),
+            ScalarType::Record { fields } => {
+                Type::Record(fields.iter().map(|(_name, ty)| Type::from(ty)).collect())
+            }
         }
     }
 }

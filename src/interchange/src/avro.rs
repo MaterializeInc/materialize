@@ -868,7 +868,8 @@ fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
                 "type": "string",
                 "connect.name": "io.debezium.data.Json",
             }),
-            ScalarType::List(_t) => unimplemented!("jamii/list"),
+            ScalarType::List(_t) => unimplemented!("list types"),
+            ScalarType::Record { .. } => unimplemented!("record types"),
         };
         if typ.nullable {
             field_type = json!(["null", field_type]);
@@ -1051,7 +1052,8 @@ impl Encoder {
                     ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
                     ScalarType::String => Value::String(datum.unwrap_str().to_owned()),
                     ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
-                    ScalarType::List(_t) => unimplemented!("jamii/list"),
+                    ScalarType::List(_t) => unimplemented!("list types"),
+                    ScalarType::Record { .. } => unimplemented!("record types"),
                 };
                 if typ.nullable {
                     val = Value::Union(1, Box::new(val));
