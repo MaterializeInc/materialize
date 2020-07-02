@@ -1540,7 +1540,7 @@ ORDER BY
 | ArrangeBy (#1, #2)
 
 %14 =
-| Join %12 %13 (= #0 #3) (= #1 #4)
+| Join %12 %13 (= #1 #4) (= #0 #3)
 | | implementation = DeltaQuery %12 %13.(#1, #2) | %13 %12.(#0, #1)
 | | demand = (#0, #1, #6, #12)
 | Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
@@ -1847,72 +1847,37 @@ ORDER BY
     s_name
 ----
 %0 =
-| Constant ()
+| Get materialize.public.supplier (u8)
 
 %1 =
-| Get materialize.public.supplier (u8)
+| Get materialize.public.nation (u1)
 
 %2 =
 | InnerJoin %0 %1 on true
-
-%3 =
-| Get materialize.public.nation (u1)
-
-%4 =
-| InnerJoin %2 %3 on true
-| Filter ((select(%7) && (#3 = #7)) && (#8 = "CANADA"))
+| Filter ((select(%3) && (#3 = #7)) && (#8 = "CANADA"))
 | |
-| | %5 =
-| | | Constant ()
-| |
-| | %6 =
+| | %3 =
 | | | Get materialize.public.partsupp (u11)
-| |
-| | %7 =
-| | | InnerJoin %5 %6 on true
-| | | Filter (select(%10) && ((i32todec(#2) * 1000dec) > select(%14)))
+| | | Filter (select(%4) && ((i32todec(#2) * 1000dec) > select(%6)))
 | | | |
-| | | | %8 =
-| | | | | Constant ()
-| | | |
-| | | | %9 =
+| | | | %4 =
 | | | | | Get materialize.public.part (u6)
-| | | |
-| | | | %10 =
-| | | | | InnerJoin %8 %9 on true
 | | | | | Filter like(#1, "forest%")
-| | | | | Map #0
-| | | | | Project (#9)
-| | | | | Map
 | | | | | Project (#0)
 | | | | | Reduce group=() any((#^0 = #0))
 | | | |
 | | | |
-| | | | %12 =
-| | | | | Constant ()
-| | | |
-| | | | %13 =
+| | | | %6 =
 | | | | | Get materialize.public.lineitem (u21)
-| | | |
-| | | | %14 =
-| | | | | InnerJoin %12 %13 on true
 | | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= strtodate("1995-01-01"))) && (datetots(#10) < (strtodate("1995-01-01") + 1 year)))
-| | | | | Map
 | | | | | Reduce group=() sum(#4)
 | | | | | Map (5dec * #0)
 | | | | | Project (#1)
-| | | | | Map
-| | | | | Project (#0)
 | | | |
-| | | Map #1
-| | | Project (#5)
-| | | Map
-| | | Project (#0)
+| | | Project (#1)
 | | | Reduce group=() any((#^0 = #0))
 | |
-| Map #1, #2
-| Project (#11, #12)
-| Map
+| Project (#1, #2)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
 

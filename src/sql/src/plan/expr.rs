@@ -357,17 +357,56 @@ impl RelationExpr {
         }
     }
 
+    pub fn arity(&self) -> usize {
+        match self {
+            RelationExpr::Constant { typ, .. } => typ.column_types.len(),
+            RelationExpr::Get { typ, .. } => typ.column_types.len(),
+            RelationExpr::Project { outputs, .. } => outputs.len(),
+            RelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
+            RelationExpr::FlatMap { input, func, .. } => input.arity() + func.output_arity(),
+            RelationExpr::Filter { input, .. }
+            | RelationExpr::TopK { input, .. }
+            | RelationExpr::Distinct { input }
+            | RelationExpr::Negate { input }
+            | RelationExpr::Threshold { input } => input.arity(),
+            RelationExpr::Join { left, right, .. } => left.arity() + right.arity(),
+            RelationExpr::Union { left, .. } => left.arity(),
+            RelationExpr::Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => group_key.len() + aggregates.len(),
+        }
+    }
+
+    pub fn is_join_identity(&self) -> bool {
+        match self {
+            RelationExpr::Constant { rows, .. } => rows.len() == 1 && self.arity() == 0,
+            _ => false,
+        }
+    }
+
     pub fn project(self, outputs: Vec<usize>) -> Self {
-        RelationExpr::Project {
-            input: Box::new(self),
-            outputs,
+        if outputs.iter().copied().eq(0..self.arity()) {
+            // The projection is trivial. Suppress it.
+            self
+        } else {
+            RelationExpr::Project {
+                input: Box::new(self),
+                outputs,
+            }
         }
     }
 
     pub fn map(self, scalars: Vec<ScalarExpr>) -> Self {
-        RelationExpr::Map {
-            input: Box::new(self),
-            scalars,
+        if scalars.is_empty() {
+            // The map is trivial. Suppress it.
+            self
+        } else {
+            RelationExpr::Map {
+                input: Box::new(self),
+                scalars,
+            }
         }
     }
 
@@ -379,11 +418,17 @@ impl RelationExpr {
     }
 
     pub fn product(self, right: Self) -> Self {
-        RelationExpr::Join {
-            left: Box::new(self),
-            right: Box::new(right),
-            on: ScalarExpr::literal_true(),
-            kind: JoinKind::Inner,
+        if self.is_join_identity() {
+            right
+        } else if right.is_join_identity() {
+            self
+        } else {
+            RelationExpr::Join {
+                left: Box::new(self),
+                right: Box::new(right),
+                on: ScalarExpr::literal_true(),
+                kind: JoinKind::Inner,
+            }
         }
     }
 

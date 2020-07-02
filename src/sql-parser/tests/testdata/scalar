@@ -53,12 +53,12 @@ BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("
 parse-scalar
 name LIKE '%a' IS NULL
 ----
-IsNull(BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) })
+IsNull { expr: BinaryOp { left: Identifier([Ident("name")]), op: Like, right: Value(String("%a")) }, negated: false }
 
 parse-scalar
 name NOT LIKE '%a' IS NULL
 ----
-IsNull(BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) })
+IsNull { expr: BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) }, negated: false }
 
 # Casts
 
@@ -257,7 +257,7 @@ BinaryOp { left: Subquery(Query { ctes: [], body: Select(Select { distinct: fals
 parse-scalar
 1 < ANY (SELECT 2)
 ----
-Any { left: Value(Number("1")), op: Lt, right: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("2")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, some: false }
+Any { left: Value(Number("1")), op: Lt, right: Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Value(Number("2")))], from: [], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None } }
 
 parse-scalar
 LIST[]

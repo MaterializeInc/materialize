@@ -18,16 +18,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// An SQL expression of any type.
-///
-/// The parser does not distinguish between expressions of different types
-/// (e.g. boolean vs string), so the caller must handle expressions of
-/// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
+use std::mem;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     BinaryOperator, DataType, Ident, ObjectName, OrderByExpr, Query, UnaryOperator, Value,
 };
 
+/// An SQL expression of any type.
+///
+/// The parser does not distinguish between expressions of different types
+/// (e.g. boolean vs string), so the caller must handle expressions of
+/// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     /// Identifier e.g. table name or column name
@@ -38,9 +40,7 @@ pub enum Expr {
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// `IS NULL` expression
-    IsNull(Box<Expr>),
-    /// `IS NOT NULL` expression
-    IsNotNull(Box<Expr>),
+    IsNull { expr: Box<Expr>, negated: bool },
     /// `[ NOT ] IN (val1, val2, ...)`
     InList {
         expr: Box<Expr>,
@@ -113,7 +113,6 @@ pub enum Expr {
         left: Box<Expr>,
         op: BinaryOperator,
         right: Box<Query>,
-        some: bool, // just tracks which syntax was used
     },
     /// `<expr> <op> ALL (<query>)`
     All {
@@ -134,13 +133,13 @@ impl AstDisplay for Expr {
                 f.write_str(".*");
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
-            Expr::IsNull(ast) => {
-                f.write_node(&ast);
-                f.write_str(" IS NULL");
-            }
-            Expr::IsNotNull(ast) => {
-                f.write_node(&ast);
-                f.write_str(" IS NOT NULL");
+            Expr::IsNull { expr, negated } => {
+                f.write_node(&expr);
+                f.write_str(" IS");
+                if *negated {
+                    f.write_str(" NOT");
+                }
+                f.write_str(" NULL");
             }
             Expr::InList {
                 expr,
@@ -288,21 +287,11 @@ impl AstDisplay for Expr {
                 f.write_node(&s);
                 f.write_str(")");
             }
-            Expr::Any {
-                left,
-                op,
-                right,
-                some,
-            } => {
+            Expr::Any { left, op, right } => {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
-                if *some {
-                    f.write_str(" SOME ");
-                } else {
-                    f.write_str(" ANY ");
-                }
-                f.write_str("(");
+                f.write_str("ANY (");
                 f.write_node(&right);
                 f.write_str(")");
             }
@@ -337,6 +326,98 @@ impl Expr {
         } else {
             false
         }
+    }
+
+    pub fn null() -> Expr {
+        Expr::Value(Value::Null)
+    }
+
+    pub fn number<S>(n: S) -> Expr
+    where
+        S: Into<String>,
+    {
+        Expr::Value(Value::Number(n.into()))
+    }
+
+    pub fn negate(self) -> Expr {
+        Expr::UnaryOp {
+            expr: Box::new(self),
+            op: UnaryOperator::Not,
+        }
+    }
+
+    pub fn binop(self, op: BinaryOperator, right: Expr) -> Expr {
+        Expr::BinaryOp {
+            left: Box::new(self),
+            op,
+            right: Box::new(right),
+        }
+    }
+
+    pub fn and(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::And, right)
+    }
+
+    pub fn or(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Or, right)
+    }
+
+    pub fn lt(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Lt, right)
+    }
+
+    pub fn lt_eq(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::LtEq, right)
+    }
+
+    pub fn gt(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Gt, right)
+    }
+
+    pub fn gt_eq(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::GtEq, right)
+    }
+
+    pub fn equals(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Eq, right)
+    }
+
+    pub fn minus(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Minus, right)
+    }
+
+    pub fn multiply(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Multiply, right)
+    }
+
+    pub fn modulo(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Modulus, right)
+    }
+
+    pub fn divide(self, right: Expr) -> Expr {
+        self.binop(BinaryOperator::Divide, right)
+    }
+
+    pub fn call(name: &str, args: Vec<Expr>) -> Expr {
+        Expr::Function(Function {
+            name: ObjectName(vec![name.into()]),
+            args: FunctionArgs::Args(args),
+            filter: None,
+            over: None,
+            distinct: false,
+        })
+    }
+
+    pub fn call_nullary(name: &str) -> Expr {
+        Expr::call(name, vec![])
+    }
+
+    pub fn call_unary(self, name: &str) -> Expr {
+        Expr::call(name, vec![self])
+    }
+
+    pub fn take(&mut self) -> Expr {
+        mem::replace(self, Expr::Identifier(vec![]))
     }
 }
 

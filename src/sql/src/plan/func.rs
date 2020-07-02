@@ -1449,6 +1449,12 @@ lazy_static! {
                 }),
                 params!(Any) => AggregateFunc::Count
             },
+            "internal_all" => {
+                params!(Any) => AggregateFunc::All
+            },
+            "internal_any" => {
+                params!(Any) => AggregateFunc::Any
+            },
             "max" => {
                 params!(Int32) => AggregateFunc::MaxInt32,
                 params!(Int64) => AggregateFunc::MaxInt64,

@@ -196,14 +196,14 @@ ALTER TABLE tab ADD CHECK (end_date > start_date OR end_date IS NULL)
 ----
 ALTER TABLE tab ADD CHECK (end_date > start_date OR end_date IS NULL)
 =>
-AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Check { name: None, expr: BinaryOp { left: BinaryOp { left: Identifier([Ident("end_date")]), op: Gt, right: Identifier([Ident("start_date")]) }, op: Or, right: IsNull(Identifier([Ident("end_date")])) } }) }
+AlterTable { name: ObjectName([Ident("tab")]), operation: AddConstraint(Check { name: None, expr: BinaryOp { left: BinaryOp { left: Identifier([Ident("end_date")]), op: Gt, right: Identifier([Ident("start_date")]) }, op: Or, right: IsNull { expr: Identifier([Ident("end_date")]), negated: false } } }) }
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 ----
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 =>
-CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: None, expr: BinaryOp { left: BinaryOp { left: Identifier([Ident("end_date")]), op: Gt, right: Identifier([Ident("start_date")]) }, op: Or, right: IsNull(Identifier([Ident("end_date")])) } }], with_options: [], if_not_exists: false }
+CreateTable { name: ObjectName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Int, collation: None, options: [] }], constraints: [Check { name: None, expr: BinaryOp { left: BinaryOp { left: Identifier([Ident("end_date")]), op: Gt, right: Identifier([Ident("start_date")]) }, op: Or, right: IsNull { expr: Identifier([Ident("end_date")]), negated: false } } }], with_options: [], if_not_exists: false }
 
 parse-statement
 CREATE DATABASE foo
@@ -557,7 +557,7 @@ CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop W
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNotNull(Identifier([Ident("a")])), Nested(Exists(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("y")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("boop"), Ident("z")]), op: Eq, right: Identifier([Ident("z")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), if_not_exists: false }
+CreateIndex { name: Some(Ident("fizz")), on_name: ObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: ObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: false, projection: [UnnamedExpr(Identifier([Ident("y")]))], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("boop")]), args: None, alias: None, with_hints: [] }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("boop"), Ident("z")]), op: Eq, right: Identifier([Ident("z")]) }), group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None })), Identifier([Ident("delta")])]), if_not_exists: false }
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))

@@ -782,10 +782,7 @@ impl Parser {
         let op_range = self.peek_prev_range();
 
         if let Some(op) = regular_binary_operator {
-            let any = self.parse_keyword("ANY");
-            let some = !any && self.parse_keyword("SOME");
-            let all = !any && !some && self.parse_keyword("ALL");
-            if any || some || all {
+            if let Some(kw) = self.parse_one_of_keywords(&["ANY", "SOME", "ALL"]) {
                 use BinaryOperator::*;
                 match op {
                     Eq | NotEq | Gt | GtEq | Lt | LtEq => (),
@@ -794,12 +791,11 @@ impl Parser {
                 self.expect_token(&Token::LParen)?;
                 let query = self.parse_query()?;
                 self.expect_token(&Token::RParen)?;
-                if any || some {
+                if kw == "ANY" || kw == "SOME" {
                     Ok(Expr::Any {
                         left: Box::new(expr),
                         op,
                         right: Box::new(query),
-                        some,
                     })
                 } else {
                     Ok(Expr::All {
@@ -819,9 +815,15 @@ impl Parser {
             match k.keyword.as_ref() {
                 "IS" => {
                     if self.parse_keyword("NULL") {
-                        Ok(Expr::IsNull(Box::new(expr)))
+                        Ok(Expr::IsNull {
+                            expr: Box::new(expr),
+                            negated: false,
+                        })
                     } else if self.parse_keywords(vec!["NOT", "NULL"]) {
-                        Ok(Expr::IsNotNull(Box::new(expr)))
+                        Ok(Expr::IsNull {
+                            expr: Box::new(expr),
+                            negated: true,
+                        })
                     } else {
                         self.expected(
                             self.peek_range(),
@@ -2113,7 +2115,11 @@ impl Parser {
         match self.parse_optional_alias(reserved_kwds)? {
             Some(name) => {
                 let columns = self.parse_parenthesized_column_list(Optional)?;
-                Ok(Some(TableAlias { name, columns }))
+                Ok(Some(TableAlias {
+                    name,
+                    columns,
+                    strict: false,
+                }))
             }
             None => Ok(None),
         }
@@ -2257,6 +2263,7 @@ impl Parser {
         let alias = TableAlias {
             name: self.parse_identifier()?,
             columns: self.parse_parenthesized_column_list(Optional)?,
+            strict: false,
         };
         self.expect_keyword("AS")?;
         self.expect_token(&Token::LParen)?;

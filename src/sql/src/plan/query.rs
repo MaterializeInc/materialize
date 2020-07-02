@@ -30,9 +30,8 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
     ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
-    TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    TableFactor, TableWithJoins, Value, Values,
 };
-use uuid::Uuid;
 
 use ::expr::{Id, RowSetFinishing};
 use dataflow_types::Timestamp;
@@ -66,7 +65,7 @@ pub fn plan_root_query(
     mut query: Query,
     lifetime: QueryLifetime,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
-    transform_ast::transform(&mut query);
+    transform_ast::transform_query(&mut query)?;
     let qcx = QueryContext::root(scx, lifetime);
     let (expr, scope, finishing) = plan_query(&qcx, &query)?;
     let typ = qcx.relation_type(&expr);
@@ -106,19 +105,15 @@ pub fn plan_show_where(
     let mut row_expr = RelationExpr::constant(rows, desc.typ().clone());
 
     if let Some(f) = filter {
-        let owned;
-        let predicate = match &f {
-            ShowStatementFilter::Like(s) => {
-                owned = Expr::BinaryOp {
-                    left: Box::new(Expr::Identifier(vec![Ident::new(
-                        names[0].clone().unwrap(),
-                    )])),
-                    op: BinaryOperator::Like,
-                    right: Box::new(Expr::Value(Value::String(s.into()))),
-                };
-                &owned
-            }
-            ShowStatementFilter::Where(selection) => selection,
+        let mut predicate = match &f {
+            ShowStatementFilter::Like(s) => Expr::BinaryOp {
+                left: Box::new(Expr::Identifier(vec![Ident::new(
+                    names[0].clone().unwrap(),
+                )])),
+                op: BinaryOperator::Like,
+                right: Box::new(Expr::Value(Value::String(s.into()))),
+            },
+            ShowStatementFilter::Where(selection) => selection.clone(),
         };
         let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
         let scope = Scope::from_source(None, names, None);
@@ -130,6 +125,7 @@ pub fn plan_show_where(
             allow_aggregates: false,
             allow_subqueries: true,
         };
+        transform_ast::transform_expr(&mut predicate)?;
         let expr = plan_expr(&ecx, &predicate)?.type_as(&ecx, ScalarType::Bool)?;
         row_expr = row_expr.filter(vec![expr]);
     }
@@ -151,7 +147,10 @@ pub fn plan_show_where(
 }
 
 /// Evaluates an expression in the AS OF position of a TAIL statement.
-pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp, failure::Error> {
+pub fn eval_as_of<'a>(
+    scx: &'a StatementContext,
+    mut expr: Expr,
+) -> Result<Timestamp, failure::Error> {
     let scope = Scope::from_source(
         None,
         iter::empty::<Option<ColumnName>>(),
@@ -168,6 +167,7 @@ pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp
         allow_subqueries: false,
     };
 
+    transform_ast::transform_expr(&mut expr)?;
     let ex = plan_expr(ecx, &expr)?
         .type_as_any(ecx)?
         .lower_uncorrelated()?;
@@ -190,7 +190,7 @@ pub fn eval_as_of<'a>(scx: &'a StatementContext, expr: Expr) -> Result<Timestamp
 pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
-    exprs: &[Expr],
+    exprs: Vec<Expr>,
 ) -> Result<Vec<::expr::ScalarExpr>, failure::Error> {
     let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext::root(scx, QueryLifetime::Static);
@@ -203,8 +203,9 @@ pub fn plan_index_exprs<'a>(
         allow_subqueries: false,
     };
     let mut out = vec![];
-    for expr in exprs {
-        let expr = plan_expr_or_col_index(ecx, expr)?;
+    for mut expr in exprs {
+        transform_ast::transform_expr(&mut expr)?;
+        let expr = plan_expr_or_col_index(ecx, &expr)?;
         out.push(expr.lower_uncorrelated()?);
     }
     Ok(out)
@@ -318,13 +319,7 @@ fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope),
             offset: finishing.offset,
         };
     }
-    Ok((
-        RelationExpr::Project {
-            input: Box::new(expr),
-            outputs: finishing.project,
-        },
-        scope,
-    ))
+    Ok((expr.project(finishing.project), scope))
 }
 
 fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope), failure::Error> {
@@ -625,8 +620,12 @@ fn plan_view_select(
                 allow_subqueries: true,
             };
             for (expr, scope_item) in plan_select_item(ecx, p, &from_scope, &select_all_mapping)? {
-                project_key.push(group_scope.len() + project_exprs.len());
-                project_exprs.push(expr);
+                if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
+                    project_key.push(column);
+                } else {
+                    project_key.push(group_scope.len() + project_exprs.len());
+                    project_exprs.push(expr);
+                }
                 project_scope.items.push(scope_item);
             }
         }
@@ -775,8 +774,17 @@ fn plan_table_alias(
     };
     let column_names = match alias {
         None => inherent_column_names,
-        Some(TableAlias { columns, .. }) if columns.is_empty() => inherent_column_names,
-        Some(TableAlias { columns, .. }) if columns.len() > inherent_column_names.len() => {
+        Some(TableAlias {
+            columns,
+            strict: false,
+            ..
+        }) if columns.is_empty() => inherent_column_names,
+
+        Some(TableAlias {
+            columns, strict, ..
+        }) if (columns.len() > inherent_column_names.len())
+            || (*strict && columns.len() != inherent_column_names.len()) =>
+        {
             bail!(
                 "{} has {} columns available but {} columns specified",
                 table_name
@@ -787,6 +795,7 @@ fn plan_table_alias(
                 columns.len()
             );
         }
+
         Some(TableAlias { columns, .. }) => columns
             .iter()
             .cloned()
@@ -1172,139 +1181,110 @@ pub fn plan_expr<'a>(
     e: &Expr,
 ) -> Result<CoercibleScalarExpr, failure::Error> {
     if let Some(i) = ecx.scope.resolve_expr(e) {
-        // surprise - we already calculated this expr before
-        Ok(ScalarExpr::Column(i).into())
-    } else {
-        Ok(match e {
-            Expr::Identifier(names) => {
-                let mut names = names.clone();
-                let col_name = normalize::column_name(names.pop().unwrap());
-                let (i, _) = if names.is_empty() {
-                    ecx.scope.resolve_column(&col_name)?
-                } else {
-                    let table_name = normalize::object_name(ObjectName(names))?;
-                    ecx.scope.resolve_table_column(&table_name, &col_name)?
-                };
-                ScalarExpr::Column(i).into()
-            }
-            Expr::Value(val) => plan_literal(val)?,
-            Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
-            Expr::Parameter(n) => {
-                if !ecx.allow_subqueries {
-                    bail!("{} does not allow subqueries", ecx.name)
-                }
-                if *n == 0 || *n > 65536 {
-                    bail!("there is no parameter ${}", n);
-                }
-                if ecx.qcx.param_types.borrow().contains_key(n) {
-                    ScalarExpr::Parameter(*n).into()
-                } else {
-                    CoercibleScalarExpr::Parameter(*n)
-                }
-            }
-            // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            Expr::IsNull(expr) => plan_is_null_expr(ecx, expr, false)?.into(),
-            Expr::IsNotNull(expr) => plan_is_null_expr(ecx, expr, true)?.into(),
-            Expr::UnaryOp { op, expr } => func::plan_unary_op(ecx, op, expr)?.into(),
-            Expr::BinaryOp { op, left, right } => {
-                func::plan_binary_op(ecx, op, left, right)?.into()
-            }
-            Expr::Between {
-                expr,
-                low,
-                high,
-                negated,
-            } => plan_between(ecx, expr, low, high, *negated)?,
-            Expr::InList {
-                expr,
-                list,
-                negated,
-            } => plan_in_list(ecx, expr, list, *negated)?,
-            Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => plan_case(ecx, operand, conditions, results, else_result)?.into(),
-            Expr::Nested(expr) => plan_expr(ecx, expr)?,
-            Expr::Cast { expr, data_type } => {
-                let to_scalar_type = scalar_type_from_sql(data_type)?;
-                let expr = plan_expr(ecx, expr)?;
-                let expr =
-                    typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(to_scalar_type.clone()))?;
-                typeconv::plan_cast("CAST", ecx, expr, CastTo::Explicit(to_scalar_type))?.into()
-            }
-            Expr::Function(func) => plan_function(ecx, func)?.into(),
-            Expr::Exists(query) => {
-                if !ecx.allow_subqueries {
-                    bail!("{} does not allow subqueries", ecx.name)
-                }
-                let qcx = ecx.derived_query_context();
-                let (expr, _scope) = plan_subquery(&qcx, query)?;
-                expr.exists().into()
-            }
-            Expr::Subquery(query) => {
-                if !ecx.allow_subqueries {
-                    bail!("{} does not allow subqueries", ecx.name)
-                }
-                let qcx = ecx.derived_query_context();
-                let (expr, _scope) = plan_subquery(&qcx, query)?;
-                let column_types = qcx.relation_type(&expr).column_types;
-                if column_types.len() != 1 {
-                    bail!(
-                        "Expected subselect to return 1 column, got {} columns",
-                        column_types.len()
-                    );
-                }
-                expr.select().into()
-            }
-            Expr::Any {
-                left,
-                op,
-                right,
-                some: _,
-            } => plan_any_or_all(ecx, left, op, right, AggregateFunc::Any)?.into(),
-            Expr::All { left, op, right } => {
-                plan_any_or_all(ecx, left, op, right, AggregateFunc::All)?.into()
-            }
-            Expr::InSubquery {
-                expr,
-                subquery,
-                negated,
-            } => {
-                if !ecx.allow_subqueries {
-                    bail!("{} does not allow subqueries", ecx.name)
-                }
-                use BinaryOperator::{Eq, NotEq};
-                if *negated {
-                    // `<expr> NOT IN (<subquery>)` is equivalent to
-                    // `<expr> <> ALL (<subquery>)`.
-                    plan_any_or_all(ecx, expr, &NotEq, subquery, AggregateFunc::All)?.into()
-                } else {
-                    // `<expr> IN (<subquery>)` is equivalent to
-                    // `<expr> = ANY (<subquery>)`.
-                    plan_any_or_all(ecx, expr, &Eq, subquery, AggregateFunc::Any)?.into()
-                }
-            }
-            Expr::Row { .. } => bail!("ROW constructors are not supported yet"),
-            Expr::Collate { .. } => unsupported!("COLLATE"),
-            Expr::Coalesce { exprs } => {
-                assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
-                let expr = ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: plan_homogeneous_exprs("coalesce", ecx, exprs)?,
-                };
-                expr.into()
-            }
-            Expr::List(exprs) => {
-                let mut out = vec![];
-                for e in exprs {
-                    out.push(plan_expr(ecx, e)?);
-                }
-                CoercibleScalarExpr::LiteralList(out)
-            }
-        })
+        // We've already calculated this expression.
+        return Ok(ScalarExpr::Column(i).into());
     }
+
+    Ok(match e {
+        // Names.
+        Expr::Identifier(names) => {
+            let mut names = names.clone();
+            let col_name = normalize::column_name(names.pop().unwrap());
+            let (i, _) = if names.is_empty() {
+                ecx.scope.resolve_column(&col_name)?
+            } else {
+                let table_name = normalize::object_name(ObjectName(names))?;
+                ecx.scope.resolve_table_column(&table_name, &col_name)?
+            };
+            ScalarExpr::Column(i).into()
+        }
+        Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
+
+        // Literals.
+        Expr::Value(val) => plan_literal(val)?,
+        Expr::Parameter(n) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            if *n == 0 || *n > 65536 {
+                bail!("there is no parameter ${}", n);
+            }
+            if ecx.qcx.param_types.borrow().contains_key(n) {
+                ScalarExpr::Parameter(*n).into()
+            } else {
+                CoercibleScalarExpr::Parameter(*n)
+            }
+        }
+        Expr::List(exprs) => {
+            let mut out = vec![];
+            for e in exprs {
+                out.push(plan_expr(ecx, e)?);
+            }
+            CoercibleScalarExpr::LiteralList(out)
+        }
+        Expr::Row { .. } => unsupported!("ROW constructors are not supported yet"),
+
+        // Generalized functions, operators, and casts.
+        Expr::UnaryOp { op, expr } => func::plan_unary_op(ecx, op, expr)?.into(),
+        Expr::BinaryOp { op, left, right } => func::plan_binary_op(ecx, op, left, right)?.into(),
+        Expr::Cast { expr, data_type } => {
+            let to_scalar_type = scalar_type_from_sql(data_type)?;
+            let expr = plan_expr(ecx, expr)?;
+            let expr = typeconv::plan_coerce(ecx, expr, CoerceTo::Plain(to_scalar_type.clone()))?;
+            typeconv::plan_cast("CAST", ecx, expr, CastTo::Explicit(to_scalar_type))?.into()
+        }
+        Expr::Function(func) => plan_function(ecx, func)?.into(),
+
+        // Special functions and operators.
+        Expr::IsNull { expr, negated } => plan_is_null_expr(ecx, expr, *negated)?.into(),
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => plan_case(ecx, operand, conditions, results, else_result)?.into(),
+        Expr::Coalesce { exprs } => {
+            assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
+            let expr = ScalarExpr::CallVariadic {
+                func: VariadicFunc::Coalesce,
+                exprs: plan_homogeneous_exprs("coalesce", ecx, exprs)?,
+            };
+            expr.into()
+        }
+
+        // Subqueries.
+        Expr::Exists(query) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            let qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&qcx, query)?;
+            expr.exists().into()
+        }
+        Expr::Subquery(query) => {
+            if !ecx.allow_subqueries {
+                bail!("{} does not allow subqueries", ecx.name)
+            }
+            let qcx = ecx.derived_query_context();
+            let (expr, _scope) = plan_subquery(&qcx, query)?;
+            let column_types = qcx.relation_type(&expr).column_types;
+            if column_types.len() != 1 {
+                bail!(
+                    "Expected subselect to return 1 column, got {} columns",
+                    column_types.len()
+                );
+            }
+            expr.select().into()
+        }
+
+        Expr::Collate { .. } => unsupported!("COLLATE"),
+        Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
+        Expr::InList { .. } => unreachable!("Expr::InList not desugared"),
+        Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
+        Expr::Any { .. } => unreachable!("Expr::Any not desugared"),
+        Expr::All { .. } => unreachable!("Expr::All not desugared"),
+        Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
+    })
 }
 
 /// Plans a list of expressions such that all input expressions will be cast to
@@ -1357,70 +1337,6 @@ pub fn plan_homogeneous_exprs(
         }
     }
     Ok(out)
-}
-
-fn plan_any_or_all<'a>(
-    ecx: &ExprContext,
-    left: &'a Expr,
-    op: &'a BinaryOperator,
-    right: &'a Query,
-    func: AggregateFunc,
-) -> Result<ScalarExpr, failure::Error> {
-    if !ecx.allow_subqueries {
-        bail!("{} does not allow subqueries", ecx.name)
-    }
-    let qcx = ecx.derived_query_context();
-    // plan right
-
-    let (right, _scope) = plan_subquery(&qcx, right)?;
-    let column_types = qcx.relation_type(&right).column_types;
-    if column_types.len() != 1 {
-        bail!(
-            "Expected subquery of ANY to return 1 column, got {} columns",
-            column_types.len()
-        );
-    }
-
-    // plan left and op
-    // this is a bit of a hack - we want to plan `op` as if the original expr was `(SELECT ANY/ALL(left op right[1]) FROM right)`
-    let mut scope = Scope::empty(Some(ecx.scope.clone()));
-    let right_name = format!("right_{}", Uuid::new_v4());
-    scope.items.push(ScopeItem {
-        names: vec![ScopeItemName {
-            table_name: None,
-            column_name: Some(ColumnName::from(right_name.clone())),
-        }],
-        expr: None,
-        nameable: true,
-    });
-    let any_ecx = ExprContext {
-        qcx: &qcx,
-        name: "WHERE clause",
-        scope: &scope,
-        relation_type: &qcx.relation_type(&right),
-        allow_aggregates: false,
-        allow_subqueries: true,
-    };
-
-    let op_expr = func::plan_binary_op(
-        &any_ecx,
-        op,
-        left,
-        &Expr::Identifier(vec![Ident::new(right_name)]),
-    )?;
-
-    // plan subquery
-    let expr = right
-        .reduce(
-            vec![],
-            vec![AggregateExpr {
-                func,
-                expr: Box::new(op_expr),
-                distinct: false,
-            }],
-        )
-        .select();
-    Ok(expr)
 }
 
 fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, failure::Error> {
@@ -1550,70 +1466,6 @@ fn plan_is_null_expr<'a>(
         }
     }
     Ok(expr)
-}
-
-fn plan_between<'a>(
-    ecx: &ExprContext,
-    expr: &'a Expr,
-    low: &'a Expr,
-    high: &'a Expr,
-    negated: bool,
-) -> Result<CoercibleScalarExpr, failure::Error> {
-    let low = Expr::BinaryOp {
-        left: Box::new(expr.clone()),
-        op: if negated {
-            BinaryOperator::Lt
-        } else {
-            BinaryOperator::GtEq
-        },
-        right: Box::new(low.clone()),
-    };
-    let high = Expr::BinaryOp {
-        left: Box::new(expr.clone()),
-        op: if negated {
-            BinaryOperator::Gt
-        } else {
-            BinaryOperator::LtEq
-        },
-        right: Box::new(high.clone()),
-    };
-    let both = Expr::BinaryOp {
-        left: Box::new(low),
-        op: if negated {
-            BinaryOperator::Or
-        } else {
-            BinaryOperator::And
-        },
-        right: Box::new(high),
-    };
-    plan_expr(ecx, &both)
-}
-
-fn plan_in_list<'a>(
-    ecx: &ExprContext,
-    expr: &'a Expr,
-    list: &'a [Expr],
-    negated: bool,
-) -> Result<CoercibleScalarExpr, failure::Error> {
-    let mut cond = Expr::Value(Value::Boolean(false));
-    for l in list {
-        cond = Expr::BinaryOp {
-            left: Box::new(cond),
-            op: BinaryOperator::Or,
-            right: Box::new(Expr::BinaryOp {
-                left: Box::new(expr.clone()),
-                op: BinaryOperator::Eq,
-                right: Box::new(l.clone()),
-            }),
-        }
-    }
-    if negated {
-        cond = Expr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr: Box::new(cond),
-        }
-    }
-    plan_expr(ecx, &cond)
 }
 
 fn plan_case<'a>(
