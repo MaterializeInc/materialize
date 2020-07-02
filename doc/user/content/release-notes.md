@@ -57,9 +57,9 @@ Wrap your release notes at the 80 character mark.
 ## 0.3.0 &rarr; 0.3.1
 
 - Introduce the [`AS OF`](/sql/create-sink/#as-of) and
-  [`WITH SNAPSHOT`](/sql/create-sink/#WITH SNAPSHOT or WITHOUT SNAPSHOT) options for `CREATE SINK` to provide
+  [`WITH SNAPSHOT`](/sql/create-sink/#with-snapshot-or-without-snapshot) options for `CREATE SINK` to provide
   more control over what data the `SINK` will produce.
-- Update the [`SNAPSHOT`](/sql/tail/#WITH SNAPSHOT or WITHOUT SNAPSHOT) options for `TAIL`
+- Update the [`SNAPSHOT`](/sql/tail/#with-snapshot-or-without-snapshot) options for `TAIL`
   to allow more control over what data `TAIL` will produce.
 - Simplify converting non-materialized views into materialized views with
   [`CREATE DEFAULT INDEX ON foo`](/sql/create-index). This creates the same
