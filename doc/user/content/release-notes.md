@@ -46,8 +46,8 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-<span id="v0.3.2"></span>
-## 0.3.2 (Unreleased)
+<span id="v0.4.0"></span>
+## 0.4.0 (Unreleased)
 
 - Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
   reflects timely workers and does not limit the number of threads that materialized may
