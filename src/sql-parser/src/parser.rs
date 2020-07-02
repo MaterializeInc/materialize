@@ -3032,33 +3032,32 @@ impl Parser {
     /// has already been consumed.
     fn parse_explain(&mut self) -> Result<Statement, ParserError> {
         // (TYPED)?
-        let mut options = ExplainOptions { typed: false };
-        if self.parse_keyword("TYPED") {
-            options.typed = true;
-        }
-
-        // SQL | (RAW | DECORRELATED | OPTIMIZED)? PLAN
-        let stage = if self.parse_keyword("SQL") {
-            ExplainStage::Sql
-        } else if self.parse_keyword("RAW") {
-            self.expect_keyword("PLAN")?;
-            ExplainStage::RawPlan
-        } else if self.parse_keyword("DECORRELATED") {
-            self.expect_keyword("PLAN")?;
-            ExplainStage::DecorrelatedPlan
-        } else if self.parse_keyword("OPTIMIZED") {
-            self.expect_keyword("PLAN")?;
-            ExplainStage::OptimizedPlan
-        } else if self.parse_keyword("PLAN") {
-            // default stage
-            ExplainStage::OptimizedPlan
-        } else {
-            return Err(self
-                .expect_one_of_keywords(&["SQL", "RAW", "DECORRELATED", "OPTIMIZED", "PLAN"])
-                .unwrap_err());
+        let options = ExplainOptions {
+            typed: self.parse_keyword("TYPED"),
         };
 
-        self.expect_keyword("FOR")?;
+        // (RAW | DECORRELATED | OPTIMIZED)? PLAN
+        let stage = match self.parse_one_of_keywords(&["RAW", "DECORRELATED", "OPTIMIZED", "PLAN"])
+        {
+            Some("RAW") => {
+                self.expect_keywords(&["PLAN", "FOR"])?;
+                ExplainStage::RawPlan
+            }
+            Some("DECORRELATED") => {
+                self.expect_keywords(&["PLAN", "FOR"])?;
+                ExplainStage::DecorrelatedPlan
+            }
+            Some("OPTIMIZED") => {
+                self.expect_keywords(&["PLAN", "FOR"])?;
+                ExplainStage::OptimizedPlan
+            }
+            Some("PLAN") => {
+                self.expect_keyword("FOR")?;
+                ExplainStage::OptimizedPlan
+            }
+            None => ExplainStage::OptimizedPlan,
+            _ => unreachable!(),
+        };
 
         // VIEW view_name | query
         let explainee = if self.parse_keyword("VIEW") {

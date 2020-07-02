@@ -131,7 +131,6 @@ pub enum Plan {
     },
     SendRows(Vec<Row>),
     ExplainPlan {
-        sql: String,
         raw_plan: RelationExpr,
         decorrelated_plan: ::expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,

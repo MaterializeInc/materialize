@@ -759,7 +759,6 @@ where
             Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
 
             Plan::ExplainPlan {
-                sql,
                 raw_plan,
                 decorrelated_plan,
                 row_set_finishing,
@@ -767,7 +766,6 @@ where
                 options,
             } => tx.send(
                 self.sequence_explain_plan(
-                    sql,
                     raw_plan,
                     decorrelated_plan,
                     row_set_finishing,
@@ -1393,7 +1391,6 @@ where
 
     fn sequence_explain_plan(
         &mut self,
-        sql: String,
         raw_plan: sql::plan::RelationExpr,
         decorrelated_plan: expr::RelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
@@ -1401,7 +1398,6 @@ where
         options: ExplainOptions,
     ) -> Result<ExecuteResponse, failure::Error> {
         let explanation_string = match stage {
-            ExplainStage::Sql => sql,
             ExplainStage::RawPlan => {
                 let mut explanation = raw_plan.explain(&self.catalog);
                 if let Some(row_set_finishing) = row_set_finishing {

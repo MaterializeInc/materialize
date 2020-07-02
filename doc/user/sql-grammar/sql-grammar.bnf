@@ -137,11 +137,7 @@ drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
 explain ::=
   'EXPLAIN'
-  (
-    'SQL' |
-    'TYPED'? ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN'
-  )
-  'FOR'
+  'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
   (
     select_stmt |
     'VIEW' view_name
