@@ -54,7 +54,7 @@ Wrap your release notes at the 80 character mark.
   start.
 
 <span id="v0.3.1"></span>
-## 0.3.1 (Unreleased)
+## 0.3.1
 
 - Introduce the [`AS OF`](/sql/create-sink/#as-of) and
   [`WITH SNAPSHOT`](/sql/create-sink/#WITH SNAPSHOT or WITHOUT SNAPSHOT) options for `CREATE SINK` to provide
