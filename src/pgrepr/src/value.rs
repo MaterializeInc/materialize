@@ -8,9 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::error::Error;
+use std::fmt;
 use std::str;
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 
@@ -18,7 +19,7 @@ use ore::fmt::FormatBuffer;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
 use repr::strconv::{self, Nestable};
-use repr::{Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{ColumnName, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
 
 use crate::{Format, Interval, Jsonb, Numeric, Type};
 
@@ -49,6 +50,8 @@ pub enum Value {
     List(Vec<Option<Value>>),
     /// An arbitrary precision number.
     Numeric(Numeric),
+    /// A sequence of heterogeneous values.
+    Record(Vec<Option<Value>>),
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
@@ -93,6 +96,13 @@ impl Value {
                     .map(|elem| Value::from_datum(elem, elem_type))
                     .collect(),
             )),
+            (Datum::List(record), ScalarType::Record { fields, .. }) => Some(Value::Record(
+                record
+                    .iter()
+                    .zip(fields)
+                    .map(|(e, (_name, ty))| Value::from_datum(e, ty))
+                    .collect(),
+            )),
             _ => panic!("can't serialize {}::{}", datum, typ),
         }
     }
@@ -130,7 +140,11 @@ impl Value {
             Value::List(elems) => {
                 let elem_pg_type = match typ {
                     Type::List(t) => &*t,
-                    _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
+                    _ => unreachable!(
+                        "Value::into_datum called with mismatched types; \
+                        expected Value::Record, but got {:?}",
+                        typ
+                    ),
                 };
                 let (_, elem_type) = null_datum(&elem_pg_type);
                 let mut packer = RowPacker::new();
@@ -143,16 +157,41 @@ impl Value {
                     ScalarType::List(Box::new(elem_type)),
                 )
             }
+            Value::Record(elems) => {
+                let fields_in = match typ {
+                    Type::Record(fields) => fields,
+                    _ => unreachable!(
+                        "Value::into_datum called with mismatched types; \
+                        expected Value::Record, but got {:?}",
+                        typ
+                    ),
+                };
+                let mut fields_out = vec![];
+                let mut packer = RowPacker::new();
+                packer.push_list(elems.into_iter().zip(fields_in).map(|(e, f_in)| match e {
+                    Some(e) => {
+                        let (d, f_out) = e.into_datum(buf, f_in);
+                        let name = ColumnName::from(format!("f{}", fields_out.len() + 1));
+                        fields_out.push((name, f_out));
+                        d
+                    }
+                    None => Datum::Null,
+                }));
+                (
+                    buf.push_row(packer.finish()).unpack_first(),
+                    ScalarType::Record { fields: fields_out },
+                )
+            }
         }
     }
 
     /// Serializes this value to `buf` in the specified `format`.
-    pub fn encode(&self, format: Format, buf: &mut BytesMut) {
+    pub fn encode(&self, ty: &Type, format: Format, buf: &mut BytesMut) {
         match format {
             Format::Text => {
                 self.encode_text(buf);
             }
-            Format::Binary => self.encode_binary(buf),
+            Format::Binary => self.encode_binary(ty, buf),
         }
     }
 
@@ -178,12 +217,13 @@ impl Value {
             Value::Text(s) => strconv::format_string(buf, s),
             Value::Jsonb(js) => strconv::format_jsonb(buf, js.0.as_ref()),
             Value::List(elems) => encode_list(buf, elems),
+            Value::Record(elems) => encode_record(buf, elems),
         }
     }
 
     /// Serializes this value to `buf` using the [binary encoding
     /// format](Format::Binary).
-    pub fn encode_binary(&self, buf: &mut BytesMut) {
+    pub fn encode_binary(&self, ty: &Type, buf: &mut BytesMut) {
         let is_null = match self {
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
@@ -202,6 +242,28 @@ impl Value {
             Value::List(_) => {
                 // for now just use text encoding
                 self.encode_text(buf);
+                Ok(postgres_types::IsNull::No)
+            }
+            Value::Record(fields) => {
+                buf.put_i32(fields.len() as i32);
+                let field_types = match ty {
+                    Type::Record(fields) => fields,
+                    _ => unreachable!(),
+                };
+                for (f, ty) in fields.iter().zip(field_types) {
+                    buf.put_u32(ty.oid());
+                    match f {
+                        None => buf.put_i32(-1),
+                        Some(f) => {
+                            let base = buf.len();
+                            buf.put_i32(0);
+                            f.encode_binary(ty, buf);
+                            let len = buf.len() - base - 4;
+                            let len = (len as u32).to_be_bytes();
+                            buf[base..base + 4].copy_from_slice(&len);
+                        }
+                    }
+                }
                 Ok(postgres_types::IsNull::No)
             }
         }
@@ -244,6 +306,11 @@ impl Value {
             Type::Numeric => Value::Numeric(Numeric(strconv::parse_decimal(raw)?)),
             Type::Jsonb => Value::Jsonb(Jsonb(strconv::parse_jsonb(raw)?)),
             Type::List(elem_type) => Value::List(decode_list(&elem_type, raw)?),
+            Type::Record(_) => {
+                return Err(Box::new(DecodeError::new(
+                    "input of anonymous composite types is not implemented",
+                )))
+            }
         })
     }
 
@@ -269,9 +336,32 @@ impl Value {
                 // just using the text encoding for now
                 Value::decode_text(ty, raw)
             }
+            Type::Record(_) => Err(Box::new(DecodeError::new(
+                "input of anonymous composite types is not implemented",
+            ))),
         }
     }
 }
+
+#[derive(Debug)]
+struct DecodeError(String);
+
+impl DecodeError {
+    fn new<S>(message: S) -> DecodeError
+    where
+        S: Into<String>,
+    {
+        DecodeError(message.into())
+    }
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Error for DecodeError {}
 
 fn encode_list<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
 where
@@ -292,6 +382,16 @@ fn decode_list(
         || None,
         |elem_text| Value::decode_text(elem_type, elem_text.as_bytes()).map(Some),
     )?)
+}
+
+fn encode_record<F>(buf: &mut F, elems: &[Option<Value>]) -> Nestable
+where
+    F: FormatBuffer,
+{
+    strconv::format_record(buf, elems, |buf, elem| match elem {
+        None => buf.write_null(),
+        Some(elem) => elem.encode_text(buf.nonnull_buffer()),
+    })
 }
 
 /// Constructs a null datum of the specified type.
@@ -315,6 +415,16 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
             let (_, elem_type) = null_datum(t);
             ScalarType::List(Box::new(elem_type))
         }
+        Type::Record(fields) => ScalarType::Record {
+            fields: fields
+                .iter()
+                .enumerate()
+                .map(|(i, ty)| {
+                    let name = ColumnName::from(format!("f{}", i + 1));
+                    (name, null_datum(ty).1)
+                })
+                .collect(),
+        },
     };
     (Datum::Null, ty)
 }

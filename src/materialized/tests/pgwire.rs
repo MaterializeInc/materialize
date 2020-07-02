@@ -467,3 +467,27 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_record_types() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    let row = client.query_one("SELECT ROW()", &[])?;
+    let _: () = row.get(0);
+
+    let row = client.query_one("SELECT ROW(1)", &[])?;
+    let record: (i32,) = row.get(0);
+    assert_eq!(record, (1,));
+
+    let row = client.query_one("SELECT (1, (2, 3))", &[])?;
+    let record: (i32, (i32, i32)) = row.get(0);
+    assert_eq!(record, (1, (2, 3)));
+
+    let row = client.query_one("SELECT (1, 'a')", &[])?;
+    let record: (i32, String) = row.get(0);
+    assert_eq!(record, (1, "a".into()));
+
+    Ok(())
+}

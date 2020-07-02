@@ -18,7 +18,7 @@ use failure::bail;
 use lazy_static::lazy_static;
 
 use expr::VariadicFunc;
-use repr::{ColumnType, Datum, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, ScalarType};
 
 use super::expr::{BinaryFunc, CoercibleScalarExpr, ScalarExpr, UnaryFunc};
 use super::query::ExprContext;
@@ -494,6 +494,29 @@ pub fn plan_coerce<'a>(
             }
             ScalarExpr::CallVariadic {
                 func: VariadicFunc::ListCreate { elem_type: typ },
+                exprs: out,
+            }
+        }
+
+        (LiteralRecord(exprs), coerce_to) => {
+            let arity = exprs.len();
+            let coercions = match coerce_to {
+                Plain(ScalarType::Record { fields, .. }) if fields.len() == arity => fields
+                    .into_iter()
+                    .map(|(_name, ty)| CoerceTo::Plain(ty))
+                    .collect(),
+                _ => vec![Plain(ScalarType::String); exprs.len()],
+            };
+            let mut out = vec![];
+            for (e, coerce_to) in exprs.into_iter().zip(coercions) {
+                out.push(plan_coerce(ecx, e, coerce_to)?);
+            }
+            ScalarExpr::CallVariadic {
+                func: VariadicFunc::RecordCreate {
+                    field_names: (0..arity)
+                        .map(|i| ColumnName::from(format!("f{}", i + 1)))
+                        .collect(),
+                },
                 exprs: out,
             }
         }

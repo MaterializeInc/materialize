@@ -52,3 +52,8 @@ object = { opt-level = 3 }
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
 debug = 1
+
+[patch.crates-io]
+postgres = { git = "https://github.com/benesch/rust-postgres.git", branch = "tuple-from-sql" }
+postgres-types = { git = "https://github.com/benesch/rust-postgres.git", branch = "tuple-from-sql" }
+tokio-postgres = { git = "https://github.com/benesch/rust-postgres.git", branch = "tuple-from-sql" }
