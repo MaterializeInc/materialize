@@ -403,6 +403,7 @@ impl State {
             logging: logging_config.as_ref(),
             data_directory: None,
             executor: &executor,
+            logging_granularity: None,
             timestamp: TimestampConfig {
                 frequency: Duration::from_millis(10),
             },
