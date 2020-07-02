@@ -54,7 +54,7 @@ use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, Plan, PlanContext};
 use transform::Optimizer;
 
-use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -258,6 +258,22 @@ where
                         {
                             coord.create_index_dataflow(name.to_string(), id, index)
                         } else {
+                            if is_cat_index(&id) {
+                                let entry = coord.catalog.get_by_id(&index.on);
+                                coord.views.insert(id, ViewState::new(false, vec![]));
+                                broadcast(
+                                    &mut coord.broadcast_tx,
+                                    SequencedCommand::CreateLocalInput {
+                                        name: name.to_string(),
+                                        index_id: id,
+                                        index: IndexDesc {
+                                            on_id: id,
+                                            keys: index.keys.clone(),
+                                        },
+                                        on_type: entry.desc().unwrap().typ().clone(),
+                                    },
+                                );
+                            }
                             coord.insert_index(id, &index, Some(1_000))
                         }
                     }
@@ -545,12 +561,16 @@ where
                 }
             }
 
-            if self.need_advance {
-                let mut next_ts = self.get_ts();
-                self.need_advance = false;
-                if next_ts <= self.read_lower_bound {
-                    next_ts = self.read_lower_bound + 1;
-                }
+            let needed = self.need_advance;
+            let mut next_ts = self.get_ts();
+            self.need_advance = false;
+            if next_ts <= self.read_lower_bound {
+                next_ts = self.read_lower_bound + 1;
+            }
+            // TODO(justin): this is pretty hacky, and works more-or-less because this frequency
+            // lines up with that used in the logging views.
+            const FREQUENCY: u64 = 1_000;
+            if needed || next_ts / FREQUENCY > self.closed_up_to / FREQUENCY {
                 if next_ts > self.closed_up_to {
                     broadcast(
                         &mut self.broadcast_tx,
@@ -1577,13 +1597,13 @@ where
                             sinks_to_drop.push(entry.id());
                             match connector {
                                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                                    broadcast(
-                                        &mut self.broadcast_tx,
-                                        SequencedCommand::AppendLog(MaterializedEvent::KafkaSink {
-                                            id: entry.id(),
-                                            topic: topic.clone(),
-                                            insert: false,
-                                        }),
+                                    self.update_catalog_view(
+                                        CatalogView::MzKafkaSinks,
+                                        Row::pack(&[
+                                            Datum::String(entry.id().to_string().as_str()),
+                                            Datum::String(topic.as_str()),
+                                        ]),
+                                        -1,
                                     );
                                 }
                                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
@@ -1862,6 +1882,21 @@ where
         self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
     }
 
+    fn update_catalog_view(&mut self, v: CatalogView, row: Row, diff: isize) {
+        let timestamp = self.get_write_ts();
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::Insert {
+                id: v.index_id(),
+                updates: vec![Update {
+                    row,
+                    diff,
+                    timestamp,
+                }],
+            },
+        );
+    }
+
     fn create_sink_dataflow(
         &mut self,
         name: String,
@@ -1872,13 +1907,13 @@ where
         #[allow(clippy::single_match)]
         match &connector {
             SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::KafkaSink {
-                        id,
-                        topic: topic.clone(),
-                        insert: true,
-                    }),
+                self.update_catalog_view(
+                    CatalogView::MzKafkaSinks,
+                    Row::pack(&[
+                        Datum::String(id.to_string().as_str()),
+                        Datum::String(topic.as_str()),
+                    ]),
+                    1,
                 );
             }
             SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
@@ -2134,7 +2169,6 @@ where
             // original sources on which they depend.
             PeekWhen::Immediately => {
                 let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
-
                 // We peek at the largest element not in advance of `upper`, which
                 // involves a subtraction. If `upper` contains a zero timestamp there
                 // is no "prior" answer, and we do not want to peek at it as it risks
@@ -2386,6 +2420,11 @@ where
     }
 }
 
+fn is_cat_index(id: &GlobalId) -> bool {
+    // TODO(justin): do something better here?
+    CatalogView::all_views().iter().any(|v| v.index_id() == *id)
+}
+
 fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
     // TODO(benesch): avoid flushing after every send.
     block_on(tx.send(cmd)).unwrap();
@@ -2552,6 +2591,40 @@ fn open_catalog(
                             &log_src.schema(),
                             &log_src.index_by(),
                         ),
+                        plan_cx: PlanContext::default(),
+                    }),
+                );
+            }
+
+            for v in CatalogView::all_views() {
+                let desc = v.desc();
+                let view_name = FullName {
+                    database: DatabaseSpecifier::Ambient,
+                    schema: "mz_catalog".into(),
+                    item: v.name(),
+                };
+                let src = catalog::Source {
+                    create_sql: "".to_string(),
+                    plan_cx: PlanContext::default(),
+                    connector: dataflow_types::SourceConnector::Local,
+                    desc: desc.clone(),
+                };
+                let index_name = format!("{}_primary_idx", v.name());
+
+                let tab = CatalogItem::Source(src);
+
+                catalog.insert_item(v.id(), view_name.clone(), tab);
+                catalog.insert_item(
+                    v.index_id(),
+                    FullName {
+                        database: DatabaseSpecifier::Ambient,
+                        schema: "mz_catalog".into(),
+                        item: index_name.clone(),
+                    },
+                    CatalogItem::Index(catalog::Index {
+                        on: v.id(),
+                        keys: vec![],
+                        create_sql: index_sql(index_name, view_name, &desc, &[]),
                         plan_cx: PlanContext::default(),
                     }),
                 );
