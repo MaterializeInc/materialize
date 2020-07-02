@@ -80,6 +80,7 @@ impl fmt::Display for CodecError {
 /// ```
 pub struct Codec {
     decode_state: DecodeState,
+    encode_state: Vec<(pgrepr::Type, pgrepr::Format)>,
 }
 
 impl Codec {
@@ -87,7 +88,12 @@ impl Codec {
     pub fn new() -> Codec {
         Codec {
             decode_state: DecodeState::Head,
+            encode_state: vec![],
         }
+    }
+
+    pub fn set_encode_state(&mut self, encode_state: Vec<(pgrepr::Type, pgrepr::Format)>) {
+        self.encode_state = encode_state;
     }
 
     fn encode_error_notice_response(
@@ -130,7 +136,7 @@ impl Encoder<BackendMessage> for Codec {
         let byte = match msg {
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
-            BackendMessage::DataRow(_, _) => b'D',
+            BackendMessage::DataRow(_) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery(_) => b'Z',
@@ -186,13 +192,13 @@ impl Encoder<BackendMessage> for Codec {
                     dst.put_u16(f.format as u16);
                 }
             }
-            BackendMessage::DataRow(fields, formats) => {
+            BackendMessage::DataRow(fields) => {
                 dst.put_u16(fields.len() as u16);
-                for (f, ff) in fields.iter().zip(formats.iter()) {
+                for (f, (ty, format)) in fields.iter().zip(&self.encode_state) {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
-                        f.encode(*ff, dst);
+                        f.encode(ty, *format, dst);
                         let len = dst.len() - base - 4;
                         let len = (len as u32).to_be_bytes();
                         dst[base..base + 4].copy_from_slice(&len);

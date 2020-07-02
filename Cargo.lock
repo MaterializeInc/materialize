@@ -1701,6 +1701,7 @@ dependencies = [
  "openssl-sys",
  "ore",
  "parse_duration",
+ "pgrepr",
  "pgwire",
  "postgres",
  "postgres-openssl",
@@ -2397,9 +2398,9 @@ dependencies = [
 
 [[package]]
 name = "postgres-types"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e634590e8812c500088d88db721195979223dabb05149f43cb50931d0ff5865d"
+checksum = "3d14b0a4f433b0e0b565bb0fbc0ac9fc3d79ca338ba265ad0e7eef0f3bcc5e94"
 dependencies = [
  "bytes",
  "chrono",

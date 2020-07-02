@@ -504,9 +504,10 @@ SELECT count(*), count(k), count(kv.v) FROM kv
 count  count  count
 6      6      5
 
-# #3179
-statement error invalid position
+query I
 SELECT count(kv.*) FROM kv
+----
+6
 
 query III
 SELECT count(DISTINCT k), count(DISTINCT v), count(DISTINCT (v)) FROM kv
@@ -555,9 +556,10 @@ SELECT count(*) FROM kv a, kv b
 ----
 36
 
-# #3179
-statement error invalid position
+query I
 SELECT count(DISTINCT a.*) FROM kv a, kv b
+----
+6
 
 query I
 SELECT count(k)+count(kv.v) FROM kv
@@ -687,7 +689,7 @@ SELECT avg(a) FROM abc
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT avg(c) FROM abc
 
-query error ROW constructors are not supported yet
+query error unable to determine which implementation to use
 SELECT avg((a,c)) FROM abc
 
 query error arguments cannot be implicitly cast to any implementation's parameters
@@ -696,7 +698,7 @@ SELECT sum(a) FROM abc
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT sum(c) FROM abc
 
-query error ROW constructors are not supported yet
+query error unable to determine which implementation to use
 SELECT sum((a,c)) FROM abc
 
 statement ok

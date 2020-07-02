@@ -13,6 +13,7 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use failure::bail;
 use uuid::Uuid;
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
@@ -234,13 +235,13 @@ impl Desugarer {
     }
 
     fn visit_expr_mut_internal(&mut self, expr: &mut Expr) -> Result<(), failure::Error> {
-        // `(<expr>)` => `<expr>`
+        // `($expr)` => `$expr`
         while let Expr::Nested(e) = expr {
             *expr = e.take();
         }
 
-        // `<expr> BETWEEN <low> AND <high>` => `<expr> >= <low> AND <expr> <= <low>`
-        // `<expr> NOT BETWEEN <low> AND <high>` => `<expr> < <low> OR <expr> > <low>`
+        // `$expr BETWEEN $low AND $high` => `$expr >= $low AND $expr <= $low`
+        // `$expr NOT BETWEEN $low AND $high` => `$expr < $low OR $expr > $low`
         if let Expr::Between {
             expr: e,
             low,
@@ -255,9 +256,9 @@ impl Desugarer {
             }
         }
 
-        // `<expr> IN (<e_1>, <e_2>, ..., <e_n>)`
+        // `$expr IN ($e1, $e2, ..., $en)`
         // =>
-        // `<expr> = <e_1> OR <expr> = <e_2> OR ... OR <expr> = <e_n>`
+        // `$expr = $e1 OR $expr = $e2 OR ... OR $expr = $en`
         if let Expr::InList {
             expr: e,
             list,
@@ -275,8 +276,8 @@ impl Desugarer {
             }
         }
 
-        // `<expr> IN (<subquery>)` => `<expr> = ANY (<subquery>)`
-        // `<expr> NOT IN (<subquery>)` => `<expr> <> ALL (<subquery>)`
+        // `$expr IN ($subquery)` => `$expr = ANY ($subquery)`
+        // `$expr NOT IN ($subquery)` => `$expr <> ALL ($subquery)`
         if let Expr::InSubquery {
             expr: e,
             subquery,
@@ -298,26 +299,48 @@ impl Desugarer {
             }
         }
 
-        // `<expr> = ALL (<subquery>)`
+        // `$expr = ALL ($subquery)`
         // =>
-        // `(SELECT internal_all(<expr> = <binding>) FROM (<subquery>) AS _ (<binding>))
+        // `(SELECT internal_all($expr = $binding) FROM ($subquery) AS _ ($binding))
         //
         // and analogously for other operators and ANY.
         if let Expr::Any { left, op, right } | Expr::All { left, op, right } = expr {
-            let binding = Ident::new(format!("right_{}", Uuid::new_v4()));
+            let left = match &mut **left {
+                Expr::Row { .. } => left.take(),
+                _ => Expr::Row {
+                    exprs: vec![left.take()],
+                },
+            };
+
+            let arity = match &left {
+                Expr::Row { exprs } => exprs.len(),
+                _ => unreachable!(),
+            };
+
+            let bindings: Vec<_> = (0..arity)
+                .map(|_| Ident::new(format!("right_{}", Uuid::new_v4())))
+                .collect();
+
             let select = Select::default()
                 .from(TableWithJoins::subquery(
                     right.take(),
                     TableAlias {
                         name: Ident::new("subquery"),
-                        columns: vec![binding.clone()],
+                        columns: bindings.clone(),
                         strict: true,
                     },
                 ))
                 .project(SelectItem::Expr {
                     expr: left
-                        .take()
-                        .binop(op.clone(), Expr::Identifier(vec![binding]))
+                        .binop(
+                            op.clone(),
+                            Expr::Row {
+                                exprs: bindings
+                                    .into_iter()
+                                    .map(|b| Expr::Identifier(vec![b]))
+                                    .collect(),
+                            },
+                        )
                         .call_unary(match expr {
                             Expr::Any { .. } => "internal_any",
                             Expr::All { .. } => "internal_all",
@@ -325,7 +348,69 @@ impl Desugarer {
                         }),
                     alias: None,
                 });
+
             *expr = Expr::Subquery(Box::new(Query::select(select)));
+        }
+
+        // Expands row comparisons.
+        //
+        // ROW($l1, $l2, ..., $ln) = ROW($r1, $r2, ..., $rn)
+        // =>
+        // $l1 = $r1 AND $l2 = $r2 AND ... AND $ln = $rn
+        //
+        // ROW($l1, $l2, ..., $ln) < ROW($r1, $r2, ..., $rn)
+        // =>
+        // $l1 < $r1 OR ($l1 = $r1 AND ($l2 < $r2 OR ($l2 = $r2 AND ... ($ln < $rn))))
+        //
+        // ROW($l1, $l2, ..., $ln) <= ROW($r1, $r2, ..., $rn)
+        // =>
+        // $l1 < $r1 OR ($l1 = $r1 AND ($l2 < $r2 OR ($l2 = $r2 AND ... ($ln <= $rn))))
+        //
+        // and analogously for the inverse operations !=, >, and >=.
+        if let Expr::BinaryOp { left, right, op } = expr {
+            if let (Expr::Row { exprs: left }, Expr::Row { exprs: right }) =
+                (&mut **left, &mut **right)
+            {
+                use BinaryOperator::*;
+                if matches!(op, Eq | NotEq | Lt | LtEq | Gt | GtEq) {
+                    if left.len() != right.len() {
+                        bail!("unequal number of entries in row expressions");
+                    }
+                    if left.is_empty() {
+                        assert!(right.is_empty());
+                        bail!("cannot compare rows of zero length");
+                    }
+                }
+                match op {
+                    Eq | NotEq => {
+                        let mut new = Expr::Value(Value::Boolean(true));
+                        for (l, r) in left.iter_mut().zip(right) {
+                            new = l.take().equals(r.take()).and(new);
+                        }
+                        if let NotEq = op {
+                            new = new.negate();
+                        }
+                        *expr = new;
+                    }
+                    Lt | LtEq | Gt | GtEq => {
+                        let strict_op = match op {
+                            Lt | LtEq => Lt,
+                            Gt | GtEq => Gt,
+                            _ => unreachable!(),
+                        };
+                        let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
+                        let mut new = l.take().binop(op.clone(), r.take());
+                        for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
+                            new = l
+                                .clone()
+                                .binop(strict_op.clone(), r.clone())
+                                .or(l.take().equals(r.take()).and(new));
+                        }
+                        *expr = new;
+                    }
+                    _ => (),
+                }
+            }
         }
 
         visit_mut::visit_expr_mut(self, expr);

@@ -1864,7 +1864,7 @@ ORDER BY
 | | | | | Get materialize.public.part (u6)
 | | | | | Filter like(#1, "forest%")
 | | | | | Project (#0)
-| | | | | Reduce group=() any((#^0 = #0))
+| | | | | Reduce group=() any(((#^0 = #0) && true))
 | | | |
 | | | |
 | | | | %6 =
@@ -1875,7 +1875,7 @@ ORDER BY
 | | | | | Project (#1)
 | | | |
 | | | Project (#1)
-| | | Reduce group=() any((#^0 = #0))
+| | | Reduce group=() any(((#^0 = #0) && true))
 | |
 | Project (#1, #2)
 
