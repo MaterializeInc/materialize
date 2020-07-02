@@ -135,6 +135,9 @@ where
     closed_up_to: Timestamp,
     /// Whether or not the most recent operation was a read.
     last_op_was_read: bool,
+    /// Whether we need to advance local inputs (i.e., did someone observe a timestamp).
+    /// TODO(justin): this is a hack, and does not work right with TAIL.
+    need_advance: bool,
 }
 
 impl<C> Coordinator<C>
@@ -198,6 +201,7 @@ where
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,
+            need_advance: true,
         };
 
         let catalog_entries: Vec<_> = coord
@@ -312,6 +316,7 @@ where
     }
 
     pub fn get_ts(&mut self) -> Timestamp {
+        self.need_advance = true;
         // This is a hack. In a perfect world we would represent time as having a "real" dimension
         // and a "coordinator" dimension so that clients always observed linearizability from
         // things the coordinator did without being related to the real dimension.
@@ -540,18 +545,21 @@ where
                 }
             }
 
-            let mut next_ts = self.get_ts();
-            if next_ts <= self.read_lower_bound {
-                next_ts = self.read_lower_bound + 1;
-            }
-            if next_ts > self.closed_up_to {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AdvanceAllLocalInputs {
-                        advance_to: next_ts,
-                    },
-                );
-                self.closed_up_to = next_ts;
+            if self.need_advance {
+                let mut next_ts = self.get_ts();
+                self.need_advance = false;
+                if next_ts <= self.read_lower_bound {
+                    next_ts = self.read_lower_bound + 1;
+                }
+                if next_ts > self.closed_up_to {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AdvanceAllLocalInputs {
+                            advance_to: next_ts,
+                        },
+                    );
+                    self.closed_up_to = next_ts;
+                }
             }
         }
 
