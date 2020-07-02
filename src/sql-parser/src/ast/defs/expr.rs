@@ -35,8 +35,16 @@ pub enum Expr {
     /// Identifier e.g. table name or column name
     Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
-    /// (Same caveats apply to `QualifiedWildcard` as to `Wildcard`.)
     QualifiedWildcard(Vec<Ident>),
+    /// A field access, like `(expr).foo`.
+    FieldAccess { expr: Box<Expr>, field: Ident },
+    /// A wildcard field access, like `(expr).*`.
+    ///
+    /// Note that this is different from `QualifiedWildcard` in that the
+    /// wildcard access occurs on an arbitrary expression, rather than a
+    /// qualified name. The distinction is important for PostgreSQL
+    /// compatibility.
+    WildcardAccess(Box<Expr>),
     /// A positional parameter, e.g., `$1` or `$42`
     Parameter(usize),
     /// `IS NULL` expression
@@ -130,6 +138,15 @@ impl AstDisplay for Expr {
             Expr::Identifier(s) => f.write_node(&display::separated(s, ".")),
             Expr::QualifiedWildcard(q) => {
                 f.write_node(&display::separated(q, "."));
+                f.write_str(".*");
+            }
+            Expr::FieldAccess { expr, field } => {
+                f.write_node(expr);
+                f.write_str(".");
+                f.write_node(field);
+            }
+            Expr::WildcardAccess(expr) => {
+                f.write_node(expr);
                 f.write_str(".*");
             }
             Expr::Parameter(n) => f.write_str(&format!("${}", n)),
