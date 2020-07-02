@@ -4,6 +4,7 @@ description = "The lexer and parser for Materialize's SQL dialect."
 version = "0.1.0"
 edition = "2018"
 publish = false
+exclude = ["tests/testdata"]
 
 [dependencies]
 failure = "0.1.8"
