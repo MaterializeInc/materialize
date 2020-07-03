@@ -257,20 +257,7 @@ where
             // columns should be present in `source_columns` (and probably not much else).
 
             let position_or = (0..arity)
-                .map(|col| {
-                    if let Some(pos) = source_columns.iter().position(|c| c == &col) {
-                        Ok(pos)
-                    } else {
-                        Err({
-                            let typ = &column_types[col];
-                            if typ.nullable {
-                                Datum::Null
-                            } else {
-                                typ.scalar_type.dummy_datum()
-                            }
-                        })
-                    }
-                })
+                .map(|col| source_columns.iter().position(|c| c == &col))
                 .collect::<Vec<_>>();
 
             (
@@ -279,8 +266,8 @@ where
                     move |row| {
                         let datums = row.unpack();
                         row_packer.pack(position_or.iter().map(|pos_or| match pos_or {
-                            Result::Ok(index) => datums[*index],
-                            Result::Err(datum) => *datum,
+                            Some(index) => datums[*index],
+                            None => Datum::Dummy,
                         }))
                     }
                 }),
