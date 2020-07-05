@@ -15,6 +15,8 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+use pgrepr::Record;
+
 use futures::stream::{self, StreamExt, TryStreamExt};
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use postgres::config::SslMode;
@@ -36,33 +38,28 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
         Err(err) => assert_eq!(err.code(), Some(&SqlState::UNDEFINED_PARAMETER)),
     }
 
-    let rows: Vec<String> = client
-        .query("SELECT $1", &[&String::from("42")])?
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert_eq!(rows, &["42"]);
+    let val: String = client
+        .query_one("SELECT $1", &[&String::from("42")])?
+        .get(0);
+    assert_eq!(val, "42");
 
-    let rows: Vec<i32> = client
-        .query("SELECT $1 + 1", &[&42_i32])?
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert_eq!(rows, &[43]);
+    let val: i32 = client.query_one("SELECT $1 + 1", &[&42_i32])?.get(0);
+    assert_eq!(val, 43);
 
-    let rows: Vec<i32> = client
-        .query("SELECT $1 - 1", &[&42_i32])?
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert_eq!(rows, &[41]);
+    let val: i32 = client.query_one("SELECT $1 - 1", &[&42_i32])?.get(0);
+    assert_eq!(val, 41);
 
-    let rows: Vec<i32> = client
-        .query("SELECT 1 - $1", &[&42_i32])?
-        .into_iter()
-        .map(|row| row.get(0))
-        .collect();
-    assert_eq!(rows, &[-41]);
+    let val: i32 = client.query_one("SELECT 1 - $1", &[&42_i32])?.get(0);
+    assert_eq!(val, -41);
+
+    match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
+        Ok(_) => panic!("query with invalid parameters executed successfully"),
+        Err(err) => assert!(err.to_string().contains("no overload")),
+    }
+
+    assert!(client
+        .query_one("SELECT ROW(1, 2) = ROW(1, $1)", &[&2_i32])?
+        .get::<_, bool>(0));
 
     // Just ensure it does not panic (see #2498).
     client.query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])?;
@@ -464,6 +461,30 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
             Err(e) => assert!(e.to_string().contains("certificate verify failed")),
         }
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_record_types() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (_server, mut client) = util::start_server(util::Config::default())?;
+
+    let row = client.query_one("SELECT ROW()", &[])?;
+    let _: Record<()> = row.get(0);
+
+    let row = client.query_one("SELECT ROW(1)", &[])?;
+    let record: Record<(i32,)> = row.get(0);
+    assert_eq!(record, Record((1,)));
+
+    let row = client.query_one("SELECT (1, (2, 3))", &[])?;
+    let record: Record<(i32, Record<(i32, i32)>)> = row.get(0);
+    assert_eq!(record, Record((1, Record((2, 3)))));
+
+    let row = client.query_one("SELECT (1, 'a')", &[])?;
+    let record: Record<(i32, String)> = row.get(0);
+    assert_eq!(record, Record((1, "a".into())));
 
     Ok(())
 }

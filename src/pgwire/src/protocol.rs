@@ -9,7 +9,6 @@
 
 use std::iter;
 use std::mem;
-use std::sync::Arc;
 use std::time::Instant;
 
 use byteorder::{ByteOrder, NetworkEndian};
@@ -792,7 +791,6 @@ where
         let portal = session
             .get_portal_mut(&portal_name)
             .expect("valid portal name for send rows");
-        let formats: Arc<Vec<pgrepr::Format>> = Arc::new(portal.result_formats.clone());
 
         if let Some(row) = rows.first() {
             let datums = row.unpack();
@@ -826,6 +824,16 @@ where
             }
         }
 
+        self.conn.get_mut().codec_mut().set_encode_state(
+            row_desc
+                .typ()
+                .column_types
+                .iter()
+                .map(|ty| pgrepr::Type::from(&ty.scalar_type))
+                .zip(portal.result_formats.iter().copied())
+                .collect(),
+        );
+
         let mut row_count = 0u32;
         {
             let row_count = &mut row_count;
@@ -837,10 +845,7 @@ where
                 }
                 .map(move |row| {
                     *row_count += 1;
-                    BackendMessage::DataRow(
-                        pgrepr::values_from_row(row, row_desc.typ()),
-                        formats.clone(),
-                    )
+                    BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
                 }),
             )
             .await?;

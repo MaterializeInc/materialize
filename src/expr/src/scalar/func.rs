@@ -24,7 +24,7 @@ use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::regex::Regex;
-use repr::{strconv, ColumnType, Datum, RowArena, RowPacker, ScalarType};
+use repr::{strconv, ColumnName, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, ScalarExpr};
@@ -2248,6 +2248,7 @@ pub enum UnaryFunc {
     TrimWhitespace,
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
+    RecordGet(usize),
 }
 
 impl UnaryFunc {
@@ -2374,6 +2375,7 @@ impl UnaryFunc {
             UnaryFunc::TrimWhitespace => Ok(trim_whitespace(a)),
             UnaryFunc::TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
             UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
+            UnaryFunc::RecordGet(i) => Ok(record_get(a, *i)),
         }
     }
 
@@ -2504,6 +2506,13 @@ impl UnaryFunc {
             JsonbTypeof => ColumnType::new(ScalarType::String).nullable(in_nullable),
             JsonbStripNulls => ColumnType::new(ScalarType::Jsonb).nullable(true),
             JsonbPretty => ColumnType::new(ScalarType::String).nullable(in_nullable),
+
+            RecordGet(i) => match input_type.scalar_type {
+                ScalarType::Record { mut fields } => {
+                    ColumnType::new(fields.swap_remove(*i).1).nullable(true)
+                }
+                _ => unreachable!("RecordGet specified nonexistent field"),
+            },
         }
     }
 
@@ -2649,6 +2658,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::TrimWhitespace => f.write_str("btrim"),
             UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
+            UnaryFunc::RecordGet(_) => f.write_str("record_get"),
         }
     }
 }
@@ -2749,6 +2759,10 @@ fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a
     temp_storage.make_datum(|packer| packer.push_list(datums))
 }
 
+fn record_get(a: Datum, i: usize) -> Datum {
+    a.unwrap_list().iter().nth(i).unwrap()
+}
+
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
@@ -2830,6 +2844,9 @@ pub enum VariadicFunc {
         // we need to know this to type exprs with empty lists
         elem_type: ScalarType,
     },
+    RecordCreate {
+        field_names: Vec<ColumnName>,
+    },
 }
 
 impl VariadicFunc {
@@ -2859,7 +2876,9 @@ impl VariadicFunc {
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
-            VariadicFunc::ListCreate { .. } => Ok(eager!(list_create, temp_storage)),
+            VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
+                Ok(eager!(list_create, temp_storage))
+            }
         }
     }
 
@@ -2889,6 +2908,14 @@ impl VariadicFunc {
                 );
                 ColumnType::new(ScalarType::List(Box::new(elem_type.clone())))
             }
+            RecordCreate { field_names } => ColumnType::new(ScalarType::Record {
+                fields: field_names
+                    .clone()
+                    .into_iter()
+                    .zip(input_types.into_iter().map(|ty| ty.scalar_type))
+                    .collect(),
+            })
+            .nullable(true),
         }
     }
 
@@ -2899,7 +2926,8 @@ impl VariadicFunc {
             | VariadicFunc::Concat
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
-            | VariadicFunc::ListCreate { .. } => false,
+            | VariadicFunc::ListCreate { .. }
+            | VariadicFunc::RecordCreate { .. } => false,
             _ => true,
         }
     }
@@ -2916,6 +2944,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
+            VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
         }
     }
 }

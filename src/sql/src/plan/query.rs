@@ -821,6 +821,7 @@ fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
         Expr::Coalesce { .. } => Some("coalesce".into()),
         Expr::List { .. } => Some("list".into()),
         Expr::Cast { expr, .. } => return invent_column_name(expr),
+        Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
         _ => return None,
     };
     name.map(|n| ScopeItemName {
@@ -862,6 +863,32 @@ fn plan_select_item<'a>(
                 bail!("no table named '{}' in scope", table_name);
             }
             Ok(out)
+        }
+        SelectItem::Expr {
+            expr: Expr::WildcardAccess(expr),
+            alias: _,
+        } => {
+            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+            let fields = match ecx.scalar_type(&expr) {
+                ScalarType::Record { fields, .. } => fields,
+                ty => bail!("type {} is not composite", ty),
+            };
+            Ok(fields
+                .iter()
+                .enumerate()
+                .map(|(i, (name, _ty))| {
+                    let expr = expr.clone().call_unary(UnaryFunc::RecordGet(i));
+                    let scope_item = ScopeItem {
+                        names: vec![ScopeItemName {
+                            table_name: None,
+                            column_name: Some(name.clone()),
+                        }],
+                        expr: None,
+                        nameable: true,
+                    };
+                    (expr, scope_item)
+                })
+                .collect())
         }
         SelectItem::Expr {
             expr: sql_expr,
@@ -1182,20 +1209,9 @@ pub fn plan_expr<'a>(
 
     Ok(match e {
         // Names.
-        Expr::Identifier(names) => {
-            let mut names = names.clone();
-            let col_name = normalize::column_name(names.pop().unwrap());
-            let (i, _) = if names.is_empty() {
-                ecx.scope.resolve_column(&col_name)?
-            } else {
-                let table_name = normalize::object_name(ObjectName(names))?;
-                ecx.scope.resolve_table_column(&table_name, &col_name)?
-            };
-            ScalarExpr::Column(i).into()
+        Expr::Identifier(names) | Expr::QualifiedWildcard(names) => {
+            plan_identifier(ecx, names)?.into()
         }
-        Expr::QualifiedWildcard(_) => bail!("wildcard in invalid position"),
-        Expr::FieldAccess { .. } => unsupported!("record field access"),
-        Expr::WildcardAccess(_) => unsupported!("wildcard field access"),
 
         // Literals.
         Expr::Value(val) => plan_literal(val)?,
@@ -1219,7 +1235,13 @@ pub fn plan_expr<'a>(
             }
             CoercibleScalarExpr::LiteralList(out)
         }
-        Expr::Row { .. } => unsupported!("ROW constructors are not supported yet"),
+        Expr::Row { exprs } => {
+            let mut out = vec![];
+            for e in exprs {
+                out.push(plan_expr(ecx, e)?);
+            }
+            CoercibleScalarExpr::LiteralRecord(out)
+        }
 
         // Generalized functions, operators, and casts.
         Expr::UnaryOp { op, expr } => func::plan_unary_op(ecx, op, expr)?.into(),
@@ -1248,6 +1270,25 @@ pub fn plan_expr<'a>(
             };
             expr.into()
         }
+        Expr::FieldAccess { expr, field } => {
+            let field = normalize::column_name(field.clone());
+            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+            let ty = ecx.scalar_type(&expr);
+            let i = match &ty {
+                ScalarType::Record { fields, .. } => {
+                    fields.iter().position(|(name, _ty)| *name == field)
+                }
+                ty => bail!(
+                    "column notation applied to type {}, which is not a composite type",
+                    ty
+                ),
+            };
+            match i {
+                None => bail!("field {} not found in data type {}", field, ty),
+                Some(i) => expr.call_unary(UnaryFunc::RecordGet(i)).into(),
+            }
+        }
+        Expr::WildcardAccess(expr) => plan_expr(ecx, expr)?,
 
         // Subqueries.
         Expr::Exists(query) => {
@@ -1396,6 +1437,61 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         expr: Box::new(expr),
         distinct: sql_func.distinct,
     })
+}
+
+fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, failure::Error> {
+    let mut names = names.to_vec();
+    let col_name = normalize::column_name(names.pop().unwrap());
+
+    // If the name is qualified, it must refer to a column in a table.
+    if !names.is_empty() {
+        let table_name = normalize::object_name(ObjectName(names))?;
+        let (i, _name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
+        return Ok(ScalarExpr::Column(i));
+    }
+
+    // If the name is unqualified, first check if it refers to a column.
+    if let Ok((i, _name)) = ecx.scope.resolve_column(&col_name) {
+        return Ok(ScalarExpr::Column(i));
+    }
+
+    // The name doesn't refer to a column. Check if it refers to a table. If it
+    // does, the expression is a record containing all the columns of the table.
+    //
+    // NOTE(benesch): `Scope` doesn't have an API for asking whether a given
+    // table is in scope, so we instead look at every column in the scope and
+    // ask what table it came from. Stupid, but it works.
+    let (exprs, field_names): (Vec<_>, Vec<_>) = ecx
+        .scope
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_i, item)| {
+            item.is_from_table(&PartialName {
+                database: None,
+                schema: None,
+                item: col_name.as_str().to_owned(),
+            })
+        })
+        .enumerate()
+        .map(|(i, (column, item))| {
+            let expr = ScalarExpr::Column(ColumnRef { level: 0, column });
+            let name = item
+                .names
+                .first()
+                .and_then(|n| n.column_name.clone())
+                .unwrap_or_else(|| ColumnName::from(format!("f{}", i + 1)));
+            (expr, name)
+        })
+        .unzip();
+    if !exprs.is_empty() {
+        return Ok(ScalarExpr::CallVariadic {
+            func: VariadicFunc::RecordCreate { field_names },
+            exprs,
+        });
+    }
+
+    bail!("column \"{}\" does not exist", col_name);
 }
 
 fn plan_function<'a>(

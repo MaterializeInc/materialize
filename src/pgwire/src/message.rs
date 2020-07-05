@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
-
 use bytes::BytesMut;
 use postgres::error::SqlState;
 
@@ -244,7 +242,7 @@ pub enum BackendMessage {
     EmptyQueryResponse,
     ReadyForQuery(TransactionStatus),
     RowDescription(Vec<FieldDescription>),
-    DataRow(Vec<Option<pgrepr::Value>>, Arc<Vec<pgrepr::Format>>),
+    DataRow(Vec<Option<pgrepr::Value>>),
     ParameterStatus(&'static str, String),
     BackendKeyData {
         conn_id: u32,

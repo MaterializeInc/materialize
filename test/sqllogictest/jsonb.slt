@@ -1864,5 +1864,5 @@ query error arguments cannot be implicitly cast to any implementation's paramete
 SELECT jsonb_agg(1, 2)
 
 # todo@jldlaughlin: Fix test when #2414 is implemented
-query error ROW constructors are not supported yet
+query error jsonb_agg does not support casting from record\(f1: i32, f2: i32\) to jsonbany
 SELECT jsonb_agg((1, 2))
