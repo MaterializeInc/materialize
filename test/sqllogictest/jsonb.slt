@@ -1863,6 +1863,7 @@ SELECT jsonb_agg(column1) FROM (VALUES (1), (2), (3))
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT jsonb_agg(1, 2)
 
-# todo@jldlaughlin: Fix test when #2414 is implemented
-query error jsonb_agg does not support casting from record\(f1: i32, f2: i32\) to jsonbany
-SELECT jsonb_agg((1, 2))
+query T
+SELECT jsonb_agg((column1, column2)) FROM (VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02'))
+----
+[{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}]
