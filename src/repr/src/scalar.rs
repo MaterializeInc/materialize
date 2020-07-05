@@ -649,6 +649,7 @@ impl<'a> ScalarType {
     /// equality.
     pub fn desaturate(&self) -> ScalarType {
         match self {
+            ScalarType::Record { .. } => ScalarType::Record { fields: vec![] },
             ScalarType::Decimal(..) => ScalarType::Decimal(0, 0),
             _ => self.clone(),
         }
