@@ -11,14 +11,14 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
-use std::iter;
+use std::{io::Read, iter};
 
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::{bail, format_err};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use log::{trace, warn};
+use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
@@ -27,12 +27,19 @@ use avro::schema::{
     resolve_schemas, RecordField, Schema, SchemaFingerprint, SchemaNode, SchemaPiece,
     SchemaPieceOrNamed,
 };
-use avro::types::{DecimalValue, Value};
+use avro::{
+    give_value,
+    types::{DecimalValue, Scalar, Value},
+    AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRecordAccess, GeneralDeserializer, Skip,
+    TrivialDecoder, ValueOrReader,
+};
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
+use ordered_float::OrderedFloat;
+use smallvec::SmallVec;
 
 lazy_static! {
     // TODO(rkhaitan): this schema intentionally omits the data_collections field
@@ -98,6 +105,469 @@ pub enum EnvelopeType {
     Upsert,
 }
 
+#[derive(Debug)]
+pub struct DebeziumSourceCoordinates {
+    snapshot: bool,
+    pos: usize,
+    row: usize,
+}
+struct DebeziumSourceDecoder<'a> {
+    snapshot: Option<bool>,
+    pos: Option<i64>,
+    row: Option<i64>,
+    file_buf: &'a mut Vec<u8>,
+    has_file: bool,
+}
+impl<'a> DebeziumSourceDecoder<'a> {
+    fn coords(self) -> Result<DebeziumSourceCoordinates> {
+        let snapshot = self.snapshot.ok_or_else(|| format_err!("no snapshot"))?;
+        let pos = self.pos.ok_or_else(|| format_err!("no pos"))? as usize;
+        let row = self.row.ok_or_else(|| format_err!("no row"))? as usize;
+        if !self.has_file {
+            bail!("no file");
+        }
+        Ok(DebeziumSourceCoordinates { snapshot, pos, row })
+    }
+}
+
+struct AvroStringDecoder<'a> {
+    pub buf: &'a mut Vec<u8>,
+    pub decoded: bool,
+}
+
+impl<'a> AvroStringDecoder<'a> {
+    pub fn with_buf(buf: &'a mut Vec<u8>) -> Self {
+        Self {
+            buf,
+            decoded: false,
+        }
+    }
+}
+
+impl<'a> AvroDecode for AvroStringDecoder<'a> {
+    fn string<'b, R: Read + Skip>(&mut self, r: ValueOrReader<'b, &'b str, R>) -> Result<()> {
+        if self.decoded {
+            bail!("Attempted to decode two strings");
+        }
+        self.decoded = true;
+        match r {
+            ValueOrReader::Value(_val) => todo!(),
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(&mut self.buf)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DbzSnapshot {
+    True,
+    Last,
+    False,
+}
+
+struct AvroDbzSnapshotDecoder(Option<DbzSnapshot>);
+
+impl AvroDecode for AvroDbzSnapshotDecoder {
+    fn union_branch<'a, R: Read + Skip, D: AvroDeserializer>(
+        &mut self,
+        _idx: usize,
+        _n_variants: usize,
+        _null_variant: Option<usize>,
+        deserializer: &'a mut D,
+        reader: &'a mut R,
+    ) -> Result<()> {
+        deserializer.deserialize(reader, self)
+    }
+    fn scalar(&mut self, scalar: Scalar) -> Result<()> {
+        match scalar {
+            Scalar::Null => Ok(()),
+            Scalar::Boolean(val) => {
+                self.0 = Some(if val {
+                    DbzSnapshot::True
+                } else {
+                    DbzSnapshot::False
+                });
+                Ok(())
+            }
+            _ => bail!("`snapshot` value had unexpected type"),
+        }
+    }
+    fn string<'a, R: Read + Skip>(&mut self, r: ValueOrReader<'a, &'a str, R>) -> Result<()> {
+        let mut s = SmallVec::<[u8; 8]>::new();
+        let s = match r {
+            ValueOrReader::Value(val) => val.as_bytes(),
+            ValueOrReader::Reader { len, r } => {
+                s.resize_with(len, Default::default);
+                r.read_exact(&mut s)?;
+                &s
+            }
+        };
+        self.0 = Some(match s {
+            b"true" => DbzSnapshot::True,
+            b"last" => DbzSnapshot::Last,
+            b"false" => DbzSnapshot::False,
+            _ => bail!(
+                "`snapshot` had unexpected value {}",
+                String::from_utf8_lossy(s)
+            ),
+        });
+        Ok(())
+    }
+}
+
+impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
+    fn record<R: Read + Skip, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
+        while let Some((name, _, field)) = a.next_field()? {
+            match name {
+                "snapshot" => {
+                    let mut d = AvroDbzSnapshotDecoder(None);
+                    field.decode_field(&mut d)?;
+                    self.snapshot = Some(match d.0 {
+                        None | Some(DbzSnapshot::False) => false,
+                        Some(DbzSnapshot::True) | Some(DbzSnapshot::Last) => true,
+                    });
+                }
+                "pos" => {
+                    self.pos = Some(
+                        field
+                            .decode_to_value()?
+                            .into_integral()
+                            .ok_or_else(|| format_err!("\"pos\" is not an integer"))?,
+                    );
+                }
+                "row" => {
+                    self.row = Some(
+                        field
+                            .decode_to_value()?
+                            .into_integral()
+                            .ok_or_else(|| format_err!("\"row\" is not an integer"))?,
+                    );
+                }
+                "file" => {
+                    let mut d = AvroStringDecoder::with_buf(self.file_buf);
+                    field.decode_field(&mut d)?;
+                    self.has_file = d.decoded;
+                }
+                _ => {
+                    field.decode_field(&mut TrivialDecoder)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+struct OptionalRowDecoder<'a> {
+    pub packer: &'a mut RowPacker,
+    pub buf: &'a mut Vec<u8>,
+    pub decoded_row: bool,
+}
+
+impl<'a> AvroDecode for OptionalRowDecoder<'a> {
+    fn union_branch<'b, R: Read + Skip, D: AvroDeserializer>(
+        &mut self,
+        idx: usize,
+        _n_variants: usize,
+        null_variant: Option<usize>,
+        deserializer: &'b mut D,
+        reader: &'b mut R,
+    ) -> Result<()> {
+        if Some(idx) == null_variant {
+            // we are done, the row is null!
+            Ok(())
+        } else {
+            self.decoded_row = true;
+            let mut d = AvroFlatDecoder {
+                packer: &mut self.packer,
+                buf: &mut self.buf,
+                is_top: true,
+            };
+            deserializer.deserialize(reader, &mut d)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AvroDebeziumDecoder<'a> {
+    pub packer: &'a mut RowPacker,
+    pub buf: &'a mut Vec<u8>,
+    pub file_buf: &'a mut Vec<u8>,
+    pub before: Option<Row>,
+    pub after: Option<Row>,
+    pub coords: Option<DebeziumSourceCoordinates>,
+}
+
+impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
+    fn record<R: std::io::Read + avro::Skip, A: AvroRecordAccess<R>>(
+        &mut self,
+        a: &mut A,
+    ) -> Result<()> {
+        while let Some((name, _, field)) = a.next_field()? {
+            match name {
+                "before" => {
+                    let mut d = OptionalRowDecoder {
+                        packer: &mut self.packer,
+                        buf: &mut self.buf,
+                        decoded_row: false,
+                    };
+                    field.decode_field(&mut d)?;
+
+                    self.before = if d.decoded_row {
+                        self.packer.push(Datum::Int64(-1));
+                        Some(self.packer.finish_and_reuse())
+                    } else {
+                        None
+                    }
+                }
+                "after" => {
+                    let mut d = OptionalRowDecoder {
+                        packer: &mut self.packer,
+                        buf: &mut self.buf,
+                        decoded_row: false,
+                    };
+                    field.decode_field(&mut d)?;
+
+                    self.after = if d.decoded_row {
+                        self.packer.push(Datum::Int64(1));
+                        Some(self.packer.finish_and_reuse())
+                    } else {
+                        None
+                    }
+                }
+                "source" => {
+                    let mut d = DebeziumSourceDecoder {
+                        snapshot: None,
+                        pos: None,
+                        row: None,
+                        file_buf: &mut self.file_buf,
+                        has_file: false,
+                    };
+                    field.decode_field(&mut d)?;
+                    self.coords = Some(d.coords()?);
+                }
+                _ => {
+                    field.decode_field(&mut TrivialDecoder)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct AvroFlatDecoder<'a> {
+    pub packer: &'a mut RowPacker,
+    pub buf: &'a mut Vec<u8>,
+    pub is_top: bool,
+}
+
+impl<'a> AvroDecode for AvroFlatDecoder<'a> {
+    #[inline]
+    fn record<R: std::io::Read + avro::Skip, A: AvroRecordAccess<R>>(
+        &mut self,
+        a: &mut A,
+    ) -> Result<()> {
+        let mut str_buf = std::mem::take(self.buf);
+        let mut pack_record = |rp: &mut RowPacker| -> Result<()> {
+            let mut expected = 0;
+            let mut stash = vec![];
+            let mut dec = AvroFlatDecoder {
+                packer: rp,
+                buf: &mut str_buf,
+                is_top: false,
+            };
+            while let Some((_name, idx, f)) = a.next_field()? {
+                if idx == expected {
+                    expected += 1;
+                    f.decode_field(&mut dec)?;
+                } else {
+                    let val = f.decode_to_value()?;
+                    stash.push((idx, val));
+                }
+            }
+            stash.sort_by_key(|(idx, _val)| *idx);
+            for (idx, val) in stash {
+                assert!(idx == expected);
+                expected += 1;
+                give_value(&mut dec, &val)?;
+            }
+            Ok(())
+        };
+        if self.is_top {
+            pack_record(self.packer)?;
+        } else {
+            self.packer.push_list_with(pack_record)?;
+        }
+        *self.buf = str_buf;
+        Ok(())
+    }
+    #[inline]
+    fn union_branch<'b, R: Read + Skip, D: AvroDeserializer>(
+        &mut self,
+        idx: usize,
+        n_variants: usize,
+        null_variant: Option<usize>,
+        deserializer: &'b mut D,
+        reader: &'b mut R,
+    ) -> Result<()> {
+        if null_variant == Some(idx) {
+            for _ in 0..n_variants - 1 {
+                self.packer.push(Datum::Null)
+            }
+        } else {
+            for i in 0..n_variants {
+                if null_variant != Some(i) {
+                    if i == idx {
+                        deserializer.deserialize(reader, self)?;
+                    } else {
+                        self.packer.push(Datum::Null)
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn begin_map(&mut self) -> Result<()> {
+        bail!("Avro maps are not (yet?) supported");
+    }
+    #[inline]
+    fn map_key<'b, R: std::io::Read + avro::Skip>(
+        &mut self,
+        _r: ValueOrReader<'b, &'b str, R>,
+    ) -> Result<()> {
+        unreachable!("begin_map should have been called first");
+    }
+    #[inline]
+    fn end_map(&mut self) -> Result<()> {
+        unreachable!("begin_map should have been called first");
+    }
+    #[inline]
+    fn enum_variant(&mut self, symbol: &str, _idx: usize) -> Result<()> {
+        self.packer.push(Datum::String(symbol));
+        Ok(())
+    }
+    #[inline]
+    fn scalar(&mut self, scalar: avro::types::Scalar) -> Result<()> {
+        match scalar {
+            avro::types::Scalar::Null => self.packer.push(Datum::Null),
+            avro::types::Scalar::Boolean(val) => {
+                if val {
+                    self.packer.push(Datum::True)
+                } else {
+                    self.packer.push(Datum::False)
+                }
+            }
+            avro::types::Scalar::Int(val) => self.packer.push(Datum::Int32(val)),
+            avro::types::Scalar::Long(val) => self.packer.push(Datum::Int64(val)),
+            avro::types::Scalar::Float(val) => self.packer.push(Datum::Float32(OrderedFloat(val))),
+            avro::types::Scalar::Double(val) => self.packer.push(Datum::Float64(OrderedFloat(val))),
+            avro::types::Scalar::Date(val) => self.packer.push(Datum::Date(val)),
+            avro::types::Scalar::Timestamp(val) => self.packer.push(Datum::Timestamp(val)),
+        }
+        Ok(())
+    }
+    #[inline]
+    fn decimal<'b, R: std::io::Read + avro::Skip>(
+        &mut self,
+        _precision: usize,
+        _scale: usize,
+        r: ValueOrReader<'b, &'b [u8], R>,
+    ) -> Result<()> {
+        let buf = match r {
+            ValueOrReader::Value(val) => val,
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(&mut self.buf)?;
+                &self.buf
+            }
+        };
+        self.packer
+            .push(Datum::Decimal(Significand::from_twos_complement_be(buf)?));
+        Ok(())
+    }
+    #[inline]
+    fn bytes<'b, R: std::io::Read + avro::Skip>(
+        &mut self,
+        r: ValueOrReader<'b, &'b [u8], R>,
+    ) -> Result<()> {
+        let buf = match r {
+            ValueOrReader::Value(val) => val,
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(&mut self.buf)?;
+                &self.buf
+            }
+        };
+        self.packer.push(Datum::Bytes(buf));
+        Ok(())
+    }
+    #[inline]
+    fn string<'b, R: std::io::Read + avro::Skip>(
+        &mut self,
+        r: ValueOrReader<'b, &'b str, R>,
+    ) -> Result<()> {
+        let s = match r {
+            ValueOrReader::Value(val) => val,
+            ValueOrReader::Reader { len, r } => {
+                // TODO - this copy is unnecessary,
+                // we should special case to just look at the bytes
+                // directly when r is &[u8].
+                // It probably doesn't make a huge difference though.
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(&mut self.buf)?;
+                std::str::from_utf8(&self.buf)?
+            }
+        };
+        self.packer.push(Datum::String(s));
+        Ok(())
+    }
+    #[inline]
+    fn json<'b, R: std::io::Read + avro::Skip>(
+        &mut self,
+        r: ValueOrReader<'b, &'b serde_json::Value, R>,
+    ) -> Result<()> {
+        match r {
+            ValueOrReader::Value(val) => {
+                *self.packer =
+                    JsonbPacker::new(std::mem::take(self.packer)).pack_serde_json(val.clone())?;
+            }
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(&mut self.buf)?;
+                *self.packer =
+                    JsonbPacker::new(std::mem::take(self.packer)).pack_slice(&self.buf)?;
+            }
+        }
+        Ok(())
+    }
+    #[inline]
+    fn fixed<'b, R: std::io::Read + avro::Skip>(
+        &mut self,
+        r: ValueOrReader<'b, &'b [u8], R>,
+    ) -> Result<()> {
+        self.bytes(r)
+    }
+    #[inline]
+    fn array<A: AvroArrayAccess>(&mut self, a: &mut A) -> Result<()> {
+        let mut str_buf = std::mem::take(self.buf);
+        self.packer.push_list_with(|rp| -> Result<()> {
+            let mut dec = AvroFlatDecoder {
+                packer: rp,
+                buf: &mut str_buf,
+                is_top: false,
+            };
+            while a.decode_next(&mut dec)? {}
+            Ok(())
+        })?;
+        *self.buf = str_buf;
+        Ok(())
+    }
+}
+
 /// Converts an Apache Avro schema into a list of column names and types.
 pub fn validate_value_schema(
     schema: &str,
@@ -111,7 +581,7 @@ pub fn validate_value_schema(
             // The top-level record needs to be a diff "envelope" that contains
             // `before` and `after` fields, where the `before` and `after` fields
             // have the same schema.
-            let row_schema = match node.inner {
+            match node.inner {
                 SchemaPiece::Record { fields, .. } => {
                     let before = fields.iter().find(|f| f.name == "before");
                     let after = fields.iter().find(|f| f.name == "after");
@@ -119,48 +589,67 @@ pub fn validate_value_schema(
                         (Some(before), Some(after)) => {
                             let left = node.step(&before.schema);
                             let right = node.step(&after.schema);
-                            if let Some((left, right)) = first_mismatched_schema_types(left, right)
-                            {
-                                bail!(
-                                "source schema has mismatched 'before' and 'after' schemas: before={:?} after={:?}",
-                                left.inner,
-                                right.inner
-                            )
+                            match (left.inner, right.inner) {
+                                (SchemaPiece::Union(before), SchemaPiece::Union(after)) => {
+                                    if before.variants().len() != 2 {
+                                        bail!("Source schema 'before' field has the wrong number of variants");
+                                    }
+                                    if after.variants().len() != 2 {
+                                        bail!("Source schema 'after' field has the wrong number of variants");
+                                    }
+                                    let before_null =
+                                        before.variants().iter().position(|s| is_null(s));
+                                    let after_null =
+                                        before.variants().iter().position(|s| is_null(s));
+                                    if before_null != after_null {
+                                        bail!("Source schema 'before' and 'after' fields do not match.");
+                                    }
+
+                                    let null_idx = match before_null {
+                                        Some(null_idx) => null_idx,
+                                        None => bail!("Source schema 'before'/'after' fields are not of expected type")
+                                    };
+                                    let record_idx = 1 - null_idx;
+                                    let (before_piece, after_piece) = (
+                                        &before.variants()[record_idx],
+                                        &after.variants()[record_idx],
+                                    );
+                                    let before_name = match before_piece {
+                                        SchemaPieceOrNamed::Piece(_) => bail!(
+                                            "Source schema 'before' field should be a record."
+                                        ),
+                                        SchemaPieceOrNamed::Named(name) => name,
+                                    };
+                                    let after_name = match after_piece {
+                                        SchemaPieceOrNamed::Piece(_) => {
+                                            bail!("Source schema 'after' field should be a record.")
+                                        }
+                                        SchemaPieceOrNamed::Named(name) => name,
+                                    };
+                                    if before_name != after_name {
+                                        bail!("Source schema 'before' and 'after' fields should be the same named record.");
+                                    }
+                                    match schema.lookup(*before_name).piece {
+                                        SchemaPiece::Record { .. } => before_piece,
+                                        _ => bail!("Source schema 'before' and 'after' fields should contain a record."),
+                                    }
+                                }
+                                (_, SchemaPiece::Union(_)) => {
+                                    bail!("Source schema 'before' field should be a union.")
+                                }
+                                (SchemaPiece::Union(_), _) => {
+                                    bail!("Source schema 'after' field should be a union.")
+                                }
+                                (_, _) => bail!(
+                                    "Source schema 'before' and 'after' fields should be unions."
+                                ),
                             }
-                            &before.schema
                         }
                         (None, _) => bail!("source schema is missing 'before' field"),
                         (_, None) => bail!("source schema is missing 'after' field"),
                     }
                 }
-                _ => bail!("source schema does not match required envelope format"),
-            };
-            // The "row" schema used by the `before` and `after` fields needs to be
-            // a nullable record type.
-            match row_schema.get_piece_and_name(&schema).0 {
-                SchemaPiece::Union(us) => {
-                    if us.variants().len() != 2 {
-                        bail!("source schema 'before'/'after' fields are not of expected type");
-                    }
-                    let has_null = us.variants().iter().any(|s| is_null(s));
-                    let record =
-                        us.variants()
-                            .iter()
-                            .find(|s| match s.get_piece_and_name(&schema).0 {
-                                SchemaPiece::Record { .. } => true,
-                                _ => false,
-                            });
-                    if !has_null {
-                        bail!("source schema has non-nullable 'before'/'after' fields");
-                    }
-                    match record {
-                        Some(record) => record,
-                        None => {
-                            bail!("source schema 'before/'after' fields are not of expected type")
-                        }
-                    }
-                }
-                _ => bail!("source schema has non-nullable 'before'/'after' fields"),
+                _ => bail!("Top-level envelope must be a record."),
             }
         }
         EnvelopeType::Upsert => match node.inner {
@@ -178,45 +667,13 @@ fn validate_schema_1(schema: SchemaNode) -> Result<Vec<(ColumnName, ColumnType)>
     match schema.inner {
         SchemaPiece::Record { fields, .. } => {
             let mut columns = vec![];
+            let mut seen_avro_nodes = Default::default();
             for f in fields {
-                if let SchemaPiece::Union(us) = schema.step(&f.schema).inner {
-                    let vs = us.variants();
-                    if vs.is_empty() || (vs.len() == 1 && is_null(&vs[0])) {
-                        bail!(format_err!("Empty or null-only unions are not supported"));
-                    } else {
-                        for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
-                            let node = schema.step(v);
-                            if let SchemaPiece::Union(_) = node.inner {
-                                unreachable!("Internal error: directly nested avro union!");
-                            }
-
-                            let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null))
-                            {
-                                // There is only one non-null variant in the
-                                // union, so we can use the field name directly.
-                                f.name.clone()
-                            } else {
-                                // There are multiple non-null variants in the
-                                // union, so we need to invent field names for
-                                // each variant.
-                                format!("{}{}", &f.name, i + 1)
-                            };
-
-                            // If there is more than one variant in the union,
-                            // the column's output type is nullable, as this
-                            // column will be null whenever it is uninhabited.
-                            let ty = validate_schema_2(node)?;
-                            let nullable = vs.len() > 1;
-                            columns.push((name.into(), ColumnType::new(ty).nullable(nullable)));
-                        }
-                    }
-                } else {
-                    let scalar_type = validate_schema_2(schema.step(&f.schema))?;
-                    columns.push((
-                        f.name.clone().into(),
-                        ColumnType::new(scalar_type).nullable(false),
-                    ));
-                }
+                columns.extend(get_named_columns(
+                    &mut seen_avro_nodes,
+                    schema.step(&f.schema),
+                    &f.name,
+                )?);
             }
             Ok(columns)
         }
@@ -224,7 +681,56 @@ fn validate_schema_1(schema: SchemaNode) -> Result<Vec<(ColumnName, ColumnType)>
     }
 }
 
-fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
+fn get_named_columns<'a>(
+    seen_avro_nodes: &mut HashSet<usize>,
+    schema: SchemaNode<'a>,
+    base_name: &str,
+) -> Result<Vec<(ColumnName, ColumnType)>> {
+    if let SchemaPiece::Union(us) = schema.inner {
+        let mut columns = vec![];
+        let vs = us.variants();
+        if vs.is_empty() || (vs.len() == 1 && is_null(&vs[0])) {
+            bail!(format_err!("Empty or null-only unions are not supported"));
+        } else {
+            for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
+                let node = schema.step(v);
+                if let SchemaPiece::Union(_) = node.inner {
+                    unreachable!("Internal error: directly nested avro union!");
+                }
+
+                let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
+                    // There is only one non-null variant in the
+                    // union, so we can use the field name directly.
+                    base_name.to_string()
+                } else {
+                    // There are multiple non-null variants in the
+                    // union, so we need to invent field names for
+                    // each variant.
+                    format!("{}{}", &base_name, i + 1)
+                };
+
+                // If there is more than one variant in the union,
+                // the column's output type is nullable, as this
+                // column will be null whenever it is uninhabited.
+                let ty = validate_schema_2(seen_avro_nodes, node)?;
+                let nullable = vs.len() > 1;
+                columns.push((name.into(), ColumnType::new(ty).nullable(nullable)));
+            }
+        }
+        Ok(columns)
+    } else {
+        let scalar_type = validate_schema_2(seen_avro_nodes, schema)?;
+        Ok(vec![(
+            base_name.clone().into(),
+            ColumnType::new(scalar_type).nullable(false),
+        )])
+    }
+}
+
+fn validate_schema_2(
+    seen_avro_nodes: &mut HashSet<usize>,
+    schema: SchemaNode,
+) -> Result<ScalarType> {
     Ok(match schema.inner {
         SchemaPiece::Null => bail!("null outside of union types is not supported"),
         SchemaPiece::Boolean => ScalarType::Bool,
@@ -250,6 +756,24 @@ fn validate_schema_2(schema: SchemaNode) -> Result<ScalarType> {
         SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,
 
         SchemaPiece::Json => ScalarType::Jsonb,
+        SchemaPiece::Record { fields, .. } => {
+            let mut columns = vec![];
+            for f in fields {
+                let next_node = schema.step(&f.schema);
+                columns.extend(
+                    get_named_columns(seen_avro_nodes, next_node, &f.name)?
+                        .into_iter()
+                        // We strip out the nullability flag, because ScalarType::Record
+                        // fields are always nullable.
+                        .map(|(name, coltype)| (name, coltype.scalar_type)),
+                );
+            }
+            ScalarType::Record { fields: columns }
+        }
+        SchemaPiece::Array(inner) => {
+            let next_node = schema.step(inner);
+            ScalarType::List(Box::new(validate_schema_2(seen_avro_nodes, next_node)?))
+        }
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
     })
@@ -264,63 +788,6 @@ fn is_null(schema: &SchemaPieceOrNamed) -> bool {
     match schema {
         SchemaPieceOrNamed::Piece(SchemaPiece::Null) => true,
         _ => false,
-    }
-}
-
-/// Return None if they are equal, otherwise return the first mismatched schema
-fn first_mismatched_schema_types<'a>(
-    a: SchemaNode<'a>,
-    b: SchemaNode<'a>,
-) -> Option<(SchemaNode<'a>, SchemaNode<'a>)> {
-    match (a.inner, b.inner) {
-        (SchemaPiece::Null, SchemaPiece::Null) => None,
-        (SchemaPiece::Boolean, SchemaPiece::Boolean) => None,
-        (SchemaPiece::Int, SchemaPiece::Int) => None,
-        (SchemaPiece::Long, SchemaPiece::Long) => None,
-        (SchemaPiece::Float, SchemaPiece::Float) => None,
-        (SchemaPiece::Double, SchemaPiece::Double) => None,
-        (SchemaPiece::Bytes, SchemaPiece::Bytes) => None,
-        (SchemaPiece::Date, SchemaPiece::Date) => None,
-        (SchemaPiece::TimestampMilli, SchemaPiece::TimestampMilli) => None,
-        (SchemaPiece::TimestampMicro, SchemaPiece::TimestampMicro) => None,
-        (
-            SchemaPiece::Decimal {
-                precision: p1,
-                scale: s1,
-                fixed_size: f1,
-            },
-            SchemaPiece::Decimal {
-                precision: p2,
-                scale: s2,
-                fixed_size: f2,
-            },
-        ) if p1 == p2 && s1 == s2 && f1 == f2 => None,
-        (SchemaPiece::String, SchemaPiece::String) => None,
-        (SchemaPiece::Array(ai), SchemaPiece::Array(bi))
-        | (SchemaPiece::Map(ai), SchemaPiece::Map(bi)) => {
-            first_mismatched_schema_types(a.step(&**ai), b.step(&**bi))
-        }
-        (SchemaPiece::Union(ai), SchemaPiece::Union(bi)) => ai
-            .variants()
-            .iter()
-            .zip(bi.variants())
-            .flat_map(|(ai, bi)| first_mismatched_schema_types(a.step(ai), b.step(bi)))
-            .next(),
-        (SchemaPiece::Record { fields: ai, .. }, SchemaPiece::Record { fields: bi, .. }) => ai
-            .iter()
-            .zip(bi.iter())
-            .flat_map(|(ai, bi)| {
-                first_mismatched_schema_types(a.step(&ai.schema), b.step(&bi.schema))
-            })
-            .next(),
-        (SchemaPiece::Enum { symbols: ai, .. }, SchemaPiece::Enum { symbols: bi, .. })
-            if ai == bi =>
-        {
-            None
-        }
-        (SchemaPiece::Fixed { size: ai }, SchemaPiece::Fixed { size: bi }) if ai == bi => None,
-        (SchemaPiece::Json, SchemaPiece::Json) => None,
-        _ => Some((a, b)),
     }
 }
 
@@ -340,8 +807,8 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> Result<RowPacker> 
         )),
         Value::Bytes(b) => row.push(Datum::Bytes(&b)),
         Value::String(s) | Value::Enum(_ /* idx */, s) => row.push(Datum::String(&s)),
-        Value::Union(idx, v) => {
-            let mut v = Some(*v);
+        Value::Union { index, inner, .. } => {
+            let mut v = Some(*inner);
             if let SchemaPiece::Union(us) = n.inner {
                 for (var_idx, var_s) in us
                     .variants()
@@ -349,7 +816,7 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> Result<RowPacker> 
                     .enumerate()
                     .filter(|(_, s)| !is_null(s))
                 {
-                    if var_idx == idx {
+                    if var_idx == index {
                         let next = n.step(var_s);
                         row = pack_value(v.take().unwrap(), row, next)?;
                     } else {
@@ -374,13 +841,13 @@ where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let (v, n) = match v {
-        Value::Union(idx, v) => {
+        Value::Union { index, inner, .. } => {
             let next = if let SchemaPiece::Union(us) = n.inner {
-                n.step(&us.variants()[idx])
+                n.step(&us.variants()[index])
             } else {
                 unreachable!("Avro value out of sync with schema")
             };
-            (*v, next)
+            (*inner, next)
         }
         _ => bail!("unsupported avro value: {:?}", v),
     };
@@ -475,7 +942,7 @@ pub enum DebeziumDeduplicationStrategy {
 }
 
 #[derive(Debug)]
-enum DebeziumDeduplicationState {
+pub enum DebeziumDeduplicationState {
     Ordered {
         /// Last recorded (pos, row, offset) for each MySQL binlog file.
         /// Messages that are not ahead of the last recorded pos/row will be skipped.
@@ -639,7 +1106,7 @@ impl DebeziumDecodeState {
     ) -> Result<DiffPair<Row>> {
         fn is_snapshot(v: Value) -> Result<Option<bool>> {
             let answer = match v {
-                Value::Union(_idx, inner) => is_snapshot(*inner)?,
+                Value::Union { inner, .. } => is_snapshot(*inner)?,
                 Value::Boolean(b) => Some(b),
                 // Since https://issues.redhat.com/browse/DBZ-1295 ,
                 // "snapshot" is three-valued. "last" is the last row
@@ -726,8 +1193,12 @@ pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     envelope: EnvelopeType,
-    debezium: Option<DebeziumDecodeState>,
+    debezium_dedup: Option<DebeziumDeduplicationState>,
     debug_name: String,
+    worker_index: usize,
+    buf1: Vec<u8>,
+    buf2: Vec<u8>,
+    packer: RowPacker,
 }
 
 impl fmt::Debug for Decoder {
@@ -746,7 +1217,6 @@ impl fmt::Debug for Decoder {
     }
 }
 
-// TODO (#2133) -- Avro coding can probably be made significantly faster.
 impl Decoder {
     /// Creates a new `Decoder`
     ///
@@ -759,37 +1229,29 @@ impl Decoder {
         envelope: EnvelopeType,
         debug_name: String,
         worker_index: usize,
-        dedup_strat: Option<DebeziumDeduplicationStrategy>,
+        debezium_dedup: Option<DebeziumDeduplicationStrategy>,
     ) -> Result<Decoder> {
         assert!(
-            (envelope == EnvelopeType::Debezium && dedup_strat.is_some())
-                || (envelope != EnvelopeType::Debezium && dedup_strat.is_none())
+            (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
+                || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
         );
+        let debezium_dedup = debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat));
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
         let reader_schema = parse_schema(reader_schema).unwrap();
         let writer_schemas =
             schema_registry.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
 
-        let debezium = if envelope == EnvelopeType::Debezium {
-            Some(
-                DebeziumDecodeState::new(
-                    &reader_schema,
-                    debug_name.clone(),
-                    worker_index,
-                    dedup_strat.unwrap(), /* is_some already asserted */
-                )
-                .ok_or_else(|| format_err!("Failed to extract Debezium schema information!"))?,
-            )
-        } else {
-            None
-        };
         Ok(Decoder {
             reader_schema,
             writer_schemas,
             envelope,
-            debezium,
+            debezium_dedup,
             debug_name,
+            worker_index,
+            buf1: vec![],
+            buf2: vec![],
+            packer: Default::default(),
         })
     }
 
@@ -826,20 +1288,62 @@ impl Decoder {
         };
 
         let result = if self.envelope == EnvelopeType::Debezium {
-            let dbz_state = self.debezium.as_mut().ok_or_else(|| {
-                format_err!("Debezium schema extraction failed; can't decode message.")
-            })?;
-            let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            dbz_state.extract(val, self.reader_schema.top_node(), coord)?
+            let mut dec = AvroDebeziumDecoder {
+                packer: &mut self.packer,
+                buf: &mut self.buf1,
+                file_buf: &mut self.buf2,
+                before: None,
+                after: None,
+                coords: None,
+            };
+            let mut dsr: GeneralDeserializer = GeneralDeserializer {
+                schema: resolved_schema.top_node(),
+            };
+            // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
+            let dedup = self.debezium_dedup.as_mut().unwrap();
+            dsr.deserialize(&mut bytes, &mut dec)?;
+            let should_use = if let Some(source) = dec.coords {
+                // TODO - avoid the unnecessary utf8 check here.
+                let file = std::str::from_utf8(dec.file_buf)?;
+                source.snapshot
+                    || dedup.should_use_record(
+                        file,
+                        source.pos,
+                        source.row,
+                        coord,
+                        &self.debug_name,
+                        self.worker_index,
+                    )
+            } else {
+                true
+            };
+            if should_use {
+                DiffPair {
+                    before: dec.before,
+                    after: dec.after,
+                }
+            } else {
+                DiffPair {
+                    before: None,
+                    after: None,
+                }
+            }
         } else {
-            let val = avro::from_avro_datum(resolved_schema, &mut bytes)?;
-            let row = extract_row(val, iter::empty(), self.reader_schema.top_node())?;
+            let mut dec = AvroFlatDecoder {
+                packer: &mut self.packer,
+                buf: &mut self.buf1,
+                is_top: true,
+            };
+            let mut dsr: GeneralDeserializer = GeneralDeserializer {
+                schema: resolved_schema.top_node(),
+            };
+            dsr.deserialize(&mut bytes, &mut dec)?;
             DiffPair {
                 before: None,
-                after: row,
+                after: Some(dec.packer.finish_and_reuse()),
             }
         };
-        trace!(
+        log::trace!(
             "[customer-data] Decoded diff pair {:?}{} in {}",
             result,
             if let Some(coord) = coord {
@@ -976,8 +1480,18 @@ pub fn encode_debezium_transaction_unchecked(
     let transaction_id = Value::String(id.to_owned());
     let status = Value::String(status.to_owned());
     let event_count = match message_count {
-        None => Value::Union(0, Box::new(Value::Null)),
-        Some(count) => Value::Union(1, Box::new(Value::Long(count))),
+        None => Value::Union {
+            index: 0,
+            inner: Box::new(Value::Null),
+            n_variants: 2,
+            null_variant: Some(0),
+        },
+        Some(count) => Value::Union {
+            index: 1,
+            inner: Box::new(Value::Long(count)),
+            n_variants: 2,
+            null_variant: Some(0),
+        },
     };
 
     let avro = Value::Record(vec![
@@ -1109,17 +1623,37 @@ impl Encoder {
         transaction_id: Option<String>,
     ) -> Value {
         let before = match diff_pair.before {
-            None => Value::Union(0, Box::new(Value::Null)),
+            None => Value::Union {
+                index: 0,
+                inner: Box::new(Value::Null),
+                n_variants: 2,
+                null_variant: Some(0),
+            },
             Some(row) => {
                 let row = self.row_to_avro(row.unpack());
-                Value::Union(1, Box::new(row))
+                Value::Union {
+                    index: 1,
+                    inner: Box::new(row),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                }
             }
         };
         let after = match diff_pair.after {
-            None => Value::Union(0, Box::new(Value::Null)),
+            None => Value::Union {
+                index: 0,
+                inner: Box::new(Value::Null),
+                n_variants: 2,
+                null_variant: Some(0),
+            },
             Some(row) => {
                 let row = self.row_to_avro(row.unpack());
-                Value::Union(1, Box::new(row))
+                Value::Union {
+                    index: 1,
+                    inner: Box::new(row),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                }
             }
         };
 
@@ -1149,7 +1683,15 @@ impl Encoder {
             .map(|((name, typ), datum)| {
                 let name = name.as_str().to_owned();
                 if typ.nullable && datum.is_null() {
-                    return (name, Value::Union(0, Box::new(Value::Null)));
+                    return (
+                        name,
+                        Value::Union {
+                            index: 0,
+                            inner: Box::new(Value::Null),
+                            n_variants: 2,
+                            null_variant: Some(0),
+                        },
+                    );
                 }
                 let mut val = match &typ.scalar_type {
                     ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
@@ -1191,7 +1733,12 @@ impl Encoder {
                     ScalarType::Record { .. } => unimplemented!("record types"),
                 };
                 if typ.nullable {
-                    val = Value::Union(1, Box::new(val));
+                    val = Value::Union {
+                        index: 1,
+                        inner: Box::new(val),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    };
                 }
                 (name, val)
             })

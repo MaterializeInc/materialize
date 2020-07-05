@@ -1481,6 +1481,7 @@ dependencies = [
  "serde-value",
  "serde_json",
  "sha2",
+ "smallvec",
  "url",
 ]
 

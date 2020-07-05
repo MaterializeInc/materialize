@@ -220,6 +220,8 @@ pub enum SchemaPiece {
         index: usize,
         /// The concrete type
         inner: Box<SchemaPieceOrNamed>,
+        n_reader_variants: usize,
+        reader_null_variant: Option<usize>,
     },
     /// A union in the writer, resolved against a union in the reader.
     /// The two schemas may have different variants and the variants may be in a different order.
@@ -230,6 +232,8 @@ pub enum SchemaPiece {
         /// If the `i`th element is `Ok((j, piece))`, then the `i`th field of the writer
         /// matched the `j`th field of the reader, and `piece` is their resolved node.
         permutation: Vec<Result<(usize, SchemaPieceOrNamed), String>>,
+        n_reader_variants: usize,
+        reader_null_variant: Option<usize>,
     },
     /// The inverse of `ResolveConcreteUnion`
     ResolveUnionConcrete {
@@ -276,7 +280,7 @@ pub enum SchemaPiece {
     ResolveEnum {
         doc: Documentation,
         /// Symbols in order of the writer schema along with their index in the reader schema,
-        /// or `None` if they don't exist in the reader schema.
+        /// or `Err(symbol_name)` if they don't exist in the reader schema.
         symbols: Vec<Result<(usize, String), String>>,
         /// The value to decode if the writer writes some value not expected by the reader.
         default: Option<(usize, String)>,
@@ -1234,7 +1238,7 @@ impl Schema {
 #[derive(Clone, Debug, PartialEq)]
 pub struct NamedSchemaPiece {
     pub(crate) name: FullName,
-    pub(crate) piece: SchemaPiece,
+    pub piece: SchemaPiece,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1369,18 +1373,29 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
             SchemaPiece::ResolveIntTsMilli => SchemaPiece::ResolveIntTsMilli,
             SchemaPiece::ResolveIntTsMicro => SchemaPiece::ResolveIntTsMicro,
             SchemaPiece::ResolveDateTimestamp => SchemaPiece::ResolveDateTimestamp,
-            SchemaPiece::ResolveConcreteUnion { index, inner } => {
-                SchemaPiece::ResolveConcreteUnion {
-                    index: *index,
-                    inner: Box::new(self.clone_piece_or_named(inner.as_ref().as_ref())),
-                }
-            }
-            SchemaPiece::ResolveUnionUnion { permutation } => SchemaPiece::ResolveUnionUnion {
+            SchemaPiece::ResolveConcreteUnion {
+                index,
+                inner,
+                n_reader_variants,
+                reader_null_variant,
+            } => SchemaPiece::ResolveConcreteUnion {
+                index: *index,
+                inner: Box::new(self.clone_piece_or_named(inner.as_ref().as_ref())),
+                n_reader_variants: *n_reader_variants,
+                reader_null_variant: *reader_null_variant,
+            },
+            SchemaPiece::ResolveUnionUnion {
+                permutation,
+                n_reader_variants,
+                reader_null_variant,
+            } => SchemaPiece::ResolveUnionUnion {
                 permutation: permutation
                     .clone()
                     .into_iter()
                     .map(|o| o.map(|(idx, piece)| (idx, self.clone_piece_or_named(piece.as_ref()))))
                     .collect(),
+                n_reader_variants: *n_reader_variants,
+                reader_null_variant: *reader_null_variant,
             },
             SchemaPiece::ResolveUnionConcrete { index, inner } => {
                 SchemaPiece::ResolveUnionConcrete {
@@ -1495,9 +1510,15 @@ impl<'a> SchemaNode<'a> {
         let val = match (json, self.inner) {
             // A default value always matches the first variant of a union
             (json, SchemaPiece::Union(us)) => match us.schemas.first() {
-                Some(variant) => {
-                    AvroValue::Union(0, Box::new(self.step(variant).json_to_value(json)?))
-                }
+                Some(variant) => AvroValue::Union {
+                    index: 0,
+                    inner: Box::new(self.step(variant).json_to_value(json)?),
+                    n_variants: us.schemas.len(),
+                    null_variant: us
+                        .schemas
+                        .iter()
+                        .position(|s| s == &SchemaPieceOrNamed::Piece(SchemaPiece::Null)),
+                },
                 None => return Err(ParseSchemaError("Union schema has no variants".to_owned())),
             },
             (Null, SchemaPiece::Null) => AvroValue::Null,

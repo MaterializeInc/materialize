@@ -20,6 +20,7 @@ use smallvec::SmallVec;
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
 use crate::Datum;
+use fmt::Debug;
 
 /// A packed representation for `Datum`s.
 ///
@@ -134,10 +135,16 @@ struct RowArenaInner {
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumList<'a> {
     /// Points at the serialized datums
     data: &'a [u8],
+}
+
+impl<'a> Debug for DatumList<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
 }
 
 /// A mapping from string keys to Datums
@@ -733,6 +740,7 @@ impl RowPacker {
     ///     vec![Datum::String("age"), Datum::Int64(42)],
     /// );
     /// ```
+    #[inline]
     pub fn push_list_with<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut RowPacker) -> R,
