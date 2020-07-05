@@ -206,6 +206,8 @@ pub enum SchemaPiece {
         index: usize,
         /// The concrete type
         inner: Box<SchemaPieceOrNamed>,
+        n_reader_variants: usize,
+        reader_null_variant: Option<usize>,
     },
     /// A union in the writer, resolved against a union in the reader.
     /// The two schemas may have different variants and the variants may be in a different order.
@@ -216,6 +218,8 @@ pub enum SchemaPiece {
         /// If the `i`th element is `(j, piece)`, then the `i`th field of the writer
         /// matched the `j`th field of the reader, and `piece` is their resolved node.
         permutation: Vec<Option<(usize, SchemaPieceOrNamed)>>,
+        n_reader_variants: usize,
+        reader_null_variant: Option<usize>,
     },
     /// The inverse of `ResolveConcreteUnion`
     ResolveUnionConcrete {
@@ -255,9 +259,9 @@ pub enum SchemaPiece {
     /// The two schemas may have different values and the values may be in a different order.
     ResolveEnum {
         doc: Documentation,
-        /// Symbols in the reader schema if they exist in the writer schema,
-        /// or `None` otherwise.
-        symbols: Vec<Option<String>>,
+        /// Symbols in the writer schema along with their index in the reader schema,
+        /// or `None` if they don't exist in the reader schema..
+        symbols: Vec<Option<(String, usize)>>,
         // TODO(brennan) - These should support default values
     },
 }
@@ -395,7 +399,7 @@ impl<'a> From<&'a types::Value> for SchemaKind {
             types::Value::String(_) => SchemaKind::String,
             types::Value::Array(_) => SchemaKind::Array,
             types::Value::Map(_) => SchemaKind::Map,
-            types::Value::Union(_, _) => SchemaKind::Union,
+            types::Value::Union { .. } => SchemaKind::Union,
             types::Value::Record(_) => SchemaKind::Record,
             types::Value::Enum(_, _) => SchemaKind::Enum,
             types::Value::Fixed(_, _) => SchemaKind::Fixed,
@@ -1178,7 +1182,7 @@ impl Schema {
 #[derive(Clone, Debug, PartialEq)]
 pub struct NamedSchemaPiece {
     pub(crate) name: FullName,
-    pub(crate) piece: SchemaPiece,
+    pub piece: SchemaPiece,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1310,13 +1314,22 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
             SchemaPiece::ResolveLongFloat => SchemaPiece::ResolveLongFloat,
             SchemaPiece::ResolveLongDouble => SchemaPiece::ResolveLongDouble,
             SchemaPiece::ResolveFloatDouble => SchemaPiece::ResolveFloatDouble,
-            SchemaPiece::ResolveConcreteUnion { index, inner } => {
-                SchemaPiece::ResolveConcreteUnion {
-                    index: *index,
-                    inner: Box::new(self.clone_piece_or_named(inner.as_ref().as_ref())),
-                }
-            }
-            SchemaPiece::ResolveUnionUnion { permutation } => SchemaPiece::ResolveUnionUnion {
+            SchemaPiece::ResolveConcreteUnion {
+                index,
+                inner,
+                n_reader_variants,
+                reader_null_variant,
+            } => SchemaPiece::ResolveConcreteUnion {
+                index: *index,
+                inner: Box::new(self.clone_piece_or_named(inner.as_ref().as_ref())),
+                n_reader_variants: *n_reader_variants,
+                reader_null_variant: *reader_null_variant,
+            },
+            SchemaPiece::ResolveUnionUnion {
+                permutation,
+                n_reader_variants,
+                reader_null_variant,
+            } => SchemaPiece::ResolveUnionUnion {
                 permutation: permutation
                     .iter()
                     .map(|o| {
@@ -1324,6 +1337,8 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
                             .map(|(idx, piece)| (*idx, self.clone_piece_or_named(piece.as_ref())))
                     })
                     .collect(),
+                n_reader_variants: *n_reader_variants,
+                reader_null_variant: *reader_null_variant,
             },
             SchemaPiece::ResolveUnionConcrete { index, inner } => {
                 SchemaPiece::ResolveUnionConcrete {
@@ -1514,9 +1529,15 @@ impl<'a> SchemaNode<'a> {
             }
             // A default value always matches the first variant of a union
             (json, SchemaPiece::Union(us)) => match us.schemas.first() {
-                Some(variant) => {
-                    AvroValue::Union(0, Box::new(self.step(variant).json_to_value(json)?))
-                }
+                Some(variant) => AvroValue::Union {
+                    index: 0,
+                    inner: Box::new(self.step(variant).json_to_value(json)?),
+                    n_variants: us.schemas.len(),
+                    null_variant: us
+                        .schemas
+                        .iter()
+                        .position(|s| s == &SchemaPieceOrNamed::Piece(SchemaPiece::Null)),
+                },
                 None => return Err(ParseSchemaError("Union schema has no variants".to_owned())),
             },
             _ => {

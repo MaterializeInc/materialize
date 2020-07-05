@@ -6,19 +6,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use avro::{types::Value as AvroValue};
-use byteorder::{NetworkEndian, WriteBytesExt};
-use chrono::{Duration, NaiveDate};
-use criterion::{black_box, Criterion, Throughput};
-use futures::executor::block_on;
+use avro::{types::Value as AvroValue, AvroDeserializer, GeneralDeserializer};
 
-use interchange::avro::{
-    parse_schema,
-    DebeziumDeduplicationStrategy, Decoder, EnvelopeType,
-};
+use chrono::{Duration, NaiveDate};
+
+use interchange::avro::{parse_schema, AvroDebeziumDecoder};
 use std::ops::Add;
 
-pub fn bench_avro(c: &mut Criterion) {
+pub fn main() {
     let schema_str = r#"
 {
   "type": "record",
@@ -56,6 +51,10 @@ pub fn bench_avro(c: &mut Criterion) {
             {
               "name": "l_extendedprice",
               "type": "double"
+            },
+            {
+              "name": "l_nested_value",
+              "type": ["null", "Value"]
             },
             {
               "name": "l_discount",
@@ -270,6 +269,47 @@ pub fn bench_avro(c: &mut Criterion) {
                     ("l_linenumber".into(), AvroValue::Int(1)),
                     ("l_quantity".into(), AvroValue::Double(17.0)),
                     ("l_extendedprice".into(), AvroValue::Double(21168.23)),
+                    (
+                        "l_nested_value".into(),
+                        AvroValue::Union {
+                            index: 1,
+                            inner: Box::new(AvroValue::Record(vec![
+                                ("l_orderkey".into(), AvroValue::Int(1)),
+                                ("l_partkey".into(), AvroValue::Int(155_190)),
+                                ("l_suppkey".into(), AvroValue::Int(7706)),
+                                ("l_linenumber".into(), AvroValue::Int(1)),
+                                ("l_quantity".into(), AvroValue::Double(17.0)),
+                                ("l_extendedprice".into(), AvroValue::Double(21168.23)),
+                                (
+                                    "l_nested_value".into(),
+                                    AvroValue::Union {
+                                        index: 0,
+                                        inner: Box::new(AvroValue::Null),
+                                        n_variants: 2,
+                                        null_variant: Some(0),
+                                    },
+                                ),
+                                ("l_discount".into(), AvroValue::Double(0.04)),
+                                ("l_tax".into(), AvroValue::Double(0.02)),
+                                ("l_returnflag".into(), AvroValue::String("N".into())),
+                                ("l_linestatus".into(), AvroValue::String("O".into())),
+                                ("l_shipdate".into(), AvroValue::Date(since_epoch(9567))),
+                                ("l_commitdate".into(), AvroValue::Date(since_epoch(9537))),
+                                ("l_receiptdate".into(), AvroValue::Date(since_epoch(9567))),
+                                (
+                                    "l_shipinstruct".into(),
+                                    AvroValue::String("DELIVER IN PERSON".into()),
+                                ),
+                                ("l_shipmode".into(), AvroValue::String("TRUCK".into())),
+                                (
+                                    "l_comment".into(),
+                                    AvroValue::String("egular courts above the".into()),
+                                ),
+                            ])),
+                            n_variants: 2,
+                            null_variant: Some(0),
+                        },
+                    ),
                     ("l_discount".into(), AvroValue::Double(0.04)),
                     ("l_tax".into(), AvroValue::Double(0.02)),
                     ("l_returnflag".into(), AvroValue::String("N".into())),
@@ -387,25 +427,26 @@ pub fn bench_avro(c: &mut Criterion) {
     ]);
 
     let mut buf = Vec::new();
-    buf.write_u8(0).unwrap();
-    buf.write_i32::<NetworkEndian>(0).unwrap();
     buf.extend(avro::to_avro_datum(&schema, record).unwrap());
-    let len = buf.len() as u64;
 
-    let mut decoder = Decoder::new(
-        schema_str,
-        None,
-        EnvelopeType::Debezium,
-        "avro_bench".to_string(),
-        0,
-        Some(DebeziumDeduplicationStrategy::Ordered),
-    )
-    .unwrap();
+    let mut packer = Default::default();
+    let mut str_buf = vec![];
+    let mut file_buf = vec![];
+    let mut decoder = AvroDebeziumDecoder {
+        packer: &mut packer,
+        buf: &mut str_buf,
+        file_buf: &mut file_buf,
+        before: None,
+        after: None,
+        coords: None,
+    };
+    let mut d = GeneralDeserializer {
+        schema: schema.top_node(),
+    };
 
-    let mut bg = c.benchmark_group("avro");
-    bg.throughput(Throughput::Bytes(len));
-    bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(block_on(decoder.decode(&buf, None)).unwrap()))
-    });
-    bg.finish();
+    d.deserialize(&mut buf.as_ref(), &mut decoder).unwrap();
+    println!(
+        "before: {:#?}\nafter: {:#?}\ncoords: {:#?}",
+        decoder.before, decoder.after, decoder.coords
+    );
 }

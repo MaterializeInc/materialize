@@ -11,13 +11,16 @@ use std::collections::HashMap;
 use std::mem::transmute;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use failure::Error;
+use failure::{bail, Error};
 
 use crate::from_avro_datum;
-use crate::schema::{ResolvedRecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-use crate::types::{DecimalValue, Value};
+use crate::schema::{
+    RecordField, ResolvedDefaultValueField, ResolvedRecordField, SchemaNode, SchemaPiece,
+    SchemaPieceOrNamed,
+};
+use crate::types::{DecimalValue, Scalar, Value};
 use crate::util::{safe_len, zag_i32, zag_i64, DecodeError};
-use std::io::Read;
+use std::io::{Read, SeekFrom};
 
 #[inline]
 fn decode_long<R: Read>(reader: &mut R) -> Result<Value, Error> {
@@ -30,8 +33,25 @@ fn decode_int<R: Read>(reader: &mut R) -> Result<Value, Error> {
 }
 
 #[inline]
+fn decode_long_nonneg<R: Read>(reader: &mut R) -> Result<u64, Error> {
+    let u = match zag_i64(reader)? {
+        i if i >= 0 => i as u64,
+        i => bail!("Expected non-negative integer, got {}", i),
+    };
+    Ok(u)
+}
+
+fn decode_int_nonneg<R: Read>(reader: &mut R) -> Result<u32, Error> {
+    let u = match zag_i32(reader)? {
+        i if i >= 0 => i as u32,
+        i => bail!("Expected non-negative integer, got {}", i),
+    };
+    Ok(u)
+}
+
+#[inline]
 fn decode_len<R: Read>(reader: &mut R) -> Result<usize, Error> {
-    zag_i64(reader).and_then(|len| safe_len(len as usize))
+    zag_i64(reader).and_then(|i| safe_len(i as usize))
 }
 
 fn decode_decimal<R: Read>(
@@ -82,6 +102,792 @@ fn decode_string<R: Read>(reader: &mut R) -> Result<String, Error> {
     reader.read_exact(&mut buf)?;
 
     String::from_utf8(buf).map_err(|_| DecodeError::new("not a valid utf-8 string").into())
+}
+
+pub trait Skip {
+    fn skip(&mut self, len: usize) -> Result<(), Error>;
+}
+
+mod private {
+    // Impl this for any Seek types that we want to make Skip.
+    pub trait SkipMarker {}
+}
+
+impl private::SkipMarker for std::fs::File {}
+
+impl<T> Skip for T
+where
+    T: std::io::Seek + private::SkipMarker,
+{
+    fn skip(&mut self, len: usize) -> Result<(), Error> {
+        self.seek(SeekFrom::Current(len as i64))?;
+        Ok(())
+    }
+}
+
+impl Skip for &[u8] {
+    fn skip(&mut self, len: usize) -> Result<(), Error> {
+        if len > self.len() {
+            bail!(
+                "Failed to skip {} bytes in buffer: length is {}.",
+                len,
+                self.len()
+            );
+        }
+        *self = &self[len..];
+        Ok(())
+    }
+}
+
+pub enum ValueOrReader<'a, V, R: Read + Skip> {
+    Value(V),
+    Reader { len: usize, r: &'a mut R },
+}
+
+enum SchemaOrDefault<'b, R: Read + Skip> {
+    Schema(&'b mut R, SchemaNode<'b>),
+    Default(&'b Value),
+}
+pub struct AvroFieldAccess<'b, R: Read + Skip> {
+    schema: SchemaOrDefault<'b, R>,
+}
+
+impl<'b, R: Read + Skip> AvroFieldAccess<'b, R> {
+    pub fn decode_field<D: AvroDecode>(self, d: &mut D) -> Result<(), Error> {
+        match self.schema {
+            SchemaOrDefault::Schema(r, schema) => {
+                let mut des = GeneralDeserializer { schema };
+                des.deserialize(r, d)
+            }
+            SchemaOrDefault::Default(value) => give_value(d, value),
+        }
+    }
+    pub fn decode_to_value(self) -> Result<Value, Error> {
+        match self.schema {
+            SchemaOrDefault::Schema(r, schema) => decode(schema, r),
+            SchemaOrDefault::Default(val) => Ok(val.clone()),
+        }
+    }
+}
+
+pub trait AvroRecordAccess<R: Read + Skip> {
+    fn next_field<'b>(
+        &'b mut self,
+    ) -> Result<Option<(&'b str, usize, AvroFieldAccess<'b, R>)>, Error>;
+}
+
+struct SimpleRecordAccess<'a, R: Read + Skip> {
+    schema: SchemaNode<'a>,
+    r: &'a mut R,
+    fields: &'a [RecordField],
+    i: usize,
+}
+
+impl<'a, R: Read + Skip> SimpleRecordAccess<'a, R> {
+    fn new(schema: SchemaNode<'a>, r: &'a mut R, fields: &'a [RecordField]) -> Self {
+        Self {
+            schema,
+            r,
+            fields,
+            i: 0,
+        }
+    }
+}
+
+impl<'a, R: Read + Skip> AvroRecordAccess<R> for SimpleRecordAccess<'a, R> {
+    fn next_field<'b>(
+        &'b mut self,
+    ) -> Result<Option<(&'b str, usize, AvroFieldAccess<'b, R>)>, Error> {
+        assert!(self.i <= self.fields.len());
+        if self.i == self.fields.len() {
+            Ok(None)
+        } else {
+            let f = &self.fields[self.i];
+            self.i += 1;
+            Ok(Some((
+                f.name.as_str(),
+                f.position,
+                AvroFieldAccess {
+                    schema: SchemaOrDefault::Schema(self.r, self.schema.step(&f.schema)),
+                },
+            )))
+        }
+    }
+}
+
+struct ValueRecordAccess<'a> {
+    values: &'a [(String, Value)],
+    i: usize,
+}
+
+impl<'a> ValueRecordAccess<'a> {
+    fn new(values: &'a [(String, Value)]) -> Self {
+        Self { values, i: 0 }
+    }
+}
+
+impl<'a> AvroRecordAccess<&'a [u8]> for ValueRecordAccess<'a> {
+    fn next_field<'b>(
+        &'b mut self,
+    ) -> Result<Option<(&'b str, usize, AvroFieldAccess<'b, &'a [u8]>)>, Error> {
+        assert!(self.i <= self.values.len());
+        if self.i == self.values.len() {
+            Ok(None)
+        } else {
+            let (name, val) = &self.values[self.i];
+            self.i += 1;
+            Ok(Some((
+                name.as_str(),
+                self.i - 1,
+                AvroFieldAccess {
+                    schema: SchemaOrDefault::Default(val),
+                },
+            )))
+        }
+    }
+}
+
+struct ResolvedRecordAccess<'a, R: Read + Skip> {
+    defaults: &'a [ResolvedDefaultValueField],
+    i_defaults: usize,
+    fields: &'a [ResolvedRecordField],
+    i_fields: usize,
+    r: &'a mut R,
+    schema: SchemaNode<'a>,
+}
+
+impl<'a, R: Read + Skip> ResolvedRecordAccess<'a, R> {
+    fn new(
+        defaults: &'a [ResolvedDefaultValueField],
+        fields: &'a [ResolvedRecordField],
+        r: &'a mut R,
+        schema: SchemaNode<'a>,
+    ) -> Self {
+        Self {
+            defaults,
+            i_defaults: 0,
+            fields,
+            i_fields: 0,
+            r,
+            schema,
+        }
+    }
+}
+
+impl<'a, R: Read + Skip> AvroRecordAccess<R> for ResolvedRecordAccess<'a, R> {
+    fn next_field<'b>(
+        &'b mut self,
+    ) -> Result<Option<(&'b str, usize, AvroFieldAccess<'b, R>)>, Error> {
+        assert!(self.i_defaults <= self.defaults.len() && self.i_fields <= self.fields.len());
+        if self.i_defaults < self.defaults.len() {
+            let default = &self.defaults[self.i_defaults];
+            self.i_defaults += 1;
+            Ok(Some((
+                default.name.as_str(),
+                default.position,
+                AvroFieldAccess {
+                    schema: SchemaOrDefault::Default(&default.default),
+                },
+            )))
+        } else {
+            while self.i_fields < self.fields.len() {
+                let field = &self.fields[self.i_fields];
+                self.i_fields += 1;
+                match field {
+                    ResolvedRecordField::Absent(absent_schema) => {
+                        // we don't care what's in the value, but we still need to read it in order to skip ahead the proper amount in the input.
+                        let mut d = GeneralDeserializer {
+                            schema: absent_schema.top_node(),
+                        };
+                        d.deserialize(self.r, &mut TrivialDecoder)?;
+                        continue;
+                    }
+                    ResolvedRecordField::Present(field) => {
+                        return Ok(Some((
+                            field.name.as_str(),
+                            field.position,
+                            AvroFieldAccess {
+                                schema: SchemaOrDefault::Schema(
+                                    self.r,
+                                    self.schema.step(&field.schema),
+                                ),
+                            },
+                        )));
+                    }
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+pub trait AvroArrayAccess {
+    fn decode_next<D: AvroDecode>(&mut self, d: &mut D) -> Result<bool, Error>;
+}
+
+struct SimpleArrayAccess<'a, R: Read + Skip> {
+    r: &'a mut R,
+    schema: SchemaNode<'a>,
+    remaining: usize,
+    done: bool,
+}
+
+impl<'a, R: Read + Skip> SimpleArrayAccess<'a, R> {
+    fn new(r: &'a mut R, schema: SchemaNode<'a>) -> Self {
+        Self {
+            r,
+            schema,
+            remaining: 0,
+            done: false,
+        }
+    }
+}
+
+struct ValueArrayAccess<'a> {
+    values: &'a [Value],
+    i: usize,
+}
+
+impl<'a> ValueArrayAccess<'a> {
+    fn new(values: &'a [Value]) -> Self {
+        Self { values, i: 0 }
+    }
+}
+
+impl<'a> AvroArrayAccess for ValueArrayAccess<'a> {
+    fn decode_next<D: AvroDecode>(&mut self, d: &mut D) -> Result<bool, Error> {
+        assert!(self.i <= self.values.len());
+        if self.i == self.values.len() {
+            Ok(false)
+        } else {
+            give_value(d, &self.values[self.i])?;
+            self.i += 1;
+            Ok(true)
+        }
+    }
+}
+
+impl<'a, R: Read + Skip> AvroArrayAccess for SimpleArrayAccess<'a, R> {
+    fn decode_next<D: AvroDecode>(&mut self, d: &mut D) -> Result<bool, Error> {
+        if self.done {
+            return Ok(false);
+        }
+        if self.remaining == 0 {
+            // TODO -- we can use len_in_bytes to quickly skip non-demanded arrays
+            let (len, _len_in_bytes) = match zag_i64(self.r)? {
+                len if len > 0 => (len as usize, None),
+                neglen if neglen < 0 => (neglen.abs() as usize, Some(decode_len(self.r)?)),
+                0 => {
+                    self.done = true;
+                    return Ok(false);
+                }
+                _ => unreachable!(),
+            };
+            self.remaining = len;
+        }
+        assert!(self.remaining > 0);
+        self.remaining -= 1;
+        let mut des = GeneralDeserializer {
+            schema: self.schema,
+        };
+        des.deserialize(self.r, d)?;
+        Ok(true)
+    }
+}
+
+pub trait AvroDecode {
+    fn record<R: Read + Skip, A: AvroRecordAccess<R>>(&mut self, _a: &mut A) -> Result<(), Error> {
+        bail!("Unexpected record");
+    }
+
+    fn union_branch<'a, R: Read + Skip, D: AvroDeserializer>(
+        &mut self,
+        _idx: usize,
+        _n_variants: usize,
+        _null_variant: Option<usize>,
+        _deserializer: &'a mut D,
+        _reader: &'a mut R,
+    ) -> Result<(), Error> {
+        bail!("Unexpected union");
+    }
+
+    fn array<A: AvroArrayAccess>(&mut self, _a: &mut A) -> Result<(), Error> {
+        bail!("Unexpected array");
+    }
+
+    fn begin_map(&mut self) -> Result<(), Error> {
+        bail!("Unexpected map");
+    }
+
+    fn map_key<'a, R: Read + Skip>(
+        &mut self,
+        _r: ValueOrReader<'a, &'a str, R>,
+    ) -> Result<(), Error> {
+        bail!("Unexpected map");
+    }
+    fn end_map(&mut self) -> Result<(), Error> {
+        bail!("Unexpected map");
+    }
+
+    fn enum_variant(&mut self, _symbol: &str, _idx: usize) -> Result<(), Error> {
+        bail!("Unexpected enum");
+    }
+
+    fn scalar(&mut self, _scalar: Scalar) -> Result<(), Error> {
+        bail!("Unexpected scalar");
+    }
+
+    fn decimal<'a, R: Read + Skip>(
+        &mut self,
+        _precision: usize,
+        _scale: usize,
+        _r: ValueOrReader<'a, &'a [u8], R>,
+    ) -> Result<(), Error> {
+        bail!("Unexpected decimal");
+    }
+    fn bytes<'a, R: Read + Skip>(
+        &mut self,
+        _r: ValueOrReader<'a, &'a [u8], R>,
+    ) -> Result<(), Error> {
+        bail!("Unexpected bytes");
+    }
+    fn string<'a, R: Read + Skip>(
+        &mut self,
+        _r: ValueOrReader<'a, &'a str, R>,
+    ) -> Result<(), Error> {
+        bail!("Unexpected string");
+    }
+    fn json<'a, R: Read + Skip>(
+        &mut self,
+        _r: ValueOrReader<'a, &'a serde_json::Value, R>,
+    ) -> Result<(), Error> {
+        bail!("Unexpected json");
+    }
+    fn fixed<'a, R: Read + Skip>(
+        &mut self,
+        _r: ValueOrReader<'a, &'a [u8], R>,
+    ) -> Result<(), Error> {
+        bail!("Unexpected fixed");
+    }
+}
+
+pub struct TrivialDecoder;
+
+impl TrivialDecoder {
+    fn maybe_skip<'a, V, R: Read + Skip>(
+        &mut self,
+        r: ValueOrReader<'a, V, R>,
+    ) -> Result<(), Error> {
+        if let ValueOrReader::Reader { len, r } = r {
+            r.skip(len)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl AvroDecode for TrivialDecoder {
+    fn record<R: Read + Skip, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<(), Error> {
+        while let Some((_, _, f)) = a.next_field()? {
+            f.decode_field(&mut TrivialDecoder)?;
+        }
+        Ok(())
+    }
+    fn union_branch<'a, R: Read + Skip, D: AvroDeserializer>(
+        &mut self,
+        _idx: usize,
+        _n_variants: usize,
+        _null_variant: Option<usize>,
+        deserializer: &'a mut D,
+        reader: &'a mut R,
+    ) -> Result<(), Error> {
+        deserializer.deserialize(reader, self)
+    }
+
+    fn begin_map(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+    fn map_key<'a, R: Read + Skip>(
+        &mut self,
+        r: ValueOrReader<'a, &'a str, R>,
+    ) -> Result<(), Error> {
+        self.maybe_skip(r)
+    }
+    fn end_map(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+    fn enum_variant(&mut self, _symbol: &str, _idx: usize) -> Result<(), Error> {
+        Ok(())
+    }
+    fn scalar(&mut self, _scalar: Scalar) -> Result<(), Error> {
+        Ok(())
+    }
+    fn decimal<'a, R: Read + Skip>(
+        &mut self,
+        _precision: usize,
+        _scale: usize,
+        r: ValueOrReader<'a, &'a [u8], R>,
+    ) -> Result<(), Error> {
+        self.maybe_skip(r)
+    }
+    fn bytes<'a, R: Read + Skip>(
+        &mut self,
+        r: ValueOrReader<'a, &'a [u8], R>,
+    ) -> Result<(), Error> {
+        self.maybe_skip(r)
+    }
+    fn string<'a, R: Read + Skip>(
+        &mut self,
+        r: ValueOrReader<'a, &'a str, R>,
+    ) -> Result<(), Error> {
+        self.maybe_skip(r)
+    }
+    fn json<'a, R: Read + Skip>(
+        &mut self,
+        r: ValueOrReader<'a, &'a serde_json::Value, R>,
+    ) -> Result<(), Error> {
+        self.maybe_skip(r)
+    }
+    fn fixed<'a, R: Read + Skip>(
+        &mut self,
+        r: ValueOrReader<'a, &'a [u8], R>,
+    ) -> Result<(), Error> {
+        self.maybe_skip(r)
+    }
+    fn array<A: AvroArrayAccess>(&mut self, a: &mut A) -> Result<(), Error> {
+        while a.decode_next(&mut TrivialDecoder)? {}
+        Ok(())
+    }
+}
+
+impl<'a> AvroDeserializer for &'a Value {
+    fn deserialize<R: Read + Skip, D: AvroDecode>(
+        &mut self,
+        _r: &mut R,
+        d: &mut D,
+    ) -> Result<(), Error> {
+        give_value(d, *self)
+    }
+}
+
+pub fn give_value<D: AvroDecode>(d: &mut D, mut v: &Value) -> Result<(), Error> {
+    use ValueOrReader::Value as V;
+    match v {
+        Value::Null => d.scalar(Scalar::Null),
+        Value::Boolean(val) => d.scalar(Scalar::Boolean(*val)),
+        Value::Int(val) => d.scalar(Scalar::Int(*val)),
+        Value::Long(val) => d.scalar(Scalar::Long(*val)),
+        Value::Float(val) => d.scalar(Scalar::Float(*val)),
+        Value::Double(val) => d.scalar(Scalar::Double(*val)),
+        Value::Date(val) => d.scalar(Scalar::Date(*val)),
+        Value::Timestamp(val) => d.scalar(Scalar::Timestamp(*val)),
+        // The &[u8] parameter here (and elsewhere in this function) is arbitrary, but we have to put in something in order for the function
+        // to type-check
+        Value::Decimal(val) => d.decimal::<&[u8]>(val.precision, val.scale, V(&val.unscaled)),
+        Value::Bytes(val) => d.bytes::<&[u8]>(V(val)),
+        Value::String(val) => d.string::<&[u8]>(V(val)),
+        Value::Fixed(_len, val) => d.fixed::<&[u8]>(V(val)),
+        Value::Enum(idx, symbol) => d.enum_variant(symbol, *idx as usize),
+        Value::Union {
+            index,
+            inner: _,
+            n_variants,
+            null_variant,
+        } => {
+            let mut empty_reader: &[u8] = &[];
+            d.union_branch(
+                *index,
+                *n_variants,
+                *null_variant,
+                &mut v,
+                &mut empty_reader,
+            )
+        }
+        Value::Array(val) => {
+            let mut a = ValueArrayAccess::new(val);
+            d.array(&mut a)
+        }
+        Value::Map(val) => {
+            d.begin_map()?;
+            for (key, v) in val {
+                d.map_key::<&[u8]>(V(key))?;
+                give_value(d, v)?;
+            }
+            d.end_map()
+        }
+        Value::Record(val) => {
+            let mut a = ValueRecordAccess::new(val);
+            d.record(&mut a)
+        }
+        Value::Json(val) => d.json::<&[u8]>(V(val)),
+    }
+}
+
+pub trait AvroDeserializer {
+    fn deserialize<R: Read + Skip, D: AvroDecode>(
+        &mut self,
+        r: &mut R,
+        d: &mut D,
+    ) -> Result<(), Error>;
+}
+
+pub struct GeneralDeserializer<'a> {
+    pub schema: SchemaNode<'a>,
+}
+
+impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
+    fn deserialize<R: Read + Skip, D: AvroDecode>(
+        &mut self,
+        r: &mut R,
+        d: &mut D,
+    ) -> Result<(), Error> {
+        use ValueOrReader::Reader;
+        match self.schema.inner {
+            SchemaPiece::Null => d.scalar(Scalar::Null),
+            SchemaPiece::Boolean => {
+                let mut buf = [0u8; 1];
+                r.read_exact(&mut buf[..])?;
+                let val = match buf[0] {
+                    0u8 => false,
+                    1u8 => true,
+                    _ => return Err(DecodeError::new("not a bool").into()),
+                };
+                d.scalar(Scalar::Boolean(val))
+            }
+            SchemaPiece::Int => {
+                let val = zag_i32(r)?;
+                d.scalar(Scalar::Int(val))
+            }
+            SchemaPiece::Long => {
+                let val = zag_i64(r)?;
+                d.scalar(Scalar::Long(val))
+            }
+            SchemaPiece::Float => {
+                let val = decode_float(r)?;
+                d.scalar(Scalar::Float(val))
+            }
+            SchemaPiece::Double => {
+                let val = decode_double(r)?;
+                d.scalar(Scalar::Double(val))
+            }
+            SchemaPiece::Date => {
+                let days = zag_i32(r)?;
+                let val = NaiveDate::from_ymd(1970, 1, 1)
+                    .checked_add_signed(chrono::Duration::days(days.into()))
+                    .ok_or_else(|| {
+                        DecodeError::new(format!("Invalid num days from epoch: {0}", days))
+                    })?;
+                d.scalar(Scalar::Date(val))
+            }
+            SchemaPiece::TimestampMilli => {
+                let total_millis = zag_i32(r)?;
+                let seconds = total_millis / 1000;
+                let millis = (total_millis % 1000) as u32;
+                let val = NaiveDateTime::from_timestamp_opt(seconds as i64, millis * 1_000_000)
+                    .ok_or_else(|| {
+                        DecodeError::new(format!("Invalid ms timestamp {}.{}", seconds, millis))
+                    })?;
+                d.scalar(Scalar::Timestamp(val))
+            }
+            SchemaPiece::TimestampMicro => {
+                let total_micros = zag_i64(r)?;
+                let seconds = total_micros / 1_000_000;
+                let micros = (total_micros % 1_000_000) as u32;
+                let val =
+                    NaiveDateTime::from_timestamp_opt(seconds, micros * 1000).ok_or_else(|| {
+                        DecodeError::new(format!(
+                            "Invalid microsecond timestamp: {}.{}",
+                            seconds, micros
+                        ))
+                    })?;
+                d.scalar(Scalar::Timestamp(val))
+            }
+            SchemaPiece::Decimal {
+                precision,
+                scale,
+                fixed_size,
+            } => {
+                let len = fixed_size.map(Ok).unwrap_or_else(|| decode_len(r))?;
+                d.decimal(*precision, *scale, Reader { len, r })
+            }
+            SchemaPiece::Bytes => {
+                let len = decode_len(r)?;
+                d.bytes(Reader { len, r })
+            }
+            SchemaPiece::String => {
+                let len = decode_len(r)?;
+                d.string(Reader { len, r })
+            }
+            SchemaPiece::Json => {
+                let len = decode_len(r)?;
+                d.json(Reader { len, r })
+            }
+            SchemaPiece::Array(inner) => {
+                // From the spec:
+                // Arrays are encoded as a series of blocks. Each block consists of a long count value, followed by that many array items. A block with count zero indicates the end of the array. Each item is encoded per the array's item schema.
+                // If a block's count is negative, its absolute value is used, and the count is followed immediately by a long block size indicating the number of bytes in the block. This block size permits fast skipping through data, e.g., when projecting a record to a subset of its fields.
+
+                let mut a = SimpleArrayAccess::new(r, self.schema.step(inner));
+                d.array(&mut a)
+            }
+            SchemaPiece::Map(inner) => {
+                // See logic for `SchemaPiece::Array` above. Maps are encoded similarly.
+                d.begin_map()?;
+                loop {
+                    let (len, _len_in_bytes) = match zag_i64(r)? {
+                        len if len > 0 => (len as usize, None),
+                        neglen if neglen < 0 => (neglen.abs() as usize, Some(decode_len(r)?)),
+                        0 => break,
+                        _ => unreachable!(),
+                    };
+
+                    for _ in 0..len {
+                        let key_len = decode_len(r)?;
+                        d.map_key(Reader { len: key_len, r })?;
+                        self.schema = self.schema.step(inner.as_ref());
+                        self.deserialize(r, d)?;
+                    }
+                }
+                d.end_map()
+            }
+            SchemaPiece::Union(inner) => {
+                let index = decode_long_nonneg(r)? as usize;
+                let variants = inner.variants();
+                match variants.get(index) {
+                    Some(variant) => {
+                        let n_variants = variants.len();
+                        let null_variant = variants
+                            .iter()
+                            .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
+                        self.schema = self.schema.step(variant);
+                        d.union_branch(index, n_variants, null_variant, self, r)
+                    }
+                    None => Err(DecodeError::new("Union index out of bounds").into()),
+                }
+            }
+            SchemaPiece::ResolveIntLong => {
+                let val = zag_i32(r)? as i64;
+                d.scalar(Scalar::Long(val))
+            }
+            SchemaPiece::ResolveIntFloat => {
+                let val = zag_i32(r)? as f32;
+                d.scalar(Scalar::Float(val))
+            }
+            SchemaPiece::ResolveIntDouble => {
+                let val = zag_i32(r)? as f64;
+                d.scalar(Scalar::Double(val))
+            }
+            SchemaPiece::ResolveLongFloat => {
+                let val = zag_i64(r)? as f32;
+                d.scalar(Scalar::Float(val))
+            }
+            SchemaPiece::ResolveLongDouble => {
+                let val = zag_i64(r)? as f64;
+                d.scalar(Scalar::Double(val))
+            }
+            SchemaPiece::ResolveFloatDouble => {
+                let val = decode_float(r)? as f64;
+                d.scalar(Scalar::Double(val))
+            }
+            SchemaPiece::ResolveConcreteUnion {
+                index,
+                inner,
+                n_reader_variants,
+                reader_null_variant,
+            } => {
+                self.schema = self.schema.step(&**inner);
+                d.union_branch(*index, *n_reader_variants, *reader_null_variant, self, r)
+            }
+            SchemaPiece::ResolveUnionUnion {
+                permutation,
+                n_reader_variants,
+                reader_null_variant,
+            } => {
+                let index = decode_long_nonneg(r)? as usize;
+                match &permutation[index] {
+                    None => {
+                        Err(DecodeError::new("Union variant not found in reader schema").into())
+                    }
+                    Some((index, variant)) => {
+                        self.schema = self.schema.step(variant);
+                        d.union_branch(*index, *n_reader_variants, *reader_null_variant, self, r)
+                    }
+                }
+            }
+            SchemaPiece::ResolveUnionConcrete { index, inner } => {
+                let found_index = decode_long_nonneg(r)? as usize;
+                if *index != found_index {
+                    Err(DecodeError::new(
+                        "Union variant does not match reader schema's concrete type",
+                    )
+                    .into())
+                } else {
+                    self.schema = self.schema.step(inner.as_ref());
+                    // The reader is not expecting a union here, so don't call `D::union_branch`
+                    self.deserialize(r, d)
+                }
+            }
+            SchemaPiece::Record {
+                doc: _,
+                fields,
+                lookup: _,
+            } => {
+                let mut a = SimpleRecordAccess::new(self.schema, r, fields);
+                d.record(&mut a)
+                // d.begin_record()?;
+                // for field in fields {
+                //     d.record_field(&field.name, field.position)?;
+                //     decode_new(schema.step(&field.schema), r, d)?;
+                // }
+                // d.end_record()
+            }
+            SchemaPiece::Enum { doc: _, symbols } => {
+                let index = decode_int_nonneg(r)? as usize;
+                match symbols.get(index) {
+                    None => Err(DecodeError::new(format!(
+                        "enum symbol index out of bounds: {}, [0, {})",
+                        index,
+                        symbols.len()
+                    ))
+                    .into()),
+                    Some(symbol) => d.enum_variant(symbol, index),
+                }
+            }
+            SchemaPiece::Fixed { size } => d.fixed(Reader { len: *size, r }),
+            // XXX - This does not deliver fields to the consumer in the same order they were
+            // declared in the reader schema, which might cause headache for consumers...
+            // Unfortunately, there isn't a good way to do so without pre-decoding the whole record
+            // (which would require a lot of allocations)
+            // and then sorting the fields. So, just let the consumer deal with re-ordering.
+            SchemaPiece::ResolveRecord {
+                defaults,
+                fields,
+                n_reader_fields: _,
+            } => {
+                let mut a = ResolvedRecordAccess::new(defaults, fields, r, self.schema);
+                d.record(&mut a)
+            }
+            SchemaPiece::ResolveEnum { doc: _, symbols } => {
+                let index = decode_int_nonneg(r)? as usize;
+                match symbols.get(index) {
+                    None => Err(DecodeError::new(format!(
+                        "enum symbol index out of bounds: {}, [0, {})",
+                        index,
+                        symbols.len()
+                    ))
+                    .into()),
+                    Some(op) => match op {
+                        None => Err(DecodeError::new(format!(
+                            "Enum symbol at index {} in writer schema not found in reader",
+                            index
+                        ))
+                        .into()),
+                        Some((name, index)) => d.enum_variant(name, *index),
+                    },
+                }
+            }
+        }
+    }
 }
 
 /// Decode a `Value` from avro format given its `Schema`.
@@ -219,9 +1025,14 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             let index = zag_i64(reader)? as usize;
             let variants = inner.variants();
             match variants.get(index) {
-                Some(variant) => {
-                    decode(schema.step(variant), reader).map(|x| Value::Union(index, Box::new(x)))
-                }
+                Some(variant) => decode(schema.step(variant), reader).map(|x| Value::Union {
+                    index,
+                    inner: Box::new(x),
+                    n_variants: variants.len(),
+                    null_variant: variants
+                        .iter()
+                        .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null)),
+                }),
                 None => Err(DecodeError::new("Union index out of bounds").into()),
             }
         }
@@ -231,15 +1042,32 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
         SchemaPiece::ResolveLongFloat => zag_i64(reader).map(|x| Value::Float(x as f32)),
         SchemaPiece::ResolveLongDouble => zag_i64(reader).map(|x| Value::Double(x as f64)),
         SchemaPiece::ResolveFloatDouble => decode_float(reader).map(|x| Value::Double(x as f64)),
-        SchemaPiece::ResolveConcreteUnion { index, inner } => {
-            decode(schema.step(&**inner), reader).map(|x| Value::Union(*index, Box::new(x)))
-        }
-        SchemaPiece::ResolveUnionUnion { permutation } => {
+        SchemaPiece::ResolveConcreteUnion {
+            index,
+            inner,
+            n_reader_variants,
+            reader_null_variant,
+        } => decode(schema.step(&**inner), reader).map(|x| Value::Union {
+            index: *index,
+            inner: Box::new(x),
+            n_variants: *n_reader_variants,
+            null_variant: *reader_null_variant,
+        }),
+        SchemaPiece::ResolveUnionUnion {
+            permutation,
+            n_reader_variants,
+            reader_null_variant,
+        } => {
             let index = zag_i64(reader)? as usize;
             match &permutation[index] {
                 None => Err(DecodeError::new("Union variant not found in reader schema").into()),
                 Some((index, variant)) => {
-                    decode(schema.step(variant), reader).map(|x| Value::Union(*index, Box::new(x)))
+                    decode(schema.step(variant), reader).map(|x| Value::Union {
+                        index: *index,
+                        inner: Box::new(x),
+                        n_variants: *n_reader_variants,
+                        null_variant: *reader_null_variant,
+                    })
                 }
             }
         }
@@ -341,7 +1169,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             if let Value::Int(index) = decode_int(reader)? {
                 if index >= 0 && (index as usize) <= symbols.len() {
                     match symbols[index as usize].clone() {
-                        Some(symbol) => Ok(Value::Enum(index, symbol)), // Todo (brennan) -- should this actually be the index in reader? Does it matter?
+                        Some((symbol, index)) => Ok(Value::Enum(index as i32, symbol)),
                         None => Err(DecodeError::new(format!(
                             "Enum symbol at index {} in writer schema not found in reader",
                             index

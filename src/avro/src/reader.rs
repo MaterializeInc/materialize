@@ -431,13 +431,7 @@ impl<'a> SchemaResolver<'a> {
                     .collect::<HashMap<_, _>>();
                 let symbols = w_symbols
                     .iter()
-                    .map(|s| {
-                        if r_map.contains_key(&s) {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
+                    .map(|s| r_map.get(s).map(|i| (s.clone(), *i)))
                     .collect();
                 SchemaPiece::ResolveEnum {
                     doc: doc.clone(),
@@ -556,17 +550,36 @@ impl<'a> SchemaResolver<'a> {
                         })
                     })
                     .collect::<Vec<_>>();
-                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveUnionUnion { permutation })
+                let n_reader_variants = r_inner.variants().len();
+                let reader_null_variant = r_inner
+                    .variants()
+                    .iter()
+                    .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
+                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveUnionUnion {
+                    permutation,
+                    n_reader_variants,
+                    reader_null_variant,
+                })
             }
             // Writer is concrete; reader is union
             (other, SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(r_inner))) => {
+                let n_reader_variants = r_inner.variants().len();
+                let reader_null_variant = r_inner
+                    .variants()
+                    .iter()
+                    .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
                 let (index, r_inner) = r_inner
                     .resolve_ref(other, &self.writer_to_reader_names)
                     .ok_or_else(|| {
                         SchemaResolutionError::new("No matching schema in union".to_string())
                     })?;
                 let inner = Box::new(self.resolve(writer.step_ref(other), reader.step(r_inner))?);
-                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveConcreteUnion { index, inner })
+                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveConcreteUnion {
+                    index,
+                    inner,
+                    n_reader_variants,
+                    reader_null_variant,
+                })
             }
             // Writer is union; reader is concrete
             (SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(w_inner)), other) => {
@@ -799,7 +812,12 @@ mod tests {
 
         assert_eq!(
             from_avro_datum(&schema, &mut encoded).unwrap(),
-            Value::Union(1, Box::new(Value::Long(0)))
+            Value::Union {
+                index: 1,
+                inner: Box::new(Value::Long(0)),
+                n_variants: 2,
+                null_variant: Some(0)
+            }
         );
     }
 

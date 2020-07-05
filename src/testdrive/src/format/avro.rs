@@ -25,7 +25,7 @@ use serde_json::Value as JsonValue;
 // Re-export components from the various other Avro libraries, so that other
 // testdrive modules can import just this one.
 
-pub use avro::schema::{Schema, SchemaNode, SchemaPiece};
+pub use avro::schema::{Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 pub use avro::types::{DecimalValue, ToAvro, Value};
 pub use avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
 pub use interchange::avro::parse_schema;
@@ -117,9 +117,20 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
         (val, SchemaPiece::Union(us)) => {
             let variants = us.variants();
             let mut last_err = format!("Union schema {:?} did not match {:?}", variants, val);
+            let null_variant = variants
+                .iter()
+                .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
             for (i, variant) in variants.iter().enumerate() {
                 match from_json(val, schema.step(variant)) {
-                    Ok(avro) => return Ok(Value::Union(i, Box::new(avro))),
+                    Ok(avro) => {
+                        return Ok(Value::Union {
+                            index: i,
+
+                            inner: Box::new(avro),
+                            n_variants: variants.len(),
+                            null_variant,
+                        })
+                    }
                     Err(msg) => last_err = msg,
                 }
             }

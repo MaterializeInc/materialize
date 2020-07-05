@@ -546,7 +546,7 @@ fn parse_byo(record: Vec<(String, Value)>) -> (String, i32, PartitionId, u64, Mz
                 panic!("Int expected");
             }
         } else if key == "partition_id" {
-            if let Value::Union(_, value) = value {
+            if let Value::Union { inner: value, .. } = value {
                 if let Value::Int(pid) = *value {
                     partition_id = PartitionId::Kafka(pid);
                 } else if let Value::String(s) = *value {
@@ -586,7 +586,7 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
     let mut result = vec![];
     for (key, value) in record {
         if key == "data_collections" {
-            if let Value::Union(_, value) = value {
+            if let Value::Union { inner: value, .. } = value {
                 if let Value::Array(items) = *value {
                     for v in items {
                         if let Value::Record(item) = v {

@@ -30,7 +30,12 @@ lazy_static! {
         (r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"]}"#, Value::Enum(1, "B".to_string())),
         (r#"{"type": "array", "items": "long"}"#, Value::Array(vec![Value::Long(1), Value::Long(3), Value::Long(2)])),
         (r#"{"type": "map", "values": "long"}"#, Value::Map([("a".to_string(), Value::Long(1i64)), ("b".to_string(), Value::Long(3i64)), ("c".to_string(), Value::Long(2i64))].iter().cloned().collect())),
-        (r#"["string", "null", "long"]"#, Value::Union(1, Box::new(Value::Null))),
+        (r#"["string", "null", "long"]"#, Value::Union{
+            index: 1,
+            inner: Box::new(Value::Null),
+            n_variants:3,
+            null_variant:Some(1)
+        }),
         (r#"{"type": "record", "name": "Test", "fields": [{"name": "f", "type": "long"}]}"#, Value::Record(vec![("f".to_string(), Value::Long(1))]))
     ];
 
@@ -328,13 +333,20 @@ fn test_namespaces() {
     let schema = Schema::parse_str(schema).unwrap();
     let datum_to_write = Value::Record(vec![(
         "link".to_owned(),
-        Value::Union(
-            1,
-            Box::new(Value::Record(vec![(
+        Value::Union {
+            index: 1,
+            inner: Box::new(Value::Record(vec![(
                 "link".to_owned(),
-                Value::Union(0, Box::new(Value::Null)),
+                Value::Union {
+                    index: 0,
+                    inner: Box::new(Value::Null),
+                    n_variants: 2,
+                    null_variant: Some(0),
+                },
             )])),
-        ),
+            n_variants: 2,
+            null_variant: Some(0),
+        },
     )]);
     let encoded = to_avro_datum(&schema, datum_to_write.clone()).unwrap();
     let datum_read = from_avro_datum(&schema, &mut Cursor::new(encoded)).unwrap();
@@ -396,7 +408,12 @@ fn test_self_referential_schema() {
                     ("f4".to_owned(), Value::String("s2".to_owned())),
                     (
                         "f5".to_owned(),
-                        Value::Union(1, Box::new(Value::Double(1.234))),
+                        Value::Union {
+                            index: 1,
+                            inner: Box::new(Value::Double(1.234)),
+                            n_variants: 2,
+                            null_variant: Some(0),
+                        },
                     ),
                 ]),
                 Value::Record(vec![
@@ -404,7 +421,12 @@ fn test_self_referential_schema() {
                     ("f4".to_owned(), Value::String("s4".to_owned())),
                     (
                         "f5".to_owned(),
-                        Value::Union(1, Box::new(Value::Double(2.468))),
+                        Value::Union {
+                            index: 1,
+                            inner: Box::new(Value::Double(2.468)),
+                            n_variants: 2,
+                            null_variant: Some(0),
+                        },
                     ),
                 ]),
             ]),
@@ -414,7 +436,15 @@ fn test_self_referential_schema() {
             Value::Array(vec![Value::Record(vec![
                 ("f3".to_owned(), Value::String("s5".to_owned())),
                 ("f4".to_owned(), Value::String("s6".to_owned())),
-                ("f5".to_owned(), Value::Union(0, Box::new(Value::Null))),
+                (
+                    "f5".to_owned(),
+                    Value::Union {
+                        index: 0,
+                        inner: Box::new(Value::Null),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
             ])]),
         ),
     ]);
@@ -490,13 +520,23 @@ fn test_complex_resolutions() {
         ("f5".to_owned(), Value::Long(1234)),
         (
             "f4".to_owned(),
-            Value::Union(1, Box::new(Value::Fixed(1, vec![0]))),
+            Value::Union {
+                index: 1,
+                inner: Box::new(Value::Fixed(1, vec![0])),
+                n_variants: 4,
+                null_variant: Some(2),
+            },
         ),
         ("f3".to_owned(), Value::Double(1.234)),
         ("f2".to_owned(), Value::Enum(1, "Diamonds".to_owned())),
         (
             "f1".to_owned(),
-            Value::Union(2, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
+            Value::Union {
+                index: 2,
+                inner: Box::new(Value::Fixed(4, vec![0, 1, 2, 3])),
+                n_variants: 3,
+                null_variant: None,
+            },
         ),
     ]);
     let expected_read = Value::Record(vec![
@@ -506,19 +546,34 @@ fn test_complex_resolutions() {
                 ("f0_0".to_owned(), Value::Double(1.234)),
                 (
                     "f0_1".to_owned(),
-                    Value::Union(0, Box::new(Value::Enum(1, "bar".to_owned()))),
+                    Value::Union {
+                        index: 0,
+                        inner: Box::new(Value::Enum(1, "bar".to_owned())),
+                        n_variants: 2,
+                        null_variant: None,
+                    },
                 ),
             ]),
         ),
         (
             "f1".to_owned(),
-            Value::Union(0, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
+            Value::Union {
+                index: 0,
+                inner: Box::new(Value::Fixed(4, vec![0, 1, 2, 3])),
+                n_variants: 2,
+                null_variant: None,
+            },
         ),
         ("f2".to_owned(), Value::Enum(1, "Diamonds".to_owned())), // TODO - should be the index in the reader
         ("f4".to_owned(), Value::Fixed(1, vec![0])),
         (
             "f5".to_owned(),
-            Value::Union(1, Box::new(Value::Long(1234))),
+            Value::Union {
+                index: 1,
+                inner: Box::new(Value::Long(1234)),
+                n_variants: 2,
+                null_variant: None,
+            },
         ),
     ]);
     let reader_schema = r#"
