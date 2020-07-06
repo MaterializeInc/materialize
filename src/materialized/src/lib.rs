@@ -164,7 +164,16 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     let num_timely_workers = config.num_timely_workers();
 
     // Start Tokio runtime.
-    let mut runtime = tokio::runtime::Runtime::new()?;
+    let mut runtime = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        // The default thread name exceeds the Linux limit on thread name
+        // length, so pick something shorter.
+        //
+        // TODO(benesch): use `thread_name_fn` to get unique names if that
+        // lands upstream: https://github.com/tokio-rs/tokio/pull/1921.
+        .thread_name("tokio:worker")
+        .enable_all()
+        .build()?;
     let executor = runtime.handle().clone();
 
     // Validate TLS configuration, if present.
