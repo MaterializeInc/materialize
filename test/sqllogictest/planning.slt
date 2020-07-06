@@ -1,0 +1,33 @@
+
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE test1(a int, b int, c int, d int)
+
+# check that the extra project caused by the CSE is lifted
+# through the TopK
+query T multiline
+EXPLAIN PLAN FOR
+SELECT avg(d), sumc, sumd FROM (
+SELECT a + b + c as sumc, a + b + d as sumd, d
+FROM test1
+ORDER BY d LIMIT 4
+)
+GROUP BY sumc, sumd
+----
+%0 =
+| Get materialize.public.test1 (u1)
+| Map (#0 + #1), (#4 + #2), (#4 + #3)
+| TopK group=() order=(#3 asc) limit=4 offset=0
+| Reduce group=(#5, #6) sum(#3) count(#3)
+| Map (((i32todec(#2) * 10000000dec) / i64todec(if (#3 = 0) then {null} else {#3})) / 10dec)
+| Project (#4, #0, #1)
+
+EOF
