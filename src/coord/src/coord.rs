@@ -1308,7 +1308,7 @@ where
                 };
                 let index_name = format!("temp-index-on-{}", view_id);
                 let mut dataflow = DataflowDesc::new(view_name.to_string());
-                dataflow.set_as_of(Antichain::from_elem(as_of.unwrap_or(0)));
+                dataflow.set_as_of(Antichain::from_elem(as_of.unwrap_or(timestamp)));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
                     plan_cx: PlanContext::default(),
