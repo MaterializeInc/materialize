@@ -1265,7 +1265,7 @@ where
 
             let (project, filter) = Self::plan_peek(source.as_mut());
 
-            // If an `as_of` argument is provided, generate a new index from that timestamp.
+            // If an `as_of` argument is provided, always build a new transient dataflow.
             let (fast_path, index_id) = if as_of.is_some() {
                 (false, self.catalog.allocate_id()?)
             } else if let RelationExpr::Get {
@@ -1313,7 +1313,7 @@ where
                 };
                 let index_name = format!("temp-index-on-{}", view_id);
                 let mut dataflow = DataflowDesc::new(view_name.to_string());
-                dataflow.set_as_of(Antichain::from_elem(as_of.unwrap_or(timestamp)));
+                dataflow.set_as_of(Antichain::from_elem(timestamp));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
                     plan_cx: PlanContext::default(),
