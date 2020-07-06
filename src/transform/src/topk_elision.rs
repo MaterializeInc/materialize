@@ -9,10 +9,8 @@
 
 //! Remove TopK operators with both an offset of zero and no limit.
 
-use std::collections::HashMap;
-
 use crate::TransformArgs;
-use expr::{Id, RelationExpr};
+use expr::RelationExpr;
 
 /// Remove TopK operators with both an offset of zero and no limit.
 #[derive(Debug)]
