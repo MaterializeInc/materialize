@@ -1215,7 +1215,12 @@ where
         materialize: bool,
         as_of: Option<u64>,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let timestamp = self.determine_timestamp(&source, when)?;
+        let peek_when = if let Some(as_of) = as_of {
+            PeekWhen::AtTimestamp(as_of)
+        } else {
+            when
+        };
+        let timestamp = self.determine_timestamp(&source, peek_when)?;
 
         // See if the query is introspecting its own logical timestamp, and
         // install the determined timestamp if so.
@@ -1260,7 +1265,7 @@ where
 
             let (project, filter) = Self::plan_peek(source.as_mut());
 
-            // If an `as_of` is provided, generate a new index from that timestamp.
+            // If an `as_of` argument is provided, generate a new index from that timestamp.
             let (fast_path, index_id) = if as_of.is_some() {
                 (false, self.catalog.allocate_id()?)
             } else if let RelationExpr::Get {
@@ -2180,14 +2185,13 @@ where
         }
     }
 
-    /// todo: docs.
+    /// Determine the frontier of updates to start *from*.
+    /// Updates greater or equal to this frontier will be produced.
     fn determine_frontier(
         &mut self,
         as_of: Option<u64>,
         source_id: GlobalId,
     ) -> Result<Antichain<u64>, failure::Error> {
-        // Determine the frontier of updates to start *from*.
-        // Updates greater or equal to this frontier will be produced.
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
             Antichain::from_elem(self.determine_timestamp(
