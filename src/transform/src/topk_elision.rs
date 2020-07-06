@@ -24,18 +24,16 @@ impl crate::Transform for TopKElision {
         relation: &mut RelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        self.action(relation, &mut HashMap::new());
+        relation.visit_mut(&mut |e| {
+            self.action(e);
+        });
         Ok(())
     }
 }
 
 impl TopKElision {
     /// Remove TopK operators with both an offset of zero and no limit.
-    pub fn action(
-        &self,
-        relation: &mut RelationExpr,
-        _gets: &mut HashMap<Id, (repr::RelationType, Vec<usize>)>,
-    ) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::TopK {
             input,
             group_key: _,
