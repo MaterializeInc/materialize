@@ -42,7 +42,7 @@ tokio = "0.2"
 tokio-openssl = "0.4.0"
 tracing = "0.1.15"
 tracing-subscriber = "0.2.7"
-chrono = "0.4.11"
+chrono = "0.4.13"
 
 [dev-dependencies]
 assert_cmd = "1.0.1"
