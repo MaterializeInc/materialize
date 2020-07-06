@@ -31,3 +31,25 @@ GROUP BY sumc, sumd
 | Project (#4, #0, #1)
 
 EOF
+
+# check that TopK elision is recursive
+statement ok
+CREATE MATERIALIZED VIEW plan_test1 AS
+SELECT avg(d), sumc, sumd FROM (
+SELECT a + b + c as sumc, a + b + d as sumd, d
+FROM test1
+ORDER BY d
+)
+GROUP BY sumc, sumd
+ORDER BY sumc
+
+query T multiline
+EXPLAIN PLAN FOR VIEW plan_test1
+----
+%0 =
+| Get materialize.public.test1 (u1)
+| Reduce group=(((#0 + #1) + #2), ((#0 + #1) + #3)) sum(#3) count(#3)
+| Map (((i32todec(#2) * 10000000dec) / i64todec(if (#3 = 0) then {null} else {#3})) / 10dec)
+| Project (#4, #0, #1)
+
+EOF
