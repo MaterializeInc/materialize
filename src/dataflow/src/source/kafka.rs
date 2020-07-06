@@ -579,8 +579,7 @@ struct PartitionConsumer {
     pid: i32,
     /// A buffer to store messages that cannot be timestamped yet
     buffer: Option<SourceMessage<Vec<u8>>>,
-    /// The underlying Kafka consmer. This consumer is assigned to read from one partition
-    /// exclusively
+    /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
 }
 
