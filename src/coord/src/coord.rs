@@ -742,8 +742,16 @@ where
                 when,
                 finishing,
                 materialize,
+                as_of,
             } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing, materialize),
+                self.sequence_peek(
+                    session.conn_id(),
+                    source,
+                    when,
+                    finishing,
+                    materialize,
+                    as_of,
+                ),
                 session,
             ),
 
@@ -1205,6 +1213,7 @@ where
         when: PeekWhen,
         finishing: RowSetFinishing,
         materialize: bool,
+        as_of: Option<u64>,
     ) -> Result<ExecuteResponse, failure::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
@@ -1251,7 +1260,10 @@ where
 
             let (project, filter) = Self::plan_peek(source.as_mut());
 
-            let (fast_path, index_id) = if let RelationExpr::Get {
+            // If an `as_of` is provided, generate a new index from that timestamp.
+            let (fast_path, index_id) = if as_of.is_some() {
+                (false, self.catalog.allocate_id()?)
+            } else if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
             } = source.as_ref()
@@ -1296,7 +1308,7 @@ where
                 };
                 let index_name = format!("temp-index-on-{}", view_id);
                 let mut dataflow = DataflowDesc::new(view_name.to_string());
-                dataflow.set_as_of(Antichain::from_elem(timestamp));
+                dataflow.set_as_of(Antichain::from_elem(as_of.unwrap_or(0)));
                 let view = catalog::View {
                     create_sql: "<none>".into(),
                     plan_cx: PlanContext::default(),

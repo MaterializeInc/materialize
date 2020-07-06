@@ -377,6 +377,7 @@ fn finish_show_where(
         when: PeekWhen::Immediately,
         finishing,
         materialize: true,
+        as_of: None,
     })
 }
 
@@ -1642,15 +1643,14 @@ fn handle_select(
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
-    if let Some(_as_of) = as_of {
-        unsupported!("SELECT AS OF");
-    }
+    let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
 
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
         finishing,
         materialize: true,
+        as_of,
     })
 }
 
