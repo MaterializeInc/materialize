@@ -11,6 +11,15 @@ To help you get started with Materialize, we'll:
 - Explore its API
 - Set up a real-time stream to perform aggregations on
 
+## Web Demo
+Try it out:
+
+<script src="//katacoda.com/embed.js"></script>
+<div id="katacoda-scenario-1"
+    data-katacoda-id="materialize/intro-wikipedia"
+    data-katacoda-color="004d7f"
+    style="height: 600px; padding-top: 20px;"></div>
+
 ## Prerequisites
 
 To complete this demo, you need:
