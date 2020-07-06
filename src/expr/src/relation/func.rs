@@ -419,6 +419,11 @@ pub enum AggregateFunc {
     Any,
     All,
     JsonbAgg,
+    /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
+    ///
+    /// Useful for removing an expensive aggregation while maintaining the shape
+    /// of a reduce operator.
+    Dummy,
 }
 
 impl AggregateFunc {
@@ -457,6 +462,7 @@ impl AggregateFunc {
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
+            AggregateFunc::Dummy => Datum::Dummy,
         }
     }
 
@@ -465,6 +471,7 @@ impl AggregateFunc {
             AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
+            AggregateFunc::Dummy => Datum::Dummy,
             _ => Datum::Null,
         }
     }
@@ -598,6 +605,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
             AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
+            AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }
 }

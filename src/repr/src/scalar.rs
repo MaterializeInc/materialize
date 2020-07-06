@@ -62,6 +62,23 @@ pub enum Datum<'a> {
     /// This variant is distinct from [`Datum::Null`] as a null datum is
     /// distinct from a non-null datum that contains the JSON value `null`.
     JsonNull,
+    /// A placeholder value.
+    ///
+    /// Dummy values are never meant to be observed. Many operations on `Datum`
+    /// panic if called on this variant.
+    ///
+    /// Dummies are useful as placeholders in e.g. a `Vec<Datum>`, where it is
+    /// known that a certain element of the vector is never observed and
+    /// therefore needn't be computed, but where *some* `Datum` must still be
+    /// provided to maintain the shape of the vector. While any valid datum
+    /// could be used for this purpose, having a dedicated variant makes it
+    /// obvious when these optimizations have gone awry. If we used e.g.
+    /// `Datum::Null`, an unexpected `Datum::Null` could indicate any number of
+    /// problems: bad user data, bad function metadata, or a bad optimization.
+    ///
+    // TODO(benesch): get rid of this variant. With a more capable optimizer, I
+    // don't think there would be any need for dummy datums.
+    Dummy,
 }
 
 impl<'a> Datum<'a> {
@@ -290,6 +307,7 @@ impl<'a> Datum<'a> {
             } else {
                 // sql type checking
                 match (datum, scalar_type) {
+                    (Datum::Dummy, _) => panic!("Datum::Dummy observed"),
                     (Datum::Null, _) => false,
                     (Datum::False, ScalarType::Bool) => true,
                     (Datum::False, _) => false,
@@ -526,6 +544,7 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("}")
             }
             Datum::JsonNull => f.write_str("json_null"),
+            Datum::Dummy => f.write_str("dummy"),
         }
     }
 }
@@ -605,42 +624,6 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Decimal(p, s) => (*p, *s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
-        }
-    }
-
-    /// Constructs a dummy datum for this type.
-    pub fn dummy_datum(&self) -> Datum<'a> {
-        match self {
-            ScalarType::Bool => Datum::False,
-            ScalarType::Int32 => Datum::Int32(0),
-            ScalarType::Int64 => Datum::Int64(0),
-            ScalarType::Float32 => Datum::Float32(OrderedFloat(0.0)),
-            ScalarType::Float64 => Datum::Float64(OrderedFloat(0.0)),
-            ScalarType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
-            ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
-            ScalarType::Time => Datum::Time(NaiveTime::from_hms(0, 0, 0)),
-            ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
-            ScalarType::TimestampTz => {
-                Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
-            }
-            ScalarType::Interval => Datum::Interval(Interval::default()),
-            ScalarType::Bytes => Datum::Bytes(&[]),
-            ScalarType::String => Datum::String(""),
-            ScalarType::Jsonb => Datum::JsonNull,
-            ScalarType::List(_) => Datum::List(DatumList::empty()),
-            // NOTE(benesch): This is kind of wrong--we should recursively
-            // construct dummy datums for the inner record bits--but it is not
-            // possible to implement this method correctly for record types
-            // without refactoring it to take a `RowPacker`. And it doesn't
-            // actually matter, because dummy datums are only constructed in
-            // situations where the actual value of the datum doesn't matter...
-            // which raises the question, why are we trying so hard to construct
-            // a datum of the correct type if no one cares about the type?
-            //
-            // So, if you're here because this dummy record type is unsuitable
-            // for your purposes, consider figuring out how to remove this
-            // method rather than trying to fix it.
-            ScalarType::Record { .. } => Datum::List(DatumList::empty()),
         }
     }
 

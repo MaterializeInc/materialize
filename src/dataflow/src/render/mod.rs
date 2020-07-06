@@ -476,21 +476,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             let position_or = (0..source_type.arity())
                                 .map(|col| {
                                     if operators.projection.contains(&col) {
-                                        Ok(col)
+                                        Some(col)
                                     } else {
-                                        Err({
-                                            // TODO(frank): This could be `Datum::Null` if we
-                                            // are certain that no readers will consult it and
-                                            // believe it to be a non-null value. That is the
-                                            // intent, but it is not yet clear that we ensure
-                                            // this.
-                                            let typ = &source_type.column_types[col];
-                                            if typ.nullable {
-                                                Datum::Null
-                                            } else {
-                                                typ.scalar_type.dummy_datum()
-                                            }
-                                        })
+                                        None
                                     }
                                 })
                                 .collect::<Vec<_>>();
@@ -509,8 +497,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     match pred_eval {
                                         None => Some(Ok(row_packer.pack(position_or.iter().map(
                                             |pos_or| match pos_or {
-                                                Result::Ok(index) => datums[*index],
-                                                Result::Err(datum) => *datum,
+                                                Some(index) => datums[*index],
+                                                None => Datum::Dummy,
                                             },
                                         )))),
                                         Some(Ok(Datum::False)) => None,
@@ -934,65 +922,53 @@ where
                     let types = relation_expr.typ();
                     let arity = types.column_types.len();
                     let replace = (0..arity)
-                        .map(|col| {
-                            if demand.as_ref().map(|d| d.contains(&col)).unwrap_or(true) {
-                                None
-                            } else {
-                                Some({
-                                    let typ = &types.column_types[col];
-                                    if typ.nullable {
-                                        Datum::Null
-                                    } else {
-                                        typ.scalar_type.dummy_datum()
-                                    }
-                                })
-                            }
-                        })
+                        .map(|col| !demand.as_ref().map(|d| d.contains(&col)).unwrap_or(true))
                         .collect::<Vec<_>>();
 
                     let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let (ok_collection, new_err_collection) = ok_collection.flat_map_fallible({
-                        let mut row_packer = repr::RowPacker::new();
-                        move |input_row| {
-                            let datums = input_row.unpack();
-                            let replace = replace.clone();
-                            let temp_storage = RowArena::new();
-                            let exprs = exprs
-                                .iter()
-                                .map(|e| e.eval(&datums, &temp_storage))
-                                .collect::<Result<Vec<_>, _>>();
-                            let exprs = match exprs {
-                                Ok(exprs) => exprs,
-                                Err(e) => return vec![Err(e.into())],
-                            };
-                            let output_rows = func.eval(exprs, &temp_storage);
-                            output_rows
-                                .into_iter()
-                                .map(|output_row| {
-                                    Ok::<_, DataflowError>(
-                                        row_packer.pack(
-                                            datums
-                                                .iter()
-                                                .cloned()
-                                                .chain(output_row.iter())
-                                                .zip(replace.iter())
-                                                .map(|(datum, demand)| {
-                                                    if let Some(bogus) = demand {
-                                                        bogus.clone()
-                                                    } else {
-                                                        datum
-                                                    }
-                                                }),
-                                        ),
-                                    )
-                                })
-                                // The collection avoids the lifetime issues of the `datums` borrow,
-                                // which allows us to avoid multiple unpackings of `input_row`. We
-                                // could avoid this allocation with a custom iterator that understands
-                                // the borrowing, but it probably isn't the leading order issue here.
-                                .collect::<Vec<_>>()
-                        }
-                    });
+                    let (ok_collection, new_err_collection) =
+                        ok_collection.flat_map_fallible({
+                            let mut row_packer = repr::RowPacker::new();
+                            move |input_row| {
+                                let datums = input_row.unpack();
+                                let replace = replace.clone();
+                                let temp_storage = RowArena::new();
+                                let exprs = exprs
+                                    .iter()
+                                    .map(|e| e.eval(&datums, &temp_storage))
+                                    .collect::<Result<Vec<_>, _>>();
+                                let exprs = match exprs {
+                                    Ok(exprs) => exprs,
+                                    Err(e) => return vec![Err(e.into())],
+                                };
+                                let output_rows = func.eval(exprs, &temp_storage);
+                                output_rows
+                                    .into_iter()
+                                    .map(|output_row| {
+                                        Ok::<_, DataflowError>(
+                                            row_packer.pack(
+                                                datums
+                                                    .iter()
+                                                    .cloned()
+                                                    .chain(output_row.iter())
+                                                    .zip(replace.iter())
+                                                    .map(|(datum, demand)| {
+                                                        if *demand {
+                                                            Datum::Dummy
+                                                        } else {
+                                                            datum
+                                                        }
+                                                    }),
+                                            ),
+                                        )
+                                    })
+                                    // The collection avoids the lifetime issues of the `datums` borrow,
+                                    // which allows us to avoid multiple unpackings of `input_row`. We
+                                    // could avoid this allocation with a custom iterator that understands
+                                    // the borrowing, but it probably isn't the leading order issue here.
+                                    .collect::<Vec<_>>()
+                            }
+                        });
                     let err_collection = err_collection.concat(&new_err_collection);
 
                     self.collections

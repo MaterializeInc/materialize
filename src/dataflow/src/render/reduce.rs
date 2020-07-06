@@ -362,6 +362,10 @@ where
                         Datum::False => (0, 1),
                         x => panic!("Invalid argument to AggregateFunc::All: {:?}", x),
                     },
+                    AggregateFunc::Dummy => match datum {
+                        Datum::Dummy => (0, 0),
+                        x => panic!("Invalid argument to AggregateFunc::Dummy: {:?}", x),
+                    }
                     _ => {
                         // Other accumulations need to disentangle the accumulable
                         // value from its NULL-ness, which is not quite as easily
@@ -429,6 +433,7 @@ where
                             Datum::Null
                         }
                     }
+                    (AggregateFunc::Dummy, _) => Datum::Dummy,
                     // Below this point, anything with only nulls should be null.
                     (_, 0) => Datum::Null,
                     // If any non-nulls, just report the aggregate.
@@ -541,7 +546,8 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::Count
         | AggregateFunc::CountAll
         | AggregateFunc::Any
-        | AggregateFunc::All => (true, false),
+        | AggregateFunc::All
+        | AggregateFunc::Dummy => (true, false),
         AggregateFunc::MaxInt32
         | AggregateFunc::MaxInt64
         | AggregateFunc::MaxFloat32

@@ -11,8 +11,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use expr::{AggregateExpr, AggregateFunc, Id, RelationExpr, ScalarExpr};
+use repr::Datum;
+
 use crate::TransformArgs;
-use expr::{Id, RelationExpr, ScalarExpr};
 
 /// Drive demand from the root through operators.
 ///
@@ -104,12 +106,8 @@ impl Demand {
                         // Leave literals as they are, to benefit explain.
                         if !scalar.is_literal() {
                             let typ = relation_type.column_types[arity + index].clone();
-                            let datum = if typ.nullable {
-                                repr::Datum::Null
-                            } else {
-                                typ.scalar_type.dummy_datum()
-                            };
-                            *scalar = ScalarExpr::Literal(Ok(row_packer.pack(Some(datum))), typ);
+                            *scalar =
+                                ScalarExpr::Literal(Ok(row_packer.pack(Some(Datum::Dummy))), typ);
                         }
                     }
                 }
@@ -236,21 +234,16 @@ impl Demand {
                     }
                 }
 
-                // Replace un-demanded aggregations with literals.
-                let mut row_packer = repr::RowPacker::new();
+                // Replace un-demanded aggregations with dummies.
                 let input_type = input.typ();
                 for index in (0..aggregates.len()).rev() {
                     if !columns.contains(&(group_key.len() + index)) {
-                        if !aggregates[index].expr.is_literal() {
-                            let typ = aggregates[index].expr.typ(&input_type);
-                            let datum = if typ.nullable {
-                                repr::Datum::Null
-                            } else {
-                                typ.scalar_type.dummy_datum()
-                            };
-                            aggregates[index].expr =
-                                ScalarExpr::Literal(Ok(row_packer.pack(Some(datum))), typ);
-                        }
+                        let typ = aggregates[index].typ(&input_type);
+                        aggregates[index] = AggregateExpr {
+                            func: AggregateFunc::Dummy,
+                            expr: ScalarExpr::literal_ok(Datum::Dummy, typ),
+                            distinct: false,
+                        };
                     }
                 }
 

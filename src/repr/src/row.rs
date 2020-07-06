@@ -167,6 +167,7 @@ enum Tag {
     List,
     Dict,
     JsonNull,
+    Dummy,
 }
 
 // --------------------------------------------------------------------------------
@@ -291,6 +292,7 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             Datum::Dict(DatumDict { data: bytes })
         }
         Tag::JsonNull => Datum::JsonNull,
+        Tag::Dummy => Datum::Dummy,
     }
 }
 
@@ -380,6 +382,7 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             push_untagged_bytes(data, &dict.data);
         }
         Datum::JsonNull => data.push(Tag::JsonNull as u8),
+        Datum::Dummy => data.push(Tag::Dummy as u8),
     }
 }
 
@@ -406,6 +409,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::List(list) => 1 + size_of::<usize>() + list.data.len(),
         Datum::Dict(dict) => 1 + size_of::<usize>() + dict.data.len(),
         Datum::JsonNull => 1,
+        Datum::Dummy => 1,
     }
 }
 
