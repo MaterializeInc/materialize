@@ -140,6 +140,7 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
 use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
+use crate::source::KafkaSourceInfo;
 use source::SourceOutput;
 
 mod arrange_by;
@@ -282,12 +283,20 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         _ => false,
                     };
 
+                    // All workers are responsible for reading in Kafka sources. Other sources
+                    // support single-threaded ingestion only
+                    let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
+                        true
+                    } else {
+                        (usize::cast_from(uid.hashed()) % worker_peers) == worker_index
+                    };
+
                     let source_config = SourceConfig {
                         name: format!("{}-{}", connector.name(), uid),
                         id: uid,
                         scope: region,
                         // Distribute read responsibility among workers.
-                        active: (usize::cast_from(uid.hashed()) % worker_peers) == worker_index,
+                        active: active_read_worker,
                         timestamp_histories: timestamp_histories.clone(),
                         timestamp_tx: timestamp_channel.clone(),
                         consistency,
@@ -299,8 +308,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
-                            ExternalSourceConnector::Kafka(kc) => {
-                                let (source, capability) = source::kafka(source_config, kc);
+                            ExternalSourceConnector::Kafka(_) => {
+                                let (source, capability) =
+                                    source::create_source::<_, KafkaSourceInfo>(
+                                        source_config,
+                                        connector,
+                                    );
 
                                 // This operator changes the timestamp from capability to message payload,
                                 // and applies `as_of` frontier compaction. The compaction is important as
@@ -393,8 +406,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 )
                             } else {
                                 let ((ok_source, err_source), capability) = match connector {
-                                    ExternalSourceConnector::Kafka(kc) => {
-                                        let (ok_source, cap) = source::kafka(source_config, kc);
+                                    ExternalSourceConnector::Kafka(_) => {
+                                        let (ok_source, cap) =
+                                            source::create_source::<_, KafkaSourceInfo>(
+                                                source_config,
+                                                connector,
+                                            );
                                         ((ok_source, operator::empty(region)), cap)
                                     }
                                     ExternalSourceConnector::Kinesis(kc) => {

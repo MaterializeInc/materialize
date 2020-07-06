@@ -28,8 +28,8 @@ mz_offset  NO        int8
 > SELECT * FROM data
 data           mz_offset
 ------------------------
-"\\xc2\\xa91"  0
-"\\xc2\\xa92"  1
+"\\xc2\\xa91"  1
+"\\xc2\\xa92"  2
 
 # Test that CREATE SOURCE can specify a custom name for the column.
 

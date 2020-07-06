@@ -195,9 +195,9 @@ testdrive-textbytes-${testdrive.seed},1,0,10,5
 > select * from texttext
 key           data  mz_offset
 -----------------------------
-fish          fish  0
-bírdmore      geese 2
-mammal1       moose 3
+fish          fish  1
+bírdmore      geese 3
+mammal1       moose 4
 
 $ kafka-ingest format=bytes topic=data-consistency2
 testdrive-textbytes-${testdrive.seed},1,0,15,8
@@ -206,10 +206,10 @@ testdrive-textbytes-${testdrive.seed},1,0,21,9
 > select * from textbytes
 key           data             mz_offset
 ----------------------------------------
-fish          fish             0
-bírdmore      g\xc3\xa9ese     5
-mammal1       mouse            8
-mammalmore    moose            6
+fish          fish             1
+bírdmore      g\xc3\xa9ese     6
+mammal1       mouse            9
+mammalmore    moose            7
 
 $ kafka-ingest format=bytes topic=data-consistency2
 testdrive-textbytes-${testdrive.seed},1,0,28,10
@@ -217,10 +217,10 @@ testdrive-textbytes-${testdrive.seed},1,0,28,10
 > select * from bytesbytes
 key              data             mz_offset
 ----------------------------------------
-fish             fish             0
-b\xc3\xadrdmore  g\xc3\xa9ese     5
-mammal1          mouse            8
-mammalmore       herd             9
+fish             fish             1
+b\xc3\xadrdmore  g\xc3\xa9ese     6
+mammal1          mouse            9
+mammalmore       herd             10
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: publish=true
 bìrd1:
@@ -233,9 +233,9 @@ testdrive-textbytes-${testdrive.seed},1,0,45,12
 > select * from bytestext
 key              data             mz_offset
 ----------------------------------------
-b\xc3\xadrdmore  géese            5
-mammal1          mouse            8
-mammalmore       herd             9
+b\xc3\xadrdmore  géese            6
+mammal1          mouse            9
+mammalmore       herd             10
 
 $ kafka-create-topic topic=nullkey
 
@@ -267,8 +267,8 @@ testdrive-nullkey-${testdrive.seed},1,0,51,7
 > select * from nullkey
 key           data  mz_offset
 -----------------------------
-birdmore      geese 4
-mammalmore    moose 5
+birdmore      geese 5
+mammalmore    moose 6
 
 $ kafka-create-topic topic=realtimeavroavro
 
