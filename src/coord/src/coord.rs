@@ -971,6 +971,14 @@ where
             }
         };
 
+        let frontier = match self.determine_frontier(as_of, sink.from) {
+            Ok(frontier) => frontier,
+            Err(e) => {
+                tx.send(Err(e), session);
+                return;
+            }
+        };
+
         // Then try to create a placeholder catalog item with an unknown
         // connector. If that fails, we're done, though if the client specified
         // `if_not_exists` we'll tell the client we succeeded.
@@ -1001,13 +1009,6 @@ where
             }
         }
 
-        let frontier = match self.determine_frontier(as_of, sink.from) {
-            Ok(frontier) => frontier,
-            Err(e) => {
-                tx.send(Err(e), session);
-                return;
-            }
-        };
         // Now we're ready to create the sink connector. Arrange to notify the
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
