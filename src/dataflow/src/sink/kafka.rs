@@ -35,7 +35,7 @@ use timely::progress::frontier::MutableAntichain;
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 use expr::GlobalId;
-use interchange::avro::{DiffPair, Encoder};
+use interchange::avro::{self, DiffPair, Encoder};
 use repr::{RelationDesc, Row};
 
 use super::util::sink_reschedule;
@@ -211,7 +211,6 @@ where
     // of also distributing sinks amongst workers
     let sink_hash = id.hashed();
 
-    let encoder = Encoder::new(desc);
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.url.to_string());
 
@@ -261,6 +260,7 @@ where
         None
     };
 
+    let encoder = Encoder::new(desc, consistency.is_some());
     let name = format!("kafka-{}", id);
     sink_reschedule(
         &stream,
@@ -356,7 +356,7 @@ where
 
                                 let transaction_id = time.to_string();
                                 (
-                                    encoder.encode_transaction_unchecked(
+                                    avro::encode_debezium_transaction_unchecked(
                                         consistency.schema_id,
                                         &transaction_id,
                                         state_str,

@@ -17,6 +17,7 @@ ccsr = { path = "../ccsr" }
 chrono = "0.4"
 failure = "0.1.8"
 futures = "0.3"
+lazy_static = "1.4.0"
 log = "0.4.8"
 num-traits = "0.2.12" # don't want to upgrade to autocfg 1.0 until more things use it
 itertools = "0.9.0"

@@ -17,6 +17,7 @@ use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::{bail, format_err};
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use log::{trace, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -32,6 +33,37 @@ use repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
+
+lazy_static! {
+    // TODO(rkhaitan): this schema intentionally omits the data_collections field
+    // that is typically present in Debezium transaction metadata topics. See
+    // https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata
+    // for more information. We chose to omit this field because it is redundant
+    // for sinks where each consistency topic corresponds to exactly one sink.
+    // We will need to add it in order to be able to reingest sinked topics.
+    static ref DEBEZIUM_TRANSACTION_SCHEMA: Schema =
+    Schema::parse(&json!({
+        "type": "record",
+        "name": "envelope",
+        "fields": [
+            {
+                "name": "id",
+                "type": "string"
+            },
+            {
+                "name": "status",
+                "type": "string"
+            },
+            {
+                "name": "event_count",
+                "type": [
+                  "null",
+                  "long"
+                ]
+            }
+        ]
+    })).expect("valid schema constructed");
+}
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -829,7 +861,7 @@ impl Decoder {
 ///   * Union schemas are only used to represent nullability. The first
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
-fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
+fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool) -> Schema {
     let mut fields = Vec::new();
     for (name, typ) in columns.iter() {
         let mut field_type = match &typ.scalar_type {
@@ -880,88 +912,90 @@ fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
         }));
     }
 
+    let mut schema_fields = Vec::new();
+    schema_fields.push(json!({
+        "name": "before",
+        "type": [
+            "null",
+            {
+                "name": "row",
+                "type": "record",
+                "fields": fields,
+             }
+        ]
+    }));
+
+    schema_fields.push(json!({
+        "name": "after",
+        "type": ["null", "row"],
+    }));
+
     // TODO(rkhaitan): this schema omits the total_order and data collection_order
     // fields found in Debezium's transaction metadata struct. We chose to omit
     // those because the order is not stable across reruns and has no semantic
     // meaning for records within a timestamp in Materialize. These fields may
     // be useful in the future for deduplication.
+    if include_transaction {
+        schema_fields.push(json!({
+        "name": "transaction",
+            "type":
+                {
+                    "name": "transaction_metadata",
+                    "type": "record",
+                    "fields": [
+                        {
+                            "name": "id",
+                            "type": "string",
+                        }
+                    ]
+                }
+        }));
+    }
+
     let schema = json!({
         "type": "record",
         "name": "envelope",
-        "fields": [
-            {
-                "name": "before",
-                "type": [
-                    "null",
-                    {
-                        "name": "row",
-                        "type": "record",
-                        "fields": fields,
-                    }
-                ]
-            },
-            {
-                "name": "after",
-                "type": ["null", "row"]
-            },
-            {
-                "name": "transaction",
-                "type": [
-                    "null",
-                    {
-                        "name": "transaction_metadata",
-                        "type": "record",
-                        "fields": [
-                            {
-                                "name": "id",
-                                "type": "string",
-                            }
-                        ]
-                    }
-                ]
-            }
-        ]
+        "fields": schema_fields,
     });
     Schema::parse(&schema).expect("valid schema constructed")
 }
 
-fn get_consistency_schema() -> Schema {
-    // TODO(rkhaitan): this schema intentionally omits the data_collections field
-    // that is typically present in Debezium transaction metadata topics. See
-    // https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata
-    // for more information. We chose to omit this field because it is redundant
-    // for sinks where each consistency topic corresponds to exactly one sink.
-    // We will need to add it in order to be able to reingest sinked topics.
-    let schema = json!({
-        "type": "record",
-        "name": "envelope",
-        "fields": [
-            {
-                "name": "id",
-                "type": "string"
-            },
-            {
-                "name": "status",
-                "type": "string"
-            },
-            {
-                "name": "event_count",
-                "type": [
-                  "null",
-                  "long"
-                ]
-            }
-        ]
-    });
+pub fn get_debezium_transaction_schema() -> &'static Schema {
+    &DEBEZIUM_TRANSACTION_SCHEMA
+}
 
-    Schema::parse(&schema).expect("valid schema constructed")
+pub fn encode_debezium_transaction_unchecked(
+    schema_id: i32,
+    id: &str,
+    status: &str,
+    message_count: Option<i64>,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.write_u8(0).expect("writing to vec cannot fail");
+    buf.write_i32::<NetworkEndian>(schema_id)
+        .expect("writing to vec cannot fail");
+
+    let transaction_id = Value::String(id.to_owned());
+    let status = Value::String(status.to_owned());
+    let event_count = match message_count {
+        None => Value::Union(0, Box::new(Value::Null)),
+        Some(count) => Value::Union(1, Box::new(Value::Long(count))),
+    };
+
+    let avro = Value::Record(vec![
+        ("id".into(), transaction_id),
+        ("status".into(), status),
+        ("event_count".into(), event_count),
+    ]);
+    debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
+    avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
+    buf
 }
 
 /// Manages encoding of Avro-encoded bytes.
 pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
-    consistency_schema: Schema,
 }
 
 impl fmt::Debug for Encoder {
@@ -973,7 +1007,7 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    pub fn new(desc: RelationDesc) -> Self {
+    pub fn new(desc: RelationDesc, include_transaction: bool) -> Self {
         // Invent names for columns that don't have a name.
         let mut columns: Vec<_> = desc
             .into_iter()
@@ -1000,21 +1034,15 @@ impl Encoder {
             seen.insert(name);
         }
 
-        let writer_schema = build_schema(&columns);
-        let consistency_schema = get_consistency_schema();
+        let writer_schema = build_schema(&columns, include_transaction);
         Encoder {
             columns,
             writer_schema,
-            consistency_schema,
         }
     }
 
     pub fn writer_schema(&self) -> &Schema {
         &self.writer_schema
-    }
-
-    pub fn consistency_schema(&self) -> &Schema {
-        &self.consistency_schema
     }
 
     pub fn encode_unchecked(
@@ -1030,35 +1058,6 @@ impl Encoder {
         let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
         debug_assert!(avro.validate(self.writer_schema.top_node()));
         avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
-        buf
-    }
-
-    pub fn encode_transaction_unchecked(
-        &self,
-        schema_id: i32,
-        id: &str,
-        status: &str,
-        message_count: Option<i64>,
-    ) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.write_u8(0).expect("writing to vec cannot fail");
-        buf.write_i32::<NetworkEndian>(schema_id)
-            .expect("writing to vec cannot fail");
-
-        let transaction_id = Value::String(id.to_owned());
-        let status = Value::String(status.to_owned());
-        let event_count = match message_count {
-            None => Value::Union(0, Box::new(Value::Null)),
-            Some(count) => Value::Union(1, Box::new(Value::Long(count))),
-        };
-
-        let avro = Value::Record(vec![
-            ("id".into(), transaction_id),
-            ("status".into(), status),
-            ("event_count".into(), event_count),
-        ]);
-        debug_assert!(avro.validate(self.consistency_schema.top_node()));
-        avro::encode_unchecked(&avro, &self.consistency_schema, &mut buf);
         buf
     }
 

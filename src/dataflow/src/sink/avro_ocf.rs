@@ -28,7 +28,7 @@ pub fn avro_ocf<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let encoder = Encoder::new(desc);
+    let encoder = Encoder::new(desc, false);
     let schema = encoder.writer_schema();
     let sink_hash = id.hashed();
 

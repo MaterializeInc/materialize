@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use failure::{bail, format_err, ResultExt};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 
 use dataflow_types::{
@@ -36,15 +37,13 @@ pub async fn build(
 }
 
 async fn register_kafka_topic(
-    config: &mut ClientConfig,
+    client: &AdminClient<DefaultClientContext>,
     topic: &str,
     replication_factor: i32,
     ccsr: &ccsr::Client,
     schema: &str,
 ) -> Result<i32, failure::Error> {
-    let res = config
-        .create::<AdminClient<_>>()
-        .expect("creating admin kafka client failed")
+    let res = client
         .create_topics(
             &[NewTopic::new(
                 &topic,
@@ -90,10 +89,13 @@ async fn build_kafka(
     // Create Kafka topic with single partition.
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &builder.broker_url.to_string());
+    let client = config
+        .create::<AdminClient<_>>()
+        .expect("creating admin client failed");
     let ccsr = ccsr::ClientConfig::new(builder.schema_registry_url).build();
 
     let schema_id = register_kafka_topic(
-        &mut config,
+        &client,
         &topic,
         builder.replication_factor as i32,
         &ccsr,
@@ -105,7 +107,7 @@ async fn build_kafka(
     let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
         let consistency_topic = format!("{}-consistency", topic);
         let consistency_schema_id = register_kafka_topic(
-            &mut config,
+            &client,
             &consistency_topic,
             builder.replication_factor as i32,
             &ccsr,
