@@ -183,6 +183,14 @@ lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter =
         register_int_counter!("mz_bytes_read_total", "Count of bytes read from sources").unwrap();
 }
+// Legacy metric
+lazy_static! {
+    static ref KAFKA_BYTES_READ_COUNTER: IntCounter = register_int_counter!(
+        "mz_kafka_bytes_read_total",
+        "Count of bytes read from sources"
+    )
+    .unwrap();
+}
 
 /// Each source must implement this trait. Sources will then get created as part of the
 /// [`create_source`] function.
@@ -556,8 +564,8 @@ impl SourceMetrics {
             )
             .unwrap();
             static ref CAPABILITY: UIntGaugeVec = register_uint_gauge_vec!(
-                "mz_kafka_capability",
-                "The current capability for this dataflow. This corresponds to min(mz_kafka_partition_closed_ts)",
+                "mz_capability",
+                "The current capability for this dataflow. This corresponds to min(mz_partition_closed_ts)",
                 &["topic", "source_id", "worker_id"]
             )
             .unwrap();

@@ -75,7 +75,7 @@
       "pluginVersion": "7.0.0",
       "targets": [
         {
-          "expr": "sum(mz_kafka_messages_ingested)",
+          "expr": "sum(mz_messages_ingested)",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -128,7 +128,7 @@
       "pluginVersion": "7.0.0",
       "targets": [
         {
-          "expr": "sum(rate(mz_kafka_messages_ingested[$__interval]))",
+          "expr": "sum(rate(mz_messages_ingested[$__interval]))",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -950,13 +950,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_messages_ingested[$__interval])",
+              "expr": "rate(mz_messages_ingested[$__interval])",
               "interval": "",
               "legendFormat": "rate {{topic}} {{source_id}} {{partition_id}}",
               "refId": "A"
             },
             {
-              "expr": "mz_kafka_messages_ingested",
+              "expr": "mz_messages_ingested",
               "interval": "",
               "legendFormat": "total {{topic}} {{source_id}} {{partition_id}}",
               "refId": "B"
@@ -1054,7 +1054,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "mz_kafka_partition_offset_received",
+              "expr": "mz_partition_offset_received",
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} {{source_id}}",
               "refId": "A"
@@ -1153,13 +1153,13 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_bytes_read_total[$__interval])",
+              "expr": "rate(mz_bytes_read_total[$__interval])",
               "interval": "",
               "legendFormat": "rate",
               "refId": "A"
             },
             {
-              "expr": "mz_kafka_bytes_read_total",
+              "expr": "mz_bytes_read_total",
               "interval": "",
               "legendFormat": "total",
               "refId": "B"
@@ -1258,7 +1258,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk(50, mz_kafka_partition_offset_max - mz_kafka_partition_offset_ingested)",
+              "expr": "topk(50, mz_kafka_partition_offset_max - mz_partition_offset_ingested)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}",
@@ -1775,7 +1775,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "topk(10, (mz_max_timestamp - ignoring(topic) mz_kafka_partition_closed_ts))",
+              "expr": "topk(10, (mz_max_timestamp - ignoring(topic) mz_partition_closed_ts))",
               "interval": "",
               "legendFormat": "{{source_id}}-{{partition_id}}",
               "refId": "A"
@@ -1870,7 +1870,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(mz_kafka_capability[$__interval])",
+              "expr": "rate(mz_capability[$__interval])",
               "interval": "",
               "legendFormat": "{{topic}}-{{source_id}}",
               "refId": "A"
@@ -1965,7 +1965,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max by (topic, source_id) (mz_kafka_partition_closed_ts) - min by (topic, source_id) (mz_kafka_partition_closed_ts)",
+              "expr": "max by (topic, source_id) (mz_partition_closed_ts) - min by (topic, source_id) (mz_partition_closed_ts)",
               "interval": "",
               "legendFormat": "{{topic}}-{{source_id}}",
               "refId": "A"

@@ -17,12 +17,18 @@ use dataflow_types::{
     Consistency, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
+use lazy_static::lazy_static;
 use log::{error, info, log_enabled, warn};
+use prometheus::{
+    register_int_counter_vec, register_int_gauge_vec, register_uint_gauge_vec, IntCounterVec,
+    IntGaugeVec, UIntGaugeVec,
+};
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
+
 use timely::scheduling::activate::{Activator, SyncActivator};
 use url::Url;
 
@@ -30,6 +36,35 @@ use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
 use crate::source::{ConsistencyInfo, PartitionMetrics, SourceInfo, SourceMessage};
+
+// Legacy metrics
+lazy_static! {
+    static ref KAFKA_OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_ingested",
+        "The most recent offset that we have ingested into a dataflow. This correspond to \
+                data that we have 1)ingested 2) assigned a timestamp",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+    static ref KAFKA_OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
+        "mz_kafka_partition_offset_received",
+        "The most recent offset that we have been received by this source.",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+    static ref KAFKA_CLOSED_TS: UIntGaugeVec = register_uint_gauge_vec!(
+        "mz_kafka_partition_closed_ts",
+        "The highest closed timestamp for each partition in this dataflow",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+    static ref KAFKA_MESSAGES_INGESTED: IntCounterVec = register_int_counter_vec!(
+        "mz_kafka_messages_ingested",
+        "The number of messages ingested per partition.",
+        &["topic", "source_id", "partition_id"]
+    )
+    .unwrap();
+}
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceInfo {

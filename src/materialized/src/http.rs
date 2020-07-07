@@ -181,7 +181,7 @@ async fn handle_status(
     let desired_metrics = {
         let mut s = BTreeSet::new();
         s.insert("mz_dataflow_events_read_total");
-        s.insert("mz_kafka_bytes_read_total");
+        s.insert("mz_bytes_read_total");
         s.insert("mz_worker_command_queue_size");
         s.insert("mz_command_durations");
         s
