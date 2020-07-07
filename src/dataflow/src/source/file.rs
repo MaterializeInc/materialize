@@ -25,8 +25,6 @@ use timely::scheduling::{Activator, SyncActivator};
 
 use std::io::{BufRead, Read};
 use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
 
 use avro::types::Value;
 use failure::ResultExt;
