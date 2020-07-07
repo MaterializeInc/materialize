@@ -12,7 +12,7 @@ To help you get started with Materialize, we'll:
 - Set up a real-time stream to perform aggregations on
 
 ## Web Demo
-Try it out:
+Try it out [on Katacoda](https://www.katacoda.com/materialize/scenarios/intro-wikipedia).
 
 <script src="//katacoda.com/embed.js"></script>
 <div id="katacoda-scenario-1"
