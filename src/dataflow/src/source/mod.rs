@@ -871,7 +871,7 @@ where
                             );
                             return SourceStatus::Done;
                        }
-                    }
+                   }
                 }
 
                 // Downgrade capability (if possible) before exiting
