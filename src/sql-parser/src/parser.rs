@@ -143,6 +143,7 @@ enum Precedence {
     Times,
     UnaryOp,
     DoubleColon,
+    VectorSubscript,
 }
 
 impl Parser {
@@ -873,10 +874,78 @@ impl Parser {
             }
         } else if Token::DoubleColon == tok {
             self.parse_pg_cast(expr)
+        } else if Token::LBracket == tok {
+            let e = self.parse_subscript(expr)?;
+            self.expect_token(&Token::RBracket)?;
+            Ok(e)
         } else {
             // Can only happen if `get_next_precedence` got out of sync with this function
             panic!("No infix parser for token {:?}", tok)
         }
+    }
+
+    /// Parse the values used in a subscript, i.e. either an index value or slice range.
+    fn parse_subscript(&mut self, mut expr: Expr) -> Result<Expr, ParserError> {
+        let mut on_axis = 1;
+        let mut is_slice = false;
+        loop {
+            let lhs = if self.consume_token(&Token::Colon) {
+                is_slice = true;
+                None
+            } else {
+                let e = Some(self.parse_expr()?);
+                if is_slice {
+                    self.expect_token(&Token::Colon)?;
+                } else {
+                    is_slice = self.consume_token(&Token::Colon);
+                }
+                e
+            };
+
+            let rhs = if is_slice
+                && (Some(Token::RBracket) != self.peek_token()
+                    && Some(Token::Comma) != self.peek_token())
+            {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            let op = match (is_slice, &lhs, &rhs) {
+                (false, Some(_), None) => SubscriptOperator::Index,
+                (true, Some(_), Some(_)) => SubscriptOperator::Slice { on_axis },
+                (true, Some(_), None) => SubscriptOperator::SliceNToEnd { on_axis },
+                (true, None, Some(_)) => SubscriptOperator::SliceStartToN { on_axis },
+                (true, None, None) => SubscriptOperator::SliceNop { on_axis },
+                _ => {
+                    return self.expected(
+                        self.peek_range(),
+                        "vector index or slice",
+                        self.peek_token(),
+                    );
+                }
+            };
+
+            let mut positions = Vec::new();
+            if let Some(l) = lhs {
+                positions.push(l);
+            }
+            if let Some(r) = rhs {
+                positions.push(r);
+            }
+
+            expr = Expr::Subscript {
+                expr: Box::new(expr),
+                positions,
+                op,
+            };
+
+            if !is_slice || !self.consume_token(&Token::Comma) {
+                break;
+            }
+            on_axis += 1;
+        }
+        Ok(expr)
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
@@ -968,6 +1037,7 @@ impl Parser {
                 Token::Plus | Token::Minus => Precedence::Plus,
                 Token::Mult | Token::Div | Token::Mod => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,
+                Token::LBracket => Precedence::VectorSubscript,
                 _ => Precedence::Zero,
             }
         } else {

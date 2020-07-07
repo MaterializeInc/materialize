@@ -105,3 +105,24 @@ impl fmt::Display for BinaryOperator {
         })
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SubscriptOperator {
+    Index,
+    Slice { on_axis: usize },
+    SliceStartToN { on_axis: usize },
+    SliceNToEnd { on_axis: usize },
+    SliceNop { on_axis: usize },
+}
+
+impl fmt::Display for SubscriptOperator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            SubscriptOperator::Index => "index",
+            SubscriptOperator::Slice { .. }
+            | SubscriptOperator::SliceNop { .. }
+            | SubscriptOperator::SliceStartToN { .. }
+            | SubscriptOperator::SliceNToEnd { .. } => "slice",
+        })
+    }
+}

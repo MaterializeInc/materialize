@@ -31,7 +31,7 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
     ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
-    TableAlias, TableFactor, TableWithJoins, Value, Values,
+    SubscriptOperator, TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
 use ::expr::{Id, RowSetFinishing};
@@ -1437,6 +1437,30 @@ pub fn plan_expr<'a>(
             }
         }
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr)?,
+        Expr::Subscript {
+            expr,
+            positions,
+            op,
+        } => {
+            use SubscriptOperator::*;
+            match op {
+                Index => {}
+                Slice { on_axis }
+                | SliceNop { on_axis }
+                | SubscriptOperator::SliceStartToN { on_axis }
+                | SubscriptOperator::SliceNToEnd { on_axis } => {
+                    if *on_axis > 1 && !ecx.qcx.scx.experimental_mode() {
+                        bail!(
+                            "multi-dimensional slicing requires experimental mode; see \
+                        https://materialize.io/docs/cli/#experimental-mode"
+                        )
+                    }
+                }
+            }
+            let mut exprs = vec![*expr.clone()];
+            exprs.extend(positions.clone());
+            func::plan_subscript(ecx, op.clone(), &exprs)?.into()
+        }
 
         // Subqueries.
         Expr::Exists(query) => {

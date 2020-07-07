@@ -20,7 +20,7 @@ use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
 use repr::{ColumnName, ColumnType, Datum, ScalarType};
-use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
+use sql_parser::ast::{BinaryOperator, Expr, SubscriptOperator, UnaryOperator};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -632,6 +632,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         let arg_type = self.ecx.scalar_type(&arg);
         let cast_to = match typ {
             ParamType::Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => return Ok(arg),
+            ParamType::Plain(List(..)) if matches!(arg_type, List(..)) => return Ok(arg),
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any => return Ok(arg),
             ParamType::JsonbAny => CastTo::JsonbAny,
@@ -1526,4 +1527,91 @@ pub fn select_aggregate_func(
     }
 
     ArgImplementationMatcher::select_implementation(ident, func_err_string, ecx, impls, cexprs)
+}
+
+fn subscript_err_string(ident: &str, types: &[Option<ScalarType>], hint: String) -> String {
+    format!(
+        "cannot subscript ({}) type {}: {}",
+        ident,
+        stringify_opt_scalartype(&types[0]),
+        hint,
+    )
+}
+
+/// Plans a function compatible with the `UnaryOperator`.
+pub fn plan_subscript(
+    ecx: &ExprContext,
+    op: SubscriptOperator,
+    args: &[Expr],
+) -> Result<ScalarExpr, failure::Error> {
+    use BinaryFunc::*;
+    use ScalarType::*;
+    use SubscriptOperator::*;
+
+    macro_rules! dim_check {
+        ($ecx:expr, $e:expr, $dim:expr) => {
+            let n_dims = $ecx.scalar_type($e).unwrap_list_n_dims();
+            if $dim > n_dims {
+                bail!(
+                    "cannot slice on {} dimensions; list only has {} dimensions",
+                    $dim,
+                    n_dims,
+                )
+            }
+        };
+    }
+
+    // `SubscriptOperator`s dynamically generate their `FuncImpl`s to handle
+    // multi-dimensional slicing.
+    let impls = match op {
+        Index => FuncImpl {
+            params: params!(List(Box::new(String)), Int64),
+            op: binary_op(move |_ecx, lhs, rhs| Ok(lhs.call_binary(rhs, ListIndex))),
+        },
+        Slice { on_axis } => FuncImpl {
+            params: params!(List(Box::new(String)), Int64, Int64),
+            op: variadic_op(move |ecx, exprs| {
+                dim_check!(ecx, &exprs[0], on_axis);
+                Ok(ScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListSlice { on_axis },
+                    exprs,
+                })
+            }),
+        },
+        SliceStartToN { on_axis } => FuncImpl {
+            params: params!(List(Box::new(String)), Int64),
+            op: binary_op(move |ecx, lhs, rhs| {
+                dim_check!(ecx, &lhs, on_axis);
+                Ok(lhs.call_binary(rhs, ListSliceStartToN { on_axis }))
+            }),
+        },
+        SliceNToEnd { on_axis } => FuncImpl {
+            params: params!(List(Box::new(String)), Int64),
+            op: binary_op(move |ecx, lhs, rhs| {
+                dim_check!(ecx, &lhs, on_axis);
+                Ok(lhs.call_binary(rhs, ListSliceNToEnd { on_axis }))
+            }),
+        },
+        SliceNop { on_axis } => FuncImpl {
+            params: params!(List(Box::new(String))),
+            op: unary_op(move |ecx, e| {
+                dim_check!(ecx, &e, on_axis);
+                Ok(e)
+            }),
+        },
+    };
+
+    let mut cexprs = Vec::new();
+    for arg in args {
+        let cexpr = query::plan_expr(ecx, arg)?;
+        cexprs.push(cexpr);
+    }
+
+    ArgImplementationMatcher::select_implementation(
+        &op.to_string(),
+        subscript_err_string,
+        ecx,
+        &[impls],
+        cexprs,
+    )
 }

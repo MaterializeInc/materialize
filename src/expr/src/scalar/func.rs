@@ -25,7 +25,7 @@ use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::regex::Regex;
-use repr::{strconv, ColumnName, ColumnType, Datum, RowArena, RowPacker, ScalarType};
+use repr::{strconv, ColumnName, ColumnType, Datum, DatumList, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, ScalarExpr};
@@ -1743,6 +1743,9 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
+    ListIndex,
+    ListSliceNToEnd { on_axis: usize },
+    ListSliceStartToN { on_axis: usize },
 }
 
 impl BinaryFunc {
@@ -1851,6 +1854,13 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
+            BinaryFunc::ListIndex => Ok(eager!(list_index)),
+            BinaryFunc::ListSliceNToEnd { on_axis } => {
+                Ok(eager!(list_slice_n_to_end, *on_axis, temp_storage))
+            }
+            BinaryFunc::ListSliceStartToN { on_axis } => {
+                Ok(eager!(list_slice_start_to_n, *on_axis, temp_storage))
+            }
         }
     }
 
@@ -1972,6 +1982,14 @@ impl BinaryFunc {
 
             JsonbContainsString | JsonbContainsJsonb => {
                 ColumnType::new(ScalarType::Bool).nullable(in_nullable)
+            }
+
+            ListIndex => {
+                ColumnType::new(input1_type.scalar_type.unwrap_list_inner_type()).nullable(true)
+            }
+
+            ListSliceNToEnd { .. } | ListSliceStartToN { .. } => {
+                ColumnType::new(input1_type.scalar_type).nullable(true)
             }
         }
     }
@@ -2102,7 +2120,10 @@ impl BinaryFunc {
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
-            | TextConcat => true,
+            | TextConcat
+            | ListIndex
+            | ListSliceNToEnd { .. }
+            | ListSliceStartToN { .. } => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2198,6 +2219,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
+            BinaryFunc::ListIndex => f.write_str("list_index"),
+            BinaryFunc::ListSliceNToEnd { .. } => f.write_str("list_slice_n_to_end"),
+            BinaryFunc::ListSliceStartToN { .. } => f.write_str("list_slice_start_to_n"),
         }
     }
 }
@@ -2871,6 +2895,18 @@ where
     }
 }
 
+fn list_slice<'a>(datums: &[Datum<'a>], on_axis: usize, temp_storage: &'a RowArena) -> Datum<'a> {
+    let s = datums[1].unwrap_int64();
+    let e = datums[2].unwrap_int64();
+    let slice_iter = |l: Datum<'a>| {
+        l.unwrap_list()
+            .iter()
+            .skip((s - 1) as usize)
+            .take((e + 1 - s) as usize)
+    };
+    list_slice_descend(datums[0], &slice_iter, 1, on_axis, temp_storage)
+}
+
 fn record_get(a: Datum, i: usize) -> Datum {
     a.unwrap_list().iter().nth(i).unwrap()
 }
@@ -2943,6 +2979,95 @@ fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
 }
 
+fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    // SQL arrays are 1-indexed, so our lists are, as well.
+    match a.unwrap_list().iter().nth(i as usize - 1) {
+        Some(e) => e,
+        None => Datum::Null,
+    }
+}
+
+// Recurse into lists for multi-dimensional slicing, i.e. slicing the inner list
+// in a list of lists.
+fn list_slice_descend<'a, F, I, D>(
+    d: Datum<'a>,
+    slice_iter: &F,
+    this_axis: usize,
+    target_axis: usize,
+    temp_storage: &'a RowArena,
+) -> Datum<'a>
+where
+    F: Fn(Datum<'a>) -> I,
+    I: IntoIterator<Item = D>,
+    D: std::borrow::Borrow<Datum<'a>>,
+{
+    if this_axis == target_axis {
+        let slice = temp_storage.make_datum(|packer| packer.push_list(slice_iter(d)));
+        // If returned list is empty then `F`'s first index was beyond the final
+        // element of `x`; note that for empty lists, this means any slice at all.
+        //
+        // For consistency with indexing into a list, this returns _NULL_.
+        if Datum::List(DatumList::empty()) == slice {
+            Datum::Null
+        } else {
+            slice
+        }
+    } else {
+        let l = d.unwrap_list();
+        let l = l.iter().peekable();
+        let mut datums = Vec::new();
+        for e in l {
+            datums.push(match e {
+                Datum::List(i) => list_slice_descend(
+                    Datum::List(i),
+                    slice_iter,
+                    this_axis + 1,
+                    target_axis,
+                    temp_storage,
+                ),
+                Datum::Null => Datum::Null,
+                _ => unreachable!(),
+            });
+        }
+
+        if datums.iter().all(|e| Datum::Null == *e) {
+            // Lists of all NULL elements are NULL themselves when slicing.
+            Datum::Null
+        } else {
+            temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    for e in datums {
+                        packer.push(e);
+                    }
+                });
+            })
+        }
+    }
+}
+
+fn list_slice_n_to_end<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    on_axis: usize,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let n = b.unwrap_int64();
+    let n_to_end_iter = |l: Datum<'a>| l.unwrap_list().iter().skip((n - 1) as usize);
+    list_slice_descend(a, &n_to_end_iter, 1, on_axis, temp_storage)
+}
+
+fn list_slice_start_to_n<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    on_axis: usize,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let n = b.unwrap_int64();
+    let start_to_n_iter = |l: Datum<'a>| l.unwrap_list().iter().take(n as usize);
+    list_slice_descend(a, &start_to_n_iter, 1, on_axis, temp_storage)
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -2958,6 +3083,9 @@ pub enum VariadicFunc {
     },
     RecordCreate {
         field_names: Vec<ColumnName>,
+    },
+    ListSlice {
+        on_axis: usize,
     },
 }
 
@@ -2991,6 +3119,9 @@ impl VariadicFunc {
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
             }
+            VariadicFunc::ListSlice { on_axis, .. } => {
+                Ok(eager!(list_slice, *on_axis, temp_storage))
+            }
         }
     }
 
@@ -3020,6 +3151,7 @@ impl VariadicFunc {
                 );
                 ColumnType::new(ScalarType::List(Box::new(elem_type.clone())))
             }
+            ListSlice { .. } => ColumnType::new(input_types[0].scalar_type.clone()).nullable(true),
             RecordCreate { field_names } => ColumnType::new(ScalarType::Record {
                 fields: field_names
                     .clone()
@@ -3057,6 +3189,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
+            VariadicFunc::ListSlice { .. } => f.write_str("list_slice"),
         }
     }
 }

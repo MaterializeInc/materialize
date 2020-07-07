@@ -22,7 +22,8 @@ use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    BinaryOperator, DataType, Ident, ObjectName, OrderByExpr, Query, UnaryOperator, Value,
+    BinaryOperator, DataType, Ident, ObjectName, OrderByExpr, Query, SubscriptOperator,
+    UnaryOperator, Value,
 };
 
 /// An SQL expression of any type.
@@ -130,6 +131,12 @@ pub enum Expr {
     },
     /// `LIST[<expr>*]`
     List(Vec<Expr>),
+    /// `LIST[<expr>*][<expr>?(:<expr>?(, <expr>?:<expr>?)*)?]`
+    Subscript {
+        expr: Box<Expr>,
+        positions: Vec<Expr>,
+        op: SubscriptOperator,
+    },
 }
 
 impl AstDisplay for Expr {
@@ -327,6 +334,34 @@ impl AstDisplay for Expr {
                     f.write_node(expr);
                     if exprs.peek().is_some() {
                         f.write_str(", ");
+                    }
+                }
+                f.write_str("]");
+            }
+            Expr::Subscript {
+                expr,
+                positions,
+                op,
+            } => {
+                f.write_node(&expr);
+                f.write_str("[");
+                match op {
+                    SubscriptOperator::Index => f.write_node(&positions[0]),
+                    SubscriptOperator::Slice { .. } => {
+                        f.write_node(&positions[0]);
+                        f.write_str(":");
+                        f.write_node(&positions[1]);
+                    }
+                    SubscriptOperator::SliceStartToN { .. } => {
+                        f.write_str(":");
+                        f.write_node(&positions[0]);
+                    }
+                    SubscriptOperator::SliceNToEnd { .. } => {
+                        f.write_node(&positions[0]);
+                        f.write_str(":");
+                    }
+                    SubscriptOperator::SliceNop { .. } => {
+                        f.write_str(":");
                     }
                 }
                 f.write_str("]");
