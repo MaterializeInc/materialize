@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::server::{TimestampDataUpdate, TimestampMetadataUpdate};
+use crate::server::{
+    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+};
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
@@ -15,18 +17,13 @@ use avro::Schema;
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 use failure::Error;
-use std::cell::RefCell;
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::io::{BufRead, Read};
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use timely::scheduling::{Activator, SyncActivator};
 
-use std::io::{BufRead, Read};
-use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
 
 use avro::types::Value;
 use failure::ResultExt;
@@ -175,11 +172,9 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         id: &SourceInstanceId,
         consistency: &Consistency,
         active: bool,
-        timestamp_data_updates: Rc<
-            RefCell<HashMap<SourceInstanceId, TimestampDataUpdate, RandomState>>,
-        >,
-        timestamp_metadata_channel: Rc<RefCell<Vec<TimestampMetadataUpdate>>>,
-    ) -> Option<Rc<RefCell<Vec<TimestampMetadataUpdate>>>> {
+        timestamp_data_updates: TimestampDataUpdates,
+        timestamp_metadata_channel: TimestampMetadataUpdates,
+    ) -> Option<TimestampMetadataUpdates> {
         if active {
             let prev = if let Consistency::BringYourOwn(_) = consistency {
                 timestamp_data_updates.borrow_mut().insert(
@@ -254,9 +249,9 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         &mut self,
         _consistency_info: &mut ConsistencyInfo,
         _activator: &Activator,
-    ) -> Option<SourceMessage<Out>> {
+    ) -> Result<Option<SourceMessage<Out>>, failure::Error> {
         if let Some(message) = self.buffer.take() {
-            Some(message)
+            Ok(Some(message))
         } else {
             match self.receiver_stream.try_recv() {
                 Ok(Ok(record)) => {
@@ -267,15 +262,15 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                         key: None,
                         payload: Some(record),
                     };
-                    Some(message)
+                    Ok(Some(message))
                 }
                 Ok(Err(e)) => {
                     error!("Failed to read file for {}. Error: {}.", self.id, e);
-                    None
+                    Err(e)
                 }
-                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Empty) => Ok(None),
                 //TODO(ncrooks): add mechanism to return SourceStatus::Done
-                Err(TryRecvError::Disconnected) => None,
+                Err(TryRecvError::Disconnected) => Ok(None),
             }
         }
     }
@@ -330,9 +325,9 @@ pub fn read_file_task<Ctor, I, Out, Err>(
             #[cfg(target_os = "macos")]
             let (file_events_stream, handle) = {
                 let (timer_tx, timer_rx) = std::sync::mpsc::channel();
-                thread::spawn(move || {
+                std::thread::spawn(move || {
                     while let Ok(()) = timer_tx.send(()) {
-                        thread::sleep(Duration::from_millis(100));
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                 });
                 (timer_rx, ())
