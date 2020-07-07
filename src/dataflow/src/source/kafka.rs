@@ -23,6 +23,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
+
 use timely::scheduling::activate::{Activator, SyncActivator};
 use url::Url;
 
