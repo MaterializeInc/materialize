@@ -36,7 +36,6 @@ rusqlite = { version = "0.23", features = ["bundled", "unlock_notify"] }
 serde = "1.0"
 serde_json = "1.0.56"
 sql = { path = "../sql" }
-sql-parser = { path = "../sql-parser" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.2"
