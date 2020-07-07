@@ -293,7 +293,7 @@ pub trait SourceInfo<Out> {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Option<SourceMessage<Out>>;
+    ) -> Result<Option<SourceMessage<Out>>, failure::Error>;
 
     /// Buffer a message that cannot get timestamped
     fn buffer_message(&mut self, message: SourceMessage<Out>);
@@ -765,97 +765,112 @@ where
                     .operator_scheduled_counter
                     .inc();
 
-                while let Some(message) =
-                    source_info.get_next_message(&mut consistency_info, &activator)
-                {
-                    let partition = message.partition.clone();
-                    let offset = message.offset;
+                let mut next_message = true;
 
-                    println!("Received message {} {}", partition, offset);
+                while next_message {
+                    match source_info.get_next_message(&mut consistency_info, &activator) {
+                        Ok(Some(message)) => {
+                            let partition = message.partition.clone();
+                            let offset = message.offset;
 
-                    // Update ingestion metrics
-                    consistency_info
-                        .partition_metrics
-                        .get_mut(&partition)
-                        .unwrap_or(&mut PartitionMetrics::new(
-                            &name,
-                            &id.to_string(),
-                            &partition.to_string(),
-                        ))
-                        .offset_received
-                        .set(offset.offset);
+                            // Update ingestion metrics
+                            consistency_info
+                                .partition_metrics
+                                .get_mut(&partition)
+                                .unwrap_or(&mut PartitionMetrics::new(
+                                    &name,
+                                    &id.to_string(),
+                                    &partition.to_string(),
+                                ))
+                                .offset_received
+                                .set(offset.offset);
 
-                    // Determine the timestamp to which we need to assign this message
-                    let ts = consistency_info.find_matching_timestamp(
-                        &id,
-                        &partition,
-                        offset,
-                        &timestamp_histories,
-                    );
-                    match ts {
-                        None => {
-                            // We have not yet decided on a timestamp for this message,
-                            // we need to buffer the message
-                            source_info.buffer_message(message);
+                            // Determine the timestamp to which we need to assign this message
+                            let ts = consistency_info.find_matching_timestamp(
+                                &id,
+                                &partition,
+                                offset,
+                                &timestamp_histories,
+                            );
+                            match ts {
+                                None => {
+                                    // We have not yet decided on a timestamp for this message,
+                                    // we need to buffer the message
+                                    source_info.buffer_message(message);
+                                    consistency_info.downgrade_capability(
+                                        &id,
+                                        cap,
+                                        &mut source_info,
+                                        &timestamp_histories,
+                                    );
+                                    activator.activate();
+                                    return SourceStatus::Alive;
+                                }
+                                Some(ts) => {
+                                    // Note: empty and null payload/keys are currently
+                                    // treated as the same thing.
+                                    let key = message.key.unwrap_or_default();
+                                    let out = message.payload.unwrap_or_default();
+                                    // Entry for partition_metadata is guaranteed to exist as messages
+                                    // are only processed after we have updated the partition_metadata for a
+                                    // partition and created a partition queue for it.
+                                    consistency_info
+                                        .partition_metadata
+                                        .get_mut(&partition)
+                                        .unwrap()
+                                        .offset = offset;
+                                    bytes_read += key.len() as i64;
+                                    bytes_read += out.len() as i64;
+                                    let ts_cap = cap.delayed(&ts);
+                                    output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                        key,
+                                        out,
+                                        Some(offset.offset),
+                                    )));
+
+                                    // Update ingestion metrics
+                                    // Entry is guaranteed to exist as it gets created when we initialise the partition
+                                    let partition_metrics = consistency_info
+                                        .partition_metrics
+                                        .get_mut(&partition)
+                                        .unwrap();
+                                    partition_metrics.offset_ingested.set(offset.offset);
+                                    partition_metrics.messages_ingested.inc();
+                                }
+                            }
+
+                            //TODO(ncrooks): this behaviour should probably be made configurable
+                            if timer.elapsed().as_millis() > 10 {
+                                // We didn't drain the entire queue, so indicate that we
+                                // should run again.
+                                if bytes_read > 0 {
+                                    BYTES_READ_COUNTER.inc_by(bytes_read);
+                                }
+                                // Downgrade capability (if possible) before exiting
+                                consistency_info.downgrade_capability(
+                                    &id,
+                                    cap,
+                                    &mut source_info,
+                                    &timestamp_histories,
+                                );
+                                activator.activate();
+                                return SourceStatus::Alive;
+                            }
+                        }
+                        Ok(None) => {
+                            // There were no new messages
+                            next_message = false;
+                        }
+                        Err(e) => {
+                            output.session(&cap).give(Err(e.to_string()));
                             consistency_info.downgrade_capability(
                                 &id,
                                 cap,
                                 &mut source_info,
                                 &timestamp_histories,
                             );
-                            activator.activate();
-                            return SourceStatus::Alive;
+                            return SourceStatus::Done;
                         }
-                        Some(ts) => {
-                            // Note: empty and null payload/keys are currently
-                            // treated as the same thing.
-                            println!("Assigning timestamp: {} ", ts);
-                            let key = message.key.unwrap_or_default();
-                            let out = message.payload.unwrap_or_default();
-                            // Entry for partition_metadata is guaranteed to exist as messages
-                            // are only processed after we have updated the partition_metadata for a
-                            // partition and created a partition queue for it.
-                            consistency_info
-                                .partition_metadata
-                                .get_mut(&partition)
-                                .unwrap()
-                                .offset = offset;
-                            bytes_read += key.len() as i64;
-                            bytes_read += out.len() as i64;
-                            let ts_cap = cap.delayed(&ts);
-                            output.session(&ts_cap).give(Ok(SourceOutput::new(
-                                key,
-                                out,
-                                Some(offset.offset),
-                            )));
-
-                            // Update ingestion metrics
-                            // Entry is guaranteed to exist as it gets created when we initialise the partition
-                            let partition_metrics = consistency_info
-                                .partition_metrics
-                                .get_mut(&partition)
-                                .unwrap();
-                            partition_metrics.offset_ingested.set(offset.offset);
-                            partition_metrics.messages_ingested.inc();
-                        }
-                    }
-
-                    //TODO(ncrooks): this behaviour should probably be made configurable
-                    if timer.elapsed().as_millis() > 10 {
-                        // We didn't drain the entire queue, so indicate that we
-                        // should run again.
-                        if bytes_read > 0 {
-                            BYTES_READ_COUNTER.inc_by(bytes_read);
-                        }
-                        // Downgrade capability (if possible) before exiting
-                        consistency_info.downgrade_capability(
-                            &id,
-                            cap,
-                            &mut source_info,
-                            &timestamp_histories,
-                        );
-                        activator.activate();
-                        return SourceStatus::Alive;
                     }
                 }
 

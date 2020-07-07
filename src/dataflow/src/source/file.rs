@@ -254,9 +254,9 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         &mut self,
         _consistency_info: &mut ConsistencyInfo,
         _activator: &Activator,
-    ) -> Option<SourceMessage<Out>> {
+    ) -> Result<Option<SourceMessage<Out>>, failure::Error> {
         if let Some(message) = self.buffer.take() {
-            Some(message)
+            Ok(Some(message))
         } else {
             match self.receiver_stream.try_recv() {
                 Ok(Ok(record)) => {
@@ -267,15 +267,15 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                         key: None,
                         payload: Some(record),
                     };
-                    Some(message)
+                    Ok(Some(message))
                 }
                 Ok(Err(e)) => {
                     error!("Failed to read file for {}. Error: {}.", self.id, e);
-                    None
+                    Err(e)
                 }
-                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Empty) => Ok(None),
                 //TODO(ncrooks): add mechanism to return SourceStatus::Done
-                Err(TryRecvError::Disconnected) => None,
+                Err(TryRecvError::Disconnected) => Ok(None),
             }
         }
     }
