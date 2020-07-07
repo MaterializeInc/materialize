@@ -178,7 +178,13 @@ where
     // but not to replace unused values in key because that would cause
     // errors in arrange_from_upsert
     let position_or = (0..src_type.arity())
-        .map(|col| operator.projection.iter().position(|c| c == &col))
+        .map(|col| {
+            if operator.projection.contains(&col) {
+                Some(col)
+            } else {
+                None
+            }
+        })
         .collect::<Vec<_>>();
 
     // If a row does not match a predicate whose support lies in the key
