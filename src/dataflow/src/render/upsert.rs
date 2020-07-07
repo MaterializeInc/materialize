@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rihts reserved.
+// Copyright Materialize, Inc. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -24,6 +24,12 @@ use crate::decode::decode_upsert;
 use crate::operator::StreamExt;
 use crate::source::SourceOutput;
 
+/// Entrypoint to the upsert-specific transformations involved 
+/// in rendering a stream that came from an upsert source.
+/// Upsert-specific operators are different from the rest of 
+/// the rendering pipeline in that their input is a stream
+/// with two components instead of one, and the second component
+/// can be null or empty.
 #[allow(clippy::too_many_arguments)]
 pub fn pre_arrange_from_upsert_transforms<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
@@ -59,9 +65,10 @@ where
         }
     });
 
-    // Deduplicate records by key, decode, and then upsert arrange them.
+    // Deduplicate records by key
     let deduplicated = prepare_upsert_by_max_offset(&stream);
 
+    //Decode
     let decoded = decode_upsert(
         &deduplicated,
         encoding,
@@ -151,6 +158,7 @@ where
     )
 }
 
+/// Apply a filter followed by a project to an upsert stream.
 fn apply_linear_operators<G>(
     stream: &Stream<G, (Row, Option<Row>, Timestamp)>,
     operator: &LinearOperator,
