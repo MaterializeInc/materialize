@@ -82,3 +82,575 @@ query T
 SELECT LIST[LIST[]::text list, LIST['a', 'b'], LIST['z']]
 ----
 {{},{a,b},{z}}
+
+# 🔬 list subscripts
+# 🔬🔬 list indexes
+query R
+SELECT LIST [1, 2, 3][2];
+----
+2
+
+# exceeds maximum index
+query R
+SELECT LIST [1, 2, 3][100];
+----
+NULL
+
+# exceeds maximum dimension
+query error cannot subscript type i32
+SELECT LIST [1, 2, 3][1][1];
+
+# 🔬🔬 list slices
+query T
+SELECT LIST [1, 2, 3][2:3];
+----
+{2,3}
+
+query T
+SELECT LIST [1, 2, 3][2:];
+----
+{2,3}
+
+query T
+SELECT LIST [1, 2, 3][:2];
+----
+{1,2}
+
+query T
+SELECT LIST [1, 2, 3][:];
+----
+{1,2,3}
+
+# start exceeds maximum index
+query R
+SELECT LIST [1, 2, 3][100:];
+----
+NULL
+
+# end exceeds maximum index
+query T
+SELECT LIST [1, 2, 3][:100];
+----
+{1,2,3}
+
+# exceeds maximum dimension
+query error cannot slice on 2 dimensions; list only has 1 dimension
+SELECT LIST [1, 2, 3][:, :]
+
+# successive slices
+query T
+SELECT LIST [1, 2, 3][2:3][1:1];
+----
+{2}
+
+# 🔬🔬 list slices + index
+query T
+SELECT LIST [1, 2, 3][2:3][2];
+----
+3
+
+# 🔬 list list subscripts
+# 🔬🔬 list list indexes
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][1]
+----
+{1,2,3}
+
+query R
+SELECT LIST [[1, 2, 3], [4, 5]][1][3]
+----
+3
+
+# exceeds maximum index
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][100]
+----
+NULL
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][1][100]
+----
+NULL
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][100][1]
+----
+NULL
+
+# exceeds maximum dimension
+query error cannot subscript type i32
+SELECT LIST [[1, 2, 3], [4, 5]][1][1][1]
+
+# 🔬🔬 list list slices
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][2:2]
+----
+{{4,5}}
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][1:2, 2:3];
+----
+{{2,3},{5}}
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][2:]
+----
+{{4,5}}
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][:2, 2:]
+----
+{{2,3},{5}}
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][:, 2:]
+----
+{{2,3},{5}}
+
+# start exceeds maximum index
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][100:, :]
+----
+NULL
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][:, 100:]
+----
+NULL
+
+# propagating NULL lists
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][:, 3:3]
+----
+{{3},NULL}
+
+# end exceeds maximum index
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][:100, :];
+----
+{{1,2,3},{4,5}}
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][:, :100]
+----
+{{1,2,3},{4,5}}
+
+# exceeds maximum dimension
+query error cannot slice on 3 dimensions; list only has 2 dimensions
+SELECT LIST [[1, 2, 3], [4, 5]][:, :, :]
+
+# successive slice operations
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][2:2][1:1]
+----
+{{4,5}}
+
+# 🔬🔬 list list slices + index
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][1:2][2]
+----
+{4,5}
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][1:2][2][2:2]
+----
+{5}
+
+query T
+SELECT LIST [[1, 2, 3], [4, 5]][1:2][2][2:2][1]
+----
+5
+
+# 🔬 list list list
+# 🔬🔬 list list list indexes
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1]
+----
+{{1,2},{3,4,5}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2]
+----
+{3,4,5}
+
+query R
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][3]
+----
+5
+
+# exceeds maximum index
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100]
+----
+NULL
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][100]
+----
+NULL
+
+query R
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][100]
+----
+NULL
+
+query R
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100][2][3]
+----
+NULL
+
+# exceeds maximum dimension
+query error cannot subscript type i32
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][3][1]
+
+# 🔬🔬 list list list slices
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2]
+----
+{{{1,2},{3,4,5}},{{6}}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 1:1];
+----
+{{{1,2}},{{6}},{{7,8}}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, 1:1];
+----
+{{{1},{3}},{{6}},{{7},{9}}}
+
+# start exceeds maximum index
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100:100];
+----
+NULL
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 100:100];
+----
+NULL
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, 100:100];
+----
+NULL
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 100:100, :];
+----
+NULL
+
+# propagating NULL lists
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 2:2];
+----
+{{{3,4,5}},NULL,{{9}}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, 2:2, 2:2];
+----
+{{{4}},NULL,NULL}
+
+# end exceeds maximum index
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:100];
+----
+{{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :100];
+----
+{{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :100];
+----
+{{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :100, :100];
+----
+{{{1,2},{3,4,5}},{{6}},{{7,8},{9}}}
+
+# exceeds maximum dimension
+query error cannot slice on 4 dimensions; list only has 3 dimensions
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :, :];
+
+# 🔬🔬 list list list slices + index
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1];
+----
+{{1,2},{3,4,5}}
+
+query T
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1][2:2][1];
+----
+{3,4,5}
+
+query R
+SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1][2:3][1][2:3][2];
+----
+5
+
+# 🔬 NULL expressions
+query R
+SELECT (LIST[[1, 2, 3], NULL, [4]]::INT LIST LIST)[2][1]
+----
+NULL
+
+query T
+SELECT (LIST[[1, 2, 3], NULL, [4]]::INT LIST LIST)[2:3, 2:2]
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][NULL]
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][NULL:NULL]
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][1:NULL]
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][NULL:1]
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][NULL:]
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][:NULL]
+----
+NULL
+
+query T
+SELECT LIST[NULL][:]
+----
+{NULL}
+
+query T
+SELECT LIST[1, NULL, 3][:NULL]
+----
+NULL
+
+query T
+SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:];
+----
+{NULL,{4,NULL,6}}
+
+query T
+SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3][1];
+----
+NULL
+
+# 🔬🔬 Slices and NULLs
+
+# NULL literals are not touched by slice operations
+query T
+SELECT (LIST[NULL]::INT LIST)[1:1];
+----
+{NULL}
+
+# Slicing into a NULL list produces an empty result expressed as NULL; if all
+# results are empty, reduce them all to a single NULL
+query T
+SELECT (LIST[NULL, NULL]::INT LIST LIST)[:, 1:1];
+----
+NULL
+
+# Literal NULLs are NOT empty results and don't get reduced
+query T
+SELECT (LIST[NULL, [NULL]]::INT LIST LIST)[:, 1:1];
+----
+{NULL,{NULL}}
+
+# Results can intermix values and empty-results-as-NULLs
+query T
+SELECT (LIST [[1, NULL, 3], NULL, [4, 5, 6]]::INT LIST LIST)[2:3, 2:2];
+----
+{NULL,{5}}
+
+# Results can intermix NULL values and empty-results-as-NULLs
+query T
+SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3, 2:2];
+----
+{NULL,{NULL}}
+
+# Empty results across dimensions are still reduced
+query T
+SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3, 4:4];
+----
+NULL
+
+# Outer list's second position produces empty results, but third position
+# produces value, so cannot be totally reduced
+query T
+SELECT (LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:, :, :];
+----
+{NULL,NULL,{{NULL}}}
+
+# Third position returns empty results, along with the first and second
+# position, so all can be reduced to NULL
+query T
+SELECT (LIST [NULL, [NULL], [[NULL]]]::INT LIST LIST LIST)[:, :, 2:2];
+----
+NULL
+
+# 🔬 Empty lists expressions
+query T
+SELECT (LIST[]::INT LIST)[1]
+----
+NULL
+
+query T
+SELECT (LIST[]::INT LIST)[:]
+----
+NULL
+
+query T
+SELECT (LIST[]::INT LIST)[1:1]
+----
+NULL
+
+query T
+SELECT (LIST[]::INT LIST LIST)[1:1, 1:1]
+----
+NULL
+
+# 🔬 Other subcript values
+
+# 🔬🔬 end > start
+query T
+SELECT LIST[1, 2, 3][2:1];
+----
+NULL
+
+# 🔬🔬 Negative values
+query T
+SELECT LIST[1, 2, 3][-100];
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][-100:];
+----
+{1,2,3}
+
+query T
+SELECT LIST[1, 2, 3][-100:99];
+----
+{1,2,3}
+
+query T
+SELECT LIST[1, 2, 3][-100:-99];
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][-100:-101];
+----
+NULL
+
+query T
+SELECT LIST[1, 2, 3][:-100];
+----
+NULL
+
+# 🔬🔬 min/max
+query R
+SELECT LIST[1][9223372036854775807::bigint]
+----
+NULL
+
+query R
+SELECT LIST[1][-9223372036854775807::bigint]
+----
+NULL
+
+query R
+SELECT LIST[1][9223372036854775807::bigint:9223372036854775807::bigint]
+----
+NULL
+
+query R
+SELECT LIST[1][9223372036854775807::bigint:-9223372036854775807::bigint]
+----
+NULL
+
+query T
+SELECT LIST[1][-9223372036854775807::bigint:9223372036854775807::bigint]
+----
+{1}
+
+query R
+SELECT LIST[1][-9223372036854775807::bigint:-9223372036854775807::bigint]
+----
+NULL
+
+# 🔬 Non-int subscript values
+# 🔬🔬 Ok
+query R
+select LIST[1,2,3][1.4];
+----
+1
+
+query R
+select LIST[1,2,3][1.5];
+----
+2
+
+query R
+select LIST[1,2,3][1.5::real];
+----
+2
+
+query R
+select LIST[1,2,3][1.5::float];
+----
+2
+
+query R
+select LIST[1,2,3][1.5 + 1.6];
+----
+3
+
+query T
+select LIST[1,2,3][0.1 * 2 : 0.5 + 1.6];
+----
+{1,2}
+
+query T
+select LIST[1,2,3][LIST[1][2.0 / 2]];
+----
+1
+
+# 🔬🔬 Err
+query error invalid input syntax for int8: invalid digit found in string: "dog"
+SELECT LIST[1,2,3]['dog']
+
+query error subscript \(indexing\) does not support casting from date to i64
+SELECT LIST [[1, 2, 3], [4, 5]][DATE '2001-01-01']
+
+query error subscript \(indexing\) does not support casting from timestamp to i64
+SELECT LIST [[1, 2, 3], [4, 5]][TIMESTAMP '2001-01-01']
+
+query error invalid input syntax for int8: invalid digit found in string: "dog"
+SELECT LIST[1,2,3][1:'dog']
+
+query error subscript \(slicing\) does not support casting from date to i64
+SELECT LIST [[1, 2, 3], [4, 5]][1:DATE '2001-01-01']
+
+query error subscript \(slicing\) does not support casting from timestamp to i64
+SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']

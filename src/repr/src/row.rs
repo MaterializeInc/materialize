@@ -846,6 +846,11 @@ impl RowPacker {
         })
     }
 
+    /// Truncates `self.data` to the specified position.
+    pub fn truncate(&mut self, pos: usize) {
+        self.data.truncate(pos);
+    }
+
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
