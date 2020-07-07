@@ -123,7 +123,6 @@ pub enum Plan {
         when: PeekWhen,
         finishing: RowSetFinishing,
         materialize: bool,
-        as_of: Option<Timestamp>,
     },
     Tail {
         id: GlobalId,

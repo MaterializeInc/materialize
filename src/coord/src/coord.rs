@@ -742,16 +742,8 @@ where
                 when,
                 finishing,
                 materialize,
-                as_of,
             } => tx.send(
-                self.sequence_peek(
-                    session.conn_id(),
-                    source,
-                    when,
-                    finishing,
-                    materialize,
-                    as_of,
-                ),
+                self.sequence_peek(session.conn_id(), source, when, finishing, materialize),
                 session,
             ),
 
@@ -1213,14 +1205,8 @@ where
         when: PeekWhen,
         finishing: RowSetFinishing,
         materialize: bool,
-        as_of: Option<u64>,
     ) -> Result<ExecuteResponse, failure::Error> {
-        let peek_when = if let Some(as_of) = as_of {
-            PeekWhen::AtTimestamp(as_of)
-        } else {
-            when
-        };
-        let timestamp = self.determine_timestamp(&source, peek_when)?;
+        let timestamp = self.determine_timestamp(&source, when)?;
 
         // See if the query is introspecting its own logical timestamp, and
         // install the determined timestamp if so.
@@ -1265,10 +1251,7 @@ where
 
             let (project, filter) = Self::plan_peek(source.as_mut());
 
-            // If an `as_of` argument is provided, always build a new transient dataflow.
-            let (fast_path, index_id) = if as_of.is_some() {
-                (false, self.catalog.allocate_id()?)
-            } else if let RelationExpr::Get {
+            let (fast_path, index_id) = if let RelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
             } = source.as_ref()
