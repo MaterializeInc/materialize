@@ -85,7 +85,16 @@ impl PredicatePushdown {
         get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
     ) {
         relation.visit_mut_pre(&mut |e| {
-            self.action(e, get_predicates);
+            if let RelationExpr::Filter { input, predicates } = e {
+                if let RelationExpr::Get { id, .. } = **input {
+                    // We can report the predicates upward in `get_predicates`,
+                    // but we are not yet able to delete them from the `Filter`.
+                    get_predicates
+                        .entry(id)
+                        .or_insert_with(|| predicates.iter().cloned().collect())
+                        .retain(|p| predicates.contains(p));
+                }
+            }
         });
     }
 

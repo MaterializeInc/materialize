@@ -98,7 +98,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
                 .as_mut()
                 .take_dangerous()
                 .filter(list.iter().cloned());
-            // TODO: remove the listed predicates from the earlier objects
+            // TODO: remove the predicates in `list` from the earlier objects
         }
         transform.dataflow_transform(build_desc.relation_expr.as_mut(), &mut predicates);
     }
