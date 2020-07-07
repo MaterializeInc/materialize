@@ -9,7 +9,9 @@ To help you get started with Materialize, we'll:
 
 - Install, run, and connect to Materialize
 - Explore its API
-- Set up a real-time stream to perform aggregations on
+- Set up a real-time stream to perform aggregations on Wikipedia user edits.
+
+**[Try out a live web demo](#webdemo)** below.
 
 ## Prerequisites
 
@@ -217,3 +219,7 @@ Once you're done, don't forget to stop `curl` and `rm wikirecent`.
 [Next, see how Materialize can work as an entire microservices →](/docs/demos/microservice)
 
 {{</ cta >}}
+
+## <a name="webdemo"></a> Web Demo
+Try Materialize out in your browser <a href="https://www.katacoda.com/materialize/scenarios/intro-wikipedia" target="_blank">on Katacoda</a>.
+
