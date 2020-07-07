@@ -221,5 +221,5 @@ Once you're done, don't forget to stop `curl` and `rm wikirecent`.
 {{</ cta >}}
 
 ## <a name="webdemo"></a> Web Demo
-Try Materialize out in your browser 
+Try Materialize out in your browser
 <a href="https://www.katacoda.com/materialize/scenarios/intro-wikipedia" target="_blank">on Katacoda</a>.
