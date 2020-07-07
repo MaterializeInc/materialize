@@ -1005,6 +1005,7 @@ fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
 pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
+    include_transaction: bool,
 }
 
 impl fmt::Debug for Encoder {
@@ -1047,11 +1048,23 @@ impl Encoder {
         Encoder {
             columns,
             writer_schema,
+            include_transaction,
         }
     }
 
     pub fn writer_schema(&self) -> &Schema {
         &self.writer_schema
+    }
+
+    fn validate_transaction_id(&self, transaction_id: &Option<String>) {
+        // We need to preserve the invariant that transaction id is always Some(..)
+        // when users requested that we emit transaction information, and never
+        // otherwise.
+        assert_eq!(
+            self.include_transaction,
+            transaction_id.is_some(),
+            "Testing to make sure transaction IDs are always present only when required"
+        );
     }
 
     pub fn encode_unchecked(
@@ -1060,6 +1073,7 @@ impl Encoder {
         diff_pair: DiffPair<&Row>,
         transaction_id: Option<String>,
     ) -> Vec<u8> {
+        self.validate_transaction_id(&transaction_id);
         let mut buf = Vec::new();
         encode_avro_header(&mut buf, schema_id);
         let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
@@ -1075,6 +1089,7 @@ impl Encoder {
         diff_pair: DiffPair<&Row>,
         transaction_id: Option<String>,
     ) -> Vec<u8> {
+        self.validate_transaction_id(&transaction_id);
         let mut buf = Vec::new();
         encode_avro_header(&mut buf, schema_id);
         buf.write_i32::<NetworkEndian>(schema_id)
