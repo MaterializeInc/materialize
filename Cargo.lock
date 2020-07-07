@@ -3280,6 +3280,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "datadriven",
+ "itertools",
  "lazy_static",
  "log",
  "matches",

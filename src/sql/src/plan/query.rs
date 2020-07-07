@@ -1430,6 +1430,92 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             }
         }
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr)?,
+        Expr::Subscript {
+            expr,
+            is_slice,
+            positions,
+        } => {
+            assert_ne!(
+                positions.len(),
+                0,
+                "subscript expression must contain at least one position"
+            );
+            if !is_slice {
+                assert_eq!(
+                    positions.len(),
+                    1,
+                    "index expressions can only specify a single position"
+                );
+                assert_eq!(
+                    positions[0].start.is_some() && positions[0].end.is_none(),
+                    true,
+                    "index positions can only be specified as SubscriptPosition.start"
+                );
+            }
+            if positions.len() > 1 && !ecx.qcx.scx.experimental_mode() {
+                bail!(
+                    "multi-dimensional slicing requires experimental mode; see \
+                https://materialize.io/docs/cli/#experimental-mode"
+                )
+            };
+            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+            let ty = ecx.scalar_type(&expr);
+            match &ty {
+                ScalarType::List(_) => {
+                    let pos_len = positions.len();
+                    let n_dims = ty.unwrap_list_n_dims();
+                    if pos_len > n_dims {
+                        bail!(
+                            "cannot slice on {} dimensions; list only has {} dimension{}",
+                            pos_len,
+                            n_dims,
+                            if n_dims == 1 { "" } else { "s" }
+                        )
+                    }
+                }
+                ty => bail!(
+                    "cannot subscript on type {}, which is not a vector type",
+                    ty
+                ),
+            };
+
+            let mut exprs = vec![expr.clone()];
+            let op_str = if *is_slice {
+                "vector slice"
+            } else {
+                "vector index"
+            };
+
+            for p in positions {
+                let start = if let Some(start) = &p.start {
+                    plan_expr(ecx, start)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
+                } else {
+                    ScalarExpr::literal(Datum::Int64(1), ColumnType::new(ScalarType::Int64, true))
+                };
+
+                if !is_slice {
+                    return Ok(expr.call_binary(start, BinaryFunc::ListIndex).into());
+                }
+
+                let end = if let Some(end) = &p.end {
+                    plan_expr(ecx, end)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
+                } else {
+                    ScalarExpr::literal(
+                        Datum::Int64(i64::MAX - 1),
+                        ColumnType::new(ScalarType::Int64, true),
+                    )
+                };
+
+                exprs.push(start);
+                exprs.push(end);
+            }
+
+            ScalarExpr::CallVariadic {
+                func: VariadicFunc::ListSlice,
+                exprs,
+            }
+            .into()
+        }
 
         // Subqueries.
         Expr::Exists(query) => {

@@ -1747,6 +1747,7 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
+    ListIndex,
 }
 
 impl BinaryFunc {
@@ -1855,6 +1856,7 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
+            BinaryFunc::ListIndex => Ok(eager!(list_index)),
         }
     }
 
@@ -1979,6 +1981,11 @@ impl BinaryFunc {
             JsonbContainsString | JsonbContainsJsonb => {
                 ColumnType::new(ScalarType::Bool, in_nullable)
             }
+
+            ListIndex => ColumnType::new(
+                input1_type.scalar_type.unwrap_list_element_type().clone(),
+                true,
+            ),
         }
     }
 
@@ -2108,7 +2115,8 @@ impl BinaryFunc {
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
-            | TextConcat => true,
+            | TextConcat
+            | ListIndex => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2204,6 +2212,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
+            BinaryFunc::ListIndex => f.write_str("list_index"),
         }
     }
 }
@@ -2875,6 +2884,68 @@ where
     }
 }
 
+fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    fn slice_and_descend<'a>(
+        d: Datum<'a>,
+        ranges: &[(usize, usize)],
+        temp_storage: &'a RowArena,
+    ) -> Datum<'a> {
+        let datums: Vec<_> = d
+            .unwrap_list()
+            .iter()
+            .skip(ranges[0].0)
+            .take(ranges[0].1)
+            .map(|e| match e {
+                Datum::List(i) if ranges.len() > 1 => {
+                    slice_and_descend(Datum::List(i), &ranges[1..], temp_storage)
+                }
+                typ => typ,
+            })
+            .collect();
+
+        if datums.len() == 0 || datums.iter().all(|d| Datum::Null == *d) {
+            // If there are no datums, or all datums are NULL, collapse this datum
+            // to NULL as a convenience for traversing result slices.
+            Datum::Null
+        } else {
+            temp_storage.make_datum(|packer| {
+                packer.push_list_with(|packer| {
+                    for d in datums {
+                        packer.push(d);
+                    }
+                });
+            })
+        }
+    }
+
+    assert_eq!(
+        datums.len() % 2,
+        1,
+        "expr::scalar::func::list_slice expects an odd number of arguments; 1 for list + 2 \
+        for each start-end pair"
+    );
+    assert_eq!(
+        datums.len() > 2,
+        true,
+        "expr::scalar::func::list_slice expects at least 3 arguments; 1 for list + at least \
+        one start-end pair"
+    );
+
+    let mut ranges = Vec::new();
+    for i in 0..(datums.len() - 1) / 2 {
+        let start = std::cmp::max(datums[i * 2 + 1].unwrap_int64(), 1);
+        let end = datums[i * 2 + 2].unwrap_int64();
+
+        if start > end {
+            return Datum::Null;
+        }
+
+        ranges.push((start as usize - 1, (end - start) as usize + 1));
+    }
+
+    slice_and_descend(datums[0], &ranges, temp_storage)
+}
+
 fn record_get(a: Datum, i: usize) -> Datum {
     a.unwrap_list().iter().nth(i).unwrap()
 }
@@ -2947,6 +3018,18 @@ fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
 }
 
+fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    // SQL arrays are 1-indexed, so our lists are, as well.
+    match a.unwrap_list().iter().nth(i as usize - 1) {
+        Some(e) => e,
+        None => Datum::Null,
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -2963,6 +3046,7 @@ pub enum VariadicFunc {
     RecordCreate {
         field_names: Vec<ColumnName>,
     },
+    ListSlice,
 }
 
 impl VariadicFunc {
@@ -2995,6 +3079,7 @@ impl VariadicFunc {
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
             }
+            VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
         }
     }
 
@@ -3024,6 +3109,7 @@ impl VariadicFunc {
                 );
                 ColumnType::new(ScalarType::List(Box::new(elem_type.clone())), false)
             }
+            ListSlice { .. } => ColumnType::new(input_types[0].scalar_type.clone(), true),
             RecordCreate { field_names } => ColumnType::new(
                 ScalarType::Record {
                     fields: field_names
@@ -3063,6 +3149,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
+            VariadicFunc::ListSlice => f.write_str("list_slice"),
         }
     }
 }
