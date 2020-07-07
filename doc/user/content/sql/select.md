@@ -52,8 +52,7 @@ _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` docume
 **UNION** | Records present in `select_stmt` or `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the sum of the times it occurs in each input statement.
 **INTERSECT** | Records present in both `select_stmt` and `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the lesser of the times it occurs in each input statement.
 **EXCEPT** | Records present in `select_stmt` but not in `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the times it occurs in `select_stmt` less the times it occurs in `another_select_stmt`, or not at all if the former is greater than latter.
-**AS OF** | If provided, `SELECT` will only report all events `AS OF` this timestamp. Any events prior to the `AS OF` timestamp will be reported, but may be compacted. If not provided, Materialize will pick a timestamp itself.
-
+**AS OF** | If provided, `SELECT` will report the results at the supplied timestamp, meaning it reflects exactly those input updates at or before this timestamp.
 ## Details
 
 Because Materialize works very differently from a traditional RDBMS, it's important to understand the implications that certain features of `SELECT` will impact your Materialize instances.
