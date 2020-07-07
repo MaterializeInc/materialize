@@ -24,9 +24,9 @@ use crate::decode::decode_upsert;
 use crate::operator::StreamExt;
 use crate::source::SourceOutput;
 
-/// Entrypoint to the upsert-specific transformations involved 
+/// Entrypoint to the upsert-specific transformations involved
 /// in rendering a stream that came from an upsert source.
-/// Upsert-specific operators are different from the rest of 
+/// Upsert-specific operators are different from the rest of
 /// the rendering pipeline in that their input is a stream
 /// with two components instead of one, and the second component
 /// can be null or empty.
