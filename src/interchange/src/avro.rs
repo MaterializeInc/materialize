@@ -971,9 +971,7 @@ pub fn encode_debezium_transaction_unchecked(
     message_count: Option<i64>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
-    buf.write_u8(0).expect("writing to vec cannot fail");
-    buf.write_i32::<NetworkEndian>(schema_id)
-        .expect("writing to vec cannot fail");
+    encode_avro_header(&mut buf, schema_id);
 
     let transaction_id = Value::String(id.to_owned());
     let status = Value::String(status.to_owned());
@@ -990,6 +988,17 @@ pub fn encode_debezium_transaction_unchecked(
     debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
     avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
     buf
+}
+
+fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
+    // The first byte is a magic byte (0) that indicates the Confluent
+    // serialization format version, and the next four bytes are a
+    // 32-bit schema ID.
+    //
+    // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+    buf.write_u8(0).expect("writing to vec cannot fail");
+    buf.write_i32::<NetworkEndian>(schema_id)
+        .expect("writing to vec cannot fail");
 }
 
 /// Manages encoding of Avro-encoded bytes.
@@ -1052,9 +1061,7 @@ impl Encoder {
         transaction_id: Option<String>,
     ) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.write_u8(0).expect("writing to vec cannot fail");
-        buf.write_i32::<NetworkEndian>(schema_id)
-            .expect("writing to vec cannot fail");
+        encode_avro_header(&mut buf, schema_id);
         let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
         debug_assert!(avro.validate(self.writer_schema.top_node()));
         avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
@@ -1062,20 +1069,19 @@ impl Encoder {
     }
 
     /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
-    /// See function implementation for Confluent-specific details.
-    pub fn encode(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
-        // The first byte is a magic byte (0) that indicates the Confluent
-        // serialization format version, and the next four bytes are a
-        // 32-bit schema ID.
-        //
-        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+    pub fn encode(
+        &self,
+        schema_id: i32,
+        diff_pair: DiffPair<&Row>,
+        transaction_id: Option<String>,
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.write_u8(0).expect("writing to vec cannot fail");
+        encode_avro_header(&mut buf, schema_id);
         buf.write_i32::<NetworkEndian>(schema_id)
             .expect("writing to vec cannot fail");
         avro::write_avro_datum(
             &self.writer_schema,
-            self.diff_pair_to_avro(diff_pair, None),
+            self.diff_pair_to_avro(diff_pair, transaction_id),
             &mut buf,
         )
         .expect("schema constructed to match val");
@@ -1102,18 +1108,22 @@ impl Encoder {
             }
         };
 
-        let transaction = match transaction_id {
-            None => Value::Union(0, Box::new(Value::Null)),
-            Some(transaction_id) => {
-                let id = Value::String(transaction_id);
-                Value::Union(1, Box::new(Value::Record(vec![("id".into(), id)])))
-            }
+        let transaction = if let Some(transaction_id) = transaction_id {
+            let id = Value::String(transaction_id);
+            Some(Value::Record(vec![("id".into(), id)]))
+        } else {
+            None
         };
-        Value::Record(vec![
-            ("before".into(), before),
-            ("after".into(), after),
-            ("transaction".into(), transaction),
-        ])
+
+        let mut fields = Vec::new();
+        fields.push(("before".into(), before));
+        fields.push(("after".into(), after));
+
+        if let Some(transaction) = transaction {
+            fields.push(("transaction".into(), transaction));
+        }
+
+        Value::Record(fields)
     }
 
     fn row_to_avro(&self, row: Vec<Datum>) -> Value {
@@ -1323,7 +1333,7 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_nonnull_column("column1", typ);
-            let avro_value = Encoder::new(desc).row_to_avro(vec![datum]);
+            let avro_value = Encoder::new(desc, false).row_to_avro(vec![datum]);
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value
