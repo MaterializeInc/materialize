@@ -2169,14 +2169,13 @@ where
         }
     }
 
-    /// todo: docs.
+    /// Determine the frontier of updates to start *from*.
+    /// Updates greater or equal to this frontier will be produced.
     fn determine_frontier(
         &mut self,
         as_of: Option<u64>,
         source_id: GlobalId,
     ) -> Result<Antichain<u64>, failure::Error> {
-        // Determine the frontier of updates to start *from*.
-        // Updates greater or equal to this frontier will be produced.
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
             Antichain::from_elem(self.determine_timestamp(

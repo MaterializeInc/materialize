@@ -89,7 +89,7 @@ pub enum SequencedCommand {
     /// Peek at an arrangement.
     ///
     /// This request elicits data from the worker, by naming an
-    /// arrangement and some actions to appy to the results before
+    /// arrangement and some actions to apply to the results before
     /// returning them.
     Peek {
         /// The identifier of the arrangement.

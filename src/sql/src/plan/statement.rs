@@ -1642,13 +1642,14 @@ fn handle_select(
     params: &Params,
 ) -> Result<Plan, failure::Error> {
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
-    if let Some(_as_of) = as_of {
-        unsupported!("SELECT AS OF");
-    }
+    let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
+        Some(ts) => PeekWhen::AtTimestamp(ts),
+        None => PeekWhen::Immediately,
+    };
 
     Ok(Plan::Peek {
         source: relation_expr,
-        when: PeekWhen::Immediately,
+        when,
         finishing,
         materialize: true,
     })
