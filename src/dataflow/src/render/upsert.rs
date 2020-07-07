@@ -178,25 +178,7 @@ where
     // but not to replace unused values in key because that would cause
     // errors in arrange_from_upsert
     let position_or = (0..src_type.arity())
-        .map(|col| {
-            if operator.projection.contains(&col) {
-                Ok(col)
-            } else {
-                Err({
-                    // TODO(frank): This could be `Datum::Null` if we
-                    // are certain that no readers will consult it and
-                    // believe it to be a non-null value. That is the
-                    // intent, but it is not yet clear that we ensure
-                    // this.
-                    let typ = &src_type.column_types[col];
-                    if typ.nullable {
-                        Datum::Null
-                    } else {
-                        typ.scalar_type.dummy_datum()
-                    }
-                })
-            }
-        })
+        .map(|col| operator.projection.iter().position(|c| c == &col))
         .collect::<Vec<_>>();
 
     // If a row does not match a predicate whose support lies in the key
@@ -244,8 +226,8 @@ where
                                     None => {
                                         let value = Some(row_packer.pack(position_or.iter().map(
                                             |pos_or| match pos_or {
-                                                Result::Ok(index) => datums[*index],
-                                                Result::Err(datum) => *datum,
+                                                Some(index) => datums[*index],
+                                                None => Datum::Dummy,
                                             },
                                         )));
                                         filtered_storage.push((key, value, time));
