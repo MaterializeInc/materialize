@@ -130,6 +130,16 @@ pub enum Expr {
     },
     /// `LIST[<expr>*]`
     List(Vec<Expr>),
+    /// `<expr>[<expr>]`
+    SubscriptIndex {
+        expr: Box<Expr>,
+        subscript: Box<Expr>,
+    },
+    /// `<expr>[<expr>:<expr>(, <expr>?:<expr>?)*]`
+    SubscriptSlice {
+        expr: Box<Expr>,
+        positions: Vec<SubscriptPosition>,
+    },
 }
 
 impl AstDisplay for Expr {
@@ -331,6 +341,18 @@ impl AstDisplay for Expr {
                 }
                 f.write_str("]");
             }
+            Expr::SubscriptIndex { expr, subscript } => {
+                f.write_node(&expr);
+                f.write_str("[");
+                f.write_node(subscript);
+                f.write_str("]");
+            }
+            Expr::SubscriptSlice { expr, positions } => {
+                f.write_node(&expr);
+                f.write_str("[");
+                display::comma_separated(positions);
+                f.write_str("]");
+            }
         }
     }
 }
@@ -437,6 +459,25 @@ impl Expr {
         mem::replace(self, Expr::Identifier(vec![]))
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SubscriptPosition {
+    pub start: Option<Expr>,
+    pub end: Option<Expr>,
+}
+
+impl AstDisplay for SubscriptPosition {
+    fn fmt(&self, f: &mut AstFormatter) {
+        if let Some(start) = &self.start {
+            f.write_node(start);
+        }
+        f.write_str(":");
+        if let Some(end) = &self.end {
+            f.write_node(end);
+        }
+    }
+}
+impl_display!(SubscriptPosition);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

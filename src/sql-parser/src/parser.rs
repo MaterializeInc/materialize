@@ -143,6 +143,7 @@ enum Precedence {
     Times,
     UnaryOp,
     DoubleColon,
+    Subscript,
 }
 
 impl Parser {
@@ -873,10 +874,64 @@ impl Parser {
             }
         } else if Token::DoubleColon == tok {
             self.parse_pg_cast(expr)
+        } else if Token::LBracket == tok {
+            self.parse_subscript(expr)
         } else {
             // Can only happen if `get_next_precedence` got out of sync with this function
             panic!("No infix parser for token {:?}", tok)
         }
+    }
+
+    /// Parse subscript expression, i.e. either an index value or slice range.
+    fn parse_subscript(&mut self, expr: Expr) -> Result<Expr, ParserError> {
+        let mut is_slice = false;
+        let mut positions = Vec::new();
+        loop {
+            let start = if self.consume_token(&Token::Colon) {
+                is_slice = true;
+                None
+            } else {
+                let e = Some(self.parse_expr()?);
+                if is_slice {
+                    self.expect_token(&Token::Colon)?;
+                } else {
+                    is_slice = self.consume_token(&Token::Colon);
+                }
+                e
+            };
+
+            let end = if is_slice
+                && (Some(Token::RBracket) != self.peek_token()
+                    && Some(Token::Comma) != self.peek_token())
+            {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            positions.push(SubscriptPosition { start, end });
+
+            if !is_slice || !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
+
+        self.expect_token(&Token::RBracket)?;
+
+        Ok(if is_slice {
+            Expr::SubscriptSlice {
+                expr: Box::new(expr),
+                positions,
+            }
+        } else {
+            assert!(
+                positions.len() == 1 && positions[0].start.is_some() && positions[0].end.is_none(),
+            );
+            Expr::SubscriptIndex {
+                expr: Box::new(expr),
+                subscript: Box::new(positions.remove(0).start.unwrap()),
+            }
+        })
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
@@ -968,6 +1023,7 @@ impl Parser {
                 Token::Plus | Token::Minus => Precedence::Plus,
                 Token::Mult | Token::Div | Token::Mod => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,
+                Token::LBracket => Precedence::Subscript,
                 _ => Precedence::Zero,
             }
         } else {

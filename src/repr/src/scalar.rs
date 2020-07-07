@@ -626,6 +626,35 @@ impl<'a> ScalarType {
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
         }
     }
+    /// Returns the [`ScalarType`] of elements in a [`ScalarType::List`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::List`].
+    pub fn unwrap_list_element_type(&self) -> &ScalarType {
+        match self {
+            ScalarType::List(s) => s,
+            _ => panic!("ScalarType::unwrap_list_element_type called on {:?}", self),
+        }
+    }
+
+    /// Returns number of dimensions/axes (also known as "rank") on a
+    /// [`ScalarType::List`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on anything other than a [`ScalarType::List`].
+    pub fn unwrap_list_n_dims(&self) -> usize {
+        let mut descender = self.unwrap_list_element_type();
+        let mut dims = 1;
+
+        while let ScalarType::List(s) = descender {
+            dims += 1;
+            descender = s;
+        }
+
+        dims
+    }
 
     /// Returns a copy of `Self` with any embedded fields "zeroed" out. Meant to
     /// make comparisons easier, allowing you to mimic `std::mem::discriminant`
@@ -743,7 +772,7 @@ impl fmt::Display for ScalarType {
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
             Jsonb => f.write_str("jsonb"),
-            List(t) => write!(f, "{}[]", t),
+            List(t) => write!(f, "{} list", t),
             Record { fields } => {
                 f.write_str("record(")?;
                 write_delimited(f, ", ", fields, |f, (n, t)| write!(f, "{}: {}", n, t))?;
