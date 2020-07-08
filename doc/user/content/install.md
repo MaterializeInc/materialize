@@ -82,10 +82,11 @@ cargo build --release
 You can start the `materialized` process by simply running the binary, e.g.
 
 ```nofmt
-./materialized --w=1
+./materialized -w 1
 ```
 
-`--w=1` specifies that the process will use 1 worker. You can also find more detail about our [command line flags](/cli/#command-line-flags).
+`-w 1` specifies that the process will use 1 worker. You can also find more detail
+about our [command line flags](/cli/#command-line-flags).
 
 By default `materialized` uses:
 
