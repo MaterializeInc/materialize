@@ -174,7 +174,11 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         timestamp_data_updates: TimestampDataUpdates,
         timestamp_metadata_channel: TimestampMetadataUpdates,
     ) -> Option<TimestampMetadataUpdates> {
+<<<<<<< HEAD
        if active {
+=======
+        if active {
+>>>>>>> Formatting
             let prev = if let Consistency::BringYourOwn(_) = consistency {
                 timestamp_data_updates.borrow_mut().insert(
                     id.clone(),
