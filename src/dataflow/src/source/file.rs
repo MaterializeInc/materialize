@@ -20,7 +20,6 @@ use failure::Error;
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use timely::scheduling::{Activator, SyncActivator};
 use std::io::{BufRead, Read};
 use std::path::PathBuf;
@@ -95,7 +94,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
                     FileReadStyle::ReadOnce
                 };
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000 as usize);
-                thread::spawn(move || {
+                std::thread::spawn(move || {
                     read_file_task(oc.path, tx, Some(consumer_activator), tail, ctor);
                 });
                 rx
@@ -141,7 +140,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
                 } else {
                     FileReadStyle::ReadOnce
                 };
-                thread::spawn(move || {
+                std::thread::spawn(move || {
                     read_file_task(fc.path, tx, Some(consumer_activator), tail, ctor);
                 });
                 rx
@@ -325,9 +324,9 @@ pub fn read_file_task<Ctor, I, Out, Err>(
             #[cfg(target_os = "macos")]
             let (file_events_stream, handle) = {
                 let (timer_tx, timer_rx) = std::sync::mpsc::channel();
-                thread::spawn(move || {
+                std::thread::spawn(move || {
                     while let Ok(()) = timer_tx.send(()) {
-                        thread::sleep(std::time::Duration::from_millis(100));
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                 });
                 (timer_rx, ())
