@@ -1454,6 +1454,7 @@ dependencies = [
  "failure",
  "futures",
  "itertools",
+ "lazy_static",
  "log",
  "num-traits",
  "ordered-float",

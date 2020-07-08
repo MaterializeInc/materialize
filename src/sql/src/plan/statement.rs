@@ -26,7 +26,7 @@ use dataflow_types::{
     KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
 };
 use expr::{like_pattern, GlobalId, RowSetFinishing};
-use interchange::avro::{DebeziumDeduplicationStrategy, Encoder};
+use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
@@ -681,10 +681,15 @@ fn kafka_sink_builder(
     }
     let broker_url = broker.parse()?;
 
-    let encoder = Encoder::new(desc);
-    let value_schema = encoder.writer_schema().canonical_form();
-
     let mut with_options = normalize::with_options(&with_options);
+    let include_consistency = match with_options.remove("consistency") {
+        Some(Value::Boolean(b)) => b,
+        None => false,
+        Some(_) => bail!("consistency must be a boolean"),
+    };
+
+    let encoder = Encoder::new(desc, include_consistency);
+    let value_schema = encoder.writer_schema().canonical_form();
 
     // Use the user supplied value for replication factor, or default to 1
     let replication_factor = match with_options.remove("replication_factor") {
@@ -697,6 +702,12 @@ fn kafka_sink_builder(
         bail!("replication factor for sink topics has to be greater than zero");
     }
 
+    let consistency_value_schema = if include_consistency {
+        Some(avro::get_debezium_transaction_schema().canonical_form())
+    } else {
+        None
+    };
+
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_url,
         schema_registry_url,
@@ -705,6 +716,7 @@ fn kafka_sink_builder(
         topic_suffix,
         replication_factor,
         fuel: 10000,
+        consistency_value_schema,
     }))
 }
 

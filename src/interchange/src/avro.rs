@@ -17,6 +17,7 @@ use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use failure::{bail, format_err};
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use log::{trace, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -32,6 +33,37 @@ use repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
 use crate::error::Result;
+
+lazy_static! {
+    // TODO(rkhaitan): this schema intentionally omits the data_collections field
+    // that is typically present in Debezium transaction metadata topics. See
+    // https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata
+    // for more information. We chose to omit this field because it is redundant
+    // for sinks where each consistency topic corresponds to exactly one sink.
+    // We will need to add it in order to be able to reingest sinked topics.
+    static ref DEBEZIUM_TRANSACTION_SCHEMA: Schema =
+    Schema::parse(&json!({
+        "type": "record",
+        "name": "envelope",
+        "fields": [
+            {
+                "name": "id",
+                "type": "string"
+            },
+            {
+                "name": "status",
+                "type": "string"
+            },
+            {
+                "name": "event_count",
+                "type": [
+                  "null",
+                  "long"
+                ]
+            }
+        ]
+    })).expect("valid schema constructed");
+}
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -829,7 +861,7 @@ impl Decoder {
 ///   * Union schemas are only used to represent nullability. The first
 ///     variant is always the null variant, and the second and last variant
 ///     is the non-null variant.
-fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
+fn build_schema(columns: &[(ColumnName, ColumnType)], include_transaction: bool) -> Schema {
     let mut fields = Vec::new();
     for (name, typ) in columns.iter() {
         let mut field_type = match &typ.scalar_type {
@@ -879,34 +911,101 @@ fn build_schema(columns: &[(ColumnName, ColumnType)]) -> Schema {
             "type": field_type,
         }));
     }
+
+    let mut schema_fields = Vec::new();
+    schema_fields.push(json!({
+        "name": "before",
+        "type": [
+            "null",
+            {
+                "name": "row",
+                "type": "record",
+                "fields": fields,
+             }
+        ]
+    }));
+
+    schema_fields.push(json!({
+        "name": "after",
+        "type": ["null", "row"],
+    }));
+
+    // TODO(rkhaitan): this schema omits the total_order and data collection_order
+    // fields found in Debezium's transaction metadata struct. We chose to omit
+    // those because the order is not stable across reruns and has no semantic
+    // meaning for records within a timestamp in Materialize. These fields may
+    // be useful in the future for deduplication.
+    if include_transaction {
+        schema_fields.push(json!({
+        "name": "transaction",
+            "type":
+                {
+                    "name": "transaction_metadata",
+                    "type": "record",
+                    "fields": [
+                        {
+                            "name": "id",
+                            "type": "string",
+                        }
+                    ]
+                }
+        }));
+    }
+
     let schema = json!({
         "type": "record",
         "name": "envelope",
-        "fields": [
-            {
-                "name": "before",
-                "type": [
-                    "null",
-                    {
-                        "name": "row",
-                        "type": "record",
-                        "fields": fields,
-                    }
-                ]
-            },
-            {
-                "name": "after",
-                "type": ["null", "row"]
-            }
-        ]
+        "fields": schema_fields,
     });
     Schema::parse(&schema).expect("valid schema constructed")
+}
+
+pub fn get_debezium_transaction_schema() -> &'static Schema {
+    &DEBEZIUM_TRANSACTION_SCHEMA
+}
+
+pub fn encode_debezium_transaction_unchecked(
+    schema_id: i32,
+    id: &str,
+    status: &str,
+    message_count: Option<i64>,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    encode_avro_header(&mut buf, schema_id);
+
+    let transaction_id = Value::String(id.to_owned());
+    let status = Value::String(status.to_owned());
+    let event_count = match message_count {
+        None => Value::Union(0, Box::new(Value::Null)),
+        Some(count) => Value::Union(1, Box::new(Value::Long(count))),
+    };
+
+    let avro = Value::Record(vec![
+        ("id".into(), transaction_id),
+        ("status".into(), status),
+        ("event_count".into(), event_count),
+    ]);
+    debug_assert!(avro.validate(DEBEZIUM_TRANSACTION_SCHEMA.top_node()));
+    avro::encode_unchecked(&avro, &DEBEZIUM_TRANSACTION_SCHEMA, &mut buf);
+    buf
+}
+
+fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
+    // The first byte is a magic byte (0) that indicates the Confluent
+    // serialization format version, and the next four bytes are a
+    // 32-bit schema ID.
+    //
+    // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+    buf.write_u8(0).expect("writing to vec cannot fail");
+    buf.write_i32::<NetworkEndian>(schema_id)
+        .expect("writing to vec cannot fail");
 }
 
 /// Manages encoding of Avro-encoded bytes.
 pub struct Encoder {
     columns: Vec<(ColumnName, ColumnType)>,
     writer_schema: Schema,
+    include_transaction: bool,
 }
 
 impl fmt::Debug for Encoder {
@@ -918,7 +1017,7 @@ impl fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    pub fn new(desc: RelationDesc) -> Self {
+    pub fn new(desc: RelationDesc, include_transaction: bool) -> Self {
         // Invent names for columns that don't have a name.
         let mut columns: Vec<_> = desc
             .into_iter()
@@ -945,10 +1044,11 @@ impl Encoder {
             seen.insert(name);
         }
 
-        let writer_schema = build_schema(&columns);
+        let writer_schema = build_schema(&columns, include_transaction);
         Encoder {
             columns,
             writer_schema,
+            include_transaction,
         }
     }
 
@@ -956,39 +1056,58 @@ impl Encoder {
         &self.writer_schema
     }
 
-    pub fn encode_unchecked(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
+    fn validate_transaction_id(&self, transaction_id: &Option<String>) {
+        // We need to preserve the invariant that transaction id is always Some(..)
+        // when users requested that we emit transaction information, and never
+        // otherwise.
+        assert_eq!(
+            self.include_transaction,
+            transaction_id.is_some(),
+            "Testing to make sure transaction IDs are always present only when required"
+        );
+    }
+
+    pub fn encode_unchecked(
+        &self,
+        schema_id: i32,
+        diff_pair: DiffPair<&Row>,
+        transaction_id: Option<String>,
+    ) -> Vec<u8> {
+        self.validate_transaction_id(&transaction_id);
         let mut buf = Vec::new();
-        buf.write_u8(0).expect("writing to vec cannot fail");
-        buf.write_i32::<NetworkEndian>(schema_id)
-            .expect("writing to vec cannot fail");
-        let avro = self.diff_pair_to_avro(diff_pair);
+        encode_avro_header(&mut buf, schema_id);
+        let avro = self.diff_pair_to_avro(diff_pair, transaction_id);
         debug_assert!(avro.validate(self.writer_schema.top_node()));
         avro::encode_unchecked(&avro, &self.writer_schema, &mut buf);
         buf
     }
 
     /// Encodes a repr::Row to a Avro-compliant Vec<u8>.
-    /// See function implementation for Confluent-specific details.
-    pub fn encode(&self, schema_id: i32, diff_pair: DiffPair<&Row>) -> Vec<u8> {
-        // The first byte is a magic byte (0) that indicates the Confluent
-        // serialization format version, and the next four bytes are a
-        // 32-bit schema ID.
-        //
-        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+    pub fn encode(
+        &self,
+        schema_id: i32,
+        diff_pair: DiffPair<&Row>,
+        transaction_id: Option<String>,
+    ) -> Vec<u8> {
+        self.validate_transaction_id(&transaction_id);
         let mut buf = Vec::new();
-        buf.write_u8(0).expect("writing to vec cannot fail");
+        encode_avro_header(&mut buf, schema_id);
         buf.write_i32::<NetworkEndian>(schema_id)
             .expect("writing to vec cannot fail");
         avro::write_avro_datum(
             &self.writer_schema,
-            self.diff_pair_to_avro(diff_pair),
+            self.diff_pair_to_avro(diff_pair, transaction_id),
             &mut buf,
         )
         .expect("schema constructed to match val");
         buf
     }
 
-    pub fn diff_pair_to_avro(&self, diff_pair: DiffPair<&Row>) -> Value {
+    pub fn diff_pair_to_avro(
+        &self,
+        diff_pair: DiffPair<&Row>,
+        transaction_id: Option<String>,
+    ) -> Value {
         let before = match diff_pair.before {
             None => Value::Union(0, Box::new(Value::Null)),
             Some(row) => {
@@ -1003,7 +1122,23 @@ impl Encoder {
                 Value::Union(1, Box::new(row))
             }
         };
-        Value::Record(vec![("before".into(), before), ("after".into(), after)])
+
+        let transaction = if let Some(transaction_id) = transaction_id {
+            let id = Value::String(transaction_id);
+            Some(Value::Record(vec![("id".into(), id)]))
+        } else {
+            None
+        };
+
+        let mut fields = Vec::new();
+        fields.push(("before".into(), before));
+        fields.push(("after".into(), after));
+
+        if let Some(transaction) = transaction {
+            fields.push(("transaction".into(), transaction));
+        }
+
+        Value::Record(fields)
     }
 
     fn row_to_avro(&self, row: Vec<Datum>) -> Value {
@@ -1213,7 +1348,7 @@ mod tests {
         ];
         for (typ, datum, expected) in valid_pairings {
             let desc = RelationDesc::empty().with_nonnull_column("column1", typ);
-            let avro_value = Encoder::new(desc).row_to_avro(vec![datum]);
+            let avro_value = Encoder::new(desc, false).row_to_avro(vec![datum]);
             assert_eq!(
                 Value::Record(vec![("column1".into(), expected)]),
                 avro_value

@@ -117,7 +117,8 @@ $ kafka-verify format=avro sink=materialize.public.snk8
 {"before": null, "after": {"a": "goofus", "b": "gallant", "mz_line_no": 3}}
 {"before": null, "after": {"a": "extra", "b": "row", "mz_line_no": 4}}
 
-# Test that we are correctly handling WITH/WITHOUT SNAPSHOT.
+# Test that we are correctly handling WITH/WITHOUT SNAPSHOT on views with
+# empty upper frontier
 > CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
 
 > CREATE SINK sink9 FROM foo
