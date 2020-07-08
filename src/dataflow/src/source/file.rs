@@ -24,7 +24,6 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use timely::scheduling::{Activator, SyncActivator};
 
-
 use avro::types::Value;
 use failure::ResultExt;
 use log::error;
