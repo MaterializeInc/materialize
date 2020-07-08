@@ -170,7 +170,11 @@ impl SqlAction {
     fn get_query_as_of(&self) -> Result<String, String> {
         if let Statement::Select { query: _, as_of } = &self.stmt {
             if as_of.is_none() {
-                return Ok(format!("{} AS OF now()", self.cmd.query.to_owned()));
+                let query = &match &self.cmd.query[self.cmd.query.len() - 1..] {
+                    ";" => self.cmd.query[..self.cmd.query.len() - 1].to_owned(),
+                    _ => self.cmd.query.to_owned(),
+                };
+                return Ok(format!("{} AS OF now()", query));
             }
         }
         Ok(self.cmd.query.to_owned())
