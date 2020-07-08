@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::server::{TimestampDataUpdate, TimestampMetadataUpdate};
+use crate::server::{
+    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+};
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
@@ -15,10 +17,9 @@ use avro::Schema;
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 use failure::Error;
-use std::cell::RefCell;
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use timely::scheduling::{Activator, SyncActivator};
@@ -173,11 +174,9 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         id: &SourceInstanceId,
         consistency: &Consistency,
         active: bool,
-        timestamp_data_updates: Rc<
-            RefCell<HashMap<SourceInstanceId, TimestampDataUpdate, RandomState>>,
-        >,
-        timestamp_metadata_channel: Rc<RefCell<Vec<TimestampMetadataUpdate>>>,
-    ) -> Option<Rc<RefCell<Vec<TimestampMetadataUpdate>>>> {
+        timestamp_data_updates: TimestampDataUpdates,
+        timestamp_metadata_channel: TimestampMetadataUpdates,
+    ) -> Option<TimestampMetadataUpdates> {
         if active {
             let prev = if let Consistency::BringYourOwn(_) = consistency {
                 timestamp_data_updates.borrow_mut().insert(
