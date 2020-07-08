@@ -19,6 +19,18 @@ see the [Versions page](/versions).
 
 **Have any questions?** [Contact us](https://materialize.io/contact/)
 
+## Docker
+
+We provide the `materialize/materialized` image in Docker Hub. If you already have
+[Docker][docker-start] installed, you can run materialized with your tools in the usual
+way. For example:
+
+```shell
+docker run -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
+```
+
+[docker-start]: https://www.docker.com/get-started
+
 ## macOS installation
 
 ### Homebrew
