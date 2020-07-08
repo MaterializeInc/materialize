@@ -25,6 +25,7 @@ use timely::dataflow::{
 use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
 };
+use differential_dataflow::Hashable;
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::error;
@@ -49,12 +50,12 @@ mod kafka;
 mod kinesis;
 mod util;
 
-use differential_dataflow::Hashable;
 pub use file::read_file_task;
 pub use file::FileReadStyle;
 pub use file::FileSourceInfo;
 pub use kafka::KafkaSourceInfo;
-pub use kinesis::kinesis;
+//pub use kinesis::kinesis;
+pub use kinesis::KinesisSourceInfo;
 
 /// Shared configuration information for all source types.
 pub struct SourceConfig<'a, G> {
@@ -207,7 +208,7 @@ pub trait SourceConstructor<Out> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
-    ) -> Self
+    ) -> Result<Self, failure::Error>
     where
         Self: Sized + SourceInfo<Out>;
 }
@@ -739,7 +740,7 @@ where
 
         // Create source information (this function is specific to a specific
         // source
-        let mut source_info: S = SourceConstructor::<Out>::new(
+        let mut source_info: Result<S, failure::Error> = SourceConstructor::<Out>::new(
             name.clone(),
             id,
             active,
@@ -752,6 +753,15 @@ where
         );
 
         move |cap, output| {
+            // First check that the source was successfully created
+            let source_info = match &mut source_info {
+                Ok(source_info) => source_info,
+                Err(e) => {
+                    error!("Failed to create source: {}", e);
+                    return SourceStatus::Done;
+                }
+            };
+
             if active {
                 // Bound execution of operator to prevent a single operator from hogging
                 // the CPU if there are many messages to process
@@ -800,7 +810,7 @@ where
                                     consistency_info.downgrade_capability(
                                         &id,
                                         cap,
-                                        &mut source_info,
+                                        source_info,
                                         &timestamp_histories,
                                     );
                                     activator.activate();
@@ -850,7 +860,7 @@ where
                                 consistency_info.downgrade_capability(
                                     &id,
                                     cap,
-                                    &mut source_info,
+                                    source_info,
                                     &timestamp_histories,
                                 );
                                 activator.activate();
@@ -863,24 +873,19 @@ where
                         }
                         Err(e) => {
                             output.session(&cap).give(Err(e.to_string()));
-                           consistency_info.downgrade_capability(
+                            consistency_info.downgrade_capability(
                                 &id,
                                 cap,
-                                &mut source_info,
+                                source_info,
                                 &timestamp_histories,
                             );
                             return SourceStatus::Done;
-                       }
-                   }
+                        }
+                    }
                 }
 
                 // Downgrade capability (if possible) before exiting
-                consistency_info.downgrade_capability(
-                    &id,
-                    cap,
-                    &mut source_info,
-                    &timestamp_histories,
-                );
+                consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
             }
 
             // Ensure that we activate the source frequently enough to keep downgrading

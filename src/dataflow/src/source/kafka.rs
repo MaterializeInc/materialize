@@ -67,16 +67,16 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         connector: ExternalSourceConnector,
         _: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> KafkaSourceInfo {
+    ) -> Result<KafkaSourceInfo, failure::Error> {
         match connector {
-            ExternalSourceConnector::Kafka(kc) => KafkaSourceInfo::new(
+            ExternalSourceConnector::Kafka(kc) => Ok(KafkaSourceInfo::new(
                 source_name,
                 source_id,
                 worker_id,
                 worker_count,
                 consumer_activator,
                 kc,
-            ),
+            )),
             _ => unreachable!(),
         }
     }

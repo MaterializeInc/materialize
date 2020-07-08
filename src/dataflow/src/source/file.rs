@@ -74,7 +74,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
-    ) -> FileSourceInfo<Value> {
+    ) -> Result<FileSourceInfo<Value>, failure::Error> {
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
@@ -108,14 +108,14 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
-        FileSourceInfo {
+        Ok(FileSourceInfo {
             name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             buffer: None,
             current_file_offset: FileOffset { offset: 0 },
-        }
+        })
     }
 }
 
@@ -130,7 +130,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> FileSourceInfo<Vec<u8>> {
+    ) -> Result<FileSourceInfo<Vec<u8>>, failure::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
                 let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
@@ -155,14 +155,14 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
-        FileSourceInfo {
+        Ok(FileSourceInfo {
             name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             buffer: None,
             current_file_offset: FileOffset { offset: 0 },
-        }
+        })
     }
 }
 
@@ -174,11 +174,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         timestamp_data_updates: TimestampDataUpdates,
         timestamp_metadata_channel: TimestampMetadataUpdates,
     ) -> Option<TimestampMetadataUpdates> {
-<<<<<<< HEAD
-       if active {
-=======
         if active {
->>>>>>> Formatting
             let prev = if let Consistency::BringYourOwn(_) = consistency {
                 timestamp_data_updates.borrow_mut().insert(
                     id.clone(),
@@ -274,7 +270,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                 Err(TryRecvError::Empty) => Ok(None),
                 //TODO(ncrooks): add mechanism to return SourceStatus::Done
                 Err(TryRecvError::Disconnected) => Ok(None),
-           }
+            }
         }
     }
 
