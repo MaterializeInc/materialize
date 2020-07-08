@@ -9,7 +9,7 @@
 
 //! Logic for parsing and interacting with schemas in Avro format.
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use digest::Digest;
@@ -873,21 +873,23 @@ impl SchemaParser {
     /// Parse a `serde_json::Value` representing a Avro enum type into a
     /// `Schema`.
     fn parse_enum(&mut self, complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
-        let symbols = complex
+        let raw_symbols = complex
             .get("symbols")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| ParseSchemaError::new("No `symbols` field in enum"))
-            .and_then(|symbols| {
-                symbols
-                    .iter()
-                    .map(|symbol| symbol.as_str().map(|s| s.to_string()))
-                    .collect::<Option<_>>()
-                    .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))
-            })?;
+            .ok_or_else(|| ParseSchemaError::new("No `symbols` field in enum"))?;
+        let mut symbols: HashSet<String> = raw_symbols
+            .iter()
+            .map(|symbol| symbol.as_str().map(|s| s.to_string()))
+            .collect::<Option<_>>()
+            .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))?;
+
+        if raw_symbols.len() != symbols.len() {
+            return Err(ParseSchemaError::new("Enum symbols must be unique").into());
+        }
 
         Ok(SchemaPiece::Enum {
             doc: complex.doc(),
-            symbols,
+            symbols: symbols.drain().collect(),
         })
     }
 
