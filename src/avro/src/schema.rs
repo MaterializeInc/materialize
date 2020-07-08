@@ -30,6 +30,7 @@ use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::convert::TryFrom;
 use std::fmt::Display;
+use std::iter::FromIterator;
 use std::rc::Rc;
 use types::Value as AvroValue;
 
@@ -873,23 +874,26 @@ impl SchemaParser {
     /// Parse a `serde_json::Value` representing a Avro enum type into a
     /// `Schema`.
     fn parse_enum(&mut self, complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
-        let raw_symbols = complex
+        let symbols: Vec<String> = complex
             .get("symbols")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| ParseSchemaError::new("No `symbols` field in enum"))?;
-        let mut symbols: HashSet<String> = raw_symbols
-            .iter()
-            .map(|symbol| symbol.as_str().map(|s| s.to_string()))
-            .collect::<Option<_>>()
-            .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))?;
+            .ok_or_else(|| ParseSchemaError::new("No `symbols` field in enum"))
+            .and_then(|symbols| {
+                symbols
+                    .iter()
+                    .map(|symbol| symbol.as_str().map(|s| s.to_string()))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))
+            })?;
 
-        if raw_symbols.len() != symbols.len() {
+        let unique_symbols: HashSet<String> = HashSet::from_iter(symbols.iter().cloned());
+        if symbols.len() != unique_symbols.len() {
             return Err(ParseSchemaError::new("Enum symbols must be unique").into());
         }
 
         Ok(SchemaPiece::Enum {
             doc: complex.doc(),
-            symbols: symbols.drain().collect(),
+            symbols,
         })
     }
 
