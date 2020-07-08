@@ -31,7 +31,7 @@ use std::collections::hash_map::Entry;
 use std::convert::TryFrom;
 use std::fmt::Display;
 use std::rc::Rc;
-use types::Value as AvroValue;
+use types::{DecimalValue, Value as AvroValue};
 
 pub fn resolve_schemas(writer_schema: &Schema, reader_schema: &Schema) -> Result<Schema, Error> {
     let r_indices = reader_schema.indices.clone();
@@ -1447,6 +1447,16 @@ impl<'a> SchemaNode<'a> {
                 }
             }
             (String(s), SchemaPiece::Bytes) => AvroValue::Bytes(s.clone().into_bytes()),
+            (
+                String(s),
+                SchemaPiece::Decimal {
+                    precision, scale, ..
+                },
+            ) => AvroValue::Decimal(DecimalValue {
+                precision: *precision,
+                scale: *scale,
+                unscaled: s.clone().into_bytes(),
+            }),
             (String(s), SchemaPiece::String) => AvroValue::String(s.clone()),
             (Object(map), SchemaPiece::Record { fields, .. }) => {
                 let field_values = fields
