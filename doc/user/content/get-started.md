@@ -13,7 +13,7 @@ To help you get started with Materialize, we'll:
 
 {{< cta >}}
 
-<a href="https://www.katacoda.com/materialize/scenarios/intro-wikipedia" target="_blank">Try out a live web demo!</a>
+<a href="https://www.katacoda.com/materialize/scenarios/intro-wikipedia" target="_blank">Click here to try the demo in your browser!</a>
 
 {{</ cta >}}
 
