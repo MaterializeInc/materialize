@@ -38,7 +38,7 @@ LOAD_TEST_LABELS = [
     r'''workflow=~\"$workflow\"''',
 ]
 
-VAR_WHITELIST = set(
+VAR_ALLOWLIST = set(
     ["command", "timely_workers", "built_at", "build_version", "build_sha"]
 )
 
@@ -68,7 +68,7 @@ def main(source: os.PathLike, inplace: bool) -> None:
 
     lst = data["templating"]["list"]
     data["templating"]["list"] = [
-        clean_var(i) for i in lst if i["name"] in VAR_WHITELIST
+        clean_var(i) for i in lst if i["name"] in VAR_ALLOWLIST
     ]
 
     if inplace:
