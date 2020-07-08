@@ -101,7 +101,6 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 ----
 %0 =
 | Get materialize.public.l (u1)
-| Filter !(isnull((#0 + 1)))
 
 %1 =
 | Get materialize.public.l (u1)
@@ -116,8 +115,7 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 %3 =
 | Join %0 %1 %2 (= #2 (#0 + 1)) (= #4 (#0 + #2))
 | | implementation = Differential %0 %1.(#0) %2.(#0)
-| | demand = (#0, #2, #3, #5)
-| Filter !(isnull((#0 + #2)))
+| | demand = (#0, #3, #5)
 | Project (#0, #3, #5)
 
 EOF
@@ -169,7 +167,6 @@ WHERE l1.la IN (
 
 %6 =
 | Get materialize.public.l (u1)
-| Filter !(isnull((#0 + 1)))
 
 %7 =
 | Join %5 %6 (= #0 (#1 + 1))

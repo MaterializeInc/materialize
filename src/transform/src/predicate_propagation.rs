@@ -141,6 +141,7 @@ impl PredicateKnowledge {
             }
             RelationExpr::Filter { input, predicates } => {
                 let mut input_knowledge = PredicateKnowledge::action(input, let_knowledge)?;
+
                 // Add predicates to the knowledge as we go.
                 for predicate in predicates.iter_mut() {
                     optimize(predicate, &input.typ(), &input_knowledge[..])?;
@@ -179,6 +180,7 @@ impl PredicateKnowledge {
                     }
                 }
 
+                normalize_predicates(&mut knowledge);
                 knowledge
             }
             RelationExpr::Reduce {
@@ -209,6 +211,7 @@ impl PredicateKnowledge {
                 know1
             }
         };
+
 
         normalize_predicates(&mut predicates);
         if predicates
@@ -316,15 +319,36 @@ fn normalize_predicates(predicates: &mut Vec<ScalarExpr>) {
     predicates.retain(|p| !p.is_literal_true());
 }
 
-/// Attempts to optimize
+/// Attempts to optimize a supplied expression.
+///
+/// Naively traverse the expression looking for instances of statements that are known
+/// to be true, or known to be false. This is restricted to exact matches in the predicate,
+/// and is not clever enough to reason about various forms of inequality.
 pub fn optimize(
     expr: &mut ScalarExpr,
     input_type: &RelationType,
     predicates: &[ScalarExpr],
 ) -> Result<(), crate::TransformError> {
-    // Naively traverse the expression looking for instances of known-true statements.
-    // Note: this does not find known false statements that are consequences of negation,
-    // such as `x != y` implying that `x = y` must be false.
+
+    // To simplify things, we'll build a map from complex expressions to the simpler ones
+    // that should replace them.
+    let mut normalizing_map = HashMap::new();
+    for predicate in predicates.iter() {
+        if let ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::Eq,
+        } = predicate
+        {
+            normalizing_map.insert(expr2.clone(), expr1.clone());
+        }
+    }
+    // Replace all expressions with a normalized representative.
+    // Ideally we would do a pre-order traversal here, but that
+    // method doesn't seem to exist.
+    expr.visit_mut(&mut |e| if let Some(expr) = normalizing_map.get(e) {
+        *e = (**expr).clone();
+    });
 
     expr.visit_mut(&mut |expr| {
         if predicates.contains(expr) {
