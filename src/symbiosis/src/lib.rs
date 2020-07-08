@@ -30,13 +30,12 @@ use std::env;
 
 use chrono::Utc;
 use failure::{bail, format_err};
-use sql_parser::ast::ColumnOption;
-use sql_parser::ast::{DataType, ObjectType, Statement, TableConstraint};
 use tokio_postgres::types::FromSql;
 
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use sql::ast::{ColumnOption, DataType, ObjectType, Statement, TableConstraint};
 use sql::catalog::Catalog;
 use sql::names::FullName;
 use sql::normalize;

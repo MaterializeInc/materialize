@@ -51,7 +51,6 @@ use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 use sql::ast::Statement;
-use sql_parser::parser::ParserError as SqlParserError;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;
@@ -63,7 +62,7 @@ pub enum Outcome<'a> {
         location: Location,
     },
     ParseFailure {
-        error: SqlParserError,
+        error: failure::Error,
         location: Location,
     },
     PlanFailure {
@@ -534,14 +533,14 @@ impl State {
         location: Location,
     ) -> Result<Outcome<'a>, failure::Error> {
         // get statement
-        let statements = match sql_parser::parser::parse_statements(sql.to_string()) {
+        let statements = match sql::parse::parse(sql.to_string()) {
             Ok(statements) => statements,
-            Err(error) => {
-                if output.is_err() {
-                    return Ok(Outcome::Success);
-                } else {
-                    return Ok(Outcome::ParseFailure { error, location });
-                }
+            Err(_) if output.is_err() => return Ok(Outcome::Success),
+            Err(e) => {
+                return Ok(Outcome::ParseFailure {
+                    error: e.into(),
+                    location,
+                })
             }
         };
         let statement = match &*statements {

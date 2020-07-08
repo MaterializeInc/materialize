@@ -497,7 +497,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sql",
- "sql-parser",
  "symbiosis",
  "timely",
  "tokio",
@@ -3336,7 +3335,6 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "sql-parser",
  "tokio",
  "walkdir",
 ]
@@ -3493,7 +3491,6 @@ dependencies = [
  "repr",
  "serde_json",
  "sql",
- "sql-parser",
  "tokio",
  "tokio-postgres",
  "whoami",

@@ -47,11 +47,10 @@ use expr::{
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
-use sql::ast::{ExplainOptions, ObjectType, Statement};
+use sql::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, Plan, PlanContext};
-use sql_parser::ast::ExplainStage;
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, SinkConnectorState};
@@ -2454,7 +2453,7 @@ fn index_sql(
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
-    use sql_parser::ast::{Expr, Ident, Value};
+    use sql::ast::{Expr, Ident, Value};
 
     Statement::CreateIndex {
         name: Some(Ident::new(index_name)),

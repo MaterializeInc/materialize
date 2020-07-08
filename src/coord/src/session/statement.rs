@@ -40,12 +40,13 @@
 //! [m]: https://www.postgresql.org/docs/12/protocol-message-formats.html#Parse
 
 use repr::{RelationDesc, Row};
+use sql::ast::Statement;
 use sql::plan::Params;
 
 /// A prepared statement.
 #[derive(Debug)]
 pub struct PreparedStatement {
-    sql: Option<sql_parser::ast::Statement>,
+    sql: Option<Statement>,
     desc: Option<RelationDesc>,
     param_types: Vec<pgrepr::Type>,
 }
@@ -53,7 +54,7 @@ pub struct PreparedStatement {
 impl PreparedStatement {
     /// Constructs a new `PreparedStatement`.
     pub fn new(
-        sql: Option<sql_parser::ast::Statement>,
+        sql: Option<Statement>,
         desc: Option<RelationDesc>,
         param_types: Vec<pgrepr::Type>,
     ) -> PreparedStatement {
@@ -66,7 +67,7 @@ impl PreparedStatement {
 
     /// Returns the raw SQL string associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&sql_parser::ast::Statement> {
+    pub fn sql(&self) -> Option<&Statement> {
         self.sql.as_ref()
     }
 

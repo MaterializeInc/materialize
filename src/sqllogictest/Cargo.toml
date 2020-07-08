@@ -25,6 +25,5 @@ regex = "1"
 repr = { path = "../repr" }
 serde_json = "1"
 sql = { path = "../sql" }
-sql-parser = { path = "../sql-parser" }
 tokio = "0.2"
 walkdir = "2"
