@@ -82,7 +82,7 @@ services:
         --materialized-url=postgres://ignored@materialized:6875
         $$*
       - bash
-    command: test/krb5/smoketest.td
+    command: test/kafka-krb5/smoketest.td
     volumes:
       - ../../:/workdir
       - secrets:/share/secrets
