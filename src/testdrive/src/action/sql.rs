@@ -161,21 +161,16 @@ impl Action for SqlAction {
 }
 
 impl SqlAction {
-    /// Test data is inserted into a dataflow at some time t0. When we PEEK for the data,
-    /// there is no guarantee that the timestamp chosen for the PEEK will be t>t0. This uncertainty
-    /// causes us to query with a backoff for some amount of time, hoping that eventually the
-    /// time chosen for the PEEK will be t>t0.
+    /// Test data is inserted into a dataflow at some time t0. When we `PEEK` the data,
+    /// there is no guarantee that the timestamp chosen for the `PEEK` will be t>t0 -- the
+    /// time at which we should see the expected rows.
     ///
-    /// Instead of querying repeatedly, we can modify SELECT statements without an explicit
-    /// AS OF argument to always query with the max time (u64::max_value()), ensuring that we
-    /// should read all available data with the first query.
+    /// This function always adds `AS OF now()` to the end of `SELECT`s without an explicit
+    /// `AS OF` clause in an effort to reduce time spent querying at t<t0.
     fn get_query_as_of(&self) -> Result<String, String> {
         if let Statement::Select { query: _, as_of } = &self.stmt {
             if as_of.is_none() {
-                // u64::max_value() is currently equivalent to dataflow-types' Timestamp::max_value
-                // without requiring the import.
-                let new_query = format!("{} AS OF {}", self.cmd.query.to_owned(), u64::max_value());
-                return Ok(new_query);
+                return Ok(format!("{} AS OF now()", self.cmd.query.to_owned()));
             }
         }
         Ok(self.cmd.query.to_owned())
