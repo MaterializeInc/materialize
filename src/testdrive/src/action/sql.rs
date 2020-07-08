@@ -94,8 +94,8 @@ impl Action for SqlAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let query = &self.cmd.query;
-        print_query(&query);
+        print_query(&self.cmd.query);
+        let query = &self.get_query_as_of()?;
 
         let pgclient = &state.pgclient;
         retry::retry_for(self.timeout, |retry_state| async move {
@@ -161,6 +161,26 @@ impl Action for SqlAction {
 }
 
 impl SqlAction {
+    /// Test data is inserted into a dataflow at some time t0. When we PEEK for the data,
+    /// there is no guarantee that the timestamp chosen for the PEEK will be t>t0. This uncertainty
+    /// causes us to query with a backoff for some amount of time, hoping that eventually the
+    /// time chosen for the PEEK will be t>t0.
+    ///
+    /// Instead of querying repeatedly, we can modify SELECT statements without an explicit
+    /// AS OF argument to always query with the max time (u64::max_value()), ensuring that we
+    /// should read all available data with the first query.
+    fn get_query_as_of(&self) -> Result<String, String> {
+        if let Statement::Select { query: _, as_of } = &self.stmt {
+            if as_of.is_none() {
+                // u64::max_value() is currently equivalent to dataflow-types' Timestamp::max_value
+                // without requiring the import.
+                let new_query = format!("{} AS OF {}", self.cmd.query.to_owned(), u64::max_value());
+                return Ok(new_query);
+            }
+        }
+        Ok(self.cmd.query.to_owned())
+    }
+
     async fn try_drop(
         &self,
         pgclient: &mut tokio_postgres::Client,
