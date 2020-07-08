@@ -609,9 +609,10 @@ impl Catalog {
 
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
         let mut ops = vec![];
+        let mut seen = HashSet::new();
         if let Some(database) = self.by_name.get(&name) {
             for (schema_name, schema) in &database.schemas {
-                Self::drop_schema_items(schema, &self.by_id, &mut ops);
+                Self::drop_schema_items(schema, &self.by_id, &mut ops, &mut seen);
                 ops.push(Op::DropSchema {
                     database_name: DatabaseSpecifier::Name(name.clone()),
                     schema_name: schema_name.clone(),
@@ -628,10 +629,11 @@ impl Catalog {
         schema_name: String,
     ) -> Vec<Op> {
         let mut ops = vec![];
+        let mut seen = HashSet::new();
         if let DatabaseSpecifier::Name(database_name) = database_spec {
             if let Some(database) = self.by_name.get(&database_name) {
                 if let Some(schema) = database.schemas.get(&schema_name) {
-                    Self::drop_schema_items(schema, &self.by_id, &mut ops);
+                    Self::drop_schema_items(schema, &self.by_id, &mut ops, &mut seen);
                     ops.push(Op::DropSchema {
                         database_name: DatabaseSpecifier::Name(database_name),
                         schema_name,
@@ -654,10 +656,10 @@ impl Catalog {
         schema: &Schema,
         by_id: &BTreeMap<GlobalId, CatalogEntry>,
         ops: &mut Vec<Op>,
+        seen: &mut HashSet<GlobalId>,
     ) {
-        let mut seen = HashSet::new();
         for &id in schema.items.values() {
-            Self::drop_item_cascade(id, by_id, ops, &mut seen)
+            Self::drop_item_cascade(id, by_id, ops, seen)
         }
     }
 

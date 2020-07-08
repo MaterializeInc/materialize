@@ -149,6 +149,31 @@ unknown schema 'noexist'
 ! CREATE VIEW noexist.ignored.ignored AS SELECT 1
 unknown database 'noexist'
 
+# Dropping database with cross-schema dependencies is ok.
+> CREATE DATABASE d1;
+> CREATE SCHEMA d1.s1;
+> CREATE VIEW d1.s1.t as select 1;
+> CREATE VIEW d1.public.tt as select * from d1.s1.t;
+> DROP DATABASE d1;
+
+# Dropping database with cross-database dependencies is ok and drops the
+# dependent views.
+> CREATE DATABASE d1;
+> CREATE VIEW d1.public.t as select 1;
+> CREATE DATABASE d2;
+> CREATE VIEW d2.public.t AS SELECT * FROM d1.public.t;
+> DROP DATABASE d1;
+> SHOW DATABASES
+Database
+----
+d
+d2
+materialize
+
+> SHOW VIEWS FROM d2.public;
+ VIEWS
+-------
+
 # Check default sources and views in mz_catalog.
 
 > SHOW SOURCES FROM mz_catalog
