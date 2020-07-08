@@ -18,10 +18,10 @@ use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffse
 use expr::{PartitionId, SourceInstanceId};
 use failure::Error;
 use std::collections::HashMap;
-use std::thread;
-use std::time::Duration;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use timely::scheduling::{Activator, SyncActivator};
 
 use std::io::{BufRead, Read};
