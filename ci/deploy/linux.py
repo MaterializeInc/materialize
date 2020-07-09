@@ -37,9 +37,7 @@ def main() -> None:
     print(f"--- Tagging Docker images")
     if buildkite_tag:
         tag_docker(repo, buildkite_tag)
-        # TODO(benesch): figure out how to push a latest tag. We want to be
-        # careful to not overwrite a tag for a newer release if we are building
-        # a historical release (e.g., don't overwrite v1.1.0 with v1.0.1).
+        tag_docker_latest_maybe(repo, buildkite_tag)
     else:
         tag_docker(repo, f'unstable-{git.rev_parse("HEAD")}')
         tag_docker(repo, "unstable")
@@ -66,6 +64,18 @@ def tag_docker(repo: mzbuild.Repository, tag: str) -> None:
             name = dep.image.docker_name(tag)
             spawn.runv(["docker", "tag", dep.spec(), name])
             spawn.runv(["docker", "push", name])
+
+
+def tag_docker_latest_maybe(repo: mzbuild.Repository, tag: str) -> None:
+    """If this tag is greater than all other tags, and is a release, tag it `latest`
+    """
+    this_tag = git.Tag.from_str(tag)
+    if not this_tag.is_release():
+        return
+
+    highest_release = next(t for t in git.get_version_tags() if t.is_release())
+    if this_tag == highest_release:
+        tag_docker(repo, "latest")
 
 
 if __name__ == "__main__":
