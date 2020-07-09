@@ -15,9 +15,8 @@
 use std::process;
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
-use urlencoding::encode;
 
 use crate::config::{Args, FuzzerConfig};
 
@@ -25,9 +24,18 @@ mod config;
 mod macros;
 mod mz_client;
 
+#[derive(Debug, Serialize)]
+struct QueryRequest {
+    database: &'static str,
+    count: i64,
+    tables: String,
+    prev: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct QueryResponse {
     queries: Vec<String>,
+    next: String,
 }
 
 #[tokio::main]
@@ -71,22 +79,19 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
     // Get fuzzer inputs from Smith
     let http_client = reqwest::Client::new();
     let mut remaining: i64 = config.query_count as i64;
+    let mut prev = None;
 
     while remaining > 0 {
-        // Get information about current materialized views
-        let views_json = client.show_views().await?;
-        let views = encode(&views_json);
-
-        let count = if remaining > 50 { 50 } else { remaining };
-        let body = format!("database=materialize&count={}&tables={}", count, views);
+        let count = if remaining > 500 { 500 } else { remaining };
 
         let request = http_client
             .post(config.fuzzer_url.clone())
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(body)
+            .form(&QueryRequest {
+                database: "materialize",
+                count,
+                tables: serde_json::to_string(&client.show_views().await?)?,
+                prev,
+            })
             .build()?;
 
         log::info!("querying fuzzer: {:?}", request);
@@ -95,6 +100,7 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
 
         let response: QueryResponse = response.json().await?;
 
+        prev = Some(response.next);
         for query in response.queries.iter() {
             if let Err(e) = client.execute(query, &[]).await {
                 if !query.starts_with("INSERT INTO") {

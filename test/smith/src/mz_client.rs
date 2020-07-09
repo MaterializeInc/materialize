@@ -7,13 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
 use std::marker::Sync;
 
 use anyhow::Result;
 use postgres_types::ToSql;
 use serde::Serialize;
 use tokio_postgres::{Client, NoTls};
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Table {
+    name: String,
+    can_insert: bool,
+    columns: Vec<Column>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Column {
@@ -50,16 +56,18 @@ impl MzClient {
         Ok(self.0.execute(query, params).await?)
     }
 
-    pub async fn show_views(&self) -> Result<String> {
-        let mut v: HashMap<String, Vec<Column>> = HashMap::new();
+    pub async fn show_views(&self) -> Result<Vec<Table>> {
+        let mut views = vec![];
         for row in self.0.query("SHOW VIEWS", &[]).await? {
-            let view: String = row.get(0);
-
-            let columns = self.print_columns(&view).await?;
-            v.insert(view, columns);
+            let name = row.get(0);
+            let columns = self.print_columns(row.get(0)).await?;
+            views.push(Table {
+                name,
+                can_insert: false,
+                columns,
+            })
         }
-
-        Ok(serde_json::to_string(&v)?)
+        Ok(views)
     }
 
     pub async fn print_columns(&self, view: &str) -> Result<Vec<Column>> {
