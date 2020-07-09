@@ -11,10 +11,8 @@ To help you get started with Materialize, we'll:
 - Explore its API
 - Set up a real-time stream to perform aggregations on Wikipedia user edits.
 
-{{< cta >}}
-
-<a href="https://www.katacoda.com/materialize/scenarios/intro-wikipedia" target="_blank">Click here to try the demo in your browser!</a>
-
+{{< cta href=/katacoda?intro-wikipedia target=_blank >}}
+Click here to try the demo in your browser!
 {{</ cta >}}
 
 ## Prerequisites
@@ -218,8 +216,6 @@ Wikipedia.
 
 Once you're done, don't forget to stop `curl` and `rm wikirecent`.
 
-{{< cta >}}
-
-[Next, see how Materialize can work as an entire microservices →](/docs/demos/microservice)
-
+{{< cta href="/demos/microservice" >}}
+Next, see how Materialize can work as an entire microservices →
 {{</ cta >}}
