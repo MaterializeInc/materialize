@@ -1358,6 +1358,7 @@ impl Parser {
     fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
         let avro_schema = if self.parse_keywords(vec!["CONFLUENT", "SCHEMA", "REGISTRY"]) {
             let url = self.parse_literal_string()?;
+
             let seed = if self.parse_keyword("SEED") {
                 let key_schema = if self.parse_keyword("KEY") {
                     self.expect_keyword("SCHEMA")?;
@@ -1374,7 +1375,20 @@ impl Parser {
             } else {
                 None
             };
-            AvroSchema::CsrUrl { url, seed }
+
+            // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+            // accept `WITH (...)` here.
+            let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+                self.parse_with_options()?
+            } else {
+                vec![]
+            };
+
+            AvroSchema::CsrUrl {
+                url,
+                seed,
+                with_options,
+            }
         } else if self.parse_keyword("SCHEMA") {
             self.prev_token();
             AvroSchema::Schema(self.parse_schema()?)

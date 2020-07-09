@@ -144,7 +144,7 @@ explain ::=
   )
 format_spec_avro_kafka ::=
     ('AVRO' 'USING' (
-        'CONFLUENT SCHEMA REGISTRY' url |
+        'CONFLUENT SCHEMA REGISTRY' url ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
         'SCHEMA' (
             'FILE' schema_file_path |
             inline_schema

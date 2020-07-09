@@ -107,6 +107,34 @@ This creates a source that...
   `localhost:9092`.
 - Is append-only.
 
+### Connecting to a Kafka broker using SASL PLAIN authentication
+
+```sql
+CREATE MATERIALIZED SOURCE data_v1
+FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
+    security_protocol = 'SASL_SSL',
+    sasl_mechanisms = 'PLAIN',
+    sasl_username = '<BROKER_USERNAME>',
+    sasl_password = '<BROKER_PASSWORD>',
+)
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld' WITH (
+    username = '<SCHEMA_REGISTRY_USERNAME>',
+    password = '<SCHEMA_REGISTRY_PASSWORD>'
+);
+```
+
+This creates a source that...
+
+- Connects to a Kafka broker that requires SASL PLAIN authentication.
+- Connects to a Confluent Schema Registry that requires HTTPS and basic
+  authentication.
+- Automatically determines its schema from the Confluent Schema Registry.
+- Decodes data received from the `top-secret` topic published by Kafka running on
+  `localhost:9092`.
+- Is append-only.
+
+If you are connecting to a Kafka cluster on Confluent Cloud, this is the
+example to follow.
 
 ### Connecting to a Kafka broker using Kerberos
 

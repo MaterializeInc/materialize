@@ -419,35 +419,42 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'h
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM
 =>
-CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None })), envelope: Debezium, if_not_exists: false, materialized: false }
+CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Debezium, if_not_exists: false, materialized: false }
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED VALUE SCHEMA 'blah'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED VALUE SCHEMA 'blah'
 =>
-CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: None, value_schema: "blah" }) })), envelope: None, if_not_exists: false, materialized: false }
+CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: None, value_schema: "blah" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false }
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED KEY SCHEMA 'a' VALUE SCHEMA 'b'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED KEY SCHEMA 'a' VALUE SCHEMA 'b'
 =>
-CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: Some("a"), value_schema: "b" }) })), envelope: None, if_not_exists: false, materialized: false }
+CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: Some("a"), value_schema: "b" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false }
+
+parse-statement
+CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
+----
+CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
+=>
+CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [SqlOption { name: Ident("a"), value: String("b") }] })), envelope: Debezium, if_not_exists: false, materialized: false }
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 =>
-CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None })), envelope: None, if_not_exists: false, materialized: false }
+CreateSource { name: ObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: None, if_not_exists: false, materialized: false }
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE UPSERT
 =>
-CreateSource { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None })), envelope: Upsert(None), if_not_exists: false, materialized: false }
+CreateSource { name: ObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Upsert(None), if_not_exists: false, materialized: false }
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
@@ -535,6 +542,19 @@ CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES WITH SNAPSHOT AS OF now()
 =>
 CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Bytes), with_snapshot: true, as_of: Some(Function(Function { name: ObjectName([Ident("now")]), args: Args([]), filter: None, over: None, distinct: false })), if_not_exists: false }
 
+parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH SNAPSHOT
+=>
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), with_snapshot: true, as_of: None, if_not_exists: false }
+
+parse-statement
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
+----
+CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') WITH SNAPSHOT
+=>
+CreateSink { name: ObjectName([Ident("foo")]), from: ObjectName([Ident("bar")]), connector: File { path: "baz" }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [SqlOption { name: Ident("a"), value: String("b") }] })), with_snapshot: true, as_of: None, if_not_exists: false }
 
 parse-statement
 CREATE SINK IF EXISTS foo FROM bar INTO 'baz'
