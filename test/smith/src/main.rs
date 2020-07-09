@@ -15,15 +15,21 @@
 use std::process;
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
-use urlencoding::encode;
 
 use crate::config::{Args, FuzzerConfig};
 
 mod config;
 mod macros;
 mod mz_client;
+
+#[derive(Debug, Serialize)]
+struct QueryRequest {
+    database: &'static str,
+    count: i64,
+    tables: String,
+}
 
 #[derive(Debug, Deserialize)]
 struct QueryResponse {
@@ -73,20 +79,15 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
     let mut remaining: i64 = config.query_count as i64;
 
     while remaining > 0 {
-        // Get information about current materialized views
-        let views_json = client.show_views().await?;
-        let views = encode(&views_json);
-
-        let count = if remaining > 50 { 50 } else { remaining };
-        let body = format!("database=materialize&count={}&tables={}", count, views);
+        let count = if remaining > 500 { 500 } else { remaining };
 
         let request = http_client
             .post(config.fuzzer_url.clone())
-            .header(
-                reqwest::header::CONTENT_TYPE,
-                "application/x-www-form-urlencoded",
-            )
-            .body(body)
+            .form(&QueryRequest {
+                database: "materialize",
+                count,
+                tables: serde_json::to_string(&client.show_views().await?)?,
+            })
             .build()?;
 
         log::info!("querying fuzzer: {:?}", request);

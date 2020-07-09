@@ -9,8 +9,10 @@
 
 FROM ubuntu:bionic-20200403
 
-RUN apt-get update && apt-get install -qy postgresql-client
-RUN apt-get install -qy wait-for-it
+RUN apt-get update && apt-get install -qy \
+    ca-certificates \
+    postgresql-client \
+    wait-for-it
 
 COPY smith-fuzz /usr/local/bin
 
