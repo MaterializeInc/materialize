@@ -86,7 +86,7 @@ impl Action for VerifyAction {
             .raw;
 
         let mut config = ClientConfig::new();
-        config.set("bootstrap.servers", &state.kafka_url);
+        config.set("bootstrap.servers", &state.kafka_addr);
         config.set("auto.offset.reset", "earliest");
         config.set("group.id", "materialize-testdrive");
 

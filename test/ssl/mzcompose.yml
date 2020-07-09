@@ -28,7 +28,7 @@ services:
         wait-for-it --timeout=30 schema-registry:8081 &&
         wait-for-it --timeout=30 materialized:6875 &&
         testdrive
-        --kafka-url=SSL://kafka:9092
+        --kafka-addr=kafka:9092
         --schema-registry-url=https://schema-registry:8081
         --materialized-url=postgres://ignored@materialized:6875
         --cert=/share/secrets/producer.p12
