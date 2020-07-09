@@ -604,7 +604,7 @@ impl<'a> AvroDeserializer for &'a Value {
     }
 }
 
-pub fn give_value<D: AvroDecode>(d: &mut D, mut v: &Value) -> Result<(), Error> {
+pub fn give_value<D: AvroDecode>(d: &mut D, v: &Value) -> Result<(), Error> {
     use ValueOrReader::Value as V;
     match v {
         Value::Null => d.scalar(Scalar::Null),
@@ -624,7 +624,7 @@ pub fn give_value<D: AvroDecode>(d: &mut D, mut v: &Value) -> Result<(), Error> 
         Value::Enum(idx, symbol) => d.enum_variant(symbol, *idx as usize),
         Value::Union {
             index,
-            inner: _,
+            inner,
             n_variants,
             null_variant,
         } => {
@@ -633,7 +633,7 @@ pub fn give_value<D: AvroDecode>(d: &mut D, mut v: &Value) -> Result<(), Error> 
                 *index,
                 *n_variants,
                 *null_variant,
-                &mut v,
+                &mut inner.as_ref(),
                 &mut empty_reader,
             )
         }
@@ -796,7 +796,11 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                         self.schema = self.schema.step(variant);
                         d.union_branch(index, n_variants, null_variant, self, r)
                     }
-                    None => Err(DecodeError::new("Union index out of bounds").into()),
+                    None => Err(DecodeError::new(format!(
+                        "Union index out of bounds (new): {}",
+                        index
+                    ))
+                    .into()),
                 }
             }
             SchemaPiece::ResolveIntLong => {
@@ -1051,7 +1055,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
                         .iter()
                         .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null)),
                 }),
-                None => Err(DecodeError::new("Union index out of bounds").into()),
+                None => Err(DecodeError::new("Union index out of bounds (old)").into()),
             }
         }
         SchemaPiece::ResolveIntTsMilli => {
