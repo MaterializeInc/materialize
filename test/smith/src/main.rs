@@ -29,11 +29,13 @@ struct QueryRequest {
     database: &'static str,
     count: i64,
     tables: String,
+    prev: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct QueryResponse {
     queries: Vec<String>,
+    next: String,
 }
 
 #[tokio::main]
@@ -77,6 +79,7 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
     // Get fuzzer inputs from Smith
     let http_client = reqwest::Client::new();
     let mut remaining: i64 = config.query_count as i64;
+    let mut prev = None;
 
     while remaining > 0 {
         let count = if remaining > 500 { 500 } else { remaining };
@@ -87,6 +90,7 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
                 database: "materialize",
                 count,
                 tables: serde_json::to_string(&client.show_views().await?)?,
+                prev,
             })
             .build()?;
 
@@ -96,6 +100,7 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
 
         let response: QueryResponse = response.json().await?;
 
+        prev = Some(response.next);
         for query in response.queries.iter() {
             if let Err(e) = client.execute(query, &[]).await {
                 if !query.starts_with("INSERT INTO") {
