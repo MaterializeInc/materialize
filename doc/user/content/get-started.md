@@ -33,7 +33,7 @@ We also highly recommend checking out [What is Materialize?](/overview/what-is-m
 1. Run the `materialized` binary. For example, if you installed it in your `$PATH`:
 
     ```shell
-    materialized --w=1
+    materialized -w 1
     ```
 
     This starts the daemon listening on port 6875 using 1 worker.
