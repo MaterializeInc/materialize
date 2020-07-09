@@ -777,7 +777,7 @@ fn test_complex_resolutions() {
                         index: 0,
                         inner: Box::new(Value::Enum(1, "bar".to_owned())),
                         n_variants: 2,
-                        null_variant: None,
+                        null_variant: Some(1),
                     },
                 ),
             ]),
@@ -787,7 +787,7 @@ fn test_complex_resolutions() {
             Value::Union {
                 index: 0,
                 inner: Box::new(Value::Fixed(4, vec![0, 1, 2, 3])),
-                n_variants: 2,
+                n_variants: 3,
                 null_variant: None,
             },
         ),
