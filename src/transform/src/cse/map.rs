@@ -73,7 +73,7 @@ fn memoize_and_reuse(
     let mut scalars = Vec::new();
     for expr in exprs.iter_mut() {
         // Carefully memoize expressions that will certainly be evaluated.
-        memoize(expr, &mut scalars, &mut projection, input_arity);
+        memoize(expr, &mut scalars, &projection, input_arity);
 
         // At this point `expr` should be a column reference or a literal. It may not have
         // been added to `scalars` and we should do so if it is a literal to make sure we
@@ -101,7 +101,7 @@ fn memoize_and_reuse(
 fn memoize(
     expr: &mut ScalarExpr,
     scalars: &mut Vec<ScalarExpr>,
-    projection: &mut Vec<usize>,
+    projection: &[usize],
     input_arity: usize,
 ) {
     match expr {
@@ -115,13 +115,12 @@ fn memoize(
         _ => {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.
-            if let ScalarExpr::If {
-                cond,
-                then: _,
-                els: _,
-            } = expr
-            {
+            if let ScalarExpr::If { cond, then, els } = expr {
                 memoize(cond, scalars, projection, input_arity);
+                // Conditionally evaluated expressions still need to update their
+                // column references.
+                then.permute(projection);
+                els.permute(projection);
             } else {
                 expr.visit1_mut(|e| memoize(e, scalars, projection, input_arity));
             }
