@@ -6,16 +6,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use avro::{types::Value as AvroValue};
+use avro::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::{Duration, NaiveDate};
 use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
 
-use interchange::avro::{
-    parse_schema,
-    DebeziumDeduplicationStrategy, Decoder, EnvelopeType,
-};
+use interchange::avro::{parse_schema, DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
 use std::ops::Add;
 
 pub fn bench_avro(c: &mut Criterion) {
