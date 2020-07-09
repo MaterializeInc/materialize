@@ -109,8 +109,6 @@ Detail | Info
 
 For more information, see [CLI Connections](/connect/cli/).
 
-{{< cta >}}
-
-[Next, let's get started with Materialize →](/docs/get-started)
-
+{{< cta href="/get-started" >}}
+Next, let's get started with Materialize →
 {{</ cta >}}

@@ -1,5 +1,3 @@
-<div class="cta">
-    <p class="cta-green">
-        {{ .Inner | markdownify }}
-    </p>
-</div>
+<a class="cta" href="{{ .Get "href" | relURL }}" {{with .Get "target"}}target="{{.}}"{{end}}}>
+    {{ .Inner | markdownify }}
+</a>
