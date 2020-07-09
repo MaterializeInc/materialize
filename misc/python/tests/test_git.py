@@ -9,45 +9,34 @@
 
 import pytest  # type: ignore
 
+from semver import VersionInfo
+
 from materialize import git
 
 
-def test_tag() -> None:
-    assert git.Tag.from_str("v0.3.2-rc1") == git.Tag(0, 3, 2, "rc1")
-    assert git.Tag.from_str("v0.3.2") == git.Tag(0, 3, 2, None)
-
-    assert git.Tag.from_str("v0.20.0") > git.Tag.from_str("v0.3.50")
-
-    with pytest.raises(ValueError):
-        git.Tag.from_str("v0.3")
-
-    assert git.Tag.from_str("v0.3.1") > git.Tag.from_str("v0.2.0")
-    assert git.Tag.from_str("v0.3.1") > git.Tag.from_str("v0.2.0-rc1")
-
-    assert git.Tag.from_str("v0.3.1-rc1") < git.Tag.from_str("v0.3.1")
-    assert git.Tag.from_str("v0.3.1") > git.Tag.from_str("v0.3.1-rc1")
-
-    assert git.Tag.from_str("v0.3.2") > git.Tag.from_str("v0.3.1-rc1")
-    assert git.Tag.from_str("v0.3.2") != git.Tag.from_str("v0.3.2-rc1")
-    assert git.Tag.from_str("v1.0.0") > git.Tag.from_str("v0.3.1")
+def test_versioninfo() -> None:
+    # just make sure upgrades don't break our most important invariants
+    assert VersionInfo.parse("0.20.0") > VersionInfo.parse("0.3.50")
+    assert VersionInfo.parse("1.0.0").prerelease is None
+    assert VersionInfo.parse("1.0.0-rc1").prerelease is not None
 
 
 def test_tags_returns_ordered_newest_first() -> None:
     tags = git.get_version_tags(fetch=False)
     # use a couple hard coded tags for extra sanity
-    current_latest = git.Tag.from_str("v0.3.1")
-    older = git.Tag.from_str("v0.2.0")
+    current_latest = VersionInfo.parse("0.3.1")
+    older = VersionInfo.parse("0.2.0")
     seen_latest = False
     prev = tags[0]
     for tag in tags:
         # ensure that actual versions are correctly ordered
-        assert (prev.major, prev.minor, prev.micro) >= (
+        assert (prev.major, prev.minor, prev.patch) >= (
             tag.major,
             tag.minor,
-            tag.micro,
+            tag.patch,
         )
-        if prev.patch and tag.patch:
-            assert prev.patch > tag.patch
+        if prev.prerelease and tag.prerelease:
+            assert prev.prerelease >= tag.prerelease
         prev = tag
 
         if tag == current_latest:

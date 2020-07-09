@@ -14,78 +14,9 @@ from functools import lru_cache, total_ordering
 from pathlib import Path
 from typing import List, Optional, Set, Union, NamedTuple
 
+import semver
+
 from materialize import spawn
-
-
-class Tag(NamedTuple):
-    major: int
-    minor: int
-    micro: int
-    patch: Optional[str]
-
-    @staticmethod
-    def from_str(tag: str) -> "Tag":
-        """Parse a single line of the output of `git tag`
-
-        Raises `ValueError` if the tag does not look right
-        """
-        try:
-            major, minor, micro = tag.lstrip("v").split(".")
-        except ValueError:
-            raise ValueError(f"Invalid tag: {tag!r}")
-        patch = None
-        if "-" in micro:
-            micro, patch = micro.split("-")
-        return Tag(int(major), int(minor), int(micro), patch)
-
-    def is_release(self) -> bool:
-        """True if this is not a pre-release, False otherwise """
-        return self.patch is not None
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Tag):
-            return False
-        return (self.major, self.minor, self.micro, self.patch) == (
-            other.major,
-            other.minor,
-            other.micro,
-            other.patch,
-        )
-
-    # this, and the below type: ignore, are because lt is defined as accepting any
-    # `tuple`, but we will (a) never pass in a regular tuple, (b) don't want to allow
-    # passing in a regular tuple, (c) don't want to make the code even more ugly to
-    # support it
-    def __lt__(self, other: "Tag") -> bool:  # type: ignore
-        """Comparison where patch versions compare less than None, all else being equal
-        """
-        version_lt = (self.major, self.minor, self.micro) < (
-            other.major,
-            other.minor,
-            other.micro,
-        )
-
-        if self.patch is None and other.patch is None:
-            return version_lt
-        elif self.patch is not None and other.patch is not None:
-            return version_lt or self.patch < other.patch
-        if version_lt:
-            return True
-
-        version_eq = (self.major, self.minor, self.micro) == (
-            other.major,
-            other.minor,
-            other.micro,
-        )
-        if not version_eq:
-            return False
-
-        # If equal, the one that is not a patch is the release version, which is greater
-        # than the patch version
-        return self.patch is not None and other.patch is None
-
-    def __gt__(self, other: "Tag") -> bool:  # type: ignore
-        return not self < other and not self == other
 
 
 def rev_count(rev: str) -> int:
@@ -136,7 +67,7 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
     return set(f for f in files if f.strip() != "")
 
 
-def get_version_tags(*, fetch: bool = True) -> List[Tag]:
+def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
     """List all the version-like tags in the repo
 
     Args:
@@ -147,7 +78,7 @@ def get_version_tags(*, fetch: bool = True) -> List[Tag]:
     tags = []
     for t in spawn.capture(["git", "tag"], unicode=True).splitlines():
         try:
-            tags.append(Tag.from_str(t))
+            tags.append(semver.VersionInfo.parse(t.lstrip("v")))
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 

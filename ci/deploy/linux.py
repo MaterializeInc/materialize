@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
+from pathlib import Path
+
+import semver
+
 from materialize import bintray
 from materialize import cargo
 from materialize import ci_util
@@ -14,9 +19,7 @@ from materialize import deb
 from materialize import git
 from materialize import mzbuild
 from materialize import spawn
-from pathlib import Path
 from . import deploy_util
-import os
 
 
 def main() -> None:
@@ -69,11 +72,11 @@ def tag_docker(repo: mzbuild.Repository, tag: str) -> None:
 def tag_docker_latest_maybe(repo: mzbuild.Repository, tag: str) -> None:
     """If this tag is greater than all other tags, and is a release, tag it `latest`
     """
-    this_tag = git.Tag.from_str(tag)
-    if not this_tag.is_release():
+    this_tag = semver.VersionInfo.parse(tag)
+    if this_tag.prerelease is not None:
         return
 
-    highest_release = next(t for t in git.get_version_tags() if t.is_release())
+    highest_release = next(t for t in git.get_version_tags() if t.prerelease is None)
     if this_tag == highest_release:
         tag_docker(repo, "latest")
 
