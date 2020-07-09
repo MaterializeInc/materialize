@@ -30,7 +30,6 @@ use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::convert::TryFrom;
 use std::fmt::Display;
-use std::iter::FromIterator;
 use std::rc::Rc;
 use types::Value as AvroValue;
 
@@ -886,9 +885,17 @@ impl SchemaParser {
                     .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))
             })?;
 
-        let unique_symbols: HashSet<String> = HashSet::from_iter(symbols.iter().cloned());
-        if symbols.len() != unique_symbols.len() {
-            return Err(ParseSchemaError::new("Enum symbols must be unique").into());
+        let mut unique_symbols: HashSet<&String> = HashSet::new();
+        for symbol in symbols.iter() {
+            if unique_symbols.contains(symbol) {
+                return Err(ParseSchemaError::new(format!(
+                    "Enum symbols must be unique, found multiple: {}",
+                    symbol
+                ))
+                .into());
+            } else {
+                unique_symbols.insert(symbol);
+            }
         }
 
         Ok(SchemaPiece::Enum {
