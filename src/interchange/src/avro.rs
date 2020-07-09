@@ -721,7 +721,7 @@ fn get_named_columns<'a>(
     } else {
         let scalar_type = validate_schema_2(seen_avro_nodes, schema)?;
         Ok(vec![(
-            base_name.clone().into(),
+            base_name.into(),
             ColumnType::new(scalar_type).nullable(false),
         )])
     }
@@ -1235,7 +1235,7 @@ impl Decoder {
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
                 || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
         );
-        let debezium_dedup = debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat));
+        let debezium_dedup = debezium_dedup.map(DebeziumDeduplicationState::new);
         // It is assumed that the reader schema has already been verified
         // to be a valid Avro schema.
         let reader_schema = parse_schema(reader_schema).unwrap();
