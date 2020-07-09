@@ -219,15 +219,12 @@ a {
     }
   }
 
-  .cta-green {
+  .cta {
     background-color: $purple;
     color: #fff;
     display: inline-block;
+    font-weight: bold;
     margin: 16px 0 0 0;
     padding: 16px;
-    a {
-      color: #fff;
-      font-weight: bold;
-    }
   }
 }
