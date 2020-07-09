@@ -115,13 +115,12 @@ fn memoize(
         _ => {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.
-            if let ScalarExpr::If {
-                cond,
-                then: _,
-                els: _,
-            } = expr
-            {
+            if let ScalarExpr::If { cond, then, els } = expr {
                 memoize(cond, scalars, projection, input_arity);
+                // Conditionally evaluated expressions still need to update their
+                // column references.
+                then.permute(projection);
+                els.permute(projection);
             } else {
                 expr.visit1_mut(|e| memoize(e, scalars, projection, input_arity));
             }
