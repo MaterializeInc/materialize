@@ -378,6 +378,15 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
                 buf: &mut str_buf,
                 is_top: false,
             };
+            // The idea here is that if the deserializer gives us fields in the order we're expecting,
+            // we can decode them directly into the row.
+            // If not, we need to decode them into a Value (the old, slow decoding path) and stash them,
+            // so that we can put everything in the right order at the end.
+            //
+            // TODO(btv) - this is pretty bad, as a misordering at the top of the schema graph will
+            // cause the _entire_ chunk under it to be decoded in the slow way!
+            // Maybe instead, we should decode to separate sub-RowPackers and then add an API
+            // to RowPacker that just copies in the bytes from another one.
             while let Some((_name, idx, f)) = a.next_field()? {
                 if idx == expected {
                     expected += 1;
