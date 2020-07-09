@@ -75,3 +75,21 @@ FROM x
 | Project (#2, #3)
 
 EOF
+
+
+
+# Ensure we update columns references in if-guarded expressions
+query T multiline
+EXPLAIN PLAN FOR SELECT
+    CASE WHEN b = 0 THEN 0 ELSE 1/b END,
+    CASE WHEN b != 0 THEN 1/b ELSE 0 END
+FROM
+    (SELECT b/2 as b FROM x)
+
+----
+%0 =
+| Get materialize.public.x (u1)
+| Map (#1 / 2), if (#2 = 0) then {0} else {(1 / #2)}, if (#2 != 0) then {(1 / #2)} else {0}
+| Project (#3, #4)
+
+EOF
