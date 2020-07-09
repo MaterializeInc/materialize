@@ -1426,6 +1426,13 @@ impl<'a> SchemaNode<'a> {
     pub fn json_to_value(self, json: &serde_json::Value) -> Result<AvroValue, ParseSchemaError> {
         use serde_json::Value::*;
         let val = match (json, self.inner) {
+            // A default value always matches the first variant of a union
+            (json, SchemaPiece::Union(us)) => match us.schemas.first() {
+                Some(variant) => {
+                    AvroValue::Union(0, Box::new(self.step(variant).json_to_value(json)?))
+                }
+                None => return Err(ParseSchemaError("Union schema has no variants".to_owned())),
+            },
             (Null, SchemaPiece::Null) => AvroValue::Null,
             (Bool(b), SchemaPiece::Boolean) => AvroValue::Boolean(*b),
             (Number(n), piece) => {
@@ -1512,13 +1519,6 @@ impl<'a> SchemaNode<'a> {
             (String(s), SchemaPiece::Fixed { size }) if s.len() == *size => {
                 AvroValue::Fixed(*size, s.clone().into_bytes())
             }
-            // A default value always matches the first variant of a union
-            (json, SchemaPiece::Union(us)) => match us.schemas.first() {
-                Some(variant) => {
-                    AvroValue::Union(0, Box::new(self.step(variant).json_to_value(json)?))
-                }
-                None => return Err(ParseSchemaError("Union schema has no variants".to_owned())),
-            },
             _ => {
                 return Err(ParseSchemaError(format!(
                     "Json default value {} does not match schema",

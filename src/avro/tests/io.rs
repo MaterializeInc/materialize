@@ -229,6 +229,32 @@ fn test_no_default_value() -> Result<(), String> {
 }
 
 #[test]
+fn test_union_default() {
+    let reader_schema = Schema::parse_str(
+        r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "f1", "type": ["int", "null"], "default": 42},
+                {"name": "f2", "type": "long"}
+            ]
+        }"#,
+    )
+    .unwrap();
+    let writer_schema = Schema::parse_str(
+        r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "f2", "type": "long"}
+            ]
+        }"#,
+    )
+    .unwrap();
+    resolve_schemas(&writer_schema, &reader_schema).unwrap();
+}
+
+#[test]
 fn test_projection() {
     let reader_schema = Schema::parse_str(
         r#"
