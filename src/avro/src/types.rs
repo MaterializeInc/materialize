@@ -452,7 +452,7 @@ mod tests {
                 Value::Union {
                     index: 3,
                     inner: Box::new(Value::Int(42)),
-                    n_variants: 2,
+                    n_variants: 4,
                     null_variant: Some(0),
                 },
                 r#"["null", "double", "string", "int"]"#,
@@ -471,9 +471,15 @@ mod tests {
             (Value::Record(vec![]), "\"null\"", false),
         ];
 
-        for (value, schema, valid) in value_schema_valid.into_iter() {
-            let schema = Schema::parse_str(schema).unwrap();
-            assert_eq!(valid, value.validate(schema.top_node()));
+        for (value, schema_str, valid) in value_schema_valid.into_iter() {
+            let schema = Schema::parse_str(schema_str).unwrap();
+            assert_eq!(
+                valid,
+                value.validate(schema.top_node()),
+                "Schema failed to validate against value: {} {:#?}",
+                schema_str,
+                value
+            );
         }
     }
 
