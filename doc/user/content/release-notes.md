@@ -52,6 +52,8 @@ Wrap your release notes at the 80 character mark.
 - Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
   reflects timely workers and does not limit the number of threads that materialized may
   start.
+- Fix a bug that prevented dropping databases with cross-schema dependencies.
+  {{% gh 3558 %}}
 
 <span id="v0.3.1"></span>
 ## 0.3.0 &rarr; 0.3.1
