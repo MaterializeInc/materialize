@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
+from pathlib import Path
+
+import semver
+
 from materialize import bintray
 from materialize import cargo
 from materialize import ci_util
@@ -14,17 +19,16 @@ from materialize import deb
 from materialize import git
 from materialize import mzbuild
 from materialize import spawn
-from pathlib import Path
 from . import deploy_util
-import os
 
 
 def main() -> None:
     repo = mzbuild.Repository(Path("."))
     workspace = cargo.Workspace(repo.root)
+    buildkite_tag = os.environ["BUILDKITE_TAG"]
 
     print(f"--- Publishing Debian package")
-    if os.environ["BUILDKITE_TAG"]:
+    if buildkite_tag:
         version = workspace.crates["materialized"].version
         if version.prerelease is None:
             publish_deb("materialized", str(version))
@@ -34,11 +38,9 @@ def main() -> None:
         publish_deb("materialized-unstable", deb.unstable_version(workspace))
 
     print(f"--- Tagging Docker images")
-    if os.environ["BUILDKITE_TAG"]:
-        tag_docker(repo, os.environ["BUILDKITE_TAG"])
-        # TODO(benesch): figure out how to push a latest tag. We want to be
-        # careful to not overwrite a tag for a newer release if we are building
-        # a historical release (e.g., don't overwrite v1.1.0 with v1.0.1).
+    if buildkite_tag:
+        tag_docker(repo, buildkite_tag)
+        tag_docker_latest_maybe(repo, buildkite_tag)
     else:
         tag_docker(repo, f'unstable-{git.rev_parse("HEAD")}')
         tag_docker(repo, "unstable")
@@ -65,6 +67,18 @@ def tag_docker(repo: mzbuild.Repository, tag: str) -> None:
             name = dep.image.docker_name(tag)
             spawn.runv(["docker", "tag", dep.spec(), name])
             spawn.runv(["docker", "push", name])
+
+
+def tag_docker_latest_maybe(repo: mzbuild.Repository, tag: str) -> None:
+    """If this tag is greater than all other tags, and is a release, tag it `latest`
+    """
+    this_tag = semver.VersionInfo.parse(tag)
+    if this_tag.prerelease is not None:
+        return
+
+    highest_release = next(t for t in git.get_version_tags() if t.prerelease is None)
+    if this_tag == highest_release:
+        tag_docker(repo, "latest")
 
 
 if __name__ == "__main__":

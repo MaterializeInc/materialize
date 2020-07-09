@@ -9,10 +9,14 @@
 
 """Git utilities."""
 
-from functools import lru_cache
-from materialize import spawn
+import sys
+from functools import lru_cache, total_ordering
 from pathlib import Path
-from typing import Set, Union
+from typing import List, Optional, Set, Union, NamedTuple
+
+import semver
+
+from materialize import spawn
 
 
 def rev_count(rev: str) -> int:
@@ -61,3 +65,21 @@ def expand_globs(root: Path, *specs: Union[Path, str]) -> Set[str]:
         unicode=True,
     ).split("\0")
     return set(f for f in files if f.strip() != "")
+
+
+def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
+    """List all the version-like tags in the repo
+
+    Args:
+        fetch: If false, don't update git, only intended for testing
+    """
+    if fetch:
+        spawn.runv(["git", "fetch", "--tags"])
+    tags = []
+    for t in spawn.capture(["git", "tag"], unicode=True).splitlines():
+        try:
+            tags.append(semver.VersionInfo.parse(t.lstrip("v")))
+        except ValueError as e:
+            print(f"WARN: {e}", file=sys.stderr)
+
+    return sorted(tags, reverse=True)
