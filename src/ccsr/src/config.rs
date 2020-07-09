@@ -13,12 +13,19 @@ use serde::{Deserialize, Serialize};
 use crate::client::Client;
 use crate::tls::{Certificate, Identity};
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Auth {
+    pub username: String,
+    pub password: Option<String>,
+}
+
 /// Configuration for a `Client`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClientConfig {
     url: Url,
     root_certs: Vec<Certificate>,
     identity: Option<Identity>,
+    auth: Option<Auth>,
 }
 
 impl ClientConfig {
@@ -29,6 +36,7 @@ impl ClientConfig {
             url,
             root_certs: Vec::new(),
             identity: None,
+            auth: None,
         }
     }
 
@@ -43,6 +51,13 @@ impl ClientConfig {
     /// Enables TLS client authentication with the provided identity.
     pub fn identity(mut self, identity: Identity) -> ClientConfig {
         self.identity = Some(identity);
+        self
+    }
+
+    /// Enables HTTP basic authentication with the specified username and
+    /// optional password.
+    pub fn auth(mut self, username: String, password: Option<String>) -> ClientConfig {
+        self.auth = Some(Auth { username, password });
         self
     }
 
@@ -63,6 +78,6 @@ impl ClientConfig {
             .build()
             .unwrap();
 
-        Client::new(inner, self.url)
+        Client::new(inner, self.url, self.auth)
     }
 }

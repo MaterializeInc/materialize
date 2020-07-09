@@ -47,7 +47,7 @@ pub async fn purify(mut stmt: Statement) -> Result<Statement, failure::Error> {
                 }
 
                 // Verify that the provided security options are valid and then test them.
-                config_options = kafka_util::extract_config(&mut with_options_map.clone())?;
+                config_options = kafka_util::extract_config(&with_options_map)?;
                 kafka_util::test_config(&config_options)?;
             }
             Connector::AvroOcf { path, .. } => {
@@ -83,11 +83,15 @@ async fn purify_format(
     connector: &mut Connector,
     col_names: &mut Vec<Ident>,
     file: Option<tokio::fs::File>,
-    specified_options: &HashMap<String, String>,
+    connector_options: &HashMap<String, String>,
 ) -> Result<(), failure::Error> {
     match format {
         Some(Format::Avro(schema)) => match schema {
-            AvroSchema::CsrUrl { url, seed } => {
+            AvroSchema::CsrUrl {
+                url,
+                seed,
+                with_options: ccsr_options,
+            } => {
                 let topic = if let Connector::Kafka { topic, .. } = connector {
                     topic
                 } else {
@@ -96,8 +100,11 @@ async fn purify_format(
                 if seed.is_none() {
                     let url = url.parse()?;
 
-                    let ccsr_config =
-                        kafka_util::generate_ccsr_client_config(url, &specified_options)?;
+                    let ccsr_config = kafka_util::generate_ccsr_client_config(
+                        url,
+                        &connector_options,
+                        &normalize::with_options(ccsr_options),
+                    )?;
 
                     let Schema {
                         key_schema,

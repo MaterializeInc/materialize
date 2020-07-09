@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{DataType, Expr, Ident, ObjectName};
+use crate::ast::{DataType, Expr, Ident, ObjectName, SqlOption};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -54,20 +54,33 @@ impl_display!(Schema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema {
-    CsrUrl { url: String, seed: Option<CsrSeed> },
+    CsrUrl {
+        url: String,
+        seed: Option<CsrSeed>,
+        with_options: Vec<SqlOption>,
+    },
     Schema(Schema),
 }
 
 impl AstDisplay for AvroSchema {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Self::CsrUrl { url, seed } => {
+            Self::CsrUrl {
+                url,
+                seed,
+                with_options,
+            } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY '");
                 f.write_node(&display::escape_single_quote_string(url));
                 f.write_str("'");
                 if let Some(seed) = seed {
                     f.write_str(" ");
                     f.write_node(seed);
+                }
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
                 }
             }
             Self::Schema(schema) => schema.fmt(f),

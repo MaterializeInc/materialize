@@ -667,9 +667,16 @@ fn kafka_sink_builder(
     topic_suffix: String,
 ) -> Result<SinkConnectorBuilder, failure::Error> {
     let schema_registry_url = match format {
-        Some(Format::Avro(AvroSchema::CsrUrl { url, seed })) => {
+        Some(Format::Avro(AvroSchema::CsrUrl {
+            url,
+            seed,
+            with_options,
+        })) => {
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
+            }
+            if !with_options.is_empty() {
+                unsupported!("CONFLUENT SCHEMA REGISTRY ... WITH options in CREATE SINK");
             }
             url.parse()?
         }
@@ -1096,13 +1103,20 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                             AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
                                 unreachable!("File schema should already have been inlined")
                             }
-                            AvroSchema::CsrUrl { url, seed } => {
+                            AvroSchema::CsrUrl {
+                                url,
+                                seed,
+                                with_options: ccsr_options,
+                            } => {
                                 let url: Url = url.parse()?;
-                                let mut with_options_map = normalize::with_options(with_options);
-                                let config_options =
-                                    kafka_util::extract_config(&mut with_options_map)?;
-                                let ccsr_config =
-                                    kafka_util::generate_ccsr_client_config(url, &config_options)?;
+                                let kafka_options = kafka_util::extract_config(
+                                    &normalize::with_options(with_options),
+                                )?;
+                                let ccsr_config = kafka_util::generate_ccsr_client_config(
+                                    url,
+                                    &kafka_options,
+                                    &normalize::with_options(ccsr_options),
+                                )?;
 
                                 if let Some(seed) = seed {
                                     Schema {
@@ -1180,7 +1194,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
 
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
-                    let config_options = kafka_util::extract_config(&mut with_options)?;
+                    let config_options = kafka_util::extract_config(&with_options)?;
 
                     consistency = match with_options.remove("consistency") {
                         None => Consistency::RealTime,
