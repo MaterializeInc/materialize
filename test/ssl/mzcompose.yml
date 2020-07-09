@@ -22,6 +22,8 @@ services:
       - bash
       - -c
       - >-
+        cp /share/secrets/ca.crt /usr/local/share/ca-certificates/ca.crt &&
+        update-ca-certificates &&
         wait-for-it --timeout=30 kafka:9092 &&
         wait-for-it --timeout=30 schema-registry:8081 &&
         wait-for-it --timeout=30 materialized:6875 &&
@@ -31,14 +33,12 @@ services:
         --materialized-url=postgres://ignored@materialized:6875
         --cert=/share/secrets/producer.p12
         --cert-password=mzmzmz
-        --root-cert=/share/secrets/ca.crt
         $$*
       - bash
     command: test/ssl/smoketest.td
     volumes:
       - ../../:/workdir
       - secrets:/share/secrets
-    propagate-uid-gid: true
     init: true
     depends_on: [kafka, zookeeper, schema-registry, materialized, test-certs]
   materialized:

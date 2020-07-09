@@ -48,7 +48,6 @@ async fn run() -> Result<(), Error> {
         "PATH",
     );
     opts.optopt("", "cert-password", "Keystore password", "PASSWORD");
-    opts.optopt("", "root-cert", "Path to the root CA's cert (.pem)", "PATH");
 
     // Kerberos options.
     opts.optopt("", "krb5-keytab", "Path to the Kerberos keystab", "PATH");
@@ -126,16 +125,6 @@ async fn run() -> Result<(), Error> {
         config.keystore_path = Some(path);
     }
     config.keystore_pass = opts.opt_str("cert-password");
-    if let Some(path) = opts.opt_str("root-cert") {
-        if std::fs::metadata(&path).is_err() {
-            return Err(Error::General {
-                ctx: "root certificate path does not exist".into(),
-                cause: None,
-                hints: vec![],
-            });
-        }
-        config.root_cert_path = Some(path);
-    }
 
     if let Some(path) = opts.opt_str("krb5-keytab") {
         if std::fs::metadata(&path).is_err() {
