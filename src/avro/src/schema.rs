@@ -9,7 +9,7 @@
 
 //! Logic for parsing and interacting with schemas in Avro format.
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use digest::Digest;
@@ -873,7 +873,7 @@ impl SchemaParser {
     /// Parse a `serde_json::Value` representing a Avro enum type into a
     /// `Schema`.
     fn parse_enum(&mut self, complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
-        let symbols = complex
+        let symbols: Vec<String> = complex
             .get("symbols")
             .and_then(|v| v.as_array())
             .ok_or_else(|| ParseSchemaError::new("No `symbols` field in enum"))
@@ -884,6 +884,19 @@ impl SchemaParser {
                     .collect::<Option<_>>()
                     .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))
             })?;
+
+        let mut unique_symbols: HashSet<&String> = HashSet::new();
+        for symbol in symbols.iter() {
+            if unique_symbols.contains(symbol) {
+                return Err(ParseSchemaError::new(format!(
+                    "Enum symbols must be unique, found multiple: {}",
+                    symbol
+                ))
+                .into());
+            } else {
+                unique_symbols.insert(symbol);
+            }
+        }
 
         Ok(SchemaPiece::Enum {
             doc: complex.doc(),
