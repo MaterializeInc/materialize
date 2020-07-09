@@ -66,6 +66,16 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema-v1} publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
+> CREATE MATERIALIZED SOURCE data_v1
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM data_v1
+a
+---
+1
+
 $ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp=3
 {"before": null, "after": {"a": 2, "b": -1}}
 
@@ -74,6 +84,11 @@ $ kafka-ingest format=avro topic=data schema=${schema-v2} publish=true timestamp
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 
+> SELECT * FROM data_v1
+a
+---
+1
+2
 
 > SELECT * FROM data_v2
 a b
