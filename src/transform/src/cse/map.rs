@@ -73,7 +73,7 @@ fn memoize_and_reuse(
     let mut scalars = Vec::new();
     for expr in exprs.iter_mut() {
         // Carefully memoize expressions that will certainly be evaluated.
-        memoize(expr, &mut scalars, &mut projection, input_arity);
+        memoize(expr, &mut scalars, &projection, input_arity);
 
         // At this point `expr` should be a column reference or a literal. It may not have
         // been added to `scalars` and we should do so if it is a literal to make sure we
