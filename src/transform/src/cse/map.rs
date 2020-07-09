@@ -101,7 +101,7 @@ fn memoize_and_reuse(
 fn memoize(
     expr: &mut ScalarExpr,
     scalars: &mut Vec<ScalarExpr>,
-    projection: &mut Vec<usize>,
+    projection: &[usize],
     input_arity: usize,
 ) {
     match expr {
