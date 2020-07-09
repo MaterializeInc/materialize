@@ -59,7 +59,7 @@ steps:
   - id: miri-test
     label: ":face_with_monocle: miri test"
     command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
-    inputs: [src/repr]
+    inputs: [src/repr, ci/builder/nightly.stamp]
     timeout_in_minutes: 30
     agents:
       queue: builder
