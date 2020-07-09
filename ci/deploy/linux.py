@@ -22,9 +22,10 @@ import os
 def main() -> None:
     repo = mzbuild.Repository(Path("."))
     workspace = cargo.Workspace(repo.root)
+    buildkite_tag = os.environ["BUILDKITE_TAG"]
 
     print(f"--- Publishing Debian package")
-    if os.environ["BUILDKITE_TAG"]:
+    if buildkite_tag:
         version = workspace.crates["materialized"].version
         if version.prerelease is None:
             publish_deb("materialized", str(version))
@@ -34,8 +35,8 @@ def main() -> None:
         publish_deb("materialized-unstable", deb.unstable_version(workspace))
 
     print(f"--- Tagging Docker images")
-    if os.environ["BUILDKITE_TAG"]:
-        tag_docker(repo, os.environ["BUILDKITE_TAG"])
+    if buildkite_tag:
+        tag_docker(repo, buildkite_tag)
         # TODO(benesch): figure out how to push a latest tag. We want to be
         # careful to not overwrite a tag for a newer release if we are building
         # a historical release (e.g., don't overwrite v1.1.0 with v1.0.1).
