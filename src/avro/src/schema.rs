@@ -193,6 +193,9 @@ pub enum SchemaPiece {
     /// A value written as `int` and read as `long`,
     /// for the timestamp-micros logicalType.
     ResolveIntTsMicro,
+    /// A value written as an `int` with `date` logical type,
+    /// and read as any timestamp type
+    ResolveDateTimestamp,
     /// A value written as `int` and read as `long`
     ResolveIntLong,
     /// A value written as `int` and read as `float`
@@ -363,6 +366,7 @@ impl<'a> From<&'a SchemaPiece> for SchemaKind {
             SchemaPiece::TimestampMilli
             | SchemaPiece::TimestampMicro
             | SchemaPiece::ResolveIntTsMilli
+            | SchemaPiece::ResolveDateTimestamp
             | SchemaPiece::ResolveIntTsMicro => SchemaKind::DateTime,
             SchemaPiece::Decimal { .. } => SchemaKind::Decimal,
             SchemaPiece::Bytes => SchemaKind::Bytes,
@@ -1338,6 +1342,7 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
             SchemaPiece::ResolveFloatDouble => SchemaPiece::ResolveFloatDouble,
             SchemaPiece::ResolveIntTsMilli => SchemaPiece::ResolveIntTsMilli,
             SchemaPiece::ResolveIntTsMicro => SchemaPiece::ResolveIntTsMicro,
+            SchemaPiece::ResolveDateTimestamp => SchemaPiece::ResolveDateTimestamp,
             SchemaPiece::ResolveConcreteUnion { index, inner } => {
                 SchemaPiece::ResolveConcreteUnion {
                     index: *index,
@@ -1660,6 +1665,7 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     unreachable!("Unexpected named schema piece in anonymous schema position")
                 }
                 SchemaPiece::ResolveIntLong
+                | SchemaPiece::ResolveDateTimestamp
                 | SchemaPiece::ResolveIntFloat
                 | SchemaPiece::ResolveIntDouble
                 | SchemaPiece::ResolveLongFloat
@@ -1740,6 +1746,7 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         unreachable!("Unexpected anonymous schema piece in named schema position")
                     }
                     SchemaPiece::ResolveIntLong
+                    | SchemaPiece::ResolveDateTimestamp
                     | SchemaPiece::ResolveIntFloat
                     | SchemaPiece::ResolveIntDouble
                     | SchemaPiece::ResolveLongFloat

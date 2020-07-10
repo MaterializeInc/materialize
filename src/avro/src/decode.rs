@@ -250,6 +250,17 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             let micros = zag_i32(reader)?.into();
             build_ts_value(micros, TsUnit::Micros)
         }
+        SchemaPiece::ResolveDateTimestamp => {
+            let days = zag_i32(reader)?;
+
+            let date = NaiveDate::from_ymd(1970, 1, 1)
+                .checked_add_signed(chrono::Duration::days(days.into()))
+                .ok_or_else(|| {
+                    DecodeError::new(format!("Invalid num days from epoch: {0}", days))
+                })?;
+            let dt = date.and_hms(0, 0, 0);
+            Ok(Value::Timestamp(dt))
+        }
         SchemaPiece::ResolveIntLong => zag_i32(reader).map(|x| Value::Long(x.into())),
         SchemaPiece::ResolveIntFloat => zag_i32(reader).map(|x| Value::Float(x as f32)),
         SchemaPiece::ResolveIntDouble => zag_i32(reader).map(|x| Value::Double(x.into())),

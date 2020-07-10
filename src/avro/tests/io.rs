@@ -296,6 +296,13 @@ fn test_datetime_resolutions() {
                         "type": "int",
                         "logicalType": "date"
                     }
+                },
+                {
+                    "name": "f7",
+                    "type": {
+                        "type": "int",
+                        "logicalType": "date"
+                     }
                 }
             ]
         }
@@ -342,6 +349,13 @@ fn test_datetime_resolutions() {
                 {
                     "name": "f6",
                     "type": "int"
+                },
+                {
+                    "name": "f7",
+                    "type": {
+                        "type": "long",
+                        "logicalType": "timestamp-micros"
+                    }
                 }
             ]
         }
@@ -361,6 +375,7 @@ fn test_datetime_resolutions() {
         ),
         ("f5".into(), Value::Int(365 * 2)),
         ("f6".into(), Value::Date(NaiveDate::from_ymd(1973, 1, 1))),
+        ("f7".into(), Value::Date(NaiveDate::from_ymd(1974, 1, 1))),
     ]);
     let datum_to_read = Value::Record(vec![
         (
@@ -378,6 +393,7 @@ fn test_datetime_resolutions() {
         ("f4".into(), Value::Long(34567000000)),
         ("f5".into(), Value::Date(NaiveDate::from_ymd(1972, 1, 1))),
         ("f6".into(), Value::Int(365 * 3 + 1)), // +1 because 1972 was a leap year
+        ("f7".into(), Value::Timestamp(NaiveDate::from_ymd(1974, 1, 1).and_hms(0, 0, 0)))
     ]);
     let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();

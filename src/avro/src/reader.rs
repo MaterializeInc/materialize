@@ -609,6 +609,10 @@ impl<'a> SchemaResolver<'a> {
                     (SchemaPiece::TimestampMicro, SchemaPiece::TimestampMilli) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::TimestampMicro)
                     }
+                    (SchemaPiece::Date, SchemaPiece::TimestampMilli)
+                    | (SchemaPiece::Date, SchemaPiece::TimestampMicro) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::ResolveDateTimestamp)
+                    }
                     (wp, rp) if wp.is_underlying_int() && rp.is_underlying_int() => {
                         SchemaPieceOrNamed::Piece(rp.clone()) // This clone is just a copy - none of the underlying int/long types own heap memory.
                     }
