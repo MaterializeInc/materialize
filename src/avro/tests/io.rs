@@ -393,7 +393,10 @@ fn test_datetime_resolutions() {
         ("f4".into(), Value::Long(34567000000)),
         ("f5".into(), Value::Date(NaiveDate::from_ymd(1972, 1, 1))),
         ("f6".into(), Value::Int(365 * 3 + 1)), // +1 because 1972 was a leap year
-        ("f7".into(), Value::Timestamp(NaiveDate::from_ymd(1974, 1, 1).and_hms(0, 0, 0)))
+        (
+            "f7".into(),
+            Value::Timestamp(NaiveDate::from_ymd(1974, 1, 1).and_hms(0, 0, 0)),
+        ),
     ]);
     let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
