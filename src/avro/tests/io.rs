@@ -12,7 +12,9 @@ use std::io::Cursor;
 
 use avro::schema::resolve_schemas;
 use avro::{
-    from_avro_datum, to_avro_datum, types::Value, Schema, SchemaResolutionError, ValidationError,
+    from_avro_datum, to_avro_datum,
+    types::{DecimalValue, Value},
+    Schema, SchemaResolutionError, ValidationError,
 };
 use lazy_static::lazy_static;
 
@@ -455,7 +457,8 @@ fn test_complex_resolutions() {
     // Reordering fields in "some_record", field "f0" missing from writer, field "f3" missing
     // from reader, reordering and different set of symbols in enum in "f2",
     // "union to concrete" resolution in "f4", "concrete to union" in f5, "union to union"
-    // with reordered fields in "f1".
+    // with reordered fields in "f1", "decimal to bytes/fixed" and vice versa
+    // in "f6"-"f9"
     let writer_schema = r#"
         {
             "name": "some_record",
@@ -509,9 +512,42 @@ fn test_complex_resolutions() {
                             "size": 4
                         }
                     ]
+                },
+                {
+                    "name": "f6",
+                    "type": {
+                        "type": "fixed",
+                        "name": "dec",
+                        "size": 4,
+                        "logicalType": "decimal",
+                        "precision": 2,
+                        "scale": 2
+                    }
+                },
+                {
+                    "name": "f7",
+                    "type": {
+                        "type": "bytes",
+                        "logicalType": "decimal",
+                        "precision": 2,
+                        "scale": 2
+                    }
+                },
+                {
+                    "name": "f8",
+                    "type": {
+                        "type": "fixed",
+                        "name": "fix",
+                        "size": 2
+                    }
+                },
+                {
+                    "name": "f9",
+                    "type": "bytes"
                 }
             ]
         }"#;
+
     let datum_to_write = Value::Record(vec![
         ("f5".to_owned(), Value::Long(1234)),
         (
@@ -524,6 +560,24 @@ fn test_complex_resolutions() {
             "f1".to_owned(),
             Value::Union(2, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
         ),
+        (
+            "f6".to_owned(),
+            Value::Decimal(DecimalValue {
+                precision: 2,
+                scale: 2,
+                unscaled: vec![1, 2, 3, 4],
+            }),
+        ),
+        (
+            "f7".to_owned(),
+            Value::Decimal(DecimalValue {
+                precision: 2,
+                scale: 2,
+                unscaled: vec![1, 2],
+            }),
+        ),
+        ("f8".to_owned(), Value::Fixed(2, vec![0, 1])),
+        ("f9".to_owned(), Value::Bytes(vec![3, 4, 5])),
     ]);
     let expected_read = Value::Record(vec![
         (
@@ -545,6 +599,24 @@ fn test_complex_resolutions() {
         (
             "f5".to_owned(),
             Value::Union(1, Box::new(Value::Long(1234))),
+        ),
+        ("f6".to_owned(), Value::Fixed(4, vec![1, 2, 3, 4])),
+        ("f7".to_owned(), Value::Bytes(vec![1, 2])),
+        (
+            "f8".to_owned(),
+            Value::Decimal(DecimalValue {
+                precision: 2,
+                scale: 2,
+                unscaled: vec![0, 1],
+            }),
+        ),
+        (
+            "f9".to_owned(),
+            Value::Decimal(DecimalValue {
+                precision: 2,
+                scale: 2,
+                unscaled: vec![3, 4, 5],
+            }),
         ),
     ]);
     let reader_schema = r#"
@@ -619,6 +691,38 @@ fn test_complex_resolutions() {
                         },
                         "long"
                      ]
+                },
+                {
+                    "name": "f6",
+                    "type": {
+                        "type": "fixed",
+                        "name": "dec",
+                        "size": 4
+                    }
+                },
+                {
+                    "name": "f7",
+                    "type": "bytes"
+                },
+                {
+                    "name": "f8",
+                    "type": {
+                        "type": "fixed",
+                        "name": "fix",
+                        "size": 2,
+                        "logicalType": "decimal",
+                        "precision": 2,
+                        "scale": 2
+                    }
+                },
+                {
+                    "name": "f9",
+                    "type": {
+                        "type": "bytes",
+                        "logicalType": "decimal",
+                        "precision": 2,
+                        "scale": 2
+                    }
                 }
             ]
         }
