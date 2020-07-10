@@ -16,6 +16,7 @@ use avro::{
     types::{DecimalValue, Value},
     Schema, SchemaResolutionError, ValidationError,
 };
+use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -254,6 +255,153 @@ fn test_union_default() {
     )
     .unwrap();
     resolve_schemas(&writer_schema, &reader_schema).unwrap();
+}
+
+#[test]
+fn test_datetime_resolutions() {
+    let writer_schema = Schema::parse_str(
+        r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {
+                    "name": "f1",
+                    "type": "int"
+                },
+                {
+                    "name": "f2",
+                    "type": {
+                        "type": "long",
+                        "logicalType": "timestamp-millis"
+                    }
+                },
+                {
+                    "name": "f3",
+                    "type": "long"
+                },
+                {
+                    "name": "f4",
+                    "type": {
+                        "type": "long",
+                        "logicalType": "timestamp-micros"
+                    }
+                },
+                {
+                    "name": "f5",
+                    "type": "int"
+                },
+                {
+                    "name": "f6",
+                    "type": {
+                        "type": "int",
+                        "logicalType": "date"
+                    }
+                },
+                {
+                    "name": "f7",
+                    "type": {
+                        "type": "int",
+                        "logicalType": "date"
+                     }
+                }
+            ]
+        }
+"#,
+    )
+    .unwrap();
+    let reader_schema = Schema::parse_str(
+        r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {
+                    "name": "f1",
+                    "type": {
+                        "type": "long",
+                        "logicalType": "timestamp-millis"
+                    }
+                },
+                {
+                    "name": "f2",
+                    "type": {
+                        "type": "long",
+                        "logicalType": "timestamp-micros"
+                    }
+                },
+                {
+                    "name": "f3",
+                    "type": {
+                        "type": "long",
+                        "logicalType": "timestamp-millis"
+                    }
+                },
+                {
+                    "name": "f4",
+                    "type": "long"
+                },
+                {
+                    "name": "f5",
+                    "type": {
+                        "type": "int",
+                        "logicalType": "date"
+                    }
+                },
+                {
+                    "name": "f6",
+                    "type": "int"
+                },
+                {
+                    "name": "f7",
+                    "type": {
+                        "type": "long",
+                        "logicalType": "timestamp-micros"
+                    }
+                }
+            ]
+        }
+"#,
+    )
+    .unwrap();
+    let datum_to_write = Value::Record(vec![
+        ("f1".into(), Value::Int(1000)),
+        (
+            "f2".into(),
+            Value::Timestamp(NaiveDateTime::from_timestamp(12345, 0)),
+        ),
+        ("f3".into(), Value::Long(23456000)),
+        (
+            "f4".into(),
+            Value::Timestamp(NaiveDateTime::from_timestamp(34567, 0)),
+        ),
+        ("f5".into(), Value::Int(365 * 2)),
+        ("f6".into(), Value::Date(NaiveDate::from_ymd(1973, 1, 1))),
+        ("f7".into(), Value::Date(NaiveDate::from_ymd(1974, 1, 1))),
+    ]);
+    let datum_to_read = Value::Record(vec![
+        (
+            "f1".into(),
+            Value::Timestamp(NaiveDateTime::from_timestamp(1, 0)),
+        ),
+        (
+            "f2".into(),
+            Value::Timestamp(NaiveDateTime::from_timestamp(12345, 0)),
+        ),
+        (
+            "f3".into(),
+            Value::Timestamp(NaiveDateTime::from_timestamp(23456, 0)),
+        ),
+        ("f4".into(), Value::Long(34567000000)),
+        ("f5".into(), Value::Date(NaiveDate::from_ymd(1972, 1, 1))),
+        ("f6".into(), Value::Int(365 * 3 + 1)), // +1 because 1972 was a leap year
+        (
+            "f7".into(),
+            Value::Timestamp(NaiveDate::from_ymd(1974, 1, 1).and_hms(0, 0, 0)),
+        ),
+    ]);
+    let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
+    let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
+    let datum_read = from_avro_datum(&resolved_schema, &mut encoded.as_slice()).unwrap();
+    assert_eq!(datum_to_read, datum_read);
 }
 
 #[test]

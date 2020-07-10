@@ -599,14 +599,40 @@ impl<'a> SchemaResolver<'a> {
             // Any other anonymous type.
             (SchemaPieceRefOrNamed::Piece(wp), SchemaPieceRefOrNamed::Piece(rp)) => {
                 match (wp, rp) {
+                    // Normally for types that are underlyingly "long", we just interpret them according to the reader schema.
+                    // In this special case, it is better to interpret them according to the _writer_ schema:
+                    // By treating the written value as millis, we will decode the same DateTime values as were written.
+                    //
+                    // For example: if a writer wrote milliseconds and a reader tries to read it as microseconds,
+                    // it will be off by a factor of 1000 from the timestamp that the writer was intending to write
+                    (SchemaPiece::TimestampMilli, SchemaPiece::TimestampMicro) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::TimestampMilli)
+                    }
+                    // See above
+                    (SchemaPiece::TimestampMicro, SchemaPiece::TimestampMilli) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::TimestampMicro)
+                    }
+                    (SchemaPiece::Date, SchemaPiece::TimestampMilli)
+                    | (SchemaPiece::Date, SchemaPiece::TimestampMicro) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::ResolveDateTimestamp)
+                    }
+                    (wp, rp) if wp.is_underlying_int() && rp.is_underlying_int() => {
+                        SchemaPieceOrNamed::Piece(rp.clone()) // This clone is just a copy - none of the underlying int/long types own heap memory.
+                    }
+                    (wp, rp) if wp.is_underlying_long() && rp.is_underlying_long() => {
+                        SchemaPieceOrNamed::Piece(rp.clone()) // see above comment
+                    }
+                    (wp, SchemaPiece::TimestampMilli) if wp.is_underlying_int() => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::ResolveIntTsMilli)
+                    }
+                    (wp, SchemaPiece::TimestampMicro) if wp.is_underlying_int() => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::ResolveIntTsMicro)
+                    }
                     (SchemaPiece::Null, SchemaPiece::Null) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::Null)
                     }
                     (SchemaPiece::Boolean, SchemaPiece::Boolean) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::Boolean)
-                    }
-                    (SchemaPiece::Int, SchemaPiece::Int) => {
-                        SchemaPieceOrNamed::Piece(SchemaPiece::Int)
                     }
                     (SchemaPiece::Int, SchemaPiece::Long) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::ResolveIntLong)
@@ -616,9 +642,6 @@ impl<'a> SchemaResolver<'a> {
                     }
                     (SchemaPiece::Int, SchemaPiece::Double) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::ResolveIntDouble)
-                    }
-                    (SchemaPiece::Long, SchemaPiece::Long) => {
-                        SchemaPieceOrNamed::Piece(SchemaPiece::Long)
                     }
                     (SchemaPiece::Long, SchemaPiece::Float) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::ResolveLongFloat)
@@ -634,15 +657,6 @@ impl<'a> SchemaResolver<'a> {
                     }
                     (SchemaPiece::Double, SchemaPiece::Double) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::Double)
-                    }
-                    (SchemaPiece::Date, SchemaPiece::Date) => {
-                        SchemaPieceOrNamed::Piece(SchemaPiece::Date)
-                    }
-                    (SchemaPiece::TimestampMilli, SchemaPiece::TimestampMilli) => {
-                        SchemaPieceOrNamed::Piece(SchemaPiece::TimestampMilli)
-                    }
-                    (SchemaPiece::TimestampMicro, SchemaPiece::TimestampMicro) => {
-                        SchemaPieceOrNamed::Piece(SchemaPiece::TimestampMicro)
                     }
                     (b, SchemaPiece::Bytes)
                         if b == &SchemaPiece::Bytes || b == &SchemaPiece::String =>
