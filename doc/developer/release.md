@@ -12,7 +12,7 @@ To view the release checklist, create a new issue using the release template:
 
 ## Basic git workflow
 
-The Materialize release process is based on an "always release master" philosophy, while
+The Materialize release process is based on an "always release main" philosophy, while
 still allowing us to produce bugfix releases if they are urgently required. We will
 iterate on this release process as we gain experience.
 
@@ -30,7 +30,7 @@ steps as they find convenient.
 To start a new release version the steps look like:
 
 1. We start with an existing repository, with some work having already been done on it
-   master is currently on commit C and we'd like to get B tagged as a release:
+   main is currently on commit C and we'd like to get B tagged as a release:
 
    ![clean](assets/rel/01-clean.svg)
 1. A developer creates and updates the tag and release branch with a tag that looks like
@@ -94,18 +94,18 @@ happy path.
 Here is a walkthrough of a bad-case happening at every step in the release process:
 
 1. Ensure that the repo is entirely up to date: `git pull origin`
-1. Commit `B` in the master branch is tagged and the release branch is updated:
+1. Commit `B` in the main branch is tagged and the release branch is updated:
 
         git tag -a v0.1.0-rc1 <B>
         git push origin v0.1.0-rc1
 1. A pair of issues are discovered that are deemed important enough for us to backport to
    the rc
-1. The fixes are tested and merged to `master` as commits `D` and `E`, after some
-   unfortunately dangerous work has been commited to master (here as `C`). The repo
+1. The fixes are tested and merged to `main` as commits `D` and `E`, after some
+   unfortunately dangerous work has been commited to main (here as `C`). The repo
    therefore looks like this, and we do _not_ want to import `C` into the release:
 
    ![master-has-progressed](assets/rel/04-master-progressed.svg)
-1. The commits on master are applied to the release branch:
+1. The commits on main are applied to the release branch:
 
         git checkout release-X.Y
         git cherry-pick D
@@ -127,9 +127,9 @@ Here is a walkthrough of a bad-case happening at every step in the release proce
 1. Some time later we're ready to release from mainline again, this should be the next
    release. So even though we don't have any features that we would like to market as
    `0.2` we would like to release bugfixes and improvements from mainline. That causes
-   the next tag to be on a commit that is an ancestor of master again, allowing the
+   the next tag to be on a commit that is an ancestor of main again, allowing the
    release manager to delete the `release-0.1.0` branch that we were using as scratch
-   space, and start the process over on master:
+   space, and start the process over on main:
 
         git tag -a v0.1.1-rc1 H
         # run long-running tests

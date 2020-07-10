@@ -12,7 +12,7 @@ production readiness.
 ### Create the release candidate
 
 - [ ] Choose the desired commit. Most often, this will be the latest commit to
-  master.
+  main.
 
   ```shell
   git checkout <SHA>
@@ -52,7 +52,7 @@ production readiness.
 
   - [ ] Update the version field in
     [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) to
-    `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on master to
+    `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on main to
     `v0.1.3-dev`.
 
   - [ ] Update the [`LICENSE`](/LICENSE) file to use the `-dev` version, and

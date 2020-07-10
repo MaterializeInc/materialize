@@ -22,15 +22,15 @@ Binary tarballs require a recent version of their stated platform:
 
 ## Unstable builds
 
-Binary tarballs are built for every merge to the [master branch on
+Binary tarballs are built for every merge to the [main branch on
 GitHub][github]. These tarballs are not suitable for use in production.
 **Run unstable builds at your own risk.**
 
 Version | Binary tarball links
 --------|---------------------
-master  | [Linux] / [macOS]
+main    | [Linux] / [macOS]
 
-The tarballs for other commits on master can be constructed by replacing
+The tarballs for other commits on main can be constructed by replacing
 `latest` in the links above with the full 40-character commit hash.
 
 [Linux]: http://downloads.mtrlz.dev/materialized-latest-x86_64-unknown-linux-gnu.tar.gz
