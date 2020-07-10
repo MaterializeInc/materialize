@@ -12,10 +12,8 @@ Materialize is a streaming database for real-time applications. Materialize
 accepts input data from a variety of streaming sources (e.g. Kafka) and files
 (e.g. CSVs), and lets you query them using SQL.
 
-{{< cta >}}
-
-[Install Materialize →](./install)
-
+{{< cta href="/install" >}}
+Install Materialize →
 {{</ cta >}}
 
 ## What does Materialize do?
