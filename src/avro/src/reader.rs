@@ -602,6 +602,9 @@ impl<'a> SchemaResolver<'a> {
                     // Normally for types that are underlyingly "long", we just interpret them according to the reader schema.
                     // In this special case, it is better to interpret them according to the _writer_ schema:
                     // By treating the written value as millis, we will decode the same DateTime values as were written.
+                    //
+                    // For example: if a writer wrote milliseconds and a reader tries to read it as microseconds,
+                    // it will be off by a factor of 1000 from the timestamp that the writer was intending to write
                     (SchemaPiece::TimestampMilli, SchemaPiece::TimestampMicro) => {
                         SchemaPieceOrNamed::Piece(SchemaPiece::TimestampMilli)
                     }
