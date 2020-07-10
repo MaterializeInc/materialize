@@ -494,6 +494,24 @@ impl<'a> SchemaResolver<'a> {
                     fixed_size: *wsz,
                 }
             }
+            (SchemaPiece::Decimal { fixed_size, .. }, SchemaPiece::Fixed { size })
+                if *fixed_size == Some(*size) =>
+            {
+                SchemaPiece::Fixed { size: *size }
+            }
+            (
+                SchemaPiece::Fixed { size },
+                SchemaPiece::Decimal {
+                    precision,
+                    scale,
+                    fixed_size,
+                },
+            ) if *fixed_size == Some(*size) => SchemaPiece::Decimal {
+                precision: *precision,
+                scale: *scale,
+                fixed_size: *fixed_size,
+            },
+
             (_, SchemaPiece::ResolveRecord { .. })
             | (_, SchemaPiece::ResolveEnum { .. })
             | (SchemaPiece::ResolveRecord { .. }, _)
@@ -668,6 +686,23 @@ impl<'a> SchemaResolver<'a> {
                             return Err(SchemaResolutionError::new(format!("Decimal types must match in precision, scale, and fixed size. Got ({:?}, {:?}, {:?}); ({:?}, {:?}. {:?})", wp, ws, wf, rp, rs, rf)).into());
                         }
                     }
+                    (SchemaPiece::Decimal { fixed_size, .. }, SchemaPiece::Bytes)
+                        if *fixed_size == None =>
+                    {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::Bytes)
+                    }
+                    (
+                        SchemaPiece::Bytes,
+                        SchemaPiece::Decimal {
+                            precision,
+                            scale,
+                            fixed_size,
+                        },
+                    ) if *fixed_size == None => SchemaPieceOrNamed::Piece(SchemaPiece::Decimal {
+                        precision: *precision,
+                        scale: *scale,
+                        fixed_size: *fixed_size,
+                    }),
                     (ws, rs) => {
                         return Err(SchemaResolutionError::new(format!(
                             "Schemas don't match: {:?}, {:?}",
