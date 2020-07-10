@@ -152,7 +152,7 @@ pub enum SchemaPiece {
     Double,
     /// An `Int` Avro schema with a semantic type being days since the unix epoch.
     Date,
-    /// An `Int` Avro schema with a semantic type being milliseconds since the unix epoch.
+    /// An `Int64` Avro schema with a semantic type being milliseconds since the unix epoch.
     ///
     /// https://avro.apache.org/docs/current/spec.html#Timestamp+%28millisecond+precision%29
     TimestampMilli,
