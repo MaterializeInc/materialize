@@ -17,7 +17,7 @@ use crate::from_avro_datum;
 use crate::schema::{ResolvedRecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use crate::types::{DecimalValue, Value};
 use crate::util::{safe_len, zag_i32, zag_i64, DecodeError};
-use std::io::Read;
+use std::{fmt::Display, io::Read};
 
 #[inline]
 fn decode_long<R: Read>(reader: &mut R) -> Result<Value, Error> {
@@ -84,6 +84,39 @@ fn decode_string<R: Read>(reader: &mut R) -> Result<String, Error> {
     String::from_utf8(buf).map_err(|_| DecodeError::new("not a valid utf-8 string").into())
 }
 
+#[derive(Debug, Clone, Copy)]
+enum TsUnit {
+    Millis,
+    Micros,
+}
+
+impl Display for TsUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TsUnit::Millis => write!(f, "ms"),
+            TsUnit::Micros => write!(f, "us"),
+        }
+    }
+}
+
+fn build_ts_value(value: i64, unit: TsUnit) -> Result<Value, Error> {
+    let units_per_second = match unit {
+        TsUnit::Millis => 1_000,
+        TsUnit::Micros => 1_000_000,
+    };
+    let nanos_per_unit = 1_000_000_000 / units_per_second as u32;
+    let seconds = value / units_per_second;
+    let fraction = (value % units_per_second) as u32;
+    Ok(Value::Timestamp(
+        NaiveDateTime::from_timestamp_opt(seconds, fraction * nanos_per_unit).ok_or_else(|| {
+            DecodeError::new(format!(
+                "Invalid {} timestamp {}.{}",
+                unit, seconds, fraction
+            ))
+        })?,
+    ))
+}
+
 /// Decode a `Value` from avro format given its `Schema`.
 pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<Value, Error> {
     match schema.inner {
@@ -115,15 +148,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             }
         },
         SchemaPiece::TimestampMilli => match decode_long(reader)? {
-            Value::Long(millis) => {
-                let seconds = millis / 1_000;
-                let millis = (millis % 1_000) as u32;
-                Ok(Value::Timestamp(
-                    NaiveDateTime::from_timestamp_opt(seconds, millis * 1_000_000).ok_or_else(
-                        || DecodeError::new(format!("Invalid ms timestamp {}.{}", seconds, millis)),
-                    )?,
-                ))
-            }
+            Value::Long(millis) => build_ts_value(millis, TsUnit::Millis),
             other => Err(DecodeError::new(format!(
                 "Not an Int64 input for Millisecond DateTime: {:?}",
                 other
@@ -131,15 +156,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             .into()),
         },
         SchemaPiece::TimestampMicro => match decode_long(reader)? {
-            Value::Long(micros) => {
-                let seconds = micros / 1_000_000;
-                let micros = (micros % 1_000_000) as u32;
-                Ok(Value::Timestamp(
-                    NaiveDateTime::from_timestamp_opt(seconds, micros * 1_000).ok_or_else(
-                        || DecodeError::new(format!("Invalid mu timestamp {}.{}", seconds, micros)),
-                    )?,
-                ))
-            }
+            Value::Long(micros) => build_ts_value(micros, TsUnit::Micros),
             other => Err(DecodeError::new(format!(
                 "Not an Int64 input for Microsecond DateTime: {:?}",
                 other
@@ -224,6 +241,14 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
                 }
                 None => Err(DecodeError::new("Union index out of bounds").into()),
             }
+        }
+        SchemaPiece::ResolveIntTsMilli => {
+            let millis = zag_i32(reader)?.into();
+            build_ts_value(millis, TsUnit::Millis)
+        }
+        SchemaPiece::ResolveIntTsMicro => {
+            let micros = zag_i32(reader)?.into();
+            build_ts_value(micros, TsUnit::Micros)
         }
         SchemaPiece::ResolveIntLong => zag_i32(reader).map(|x| Value::Long(x.into())),
         SchemaPiece::ResolveIntFloat => zag_i32(reader).map(|x| Value::Float(x as f32)),

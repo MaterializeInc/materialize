@@ -187,6 +187,12 @@ pub enum SchemaPiece {
     Map(Box<SchemaPieceOrNamed>),
     /// A `union` Avro schema.
     Union(UnionSchema),
+    /// A value written as `int` and read as `long`,
+    /// for the timestamp-millis logicalType.
+    ResolveIntTsMilli,
+    /// A value written as `int` and read as `long`,
+    /// for the timestamp-micros logicalType.
+    ResolveIntTsMicro,
     /// A value written as `int` and read as `long`
     ResolveIntLong,
     /// A value written as `int` and read as `float`
@@ -260,6 +266,23 @@ pub enum SchemaPiece {
         symbols: Vec<Option<String>>,
         // TODO(brennan) - These should support default values
     },
+}
+
+impl SchemaPiece {
+    /// Returns whether the schema node is "underlyingly" an Int (but possibly a logicalType typedef)
+    pub fn is_underlying_int(&self) -> bool {
+        match self {
+            SchemaPiece::Int | SchemaPiece::Date => true,
+            _ => false,
+        }
+    }
+    /// Returns whether the schema node is "underlyingly" an Int64 (but possibly a logicalType typedef)
+    pub fn is_underlying_long(&self) -> bool {
+        match self {
+            SchemaPiece::Long | SchemaPiece::TimestampMilli | SchemaPiece::TimestampMicro => true,
+            _ => false,
+        }
+    }
 }
 
 /// Represents any valid Avro schema
@@ -337,7 +360,10 @@ impl<'a> From<&'a SchemaPiece> for SchemaKind {
             SchemaPiece::Float => SchemaKind::Float,
             SchemaPiece::Double => SchemaKind::Double,
             SchemaPiece::Date => SchemaKind::Date,
-            SchemaPiece::TimestampMilli | SchemaPiece::TimestampMicro => SchemaKind::DateTime,
+            SchemaPiece::TimestampMilli
+            | SchemaPiece::TimestampMicro
+            | SchemaPiece::ResolveIntTsMilli
+            | SchemaPiece::ResolveIntTsMicro => SchemaKind::DateTime,
             SchemaPiece::Decimal { .. } => SchemaKind::Decimal,
             SchemaPiece::Bytes => SchemaKind::Bytes,
             SchemaPiece::String => SchemaKind::String,
@@ -1310,6 +1336,8 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
             SchemaPiece::ResolveLongFloat => SchemaPiece::ResolveLongFloat,
             SchemaPiece::ResolveLongDouble => SchemaPiece::ResolveLongDouble,
             SchemaPiece::ResolveFloatDouble => SchemaPiece::ResolveFloatDouble,
+            SchemaPiece::ResolveIntTsMilli => SchemaPiece::ResolveIntTsMilli,
+            SchemaPiece::ResolveIntTsMicro => SchemaPiece::ResolveIntTsMicro,
             SchemaPiece::ResolveConcreteUnion { index, inner } => {
                 SchemaPiece::ResolveConcreteUnion {
                     index: *index,
@@ -1641,6 +1669,8 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                 | SchemaPiece::ResolveUnionUnion { .. }
                 | SchemaPiece::ResolveUnionConcrete { .. }
                 | SchemaPiece::ResolveRecord { .. }
+                | SchemaPiece::ResolveIntTsMicro
+                | SchemaPiece::ResolveIntTsMilli
                 | SchemaPiece::ResolveEnum { .. } => {
                     panic!("Attempted to serialize resolved schema")
                 }
@@ -1719,6 +1749,8 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     | SchemaPiece::ResolveUnionUnion { .. }
                     | SchemaPiece::ResolveUnionConcrete { .. }
                     | SchemaPiece::ResolveRecord { .. }
+                    | SchemaPiece::ResolveIntTsMilli
+                    | SchemaPiece::ResolveIntTsMicro
                     | SchemaPiece::ResolveEnum { .. } => {
                         panic!("Attempted to serialize resolved schema")
                     }
