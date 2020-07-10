@@ -10,10 +10,10 @@
 """Generator for the test CI pipeline.
 
 This script takes pipeline.template.yml as input, possibly trims out jobs
-whose inputs have not changed relative to the code on master, and uploads the
+whose inputs have not changed relative to the code on main, and uploads the
 resulting pipeline to the Buildkite job that triggers this script.
 
-On master and tags, all jobs are always run.
+On main and tags, all jobs are always run.
 
 For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_pipeline` below.
@@ -22,6 +22,7 @@ pipeline.template.yml and the docstring on `trim_pipeline` below.
 from collections import OrderedDict
 from materialize import mzbuild
 from materialize import spawn
+from materialize import git
 from materialize.cli.mzconduct import Composition
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -36,7 +37,10 @@ def main() -> int:
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
         pipeline = yaml.safe_load(f)
 
-    if os.environ["BUILDKITE_BRANCH"] != "master" and not os.environ["BUILDKITE_TAG"]:
+    if (
+        os.environ["BUILDKITE_BRANCH"] not in ("master", "main")
+        and not os.environ["BUILDKITE_TAG"]
+    ):
         print("--- Trimming unchanged steps from pipeline")
         trim_pipeline(pipeline)
 
@@ -117,12 +121,27 @@ def trim_pipeline(pipeline: Any) -> None:
                         step.extra_inputs.add(str(config))
         steps[step.id] = step
 
-    # Make sure we have an up to date view of master.
-    spawn.runv(["git", "fetch", "origin", "master"])
+    # Make sure we have an up to date view of main.
+    errored = False
+    try:
+        spawn.runv(["git", "fetch", "origin", "master"])
+    except subprocess.CalledProcessError:
+        errored = True
+    try:
+        spawn.runv(["git", "fetch", "origin", "main"])
+    except subprocess.CalledProcessError:
+        # if both fail something has gon catastrophically wrong
+        if errored:
+            raise
+
+    if git.is_ancestor("master", "main"):
+        base = "origin/main..."
+    else:
+        base = "origin/master..."
 
     # Print out a summary of all changes.
     os.environ["GIT_PAGER"] = ""
-    spawn.runv(["git", "diff", "--stat", "origin/master..."])
+    spawn.runv(["git", "diff", "--stat", base])
 
     # Find all the steps whose inputs have changed with respect to master.
     # We delegate this hard work to Git.
@@ -135,7 +154,7 @@ def trim_pipeline(pipeline: Any) -> None:
             # not "diff nothing", so explicitly skip.
             continue
         diff = subprocess.run(
-            ["git", "diff", "--no-patch", "--quiet", "origin/master...", "--", *inputs]
+            ["git", "diff", "--no-patch", "--quiet", base, "--", *inputs]
         )
         if diff.returncode != 0:
             changed.add(step.id)

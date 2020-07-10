@@ -36,7 +36,7 @@ def main() -> None:
             d.push()
 
     print("--- Staging Debian package")
-    if os.environ["BUILDKITE_BRANCH"] == "master":
+    if os.environ["BUILDKITE_BRANCH"] in ("master", "main"):
         stage_deb(repo, "materialized-unstable", deb.unstable_version(workspace))
     elif os.environ["BUILDKITE_TAG"]:
         version = workspace.crates["materialized"].version
@@ -45,7 +45,7 @@ def main() -> None:
         ), f'materialized version {version} does not match tag {os.environ["BUILDKITE_TAG"]}'
         stage_deb(repo, "materialized", str(version))
     else:
-        print("Not on master branch or tag; skipping")
+        print("Not on main branch or tag; skipping")
 
 
 def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
@@ -90,7 +90,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     try:
         print("Creating Bintray version...")
         commit_hash = git.rev_parse("HEAD")
-        package.create_version(version, desc="git master", vcs_tag=commit_hash)
+        package.create_version(version, desc="git main", vcs_tag=commit_hash)
     except bintray.VersionAlreadyExistsError:
         # Ignore for idempotency. Bintray won't allow us to overwite an existing
         # .deb below with a file whose checksum doesn't match, so this is safe.
