@@ -69,7 +69,7 @@ $ set writer-schema={
                 }
             ]
         }
- 
+
 $ set reader-schema={
           "name": "some_record",
           "type": "record",
@@ -163,4 +163,3 @@ f0_0 f0_1 f11 f12 f13 f2 f4 f51 f52
 ---
 7777 bar \x00\x01\x02\x03 <null> <null> Diamonds \x00 <null> 1234
 9999 <null> <null> <null> 3456 Jokers \t \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>
-
