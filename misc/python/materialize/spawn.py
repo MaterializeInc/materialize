@@ -123,5 +123,5 @@ def capture(
     """
     stderr = subprocess.STDOUT if stderr_too else None
     return subprocess.check_output(  # type: ignore
-        args, cwd=cwd, input=stdin, universal_newlines=unicode, stderr=stderr
+        args, cwd=cwd, stdin=stdin, universal_newlines=unicode, stderr=stderr
     )
