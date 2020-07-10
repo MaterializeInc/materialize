@@ -33,6 +33,7 @@ struct Config {
     std::string materializedUrl;
     std::string kafkaUrl;
     std::string schemaRegistryUrl;
+    std::string consistencySource;
     std::vector<std::pair<const std::string, ViewDefinition>*> hQueries; // pointers into allQueries
     std::unordered_map<std::string, ViewDefinition> allQueries;
     std::unordered_map<std::string, ViewDefinition> correctnessQueries;

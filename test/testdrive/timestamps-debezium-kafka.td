@@ -40,51 +40,29 @@ $ set trxschemakey={
       ]
   }
 
-
-$ set trxschema={
-      "name": "io.debezium.connector.common.TransactionMetadataValue",
-      "type": "record",
-      "fields": [
-        {
-              "name": "id",
-              "type": "string"
-         },
-         {
-              "name": "status",
-              "type": "string"
-         },
-          {
-              "name": "event_count",
-              "type": [
-                  "long",
-                  "null"
-              ]
-          },
-          {
-              "name": "data_collections",
-              "type": [
-                  {
-                      "type": "array",
-                      "items": {
-                          "name": "data",
-                          "type": "record",
-                          "fields": [
-                              {
-                                  "name": "event_count",
-                                  "type": "long"
-                              },
-                              {
-                                  "name": "data_collection",
-                                  "type": "string"
-                              }
-                          ]
-                      }
-                  },
-                  "null"
-              ]
-          }
-      ]
-  }
+$ set trxschema= {
+    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
+    "fields":[
+    {"name":"status","type":"string"},
+    {"name":"id","type": "string"},
+    {"name": "event_count",
+    "type": ["null", "long"],
+    "default": null
+    },
+    {"name":"data_collections","type":["null",{"type":"array",
+    "items": {"type":"record",
+    "name":"ConnectDefault",
+    "namespace":"io.confluent.connect.Avro",
+    "fields": [ {
+    "name": "data_collection",
+    "type": "string"
+    },
+    {
+    "name": "event_count",
+    "type": "long" }]}}],
+    "default": null}],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+    }
 
 $ kafka-create-topic topic=consistency
 
@@ -99,12 +77,12 @@ $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
 {"before": null, "after": {"a": 10, "b": 1}}
 
-> CREATE MATERIALIZED SOURCE data_foo
+> CREATE MATERIALIZED SOURCE server.data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
     WITH (consistency = 'testdrive-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
-> CREATE MATERIALIZED SOURCE data_bar
+> CREATE MATERIALIZED SOURCE server.data_bar
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bar-${testdrive.seed}'
     WITH (consistency = 'testdrive-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM

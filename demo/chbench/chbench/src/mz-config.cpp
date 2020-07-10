@@ -40,6 +40,7 @@ const mz::Config& mz::defaultConfig() {
         .materializedUrl = "postgresql://materialized:6875/materialize?sslmode=disable",
         .kafkaUrl = "kafka:9092",
         .schemaRegistryUrl = "http://schema-registry:8081",
+        .consistencySource = "",
         .hQueries = {},
         .dialect = new MySqlDialect(),
         .hist_date_offset_millis =  static_cast<inner_type>(std::uniform_int_distribution<int64_t>(946684800,1704067200)), //  2010-2024

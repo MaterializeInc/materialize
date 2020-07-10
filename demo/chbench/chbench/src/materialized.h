@@ -49,7 +49,8 @@ struct PeekResults {
 std::vector<std::string> showAllSources(pqxx::connection &c);
 
 void createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query);
-bool createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::string& registry, const std::string& source, bool materialize);
+bool createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::string& registry, const std::string& source, const std::string& consistencySource,
+        bool materialize);
 
 PeekResults peekView(pqxx::connection& c, const std::string& name, const std::optional<std::string>& order,
                      std::optional<unsigned> limit);

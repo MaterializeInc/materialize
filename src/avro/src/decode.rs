@@ -17,6 +17,7 @@ use crate::from_avro_datum;
 use crate::schema::{ResolvedRecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use crate::types::{DecimalValue, Value};
 use crate::util::{safe_len, zag_i32, zag_i64, DecodeError};
+use std::env::var;
 use std::io::Read;
 
 #[inline]
@@ -171,7 +172,6 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
         }
         SchemaPiece::Array(inner) => {
             let mut items = Vec::new();
-
             loop {
                 let len = decode_len(reader)?;
                 // arrays are 0-terminated, 0i64 is also encoded as 0 in Avro
@@ -190,7 +190,6 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
         }
         SchemaPiece::Map(inner) => {
             let mut items = HashMap::new();
-
             loop {
                 let len = decode_len(reader)?;
                 // maps are 0-terminated, 0i64 is also encoded as 0 in Avro

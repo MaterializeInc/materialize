@@ -211,14 +211,9 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<()> {
             let this_time = still_to_try.clone();
             still_to_try.clear();
             for name in this_time {
-                let delete_source = format!(
-                    r#" DROP SOURCE {name} CASCADE"#, name=name
-                );
+                let delete_source = format!(r#" DROP SOURCE {name} CASCADE"#, name = name);
                 match client.batch_execute(&delete_source) {
-                    Ok(_) => info!(
-                        "Deleted source {}",
-                        name
-                    ),
+                    Ok(_) => info!("Deleted source {}", name),
                     Err(err) => {
                         warn!("error trying to delete source {}: {}", name, err);
                     }

@@ -38,7 +38,7 @@ mz::showAllSources(pqxx::connection &c) {
 }
 
 bool
-mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::string& registry, const std::string& source, bool materialized) {
+mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::string& registry, const std::string& source, const std::string& consistencySource, bool materialized) {
     pqxx::nontransaction w(c);
     auto topic = source;
     std::replace(topic.begin(), topic.end(), '_', '.'); // Kafka topics are delimited by periods
@@ -49,7 +49,9 @@ mz::createSource(pqxx::connection &c, const std::string& kafkaUrl, const std::st
     }
     try {
         std::string mat = materialized? "" : "MATERIALIZED";
-        w.exec0("CREATE " + mat + " SOURCE IF NOT EXISTS " + source + " FROM KAFKA BROKER '" + kafkaUrl + "' TOPIC '" + topic + "' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '" + registry + "' ENVELOPE DEBEZIUM");
+        std::string consistency = consistencySource.empty()? " " : " with (consistency= '" + consistencySource + "') ";
+        std::string source_creation = "CREATE " + mat + " SOURCE IF NOT EXISTS " + source + " FROM KAFKA BROKER '" + kafkaUrl + "' TOPIC '" + topic + "' " + consistency + " FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '" + registry + "' ENVELOPE DEBEZIUM";
+        w.exec0(source_creation);
     } catch (const pqxx::sql_error &e) {
         fprintf(stderr, "Possibly temporary error creating source %s: %s\n", source.c_str(), e.what());
         return false;

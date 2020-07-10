@@ -40,51 +40,29 @@ $ set trxschemakey={
       ]
   }
 
-
-$ set trxschema={
-      "name": "io.debezium.connector.common.TransactionMetadataValue",
-      "type": "record",
-      "fields": [
-        {
-              "name": "id",
-              "type": "string"
-         },
-         {
-              "name": "status",
-              "type": "string"
-         },
-          {
-              "name": "event_count",
-              "type": [
-                  "long",
-                  "null"
-              ]
-          },
-          {
-              "name": "data_collections",
-              "type": [
-                  {
-                      "type": "array",
-                      "items": {
-                          "name": "data",
-                          "type": "record",
-                          "fields": [
-                              {
-                                  "name": "event_count",
-                                  "type": "long"
-                              },
-                              {
-                                  "name": "data_collection",
-                                  "type": "string"
-                              }
-                          ]
-                      }
-                  },
-                  "null"
-              ]
-          }
-      ]
-  }
+$ set trxschema= {
+    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
+    "fields":[
+    {"name":"status","type":"string"},
+    {"name":"id","type": "string"},
+    {"name": "event_count",
+    "type": ["null", "long"],
+    "default": null
+    },
+    {"name":"data_collections","type":["null",{"type":"array",
+    "items": {"type":"record",
+    "name":"ConnectDefault",
+    "namespace":"io.confluent.connect.Avro",
+    "fields": [ {
+    "name": "data_collection",
+    "type": "string"
+    },
+    {
+    "name": "event_count",
+    "type": "long" }]}}],
+    "default": null}],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+ }
 
 $ avro-ocf-write path=consistency.ocf schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
@@ -96,9 +74,9 @@ $ avro-ocf-write path=foo.ocf schema=${schema}
 $ avro-ocf-write path=bar.ocf schema=${schema}
 {"before": null, "after": {"a": 10, "b": 1}}
 
-> CREATE MATERIALIZED SOURCE data_foo FROM AVRO OCF '${testdrive.temp-dir}/foo.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf', tail=true) ENVELOPE DEBEZIUM
+> CREATE MATERIALIZED SOURCE server.data_foo FROM AVRO OCF '${testdrive.temp-dir}/foo.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf', tail=true) ENVELOPE DEBEZIUM
 
-> CREATE MATERIALIZED SOURCE data_bar FROM AVRO OCF '${testdrive.temp-dir}/bar.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf', tail=true) ENVELOPE DEBEZIUM
+> CREATE MATERIALIZED SOURCE server.data_bar FROM AVRO OCF '${testdrive.temp-dir}/bar.ocf' WITH (consistency='${testdrive.temp-dir}/consistency.ocf', tail=true) ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
 

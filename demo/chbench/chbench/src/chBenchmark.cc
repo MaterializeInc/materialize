@@ -150,13 +150,15 @@ static void materializeThread(mz::Config config, std::promise<std::vector<Histog
     const auto& kafkaUrl = config.kafkaUrl;
     const auto& schemaRegistryUrl = config.schemaRegistryUrl;
     const auto& pattern = config.viewPattern;
+    const auto& consistencySource = config.consistencySource;
+
     pqxx::connection c(connUrl);
 
     while (!expected.empty()) {
         std::unordered_set<std::string> nextExpected;
         for (const auto& source: expected) {
             std::cout << "Creating source: " << source << std::endl;
-            bool created = mz::createSource(c, kafkaUrl, schemaRegistryUrl, source, materializeSources);
+            bool created = mz::createSource(c, kafkaUrl, schemaRegistryUrl, source, consistencySource, materializeSources);
             if (created) {
                 std::cout << "Created source: " << source << std::endl;
             } else {
@@ -401,10 +403,10 @@ static int run(int argc, char* argv[]) {
     bool createSources = false;
     bool materializeSources = false;
     std::vector<std::string> mzViews;
-    std::optional<std::string> materializedUrl, kafkaUrl, schemaRegistryUrl;
+    std::optional<std::string> materializedUrl, kafkaUrl, schemaRegistryUrl, consistencySource;
     std::optional<mz::Config> config;
 
-    while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:l:", longOpts,
+    while ((c = getopt_long(argc, argv, "d:u:p:a:c:t:w:r:g:o:l:", longOpts,
                             nullptr)) != -1) {
         if (c == 0) switch (longopt_idx) {
         case MIN_DELAY:
@@ -458,6 +460,9 @@ static int run(int argc, char* argv[]) {
         case 'u':
             username = optarg;
             break;
+        case 'c':
+            consistencySource = optarg;
+            break;
         case 'p':
             password = optarg;
             break;
@@ -495,6 +500,10 @@ static int run(int argc, char* argv[]) {
     }
     if (schemaRegistryUrl) {
         mzCfg.schemaRegistryUrl = *schemaRegistryUrl;
+    }
+    if (consistencySource) {
+        printf("Updating consistency source to %s", consistencySource->c_str());
+        mzCfg.consistencySource = *consistencySource;
     }
     argc -= optind;
     argv += optind;

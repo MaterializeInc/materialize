@@ -471,6 +471,7 @@ impl ConsistencyInfo {
 
             // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
             if changed && min > 0 {
+                println!("Downgrading Capability {} {}", id, min);
                 self.source_metrics.capability.set(min);
                 cap.downgrade(&(&min + 1));
                 self.last_closed_ts = min;

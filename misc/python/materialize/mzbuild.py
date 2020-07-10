@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 """The implementation of the mzbuild system for Docker images.
-
 For an overview of what mzbuild is and why it exists, see the [user-facing
 documentation][user-docs].
 

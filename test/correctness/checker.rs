@@ -42,11 +42,8 @@ fn main() -> Result<(), Error> {
 
     match initialize(&config) {
         Ok(()) => {
-            // Start peek timing loop. This should never return.
-            if !config.only_initialize {
-                run_checks(&config);
-                info!("Finished running checker. Exiting ...");
-            }
+            run_checks(&config);
+            info!("Finished running checker. Exiting ...");
             Ok(())
         }
         Err(e) => {
@@ -269,17 +266,20 @@ fn initialize(config: &Args) -> Result<(), Error> {
         }
         warn!("init error, retry in 10 seconds ({} remaining)", counter);
         std::thread::sleep(Duration::from_secs(10));
-        init_result = initialize(&config);
+        init_result = init_inner(&config);
     }
     Ok(())
 }
 
 fn init_inner(config: &Args) -> Result<(), Error> {
     let mut postgres_client = create_postgres_client(&config.mz_url);
-    initialize_sources(&mut postgres_client, &config.config.sources)
-        .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
+    if config.initialize_sources {
+        initialize_sources(&mut postgres_client, &config.config.sources)
+            .map_err(|e| format!("need to have sources for anything else to work: {}", e))?;
+    }
     let mut errors = 0;
     for check in &config.config.checks {
+        println!("Initialize Check: {}", check.name);
         if !try_initialize(&mut postgres_client, &check) {
             errors += 1;
         }
@@ -300,6 +300,11 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<(), Err
         } else {
             ""
         };
+        let consistency = if source.is_byo {
+            " with (consistency = '".to_owned() + &source.consistency_topic.clone() + "') "
+        } else {
+            " ".to_owned()
+        };
         for _ in 0..10 {
             let this_time = still_to_try.clone();
             still_to_try.clear();
@@ -307,6 +312,7 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<(), Err
                 let create_source = format!(
                     r#"CREATE {materialized} SOURCE IF NOT EXISTS "{name}"
                      FROM KAFKA BROKER '{broker}' TOPIC '{prefix}{name}'
+                     {consistency}
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{registry}'
                      ENVELOPE DEBEZIUM"#,
                     name = name,
@@ -314,6 +320,7 @@ fn initialize_sources(client: &mut Client, sources: &[Source]) -> Result<(), Err
                     prefix = source.topic_namespace,
                     registry = source.schema_registry,
                     materialized = materialized,
+                    consistency = consistency,
                 );
                 match client.execute(&create_source[..], &[]) {
                     Ok(_) => info!(
