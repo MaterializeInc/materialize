@@ -160,7 +160,7 @@ pub enum SchemaPiece {
     ///
     /// https://avro.apache.org/docs/current/spec.html#Timestamp+%28microsecond+precision%29
     TimestampMicro,
-    /// A `bytes` Avro schema with a logical type of `decimal` and
+    /// A `bytes` or `fixed` Avro schema with a logical type of `decimal` and
     /// the specified precision and scale.
     ///
     /// If the underlying type is `fixed`,
