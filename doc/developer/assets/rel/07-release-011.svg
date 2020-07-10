@@ -155,18 +155,18 @@
             </defs>
             <use href="#s" xlink:href="#s" clip-path="url(#t)" stroke-width="0"/>
         </g>
-        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(322.266 24)">
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(305.422 24)">
             H - &lt;&gt;
         </text>
         <g transform="translate(110 10)">
-            <rect width="77.297" height="31" rx="10" fill="#fff" stroke="#979797"/>
+            <rect width="60.453" height="31" rx="10" fill="#fff" stroke="#979797"/>
             <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" x="10" y="15.5">
-                master
+                main
             </text>
         </g>
         <g data-offset="12">
-            <path d="M197.297 24l12 15.5h92.969q10 0 10-10v-11q0-10-10-10h-92.97 0z" fill="#979797" stroke="#979797"/>
-            <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(197.297 24)">
+            <path d="M180.453 24l12 15.5h92.969q10 0 10-10v-11q0-10-10-10h-92.969 0z" fill="#979797" stroke="#979797"/>
+            <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(180.453 24)">
                 v0.1.1-rc1
             </text>
         </g>

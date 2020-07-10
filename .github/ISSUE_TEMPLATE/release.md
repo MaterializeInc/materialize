@@ -12,7 +12,7 @@ production readiness.
 ### Create the release candidate
 
 - [ ] Choose the desired commit. Most often, this will be the latest commit to
-  master.
+  main.
 
   ```shell
   git checkout <SHA>
@@ -48,11 +48,11 @@ production readiness.
   git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
   ```
 
-- [ ] On **master**:
+- [ ] On **main**:
 
   - [ ] Update the version field in
     [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) to
-    `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on master to
+    `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on main to
     `v0.1.3-dev`.
 
   - [ ] Update the [`LICENSE`](/LICENSE) file to use the `-dev` version, and
@@ -71,7 +71,7 @@ To run the required load tests on the release candidate tag, Materialize employe
 can follow [these instructions for running semi-automatic load tests][load-instr]
 in the infrastructure repository. All of these tests can be run in parallel.
 
-[load-instr]: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
+[load-instr]: https://github.com/MaterializeInc/infra/tree/main/cloud#starting-a-load-test
 
 - [ ] Run the chbench load test on the release candidate tag.
 
@@ -176,9 +176,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
     * [Documentation](https://materialize.io/docs/)
     ```
 
-### Update the master branch for the next version
+### Update the main branch for the next version
 
-- [ ] On **master**, update the various files that must be up to date:
+- [ ] On **main**, update the various files that must be up to date:
 
   - [ ] Ensure that the [Release Notes] are up
     to date, including the current version.
@@ -192,10 +192,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] Close this issue.
 
-[`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/master/doc/user/config.toml
-[`LICENSE`]: https://github.com/MaterializeInc/materialize/tree/master/LICENSE
-[`src/materialized/Cargo.toml`]: https://github.com/MaterializeInc/materialize/tree/master/src/materialized/Cargo.toml
+[`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml
+[`LICENSE`]: https://github.com/MaterializeInc/materialize/tree/main/LICENSE
+[`src/materialized/Cargo.toml`]: https://github.com/MaterializeInc/materialize/tree/main/src/materialized/Cargo.toml
 [homebrew-guide]: https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md
-[Release Notes]: https://github.com/MaterializeInc/materialize/tree/master/doc/user/content/release-notes.md
+[Release Notes]: https://github.com/MaterializeInc/materialize/tree/main/doc/user/content/release-notes.md
 [releases]: https://github.com/MaterializeInc/materialize/releases
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2

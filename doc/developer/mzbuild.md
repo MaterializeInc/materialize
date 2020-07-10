@@ -13,7 +13,7 @@ As a user or developer, you'll interact with mzbuild through three commands:
     image.
 
     This approach keeps things snappy when running a demo or test on the latest
-    tip of master, while ensuring that you don't need to modify the Docker
+    tip of main, while ensuring that you don't need to modify the Docker
     Compose configuration as you make changes to the source code.
 
   * [**`mzimage`**](#mzimage) is a lower-level command that allows inspection

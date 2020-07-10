@@ -177,7 +177,7 @@ own document. See [Developer guide: testing](testing.md).
 ### Submitting changes
 
 We require that every change is first opened as a GitHub pull request and
-subjected to a CI run. GitHub will prevent you from pushing directly to master
+subjected to a CI run. GitHub will prevent you from pushing directly to main
 or merging a PR that does not have a green CI run.
 
 Our CI provider is Buildkite (https://buildkite.com). It's like Travis CI or

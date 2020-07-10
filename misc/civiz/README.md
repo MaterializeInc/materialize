@@ -36,4 +36,4 @@ FLASK_APP=civiz.py flask run
 
 ## Deploying
 
-A successful merge to master will deploy the new code to mtrlz.dev/civiz.
+A successful merge to main will deploy the new code to mtrlz.dev/civiz.

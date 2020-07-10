@@ -12,7 +12,7 @@
 For an overview of what mzbuild is and why it exists, see the [user-facing
 documentation][user-docs].
 
-[user-docs]: https://github.com/MaterializeInc/materialize/blob/master/doc/developer/mzbuild.md
+[user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
 
 from collections import OrderedDict

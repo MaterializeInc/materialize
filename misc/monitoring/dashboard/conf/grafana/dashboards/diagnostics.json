@@ -12,7 +12,7 @@
       }
     ]
   },
-  "description": "https://github.com/MaterializeInc/materialize/blob/master/doc/developer/diagnostic-queries.md",
+  "description": "https://github.com/MaterializeInc/materialize/blob/main/doc/developer/diagnostic-queries.md",
   "editable": true,
   "gnetId": null,
   "graphTooltip": 0,
@@ -20,7 +20,7 @@
   "links": [],
   "panels": [
     {
-      "content": "# Diagnosing apparent performance defects\n\nThe queries on this page are all derived from \nour [diagnosis page](https://github.com/MaterializeInc/materialize/blob/master/doc/developer/diagnostic-queries.md).",
+      "content": "# Diagnosing apparent performance defects\n\nThe queries on this page are all derived from \nour [diagnosis page](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/diagnostic-queries.md).",
       "datasource": null,
       "description": "",
       "fieldConfig": {
