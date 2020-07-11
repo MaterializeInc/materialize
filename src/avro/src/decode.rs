@@ -272,6 +272,14 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
         }
         SchemaPiece::ResolveUnionUnion { permutation } => {
             let index = zag_i64(reader)? as usize;
+            if index >= permutation.len() {
+                return Err(DecodeError::new(format!(
+                    "Union variant out of bounds for writer schema: {}; max {}",
+                    index,
+                    permutation.len()
+                ))
+                .into());
+            }
             match &permutation[index] {
                 None => Err(DecodeError::new("Union variant not found in reader schema").into()),
                 Some((index, variant)) => {
@@ -375,7 +383,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
         }
         SchemaPiece::ResolveEnum { doc: _, symbols } => {
             if let Value::Int(index) = decode_int(reader)? {
-                if index >= 0 && (index as usize) <= symbols.len() {
+                if index >= 0 && (index as usize) < symbols.len() {
                     match symbols[index as usize].clone() {
                         Some(symbol) => Ok(Value::Enum(index, symbol)), // Todo (brennan) -- should this actually be the index in reader? Does it matter?
                         None => Err(DecodeError::new(format!(
