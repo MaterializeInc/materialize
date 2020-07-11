@@ -917,7 +917,7 @@ fn test_partially_broken_union() {
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
     let datum_to_write = Value::Union(2, Box::new(Value::Long(42)));
     let datum_to_read = Value::Union(1, Box::new(Value::Long(42)));
-    let encoded = to_avro_datum(&writer_schema, datum_to_write.clone()).unwrap();
+    let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
     let datum_read = from_avro_datum(&resolved_schema, &mut encoded.as_slice()).unwrap();
     assert_eq!(datum_to_read, datum_read);
     let err_datum_to_write = Value::Union(
