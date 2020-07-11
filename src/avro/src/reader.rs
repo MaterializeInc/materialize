@@ -443,7 +443,7 @@ impl<'a> SchemaResolver<'a> {
                 SchemaPiece::ResolveEnum {
                     doc: doc.clone(),
                     symbols,
-                    default: (*default_idx).map(|i| (i, r_symbols[i].clone())),
+                    default: default_idx.map(|i| (i, r_symbols[i].clone())),
                 }
             }
             (SchemaPiece::Fixed { size: wsz }, SchemaPiece::Fixed { size: rsz }) => {
