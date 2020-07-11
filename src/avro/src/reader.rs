@@ -337,7 +337,7 @@ impl<'a> SchemaResolver<'a> {
                                 },
                                 None => {
                                     return Err(SchemaResolutionError::new(format!(
-                                        "Reader field {} not found in writer, and has no default",
+                                        "Reader field `{}` not found in writer, and has no default",
                                         rf.name
                                     ))
                                     .into())
@@ -434,9 +434,9 @@ impl<'a> SchemaResolver<'a> {
                     .iter()
                     .map(|s| {
                         if let Some(idx) = r_map.get(&s) {
-                            Some((*idx, s.clone()))
+                            Ok((*idx, s.clone()))
                         } else {
-                            None
+                            Err(s.clone())
                         }
                     })
                     .collect();
@@ -570,14 +570,17 @@ impl<'a> SchemaResolver<'a> {
                     .variants()
                     .iter()
                     .map(|w_variant| {
-                        let r_match = r_inner.match_(w_variant, &w2r);
-                        let resolved = r_match.and_then(|(r_idx, r_variant)| {
-                            let resolved = self
-                                .resolve(writer.step(w_variant), reader.step(r_variant))
-                                .ok()?;
-                            Some((r_idx, resolved))
-                        });
-                        resolved
+                        let (r_idx, r_variant) =
+                            r_inner.match_(w_variant, &w2r).ok_or_else(|| {
+                                format!(
+                                    "Failed to match {} against any variant in the reader",
+                                    w_variant.get_human_name(writer.root)
+                                )
+                            })?;
+                        let resolved = self
+                            .resolve(writer.step(w_variant), reader.step(r_variant))
+                            .map_err(|e| e.to_string())?;
+                        Ok((r_idx, resolved))
                     })
                     .collect();
                 SchemaPieceOrNamed::Piece(SchemaPiece::ResolveUnionUnion { permutation })

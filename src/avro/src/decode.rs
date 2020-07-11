@@ -281,8 +281,12 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
                 .into());
             }
             match &permutation[index] {
-                None => Err(DecodeError::new("Union variant not found in reader schema").into()),
-                Some((index, variant)) => {
+                Err(e) => Err(DecodeError::new(format!(
+                    "Union variant not found in reader schema: {}",
+                    e
+                ))
+                .into()),
+                Ok((index, variant)) => {
                     decode(schema.step(variant), reader).map(|x| Value::Union(*index, Box::new(x)))
                 }
             }
@@ -390,14 +394,14 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             if let Value::Int(index) = decode_int(reader)? {
                 if index >= 0 && (index as usize) < symbols.len() {
                     match symbols[index as usize].clone() {
-                        Some((reader_index, symbol)) => Ok(Value::Enum(reader_index, symbol)),
-                        None => {
+                        Ok((reader_index, symbol)) => Ok(Value::Enum(reader_index, symbol)),
+                        Err(missing) => {
                             if let Some((reader_index, symbol)) = default.clone() {
                                 Ok(Value::Enum(reader_index, symbol))
                             } else {
                                 Err(DecodeError::new(format!(
-                                    "Enum symbol at index {} in writer schema not found in reader",
-                                    index
+                                    "Enum symbol {} at index {} in writer schema not found in reader",
+                                    missing, index
                                 ))
                                 .into())
                             }

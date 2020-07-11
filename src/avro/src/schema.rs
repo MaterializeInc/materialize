@@ -110,8 +110,13 @@ pub enum SchemaPieceOrNamed {
     Piece(SchemaPiece),
     Named(usize),
 }
-
 impl SchemaPieceOrNamed {
+    pub fn get_human_name(&self, root: &Schema) -> String {
+        match self {
+            Self::Piece(piece) => format!("{:?}", piece),
+            Self::Named(idx) => format!("{}", root.lookup(*idx).name),
+        }
+    }
     #[inline(always)]
     pub fn get_piece_and_name<'a>(
         &'a self,
@@ -220,11 +225,11 @@ pub enum SchemaPiece {
     /// The two schemas may have different variants and the variants may be in a different order.
     ResolveUnionUnion {
         /// A mapping of the fields in the writer to those in the reader.
-        /// If the `i`th element is `None`, the `i`th field in the writer
+        /// If the `i`th element is `Err(e)`, the `i`th field in the writer
         /// did not match any field in the reader (or even if it matched by name, resolution failed).
-        /// If the `i`th element is `(j, piece)`, then the `i`th field of the writer
+        /// If the `i`th element is `Ok((j, piece))`, then the `i`th field of the writer
         /// matched the `j`th field of the reader, and `piece` is their resolved node.
-        permutation: Vec<Option<(usize, SchemaPieceOrNamed)>>,
+        permutation: Vec<Result<(usize, SchemaPieceOrNamed), String>>,
     },
     /// The inverse of `ResolveConcreteUnion`
     ResolveUnionConcrete {
@@ -272,7 +277,7 @@ pub enum SchemaPiece {
         doc: Documentation,
         /// Symbols in order of the writer schema along with their index in the reader schema,
         /// or `None` if they don't exist in the reader schema.
-        symbols: Vec<Option<(usize, String)>>,
+        symbols: Vec<Result<(usize, String), String>>,
         /// The value to decode if the writer writes some value not expected by the reader.
         default: Option<(usize, String)>,
     },
@@ -1380,11 +1385,9 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
             }
             SchemaPiece::ResolveUnionUnion { permutation } => SchemaPiece::ResolveUnionUnion {
                 permutation: permutation
-                    .iter()
-                    .map(|o| {
-                        o.as_ref()
-                            .map(|(idx, piece)| (*idx, self.clone_piece_or_named(piece.as_ref())))
-                    })
+                    .clone()
+                    .into_iter()
+                    .map(|o| o.map(|(idx, piece)| (idx, self.clone_piece_or_named(piece.as_ref()))))
                     .collect(),
             },
             SchemaPiece::ResolveUnionConcrete { index, inner } => {
