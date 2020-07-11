@@ -947,8 +947,8 @@ impl SchemaParser {
                 .position(|x| x == default_str)
                 .ok_or_else(|| {
                     ParseSchemaError::new(format!(
-                        "Enum default should be a string, got: {:?}",
-                        default
+                        "Enum default not found in list of symbols: {}",
+                        default_str
                     ))
                 })?;
             Some(default_idx)
