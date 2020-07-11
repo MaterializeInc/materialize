@@ -416,7 +416,7 @@ In a future iteration, we'll make this demo more interactive.
     ```
 
     You can also find the demo's code on
-    [GitHub](https://github.com/MaterializeInc/materialize/tree/master/demo/billing).
+    [GitHub](https://github.com/MaterializeInc/materialize/tree/main/demo/billing).
 
 1. Deploy and start all of the components we've listed above.
 

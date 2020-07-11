@@ -114,6 +114,6 @@ docker run --network host -e MATERIALIZED_URL=local:6875 materialize/dashboard
 ```
 
 [simplemon-hub]: https://hub.docker.com/repository/docker/materialize/dashboard
-[dashboard-json]: https://github.com/MaterializeInc/materialize/blob/master/misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
+[dashboard-json]: https://github.com/MaterializeInc/materialize/blob/main/misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
 [graf-import]: https://grafana.com/docs/grafana/latest/reference/export_import/#importing-a-dashboard
 [dc-example]: https://github.com/MaterializeInc/materialize/blob/d793b112758c840c1240eefdd56ca6f7e4f484cf/demo/billing/mzcompose.yml#L60-L70

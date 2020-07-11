@@ -29,8 +29,8 @@ const graphs = [
     {
         name: "01-clean",
         build: () => {
-            const master = gitgraph.branch("master");
-            master
+            const main = gitgraph.branch("main");
+            main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
                 .commit({hash: "C"});
@@ -39,8 +39,8 @@ const graphs = [
     {
         name: "02-tagged",
         build: () => {
-            const master = gitgraph.branch("master");
-            master
+            const main = gitgraph.branch("main");
+            main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
                 .tag("v0.1.0-rc1")
@@ -50,8 +50,8 @@ const graphs = [
     {
         name: "03-tagged-release",
         build: () => {
-            const master = gitgraph.branch("master");
-            master
+            const main = gitgraph.branch("main");
+            main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
                 .tag("v0.1.0-rc1")
@@ -60,10 +60,10 @@ const graphs = [
         }
     },
     {
-        name: "04-master-progressed",
+        name: "04-main-progressed",
         build: () => {
-            const master = gitgraph.branch("master");
-            master
+            const main = gitgraph.branch("main");
+            main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
                 .tag("v0.1.0-rc1")
@@ -76,8 +76,8 @@ const graphs = [
     {
         name: "05-tagged-rc2",
         build: () => {
-            const master = gitgraph.branch("master");
-            master
+            const main = gitgraph.branch("main");
+            main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
                 .tag("v0.1.0-rc1")
@@ -86,7 +86,7 @@ const graphs = [
                 .commit({hash: "D'"})
                 .commit({hash: "E'"})
                 .tag("v0.1.0-rc2")
-            master
+            main
                 .commit({hash: "C"})
                 .commit({hash: "D"})
                 .commit({hash: "E"})
@@ -96,8 +96,8 @@ const graphs = [
     {
         name: "06-release-010",
         build: () => {
-            const master = gitgraph.branch("master");
-            master
+            const main = gitgraph.branch("main");
+            main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
                 .tag("v0.1.0-rc1")
@@ -107,7 +107,7 @@ const graphs = [
                 .commit({hash: "E'"})
                 .tag("v0.1.0-rc2")
                 .tag("v0.1.0")
-            master
+            main
                 .commit({hash: "C"})
                 .commit({hash: "D"})
                 .commit({hash: "E"})
@@ -117,8 +117,8 @@ const graphs = [
     {
         name: "07-release-011",
         build: () => {
-            const master = gitgraph.branch("master");
-            master
+            const main = gitgraph.branch("main");
+            main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
                 .tag("v0.1.0-rc1")
@@ -128,7 +128,7 @@ const graphs = [
                 .commit({hash: "E'"})
                 .tag("v0.1.0-rc2")
                 .tag("v0.1.0")
-            master
+            main
                 .commit({hash: "C"})
                 .commit({hash: "D"})
                 .commit({hash: "E"})

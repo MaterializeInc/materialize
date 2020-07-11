@@ -9,6 +9,7 @@
 
 """Git utilities."""
 
+import subprocess
 import sys
 from functools import lru_cache, total_ordering
 from pathlib import Path
@@ -83,3 +84,12 @@ def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
             print(f"WARN: {e}", file=sys.stderr)
 
     return sorted(tags, reverse=True)
+
+
+def is_ancestor(earlier: str, later: str) -> bool:
+    """True if earlier is in an ancestor of later"""
+    try:
+        spawn.capture(["git", "merge-base", "--is-ancestor", earlier, later])
+    except subprocess.CalledProcessError:
+        return False
+    return True

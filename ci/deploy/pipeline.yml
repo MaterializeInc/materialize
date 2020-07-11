@@ -9,7 +9,7 @@
 
 steps:
   - command: bin/ci-builder run nightly ci/deploy/devsite.sh
-    branches: master
+    branches: "master main"
     timeout_in_minutes: 30
     agents:
       queue: builder

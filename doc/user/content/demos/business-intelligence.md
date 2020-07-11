@@ -327,7 +327,7 @@ At this point, Metabase will now automatically refresh this analysis for you
 every 1 minute.
 
 If you want to see more chBench queries, you can repeat these steps for the view
-`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/master/demo/chbench/chbench/mz-default.cfg).
+`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/main/demo/chbench/chbench/mz-default.cfg).
 
 ## Recap
 

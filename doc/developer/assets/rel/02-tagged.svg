@@ -40,13 +40,13 @@
             </defs>
             <use href="#e" xlink:href="#e" clip-path="url(#f)" stroke-width="0"/>
         </g>
-        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(147.297 24)">
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(130.453 24)">
             C - &lt;&gt;
         </text>
         <g transform="translate(60 10)">
-            <rect width="77.297" height="31" rx="10" fill="#fff" stroke="#979797"/>
+            <rect width="60.453" height="31" rx="10" fill="#fff" stroke="#979797"/>
             <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" x="10" y="15.5">
-                master
+                main
             </text>
         </g>
     </g>

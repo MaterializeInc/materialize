@@ -76,4 +76,4 @@ around this:
 Materialize employees can follow the instructions in the infrastructure
 repository for running a semi-automatic load test on AWS EC2.
 
-See: https://github.com/MaterializeInc/infra/tree/master/cloud#starting-a-load-test
+See: https://github.com/MaterializeInc/infra/tree/main/cloud#starting-a-load-test

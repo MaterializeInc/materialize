@@ -9,7 +9,7 @@ of commands that can be automatically triggered in response to pushes,
 new pull requests, or manual UI actions. We have multiple pipelines in this
 repository: the "test" pipeline, for example, runs `cargo test` on every PR,
 while the "deploy" pipeline builds the Rust API documentation and publishes
-it to mtrlz.dev after a merge to master.
+it to mtrlz.dev after a merge to main.
 
 Pipelines are configured with a YAML file that lives in version control,
 meaning the build configuration can be versioned alongside the code it builds.
