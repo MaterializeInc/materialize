@@ -267,6 +267,7 @@ pub enum SchemaPiece {
         /// Symbols in order of the writer schema along with their index in the reader schema,
         /// or `None` if they don't exist in the reader schema.
         symbols: Vec<Option<(usize, String)>>,
+        // TODO(brennan) - These should support default values
     },
 }
 
