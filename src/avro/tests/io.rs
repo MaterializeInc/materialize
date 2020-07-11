@@ -742,7 +742,7 @@ fn test_complex_resolutions() {
             "f1".to_owned(),
             Value::Union(0, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
         ),
-        ("f2".to_owned(), Value::Enum(1, "Diamonds".to_owned())), // TODO - should be the index in the reader
+        ("f2".to_owned(), Value::Enum(2, "Diamonds".to_owned())),
         ("f4".to_owned(), Value::Fixed(1, vec![0])),
         (
             "f5".to_owned(),

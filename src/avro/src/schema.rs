@@ -264,9 +264,9 @@ pub enum SchemaPiece {
     /// The two schemas may have different values and the values may be in a different order.
     ResolveEnum {
         doc: Documentation,
-        /// Symbols in order of the writer schema if they exist in the reader schema,
-        /// or `None` otherwise.
-        symbols: Vec<Option<String>>,
+        /// Symbols in order of the writer schema along with their index in the reader schema,
+        /// or `None` if they don't exist in the reader schema.
+        symbols: Vec<Option<(usize, String)>>,
         // TODO(brennan) - These should support default values
     },
 }
@@ -1529,7 +1529,7 @@ impl<'a> SchemaNode<'a> {
             }
             (String(s), SchemaPiece::Enum { symbols, .. }) => {
                 match symbols.iter().find_position(|sym| s == *sym) {
-                    Some((index, sym)) => AvroValue::Enum(index as i32, sym.clone()),
+                    Some((index, sym)) => AvroValue::Enum(index, sym.clone()),
                     None => return Err(ParseSchemaError(format!("Enum variant not found: {}", s))),
                 }
             }

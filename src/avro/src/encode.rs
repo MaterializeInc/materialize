@@ -106,7 +106,7 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
             _ => (),
         },
         Value::Fixed(_, bytes) => buffer.extend(bytes),
-        Value::Enum(i, _) => encode_int(*i, buffer),
+        Value::Enum(i, _) => encode_int(*i as i32, buffer),
         Value::Union(idx, item) => {
             if let SchemaPiece::Union(inner) = schema.inner {
                 let inner = &inner.variants()[*idx];
