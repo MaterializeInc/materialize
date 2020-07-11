@@ -450,7 +450,6 @@ fn test_field_order() {
     ]);
     let encoded = to_avro_datum(&LONG_RECORD_SCHEMA, LONG_RECORD_DATUM.clone()).unwrap();
     let resolved_schema = resolve_schemas(&LONG_RECORD_SCHEMA, &reader_schema).unwrap();
-    println!("Resolved: {:#?}", resolved_schema);
     let datum_read = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded)).unwrap();
     assert_eq!(datum_to_read, datum_read);
 }
@@ -926,6 +925,15 @@ fn test_partially_broken_union() {
         Box::new(Value::Record(vec![("a".into(), Value::Long(42))])),
     );
     let err_encoded = to_avro_datum(&writer_schema, err_datum_to_write).unwrap();
-    let err_read_result = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice());
-    assert!(err_read_result.is_err());
+    let err_read = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice()).unwrap_err();
+    assert!(err_read.to_string().contains("Failed to match"));
+    let err_datum_to_write = Value::Union(
+        1,
+        Box::new(Value::Record(vec![("b".into(), Value::Long(42))])),
+    );
+    let err_encoded = to_avro_datum(&writer_schema, err_datum_to_write).unwrap();
+    let err_read = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice()).unwrap_err();
+    assert!(err_read
+        .to_string()
+        .contains("Reader field `a` not found in writer"));
 }
