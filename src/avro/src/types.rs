@@ -82,7 +82,7 @@ pub enum Value {
     /// of its corresponding schema.
     /// This allows schema-less encoding, as well as schema resolution while
     /// reading values.
-    Enum(i32, String),
+    Enum(usize, String),
     /// An `union` Avro value.
     Union(usize, Box<Value>),
     /// An `array` Avro value.

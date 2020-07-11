@@ -432,8 +432,8 @@ impl<'a> SchemaResolver<'a> {
                 let symbols = w_symbols
                     .iter()
                     .map(|s| {
-                        if r_map.contains_key(&s) {
-                            Some(s.clone())
+                        if let Some(idx) = r_map.get(&s) {
+                            Some((*idx, s.clone()))
                         } else {
                             None
                         }

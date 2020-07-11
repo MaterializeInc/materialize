@@ -318,8 +318,9 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
         }
         SchemaPiece::Enum { ref symbols, .. } => {
             if let Value::Int(index) = decode_int(reader)? {
-                if index >= 0 && (index as usize) <= symbols.len() {
-                    let symbol = symbols[index as usize].clone();
+                let index = index as usize;
+                if index <= symbols.len() {
+                    let symbol = symbols[index].clone();
                     Ok(Value::Enum(index, symbol))
                 } else {
                     Err(DecodeError::new("enum symbol index out of bounds").into())
@@ -385,7 +386,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             if let Value::Int(index) = decode_int(reader)? {
                 if index >= 0 && (index as usize) < symbols.len() {
                     match symbols[index as usize].clone() {
-                        Some(symbol) => Ok(Value::Enum(index, symbol)), // Todo (brennan) -- should this actually be the index in reader? Does it matter?
+                        Some((reader_index, symbol)) => Ok(Value::Enum(reader_index, symbol)),
                         None => Err(DecodeError::new(format!(
                             "Enum symbol at index {} in writer schema not found in reader",
                             index
