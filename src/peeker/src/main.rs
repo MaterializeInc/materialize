@@ -352,6 +352,8 @@ fn print_error_and_backoff(backoff: &mut Duration, context: &str, error_message:
         "for {}: {}. Sleeping for {:#?}",
         context, error_message, *backoff
     );
-    thread::sleep(*backoff);
-    *backoff = min(*backoff * 2, MAX_BACKOFF);
+    if !error_message.contains("Evaluation error") {
+        thread::sleep(*backoff);
+        *backoff = min(*backoff * 2, MAX_BACKOFF);
+    }
 }
