@@ -15,16 +15,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-if [[ "$BRANCH" =~ master|main ]]; then
+if [[ "$BRANCH" == main ]]; then
     spec=HEAD^
 else
-    git fetch https://github.com/MaterializeInc/materialize.git master
-    git fetch https://github.com/MaterializeInc/materialize.git main 2>/dev/null || true
-    if git merge-base --is-ancestor master main 2>/dev/null ; then
-        spec=main...
-    else
-        spec=master...
-    fi
+    git fetch https://github.com/MaterializeInc/materialize.git main
+    spec=FETCH_HEAD...
 fi
 
 # The www build doesn't depend on submodules, so remove them from the working
