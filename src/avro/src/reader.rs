@@ -556,24 +556,28 @@ impl<'a> SchemaResolver<'a> {
                 SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(w_inner)),
                 SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(r_inner)),
             ) => {
-                // TODO (brennan) - can we avoid cloning this?
                 let w2r = self.writer_to_reader_names.clone();
+                // permuation[1] is Some((j, val)) iff the i'th writer variant
+                // _matches_ the j'th reader variant
+                // (i.e., it is the same primitive type, or the same kind of named type and has the same name, or a decimal with the same parameters)
+                // and succuessfully _resolves_ against it,
+                // and None otherwise.
+                //
+                // An example of types that match but don't resolve would be two records with the same name but incompatible fields.
                 let permutation = w_inner
                     .variants()
                     .iter()
-                    .map(move |w_inner| {
-                        r_inner
-                            .resolve(w_inner, &w2r)
-                            .map(|(r_idx, r_inner)| (r_idx, w_inner, r_inner))
+                    .map(|w_variant| {
+                        let r_match = r_inner.match_(w_variant, &w2r);
+                        let resolved = r_match.and_then(|(r_idx, r_variant)| {
+                            let resolved = self
+                                .resolve(writer.step(w_variant), reader.step(r_variant))
+                                .ok()?;
+                            Some((r_idx, resolved))
+                        });
+                        resolved
                     })
-                    .flat_map(|o| {
-                        o.map(|(r_idx, w_inner, r_inner)| {
-                            self.resolve(writer.step(w_inner), reader.step(r_inner))
-                                .ok()
-                                .map(|schema| (r_idx, schema))
-                        })
-                    })
-                    .collect::<Vec<_>>();
+                    .collect();
                 SchemaPieceOrNamed::Piece(SchemaPiece::ResolveUnionUnion { permutation })
             }
             // Writer is concrete; reader is union
@@ -750,7 +754,15 @@ impl<'a> SchemaResolver<'a> {
                         self.reader_to_resolved_names.insert(r_index, resolved_idx);
                         self.named.push(None);
                         let piece =
-                            self.resolve_named(writer.root, reader.root, w_index, r_index)?;
+                            match self.resolve_named(writer.root, reader.root, w_index, r_index) {
+                                Ok(piece) => piece,
+                                Err(e) => {
+                                    // clean up the placeholder values that were added above.
+                                    self.named.pop();
+                                    self.reader_to_resolved_names.remove(&r_index);
+                                    return Err(e);
+                                }
+                            };
                         let name = &self.reader_schema.named[r_index].name;
                         let ns = NamedSchemaPiece {
                             name: name.clone(),

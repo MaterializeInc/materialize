@@ -882,3 +882,49 @@ fn test_complex_resolutions() {
     let datum_read = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded)).unwrap();
     assert_eq!(expected_read, datum_read);
 }
+
+#[test]
+fn test_partially_broken_union() {
+    // If one variant of a union fails to match or resolve, we should still be able to decode one of the others.
+    // The first variant will fail to match (there is no "r" in the reader schema).
+    // The second variant will match, but fail to resolve (there is an "s" both in the reader and writer, but their fields are irreconcilable).
+    // The third variant is fine.
+    let writer_schema = r#"
+        [
+            {
+                "type": "record",
+                "name": "r",
+                "fields": [{"name": "a", "type": "long"}]
+            },
+            {
+                "type": "record",
+                "name": "s",
+                "fields": [{"name": "b", "type": "long"}]
+            },
+            "long"
+       ]"#;
+    let reader_schema = r#"
+        [
+            {
+                "type": "record",
+                "name": "s",
+                "fields": [{"name": "a", "type": "long"}]
+            },
+            "long"
+       ]"#;
+    let writer_schema = Schema::parse_str(writer_schema).unwrap();
+    let reader_schema = Schema::parse_str(reader_schema).unwrap();
+    let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
+    let datum_to_write = Value::Union(2, Box::new(Value::Long(42)));
+    let datum_to_read = Value::Union(1, Box::new(Value::Long(42)));
+    let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
+    let datum_read = from_avro_datum(&resolved_schema, &mut encoded.as_slice()).unwrap();
+    assert_eq!(datum_to_read, datum_read);
+    let err_datum_to_write = Value::Union(
+        0,
+        Box::new(Value::Record(vec![("a".into(), Value::Long(42))])),
+    );
+    let err_encoded = to_avro_datum(&writer_schema, err_datum_to_write).unwrap();
+    let err_read_result = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice());
+    assert!(err_read_result.is_err());
+}

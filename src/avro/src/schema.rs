@@ -666,7 +666,7 @@ impl UnionSchema {
     }
 
     #[inline(always)]
-    pub fn resolve(
+    pub fn match_(
         &self,
         other: &SchemaPieceOrNamed,
         names_map: &HashMap<usize, usize>,
