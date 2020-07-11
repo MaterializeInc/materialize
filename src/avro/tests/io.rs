@@ -703,7 +703,7 @@ fn test_complex_resolutions() {
             Value::Union(1, Box::new(Value::Fixed(1, vec![0]))),
         ),
         ("f3".to_owned(), Value::Double(1.234)),
-        ("f2".to_owned(), Value::Enum(1, "Diamonds".to_owned())),
+        ("f2".to_owned(), Value::Enum(4, "Jokers".to_owned())),
         (
             "f1".to_owned(),
             Value::Union(2, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
@@ -742,7 +742,7 @@ fn test_complex_resolutions() {
             "f1".to_owned(),
             Value::Union(0, Box::new(Value::Fixed(4, vec![0, 1, 2, 3]))),
         ),
-        ("f2".to_owned(), Value::Enum(2, "Diamonds".to_owned())),
+        ("f2".to_owned(), Value::Enum(1, "Spades".to_owned())),
         ("f4".to_owned(), Value::Fixed(1, vec![0])),
         (
             "f5".to_owned(),
@@ -818,7 +818,8 @@ fn test_complex_resolutions() {
                     "type": {
                         "type": "enum",
                         "symbols": ["Hearts", "Spades", "Diamonds", "Clubs"],
-                        "name": "Suit"
+                        "name": "Suit",
+                        "default": "Spades"
                     }
                 },
                 {

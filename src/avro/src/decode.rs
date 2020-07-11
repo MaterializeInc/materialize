@@ -382,16 +382,26 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
                 .into()),
             }
         }
-        SchemaPiece::ResolveEnum { doc: _, symbols } => {
+        SchemaPiece::ResolveEnum {
+            doc: _,
+            symbols,
+            default,
+        } => {
             if let Value::Int(index) = decode_int(reader)? {
                 if index >= 0 && (index as usize) < symbols.len() {
                     match symbols[index as usize].clone() {
                         Some((reader_index, symbol)) => Ok(Value::Enum(reader_index, symbol)),
-                        None => Err(DecodeError::new(format!(
-                            "Enum symbol at index {} in writer schema not found in reader",
-                            index
-                        ))
-                        .into()),
+                        None => {
+                            if let Some((reader_index, symbol)) = default.clone() {
+                                Ok(Value::Enum(reader_index, symbol))
+                            } else {
+                                Err(DecodeError::new(format!(
+                                    "Enum symbol at index {} in writer schema not found in reader",
+                                    index
+                                ))
+                                .into())
+                            }
+                        }
                     }
                 } else {
                     Err(DecodeError::new("enum symbol index out of bounds").into())
