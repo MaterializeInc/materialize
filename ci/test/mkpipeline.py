@@ -37,10 +37,7 @@ def main() -> int:
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
         pipeline = yaml.safe_load(f)
 
-    if (
-        os.environ["BUILDKITE_BRANCH"] not in ("master", "main")
-        and not os.environ["BUILDKITE_TAG"]
-    ):
+    if os.environ["BUILDKITE_BRANCH"] != "main" and not os.environ["BUILDKITE_TAG"]:
         print("--- Trimming unchanged steps from pipeline")
         trim_pipeline(pipeline)
 
@@ -122,28 +119,14 @@ def trim_pipeline(pipeline: Any) -> None:
         steps[step.id] = step
 
     # Make sure we have an up to date view of main.
-    errored = False
-    try:
-        spawn.runv(["git", "fetch", "origin", "master"])
-    except subprocess.CalledProcessError:
-        errored = True
-    try:
-        spawn.runv(["git", "fetch", "origin", "main"])
-    except subprocess.CalledProcessError:
-        # if both fail something has gon catastrophically wrong
-        if errored:
-            raise
-
-    if git.is_ancestor("master", "main"):
-        base = "origin/main..."
-    else:
-        base = "origin/master..."
+    spawn.runv(["git", "fetch", "origin", "main"])
+    base = "origin/main..."
 
     # Print out a summary of all changes.
     os.environ["GIT_PAGER"] = ""
     spawn.runv(["git", "diff", "--stat", base])
 
-    # Find all the steps whose inputs have changed with respect to master.
+    # Find all the steps whose inputs have changed with respect to main.
     # We delegate this hard work to Git.
     changed = set()
     for step in steps.values():

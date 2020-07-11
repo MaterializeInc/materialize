@@ -9,16 +9,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
+from pathlib import Path
+
+import humanize
+
 from materialize import bintray
+from materialize import errors
 from materialize import cargo
 from materialize import ci_util
 from materialize import deb
 from materialize import git
 from materialize import mzbuild
 from materialize import spawn
-from pathlib import Path
-import humanize
-import os
 
 
 def main() -> None:
@@ -36,7 +39,7 @@ def main() -> None:
             d.push()
 
     print("--- Staging Debian package")
-    if os.environ["BUILDKITE_BRANCH"] in ("master", "main"):
+    if os.environ["BUILDKITE_BRANCH"] == "main":
         stage_deb(repo, "materialized-unstable", deb.unstable_version(workspace))
     elif os.environ["BUILDKITE_TAG"]:
         version = workspace.crates["materialized"].version
@@ -44,6 +47,8 @@ def main() -> None:
             f"v{version}" == os.environ["BUILDKITE_TAG"]
         ), f'materialized version {version} does not match tag {os.environ["BUILDKITE_TAG"]}'
         stage_deb(repo, "materialized", str(version))
+    elif os.environ["BUILDKITE_BRANCH"] == "master":
+        raise errors.MzError(f"Tried to build branch master {git.rev_parse('HEAD')}")
     else:
         print("Not on main branch or tag; skipping")
 
@@ -55,7 +60,7 @@ def stage_deb(repo: mzbuild.Repository, package: str, version: str) -> None:
     step to publish the files will be run in the deploy job.
     """
 
-    print(f"{package} {version}")
+    print(f"Staging deb {package} {version}")
 
     # Extract the materialized binary from the Docker image. This avoids
     # an expensive rebuild if we're using a cached image.
