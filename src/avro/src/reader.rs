@@ -568,7 +568,7 @@ impl<'a> SchemaResolver<'a> {
                     .variants()
                     .iter()
                     .map(|w_variant| {
-                        let r_match = r_inner.resolve(w_variant, &w2r);
+                        let r_match = r_inner.match_(w_variant, &w2r);
                         let resolved = r_match.and_then(|(r_idx, r_variant)| {
                             let resolved = self
                                 .resolve(writer.step(w_variant), reader.step(r_variant))
