@@ -244,6 +244,12 @@ pub enum SchemaPiece {
     Enum {
         doc: Documentation,
         symbols: Vec<String>,
+        /// The index of the default value.
+        ///
+        /// This is only used in schema resolution: it is the value that
+        /// will be read by a reader when a writer writes a value that the reader
+        /// does not expect.
+        default_idx: Option<usize>,
     },
     /// A `fixed` Avro schema.
     Fixed { size: usize },
@@ -267,7 +273,8 @@ pub enum SchemaPiece {
         /// Symbols in order of the writer schema along with their index in the reader schema,
         /// or `None` if they don't exist in the reader schema.
         symbols: Vec<Option<(usize, String)>>,
-        // TODO(brennan) - These should support default values
+        /// The value to decode if the writer writes some value not expected by the reader.
+        default: Option<(usize, String)>,
     },
 }
 
@@ -928,9 +935,31 @@ impl SchemaParser {
             }
         }
 
+        let default_idx = if let Some(default) = complex.get("default") {
+            let default_str = default.as_str().ok_or_else(|| {
+                ParseSchemaError::new(format!(
+                    "Enum default should be a string, got: {:?}",
+                    default
+                ))
+            })?;
+            let default_idx = symbols
+                .iter()
+                .position(|x| x == default_str)
+                .ok_or_else(|| {
+                    ParseSchemaError::new(format!(
+                        "Enum default should be a string, got: {:?}",
+                        default
+                    ))
+                })?;
+            Some(default_idx)
+        } else {
+            None
+        };
+
         Ok(SchemaPiece::Enum {
             doc: complex.doc(),
             symbols,
+            default_idx,
         })
     }
 
@@ -1383,9 +1412,14 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
                     .collect(),
                 lookup: lookup.clone(),
             },
-            SchemaPiece::Enum { doc, symbols } => SchemaPiece::Enum {
+            SchemaPiece::Enum {
+                doc,
+                symbols,
+                default_idx,
+            } => SchemaPiece::Enum {
                 doc: doc.clone(),
                 symbols: symbols.clone(),
+                default_idx: *default_idx,
             },
             SchemaPiece::Fixed { size } => SchemaPiece::Fixed { size: *size },
             SchemaPiece::ResolveRecord {
@@ -1414,9 +1448,14 @@ impl<'a> SchemaSubtreeDeepCloner<'a> {
                     .collect(),
                 n_reader_fields: *n_reader_fields,
             },
-            SchemaPiece::ResolveEnum { doc, symbols } => SchemaPiece::ResolveEnum {
+            SchemaPiece::ResolveEnum {
+                doc,
+                symbols,
+                default,
+            } => SchemaPiece::ResolveEnum {
                 doc: doc.clone(),
                 symbols: symbols.clone(),
+                default: default.clone(),
             },
         }
     }
@@ -2051,7 +2090,7 @@ mod tests {
     #[test]
     fn test_enum_schema() {
         let schema = Schema::parse_str(
-                r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "clubs", "hearts"]}"#,
+                r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "jokers"}"#,
             ).unwrap();
 
         let expected = SchemaPiece::Enum {
@@ -2059,12 +2098,20 @@ mod tests {
             symbols: vec![
                 "diamonds".to_owned(),
                 "spades".to_owned(),
+                "jokers".to_owned(),
                 "clubs".to_owned(),
                 "hearts".to_owned(),
             ],
+            default_idx: Some(2),
         };
 
         assert_eq!(&expected, schema.top_node().inner);
+
+        let bad_schema = Schema::parse_str(
+            r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "blah"}"#,
+        );
+
+        assert!(bad_schema.is_err());
     }
 
     #[test]

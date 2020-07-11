@@ -422,6 +422,7 @@ impl<'a> SchemaResolver<'a> {
                 SchemaPiece::Enum {
                     symbols: r_symbols,
                     doc,
+                    default_idx,
                 },
             ) => {
                 let r_map = r_symbols
@@ -442,6 +443,7 @@ impl<'a> SchemaResolver<'a> {
                 SchemaPiece::ResolveEnum {
                     doc: doc.clone(),
                     symbols,
+                    default: (*default_idx).map(|i| (i, r_symbols[i].clone())),
                 }
             }
             (SchemaPiece::Fixed { size: wsz }, SchemaPiece::Fixed { size: rsz }) => {
