@@ -24,7 +24,7 @@ set -euxo pipefail
 cd /var/www/materialize/misc/civiz
 setfacl -m www-data:x $(dirname "$SSH_AUTH_SOCK")
 setfacl -m www-data:rwx "$SSH_AUTH_SOCK"
-sudo -u www-data --preserve-env=SSH_AUTH_SOCK git pull
+sudo -u www-data --preserve-env=SSH_AUTH_SOCK git pull origin main
 sudo -u www-data bash -c ". venv/bin/activate && python setup.py develop && alembic upgrade head"
 sudo service civiz restart
 EOF
