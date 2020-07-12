@@ -221,16 +221,16 @@ impl CatalogItem {
     fn rename_item_refs(
         &self,
         from: FullName,
-        to: FullName,
+        to_item_name: String,
         rename_self: bool,
     ) -> Result<CatalogItem, String> {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
             let mut create_stmt = sql::parse::parse(create_sql).unwrap().into_element();
             if rename_self {
-                sql::transform_ast::create_stmt_rename(&mut create_stmt, to.item.clone());
+                sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
             }
             // Determination of what constitutes an ambiguous request is done here.
-            sql::transform_ast::create_stmt_rename_refs(&mut create_stmt, from, to)?;
+            sql::ast::transform::create_stmt_rename_refs(&mut create_stmt, from, to_item_name)?;
             Ok(create_stmt.to_ast_string_stable())
         };
 
@@ -882,7 +882,7 @@ impl Catalog {
                     // Rename item itself.
                     let item = entry
                         .item
-                        .rename_item_refs(entry.name.clone(), to_full_name.clone(), true)
+                        .rename_item_refs(entry.name.clone(), to_full_name.item.clone(), true)
                         .map_err(|e| {
                             Error::new(ErrorKind::AmbiguousRename {
                                 depender: entry.name.to_string(),
@@ -896,7 +896,7 @@ impl Catalog {
                         let dependent_item = self.by_id.get(&id).unwrap();
                         let updated_item = dependent_item
                             .item
-                            .rename_item_refs(entry.name.clone(), to_full_name.clone(), false)
+                            .rename_item_refs(entry.name.clone(), to_full_name.item.clone(), false)
                             .map_err(|e| {
                                 Error::new(ErrorKind::AmbiguousRename {
                                     depender: dependent_item.name.to_string(),

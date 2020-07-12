@@ -19,16 +19,16 @@ use crate::names::FullName;
 /// Changes the `name` used in an item's `CREATE` statement. To complete a
 /// rename operation, you must also call `create_stmt_rename_refs` on all dependent
 /// items.
-pub fn create_stmt_rename(create_stmt: &mut Statement, to_name: String) {
+pub fn create_stmt_rename(create_stmt: &mut Statement, to_item_name: String) {
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
         Statement::CreateIndex { name, .. } => {
-            *name = Some(Ident::new(to_name));
+            *name = Some(Ident::new(to_item_name));
         }
         Statement::CreateSink { name, .. }
         | Statement::CreateSource { name, .. }
         | Statement::CreateView { name, .. } => {
-            name.0[2] = Ident::new(to_name);
+            name.0[2] = Ident::new(to_item_name);
         }
         _ => unreachable!("Internal error: only catalog items can be renamed"),
     }
@@ -49,12 +49,12 @@ pub fn create_stmt_rename(create_stmt: &mut Statement, to_name: String) {
 pub fn create_stmt_rename_refs(
     create_stmt: &mut Statement,
     from_name: FullName,
-    to_name: FullName,
+    to_item_name: String,
 ) -> Result<(), String> {
     let from_object = ObjectName::from(from_name.clone());
     let maybe_update_object_name = |object_name: &mut ObjectName| {
         if object_name.0 == from_object.0 {
-            object_name.0[2] = Ident::new(to_name.item.clone());
+            object_name.0[2] = Ident::new(to_item_name.clone());
         }
     };
 
@@ -68,7 +68,7 @@ pub fn create_stmt_rename_refs(
         }
         Statement::CreateSource { .. } => {}
         Statement::CreateView { query, .. } => {
-            rewrite_query(from_name, to_name, query)?;
+            rewrite_query(from_name, to_item_name, query)?;
         }
         _ => unreachable!("Internal error: only catalog items need to update item refs"),
     }
@@ -77,12 +77,12 @@ pub fn create_stmt_rename_refs(
 }
 
 /// Rewrites `query`'s references of `from` to `to` or errors if too ambiguous.
-fn rewrite_query(from: FullName, to: FullName, query: &mut Query) -> Result<(), String> {
+fn rewrite_query(from: FullName, to: String, query: &mut Query) -> Result<(), String> {
     let from_ident = Ident::new(from.item.clone());
-    let to_ident = Ident::new(to.item.clone());
+    let to_ident = Ident::new(to);
     let qual_depth =
         QueryIdentAgg::determine_qual_depth(&from_ident, Some(to_ident.clone()), query)?;
-    CreateSqlRewriter::rewrite_query_with_qual_depth(from, to, qual_depth, query);
+    CreateSqlRewriter::rewrite_query_with_qual_depth(from, to_ident.clone(), qual_depth, query);
     // Ensure that our rewrite didn't didn't introduce ambiguous
     // references to `to_name`.
     match QueryIdentAgg::determine_qual_depth(&to_ident, None, query) {
@@ -206,14 +206,16 @@ impl<'a, 'ast> Visit<'ast> for QueryIdentAgg<'a> {
             _ => visit::visit_expr(self, e),
         }
     }
+
     fn visit_ident(&mut self, ident: &'ast Ident) {
-        self.check_failure(&vec![ident.clone()]);
+        self.check_failure(&[ident.clone()]);
         // This is an unqualified item using `self.name`, e.g. an alias, which
         // we cannot unambiguously resolve.
         if ident == self.name {
             self.err = Some(ambiguous_err(self.name, "alias or column"));
         }
     }
+
     fn visit_object_name(&mut self, object_name: &'ast ObjectName) {
         let names = &object_name.0;
         self.check_failure(names);
@@ -237,57 +239,33 @@ impl<'a, 'ast> Visit<'ast> for QueryIdentAgg<'a> {
 
 struct CreateSqlRewriter {
     from: Vec<Ident>,
-    to: Vec<Ident>,
+    to: Ident,
 }
 
 impl CreateSqlRewriter {
     fn rewrite_query_with_qual_depth(
         from_name: FullName,
-        to_name: FullName,
+        to_name: Ident,
         qual_depth: usize,
         query: &mut Query,
     ) {
-        let (from, to) = match qual_depth {
-            1 => (
-                vec![Ident::new(from_name.item)],
-                vec![Ident::new(to_name.item)],
-            ),
-            2 => (
-                vec![Ident::new(from_name.schema), Ident::new(from_name.item)],
-                vec![Ident::new(to_name.schema), Ident::new(to_name.item)],
-            ),
-            3 => (
-                vec![
-                    Ident::new(from_name.database.to_string()),
-                    Ident::new(from_name.schema),
-                    Ident::new(from_name.item),
-                ],
-                vec![
-                    Ident::new(to_name.database.to_string()),
-                    Ident::new(to_name.schema),
-                    Ident::new(to_name.item),
-                ],
-            ),
+        let from = match qual_depth {
+            1 => vec![Ident::new(from_name.item)],
+            2 => vec![Ident::new(from_name.schema), Ident::new(from_name.item)],
+            3 => vec![
+                Ident::new(from_name.database.to_string()),
+                Ident::new(from_name.schema),
+                Ident::new(from_name.item),
+            ],
             _ => unreachable!(),
         };
-        let mut v = CreateSqlRewriter { from, to };
+        let mut v = CreateSqlRewriter { from, to: to_name };
         v.visit_query_mut(query);
     }
 
-    fn maybe_rewrite_idents(&mut self, name: &mut Vec<Ident>) {
-        // We don't want to rewrite if the item we're rewriting is shorter than
-        // the values we want to replace them with.
-        if name.len() < self.from.len() {
-            return;
-        }
-        let from_len = self.from.len();
-        for i in 0..name.len() - from_len + 1 {
-            // If subset of `name` matches `self.from`...
-            if name[i..i + from_len] == self.from[..] {
-                // ...splice `self.to` into `name` in that subset's location.
-                name.splice(i..i + from_len, self.to.iter().cloned());
-                return;
-            }
+    fn maybe_rewrite_idents(&mut self, name: &mut [Ident]) {
+        if name.len() > 0 && name.ends_with(&self.from) {
+            name[name.len() - 1] = self.to.clone();
         }
     }
 }
@@ -295,8 +273,14 @@ impl CreateSqlRewriter {
 impl<'ast> VisitMut<'ast> for CreateSqlRewriter {
     fn visit_expr_mut(&mut self, e: &'ast mut Expr) {
         match e {
-            Expr::Identifier(i) | Expr::QualifiedWildcard(i) => {
-                self.maybe_rewrite_idents(i);
+            Expr::Identifier(id) => {
+                // The last ID component is a column name that should not be
+                // considered in the rewrite.
+                let i = id.len() - 1;
+                self.maybe_rewrite_idents(&mut id[..i]);
+            }
+            Expr::QualifiedWildcard(id) => {
+                self.maybe_rewrite_idents(id);
             }
             _ => visit_mut::visit_expr_mut(self, e),
         }

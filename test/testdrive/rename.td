@@ -125,12 +125,12 @@ materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"o
 > ALTER VIEW renamed_mz_view RENAME TO t1
 > CREATE VIEW a AS SELECT 1 AS a
 > CREATE VIEW v0 AS SELECT 2 AS b
-> CREATE VIEW table_alias_check AS
-  SELECT t1.a
-  FROM(
-    SELECT a
-    FROM t1
-  ) AS t1;
+> CREATE VIEW t2 AS
+  SELECT * FROM a
+  JOIN v0
+  ON a.a = v0.b
+  JOIN t1
+  ON a.a = t1.a;
 
 # ❌ Identifiers used in dependent items
 ! ALTER VIEW t1 RENAME TO b;
@@ -138,8 +138,6 @@ renaming conflict
 ! ALTER VIEW t1 RENAME TO materialize;
 renaming conflict
 ! ALTER VIEW t1 RENAME TO public;
-renaming conflict
-! ALTER VIEW t1 RENAME TO t2;
 renaming conflict
 
 # ❌ Identifiers used in own definition
@@ -154,6 +152,19 @@ renaming conflict
 a is already taken by item in schema
 ! ALTER VIEW t1 RENAME TO dependent_view;
 dependent_view is already taken by item in schema
+
+# 🔬 Aliases
+
+> CREATE VIEW table_alias_check AS
+  SELECT t1.a AS b
+  FROM (
+    SELECT a
+    FROM t1
+  ) AS t1;
+
+# ❌ View name used as alias
+! ALTER VIEW t1 RENAME TO anything
+renaming conflict
 
 # 🔬 Unresolvable without scope analysis
 # These are example queries whose ambiguity cannot be resolved through
