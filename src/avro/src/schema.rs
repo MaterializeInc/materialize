@@ -657,19 +657,19 @@ impl UnionSchema {
         !self.schemas.is_empty() && self.schemas[0] == SchemaPieceOrNamed::Piece(SchemaPiece::Null)
     }
 
-    pub fn resolve_piece(&self, sp: &SchemaPiece) -> Option<(usize, &SchemaPieceOrNamed)> {
+    pub fn match_piece(&self, sp: &SchemaPiece) -> Option<(usize, &SchemaPieceOrNamed)> {
         self.anon_variant_index
             .get(&SchemaKind::from(sp))
             .map(|idx| (*idx, &self.schemas[*idx]))
     }
 
-    pub fn resolve_ref(
+    pub fn match_ref(
         &self,
         other: SchemaPieceRefOrNamed,
         names_map: &HashMap<usize, usize>,
     ) -> Option<(usize, &SchemaPieceOrNamed)> {
         match other {
-            SchemaPieceRefOrNamed::Piece(sp) => self.resolve_piece(sp),
+            SchemaPieceRefOrNamed::Piece(sp) => self.match_piece(sp),
             SchemaPieceRefOrNamed::Named(idx) => names_map
                 .get(&idx)
                 .and_then(|idx| self.named_variant_index.get(idx))
@@ -683,7 +683,7 @@ impl UnionSchema {
         other: &SchemaPieceOrNamed,
         names_map: &HashMap<usize, usize>,
     ) -> Option<(usize, &SchemaPieceOrNamed)> {
-        self.resolve_ref(other.as_ref(), names_map)
+        self.match_ref(other.as_ref(), names_map)
     }
 }
 

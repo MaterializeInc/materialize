@@ -588,7 +588,7 @@ impl<'a> SchemaResolver<'a> {
             // Writer is concrete; reader is union
             (other, SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(r_inner))) => {
                 let (index, r_inner) = r_inner
-                    .resolve_ref(other, &self.writer_to_reader_names)
+                    .match_ref(other, &self.writer_to_reader_names)
                     .ok_or_else(|| {
                         SchemaResolutionError::new("No matching schema in union".to_string())
                     })?;
@@ -598,7 +598,7 @@ impl<'a> SchemaResolver<'a> {
             // Writer is union; reader is concrete
             (SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(w_inner)), other) => {
                 let (index, w_inner) = w_inner
-                    .resolve_ref(other, &self.reader_to_writer_names)
+                    .match_ref(other, &self.reader_to_writer_names)
                     .ok_or_else(|| {
                         SchemaResolutionError::new("No matching schema in union".to_string())
                     })?;
