@@ -227,10 +227,10 @@ impl CatalogItem {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
             let mut create_stmt = sql::parse::parse(create_sql).unwrap().into_element();
             if rename_self {
-                sql::transform_ast::create_stmt_rename(&mut create_stmt, to.item.clone());
+                sql::ast::transform::create_stmt_rename(&mut create_stmt, to.item.clone());
             }
             // Determination of what constitutes an ambiguous request is done here.
-            sql::transform_ast::create_stmt_rename_refs(&mut create_stmt, from, to)?;
+            sql::ast::transform::create_stmt_rename_refs(&mut create_stmt, from, to)?;
             Ok(create_stmt.to_ast_string_stable())
         };
 

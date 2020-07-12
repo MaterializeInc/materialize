@@ -207,7 +207,7 @@ impl<'a, 'ast> Visit<'ast> for QueryIdentAgg<'a> {
         }
     }
     fn visit_ident(&mut self, ident: &'ast Ident) {
-        self.check_failure(&vec![ident.clone()]);
+        self.check_failure(&[ident.clone()]);
         // This is an unqualified item using `self.name`, e.g. an alias, which
         // we cannot unambiguously resolve.
         if ident == self.name {
