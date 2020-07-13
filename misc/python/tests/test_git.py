@@ -35,7 +35,13 @@ def test_tags_returns_ordered_newest_first() -> None:
             tag.minor,
             tag.patch,
         )
-        if prev.prerelease and tag.prerelease:
+        if (
+            prev.major == tag.major
+            and prev.minor == tag.minor
+            and prev.patch == tag.patch
+            and prev.prerelease
+            and tag.prerelease
+        ):
             assert prev.prerelease >= tag.prerelease
         prev = tag
 
