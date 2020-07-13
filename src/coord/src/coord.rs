@@ -263,14 +263,6 @@ where
         // Announce primary and foreign key relationships.
         if let Some(logging_config) = logging {
             for log in logging_config.active_logs().iter() {
-                coord.report_catalog_update(
-                    log.id(),
-                    coord
-                        .catalog
-                        .humanize_id(expr::Id::Global(log.id()))
-                        .unwrap(),
-                    true,
-                );
                 for (index, key) in log.schema().typ().keys.iter().enumerate() {
                     broadcast(
                         &mut coord.broadcast_tx,
