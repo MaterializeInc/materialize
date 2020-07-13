@@ -346,12 +346,9 @@ pub(crate) enum SchemaKind {
     Int,
     Long,
     Float,
-    Date,
-    DateTime,
     Double,
     // Variable-length types
     Bytes,
-    Decimal,
     String,
     Array,
     Map,
@@ -374,13 +371,19 @@ impl<'a> From<&'a SchemaPiece> for SchemaKind {
             SchemaPiece::Long => SchemaKind::Long,
             SchemaPiece::Float => SchemaKind::Float,
             SchemaPiece::Double => SchemaKind::Double,
-            SchemaPiece::Date => SchemaKind::Date,
+            SchemaPiece::Date => SchemaKind::Int,
             SchemaPiece::TimestampMilli
             | SchemaPiece::TimestampMicro
             | SchemaPiece::ResolveIntTsMilli
             | SchemaPiece::ResolveDateTimestamp
-            | SchemaPiece::ResolveIntTsMicro => SchemaKind::DateTime,
-            SchemaPiece::Decimal { .. } => SchemaKind::Decimal,
+            | SchemaPiece::ResolveIntTsMicro => SchemaKind::Long,
+            SchemaPiece::Decimal {
+                fixed_size: None, ..
+            } => SchemaKind::Bytes,
+            SchemaPiece::Decimal {
+                fixed_size: Some(_),
+                ..
+            } => SchemaKind::Fixed,
             SchemaPiece::Bytes => SchemaKind::Bytes,
             SchemaPiece::String => SchemaKind::String,
             SchemaPiece::Array(_) => SchemaKind::Array,
@@ -416,33 +419,6 @@ impl<'a> From<&'a Schema> for SchemaKind {
     #[inline(always)]
     fn from(schema: &'a Schema) -> SchemaKind {
         Self::from(schema.top_node())
-    }
-}
-
-impl<'a> From<&'a types::Value> for SchemaKind {
-    #[inline(always)]
-    fn from(value: &'a types::Value) -> SchemaKind {
-        match value {
-            types::Value::Null => SchemaKind::Null,
-            types::Value::Boolean(_) => SchemaKind::Boolean,
-            types::Value::Int(_) => SchemaKind::Int,
-            types::Value::Long(_) => SchemaKind::Long,
-            types::Value::Float(_) => SchemaKind::Float,
-            types::Value::Double(_) => SchemaKind::Double,
-            types::Value::Date(_) => SchemaKind::Date,
-            types::Value::Timestamp(_) => SchemaKind::DateTime,
-            // Variable-length types
-            types::Value::Decimal { .. } => SchemaKind::Decimal,
-            types::Value::Bytes(_) => SchemaKind::Bytes,
-            types::Value::String(_) => SchemaKind::String,
-            types::Value::Array(_) => SchemaKind::Array,
-            types::Value::Map(_) => SchemaKind::Map,
-            types::Value::Union(_, _) => SchemaKind::Union,
-            types::Value::Record(_) => SchemaKind::Record,
-            types::Value::Enum(_, _) => SchemaKind::Enum,
-            types::Value::Fixed(_, _) => SchemaKind::Fixed,
-            types::Value::Json(_) => SchemaKind::String,
-        }
     }
 }
 
@@ -2244,6 +2220,51 @@ mod tests {
             res.unwrap_err().to_string(),
             "Failed to parse schema: Decimal precision 12 requires more than 5 bytes of space"
         );
+
+        let res = Schema::parse_str(
+            r#"["bytes", {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 12,
+                "scale": 5
+            }]"#,
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Failed to parse schema: Unions cannot contain duplicate types"
+        );
+
+        let writer_schema = Schema::parse_str(
+            r#"["null", {
+                "type": "bytes"
+            }]"#,
+        )
+        .unwrap();
+        let reader_schema = Schema::parse_str(
+            r#"["null", {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 12,
+                "scale": 5
+            }]"#,
+        )
+        .unwrap();
+        let resolved = resolve_schemas(&writer_schema, &reader_schema).unwrap();
+
+        let expected = SchemaPiece::ResolveUnionUnion {
+            permutation: vec![
+                Ok((0, SchemaPieceOrNamed::Piece(SchemaPiece::Null))),
+                Ok((
+                    1,
+                    SchemaPieceOrNamed::Piece(SchemaPiece::Decimal {
+                        precision: 12,
+                        scale: 5,
+                        fixed_size: None,
+                    }),
+                )),
+            ],
+        };
+        assert_eq!(resolved.top_node().inner, &expected);
     }
 
     #[test]
