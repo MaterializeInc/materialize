@@ -1733,11 +1733,19 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         )?;
                         map.end()
                     }
-                    SchemaPiece::Enum { symbols, .. } => {
+                    SchemaPiece::Enum {
+                        symbols,
+                        default_idx,
+                        ..
+                    } => {
                         let mut map = serializer.serialize_map(None)?;
                         map.serialize_entry("type", "enum")?;
                         map.serialize_entry("name", &name)?;
                         map.serialize_entry("symbols", symbols)?;
+                        if let Some(default_idx) = *default_idx {
+                            assert!(default_idx < symbols.len());
+                            map.serialize_entry("default", &symbols[default_idx])?;
+                        }
                         map.end()
                     }
                     SchemaPiece::Fixed { size } => {
@@ -1938,6 +1946,16 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
+    fn expect_schema(schema: &str, expected: SchemaPiece) {
+        let schema = Schema::parse_str(schema).unwrap();
+        assert_eq!(&expected, schema.top_node().inner);
+
+        // Test serialization round trip
+        let schema = serde_json::to_string(&schema).unwrap();
+        let schema = Schema::parse_str(&schema).unwrap();
+        assert_eq!(&expected, schema.top_node().inner);
+    }
+
     #[test]
     fn test_invalid_schema() {
         assert!(Schema::parse_str("invalid").is_err());
@@ -1945,54 +1963,38 @@ mod tests {
 
     #[test]
     fn test_primitive_schema() {
-        assert_eq!(
-            SchemaPieceOrNamed::Piece(SchemaPiece::Null),
-            Schema::parse_str("\"null\"").unwrap().top
-        );
-        assert_eq!(
-            SchemaPieceOrNamed::Piece(SchemaPiece::Int),
-            Schema::parse_str("\"int\"").unwrap().top
-        );
-        assert_eq!(
-            SchemaPieceOrNamed::Piece(SchemaPiece::Double),
-            Schema::parse_str("\"double\"").unwrap().top
-        );
+        expect_schema("\"null\"", SchemaPiece::Null);
+        expect_schema("\"int\"", SchemaPiece::Int);
+        expect_schema("\"double\"", SchemaPiece::Double);
     }
 
     #[test]
     fn test_array_schema() {
-        let schema = Schema::parse_str(r#"{"type": "array", "items": "string"}"#).unwrap();
-        assert_eq!(
-            SchemaPieceOrNamed::Piece(SchemaPiece::Array(Box::new(SchemaPieceOrNamed::Piece(
-                SchemaPiece::String
-            )))),
-            schema.top
+        expect_schema(
+            r#"{"type": "array", "items": "string"}"#,
+            SchemaPiece::Array(Box::new(SchemaPieceOrNamed::Piece(SchemaPiece::String))),
         );
     }
 
     #[test]
     fn test_map_schema() {
-        let schema = Schema::parse_str(r#"{"type": "map", "values": "double"}"#).unwrap();
-        assert_eq!(
-            SchemaPieceOrNamed::Piece(SchemaPiece::Map(Box::new(SchemaPieceOrNamed::Piece(
-                SchemaPiece::Double
-            )))),
-            schema.top
+        expect_schema(
+            r#"{"type": "map", "values": "double"}"#,
+            SchemaPiece::Map(Box::new(SchemaPieceOrNamed::Piece(SchemaPiece::Double))),
         );
     }
 
     #[test]
     fn test_union_schema() {
-        let schema = Schema::parse_str(r#"["null", "int"]"#).unwrap();
-        assert_eq!(
-            SchemaPieceOrNamed::Piece(SchemaPiece::Union(
+        expect_schema(
+            r#"["null", "int"]"#,
+            SchemaPiece::Union(
                 UnionSchema::new(vec![
                     SchemaPieceOrNamed::Piece(SchemaPiece::Null),
-                    SchemaPieceOrNamed::Piece(SchemaPiece::Int)
+                    SchemaPieceOrNamed::Piece(SchemaPiece::Int),
                 ])
-                .unwrap()
-            )),
-            schema.top
+                .unwrap(),
+            ),
         );
     }
 
@@ -2040,8 +2042,7 @@ mod tests {
 
     #[test]
     fn test_record_schema() {
-        let schema = Schema::parse_str(
-            r#"
+        let schema = r#"
                 {
                     "type": "record",
                     "name": "test",
@@ -2050,9 +2051,7 @@ mod tests {
                         {"name": "b", "type": "string"}
                     ]
                 }
-            "#,
-        )
-        .unwrap();
+            "#;
 
         let mut lookup = HashMap::new();
         lookup.insert("a".to_owned(), 0);
@@ -2081,14 +2080,12 @@ mod tests {
             lookup,
         };
 
-        assert_eq!(&expected, schema.top_node().inner);
+        expect_schema(schema, expected);
     }
 
     #[test]
     fn test_enum_schema() {
-        let schema = Schema::parse_str(
-                r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "jokers"}"#,
-            ).unwrap();
+        let schema = r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "jokers"}"#;
 
         let expected = SchemaPiece::Enum {
             doc: None,
@@ -2102,7 +2099,7 @@ mod tests {
             default_idx: Some(2),
         };
 
-        assert_eq!(&expected, schema.top_node().inner);
+        expect_schema(schema, expected);
 
         let bad_schema = Schema::parse_str(
             r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "blah"}"#,
@@ -2113,11 +2110,11 @@ mod tests {
 
     #[test]
     fn test_fixed_schema() {
-        let schema = Schema::parse_str(r#"{"type": "fixed", "name": "test", "size": 16}"#).unwrap();
+        let schema = r#"{"type": "fixed", "name": "test", "size": 16}"#;
 
         let expected = SchemaPiece::Fixed { size: 16usize };
 
-        assert_eq!(&expected, schema.top_node().inner);
+        expect_schema(schema, expected);
     }
 
     #[test]
@@ -2140,9 +2137,9 @@ mod tests {
                 }"#,
         ];
         for kind in kinds {
-            let schema = Schema::parse_str(kind).unwrap();
-            assert_eq!(schema.top_node().inner, &SchemaPiece::Date);
+            expect_schema(*kind, SchemaPiece::Date);
 
+            let schema = Schema::parse_str(*kind).unwrap();
             assert_eq!(
                 serde_json::to_string(&schema).unwrap(),
                 r#"{"type":"int","logicalType":"date"}"#
@@ -2152,49 +2149,33 @@ mod tests {
 
     #[test]
     fn test_decimal_schemas() {
-        let schema = Schema::parse_str(
-            r#"{
+        let schema = r#"{
                 "type": "fixed",
                 "name": "dec",
                 "size": 8,
                 "logicalType": "decimal",
                 "precision": 12,
                 "scale": 5
-            }"#,
-        )
-        .unwrap();
+            }"#;
         let expected = SchemaPiece::Decimal {
             precision: 12,
             scale: 5,
             fixed_size: Some(8),
         };
-        assert_eq!(schema.top_node().inner, &expected);
-        let serialized = serde_json::to_value(schema).unwrap().to_string();
-        let schema = Schema::parse_str(&serialized).unwrap();
-        assert_eq!(schema.top_node().inner, &expected);
+        expect_schema(schema, expected);
 
-        let schema = Schema::parse_str(
-            r#"{
+        let schema = r#"{
                 "type": "bytes",
                 "logicalType": "decimal",
                 "precision": 12,
                 "scale": 5
-            }"#,
-        )
-        .unwrap();
+            }"#;
         let expected = SchemaPiece::Decimal {
             precision: 12,
             scale: 5,
             fixed_size: None,
         };
-        assert_eq!(schema.top_node().inner, &expected);
-        // Test that we serialize decimals properly
-        // TODO(btv) we should add similar round-trip tests
-        // to all of these schema parsing tests, to uncover more
-        // bugs like the one where decimals weren't getting encoded.
-        let serialized = serde_json::to_value(schema).unwrap().to_string();
-        let schema = Schema::parse_str(&serialized).unwrap();
-        assert_eq!(schema.top_node().inner, &expected);
+        expect_schema(schema, expected);
 
         let res = Schema::parse_str(
             r#"{
