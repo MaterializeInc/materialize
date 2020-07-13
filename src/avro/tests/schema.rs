@@ -18,6 +18,7 @@ lazy_static! {
         // Primitive examples
         r#""True""#,
         r#"'True"#,
+        r#"invalid"#,
         r#"{"no_type": "test"}"#,
         // Fixed examples
         r#"{"type": "fixed", "name": "Missing size"}"#,
