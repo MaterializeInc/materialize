@@ -2192,6 +2192,13 @@ mod tests {
             fixed_size: None,
         };
         assert_eq!(schema.top_node().inner, &expected);
+        // Test that we serialize decimals properly
+        // TODO(btv) we should add similar round-trip tests
+        // to all of these schema parsing tests, to uncover more
+        // bugs like the one where decimals weren't getting encoded.
+        let serialized = serde_json::to_value(schema).unwrap().to_string();
+        let schema = Schema::parse_str(&serialized).unwrap();
+        assert_eq!(schema.top_node().inner, &expected);
 
         let res = Schema::parse_str(
             r#"{
