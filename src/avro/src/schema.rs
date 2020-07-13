@@ -1946,7 +1946,7 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
-    fn expect_schema(schema: &str, expected: SchemaPiece) {
+    fn check_schema(schema: &str, expected: SchemaPiece) {
         let schema = Schema::parse_str(schema).unwrap();
         assert_eq!(&expected, schema.top_node().inner);
 
@@ -1963,14 +1963,14 @@ mod tests {
 
     #[test]
     fn test_primitive_schema() {
-        expect_schema("\"null\"", SchemaPiece::Null);
-        expect_schema("\"int\"", SchemaPiece::Int);
-        expect_schema("\"double\"", SchemaPiece::Double);
+        check_schema("\"null\"", SchemaPiece::Null);
+        check_schema("\"int\"", SchemaPiece::Int);
+        check_schema("\"double\"", SchemaPiece::Double);
     }
 
     #[test]
     fn test_array_schema() {
-        expect_schema(
+        check_schema(
             r#"{"type": "array", "items": "string"}"#,
             SchemaPiece::Array(Box::new(SchemaPieceOrNamed::Piece(SchemaPiece::String))),
         );
@@ -1978,7 +1978,7 @@ mod tests {
 
     #[test]
     fn test_map_schema() {
-        expect_schema(
+        check_schema(
             r#"{"type": "map", "values": "double"}"#,
             SchemaPiece::Map(Box::new(SchemaPieceOrNamed::Piece(SchemaPiece::Double))),
         );
@@ -1986,7 +1986,7 @@ mod tests {
 
     #[test]
     fn test_union_schema() {
-        expect_schema(
+        check_schema(
             r#"["null", "int"]"#,
             SchemaPiece::Union(
                 UnionSchema::new(vec![
@@ -2080,7 +2080,7 @@ mod tests {
             lookup,
         };
 
-        expect_schema(schema, expected);
+        check_schema(schema, expected);
     }
 
     #[test]
@@ -2099,7 +2099,7 @@ mod tests {
             default_idx: Some(2),
         };
 
-        expect_schema(schema, expected);
+        check_schema(schema, expected);
 
         let bad_schema = Schema::parse_str(
             r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "jokers", "clubs", "hearts"], "default": "blah"}"#,
@@ -2114,7 +2114,7 @@ mod tests {
 
         let expected = SchemaPiece::Fixed { size: 16usize };
 
-        expect_schema(schema, expected);
+        check_schema(schema, expected);
     }
 
     #[test]
@@ -2137,7 +2137,7 @@ mod tests {
                 }"#,
         ];
         for kind in kinds {
-            expect_schema(*kind, SchemaPiece::Date);
+            check_schema(*kind, SchemaPiece::Date);
 
             let schema = Schema::parse_str(*kind).unwrap();
             assert_eq!(
@@ -2162,7 +2162,7 @@ mod tests {
             scale: 5,
             fixed_size: Some(8),
         };
-        expect_schema(schema, expected);
+        check_schema(schema, expected);
 
         let schema = r#"{
                 "type": "bytes",
@@ -2175,7 +2175,7 @@ mod tests {
             scale: 5,
             fixed_size: None,
         };
-        expect_schema(schema, expected);
+        check_schema(schema, expected);
 
         let res = Schema::parse_str(
             r#"{
