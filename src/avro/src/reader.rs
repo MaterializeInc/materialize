@@ -432,7 +432,12 @@ impl<'a> SchemaResolver<'a> {
                     .collect::<HashMap<_, _>>();
                 let symbols = w_symbols
                     .iter()
-                    .map(|s| r_map.get(s).map(|i| (s.clone(), *i)).ok_or_else(|| s.clone()))
+                    .map(|s| {
+                        r_map
+                            .get(s)
+                            .map(|i| (s.clone(), *i))
+                            .ok_or_else(|| s.clone())
+                    })
                     .collect();
                 SchemaPiece::ResolveEnum {
                     doc: doc.clone(),

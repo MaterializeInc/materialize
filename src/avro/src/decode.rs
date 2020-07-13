@@ -20,7 +20,7 @@ use crate::schema::{
 };
 use crate::types::{DecimalValue, Scalar, Value};
 use crate::util::{safe_len, zag_i32, zag_i64, DecodeError};
-use std::{fmt::Display};
+use std::fmt::Display;
 use std::io::{Read, SeekFrom};
 
 #[inline]
@@ -1109,7 +1109,11 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
                 .into());
             }
             match &permutation[index] {
-                Err(e) => Err(DecodeError::new(format!("Union variant not found in reader schema: {}", e)).into()),
+                Err(e) => Err(DecodeError::new(format!(
+                    "Union variant not found in reader schema: {}",
+                    e
+                ))
+                .into()),
                 Ok((index, variant)) => {
                     decode(schema.step(variant), reader).map(|x| Value::Union {
                         index: *index,
