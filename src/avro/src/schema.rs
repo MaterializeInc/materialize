@@ -1142,23 +1142,25 @@ impl SchemaParser {
 
         let logical_type = complex.get("logicalType").and_then(|v| v.as_str());
 
-        match Self::parse_decimal(complex) {
-            Ok((precision, scale)) => {
-                let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
-                if precision > max {
-                    return Err(ParseSchemaError::new(format!(
-                        "Decimal precision {} requires more than {} bytes of space",
-                        precision, size,
-                    ))
-                    .into());
+        if let Some("decimal") = logical_type {
+            match Self::parse_decimal(complex) {
+                Ok((precision, scale)) => {
+                    let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
+                    if precision > max {
+                        return Err(ParseSchemaError::new(format!(
+                            "Decimal precision {} requires more than {} bytes of space",
+                            precision, size,
+                        ))
+                        .into());
+                    }
+                    return Ok(SchemaPiece::Decimal {
+                        precision,
+                        scale,
+                        fixed_size: Some(size as usize),
+                    });
                 }
-                return Ok(SchemaPiece::Decimal {
-                    precision,
-                    scale,
-                    fixed_size: Some(size as usize),
-                });
+                Err(e) => debug!("{}", e),
             }
-            Err(e) => debug!("{}", e),
         }
 
         debug!("parsing complex type as fixed: {:?}", complex);
