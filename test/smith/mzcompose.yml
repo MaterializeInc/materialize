@@ -20,10 +20,19 @@ services:
       - DIFFERENTIAL_EAGER_MERGE=1000
   smith-fuzz:
     mzbuild: smith-fuzz
-    entrypoint: /bin/bash
     environment:
       - RUST_LOG=smith-fuzz=debug,info
-    command: -c "wait-for-it materialized:6875 --
-      --materialized-host materialized
-      --query-count 100"
+    entrypoint: [smith-fuzz, --materialized-host=materialized]
     depends_on: [materialized]
+mzconduct:
+  workflows:
+    ci:
+      steps:
+      - step: start-services
+        services: [materialized]
+      - step: wait-for-tcp
+        host: materialized
+        port: 6875
+      - step: run
+        service: smith-fuzz
+        command: --query-count=10000
