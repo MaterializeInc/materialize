@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use avro::{types::DecimalValue, types::Value, Schema};
+use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -146,6 +147,39 @@ lazy_static! {
          Value::Decimal(DecimalValue { unscaled: vec![0, 0], precision: 1, scale: 1})),
         (r#"{"type": "bytes", "logicalType": "decimal", "precision": 4, "scale": 2}"#,
          Value::Decimal(DecimalValue { unscaled: vec![0], precision: 4, scale: 2})),
+        // Date logical type
+        (r#"{"type": "int", "logicalType": "date"}"#, Value::Date(NaiveDate::from_ymd(2020, 7, 13))),
+        // Time millis logical type
+        (r#"{"type": "int", "logicalType": "time-millis"}"#, Value::Int(0)),
+        // Time micros logical type
+        (r#"{"type": "long", "logicalType": "time-micros"}"#, Value::Long(0)),
+        // Timestamp millis logical type
+        (r#"{"type": "long", "logicalType": "timestamp-millis"}"#, Value::Timestamp(NaiveDateTime::from_timestamp(0, 0))),
+        // Timestamp micros logical type
+        (r#"{"type": "long", "logicalType": "timestamp-micros"}"#, Value::Timestamp(NaiveDateTime::from_timestamp(0, 0))),
+    ];
+
+    // From https://avro.apache.org/docs/current/spec.html#Logical+Types
+    // "Language implementations must ignore unknown logical types when reading, and should use the
+    //  underlying Avro type. If a logical type is invalid, for example a decimal with scale greater
+    //  than its precision, then implementations should ignore the logical type and use the underlying
+    //  Avro type."
+    static ref IGNORED_LOGICAL_TYPES: Vec<(&'static str, Value)> = vec![
+        (r#"{"type": "string", "logicalType": "uuid"}"#, Value::String("string".into())),
+        (r#"{"type": "string", "logicalType": "unknown-logical-type"}"#, Value::String("string".into())),
+        // Decimal logical type
+        (r#"{"type": "bytes", "logicalType": "decimal", "scale": 0}"#, Value::Bytes(vec![])),
+        (r#"{"type": "bytes", "logicalType": "decimal", "precision": 2.4, "scale": 0}"#, Value::Bytes(vec![])),
+        (r#"{"type": "bytes", "logicalType": "decimal", "precision": 2, "scale": -2}"#, Value::Bytes(vec![])),
+        (r#"{"type": "bytes", "logicalType": "decimal", "precision": -2, "scale": 2}"#, Value::Bytes(vec![])),
+        (r#"{"type": "bytes", "logicalType": "decimal", "precision": 2, "scale": 3}"#, Value::Bytes(vec![])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "test", "size": 1}"#, Value::Fixed(1, vec![0])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "test", "size": 1, "precision": 1, "scale": -2}"#,
+         Value::Fixed(1, vec![0])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "test", "size": 1, "precision": -2, "scale": 0}"#,
+         Value::Fixed(1, vec![0])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "test", "size": 1, "precision": 2, "scale": 3}"#,
+         Value::Fixed(1, vec![0])),
     ];
 }
 
@@ -183,6 +217,17 @@ fn test_valid_schemas() {
 #[test]
 fn test_valid_logical_types() {
     for (raw_schema, value) in VALID_LOGICAL_TYPES.iter() {
+        let schema = Schema::parse_str(raw_schema).unwrap();
+        assert!(
+            value.validate(schema.top_node()),
+            format!("value {:?} does not validate schema: {}", value, raw_schema)
+        );
+    }
+}
+
+#[test]
+fn test_ignored_logical_types() {
+    for (raw_schema, value) in IGNORED_LOGICAL_TYPES.iter() {
         let schema = Schema::parse_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
