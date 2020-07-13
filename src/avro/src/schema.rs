@@ -1638,13 +1638,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                 SchemaPiece::Decimal {
                     precision,
                     scale,
-                    fixed_size,
+                    fixed_size: None,
                 } => {
-                    let mut map = serializer.serialize_map(None)?;
+                    let mut map = serializer.serialize_map(Some(4))?;
                     map.serialize_entry("type", "bytes")?;
-                    if let Some(fixed_size) = fixed_size {
-                        map.serialize_entry("size", fixed_size)?;
-                    }
                     map.serialize_entry("precision", precision)?;
                     map.serialize_entry("scale", scale)?;
                     map.serialize_entry("logicalType", "decimal")?;
@@ -1679,6 +1676,10 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     map.end()
                 }
                 SchemaPiece::Record { .. }
+                | SchemaPiece::Decimal {
+                    fixed_size: Some(_),
+                    ..
+                }
                 | SchemaPiece::Enum { .. }
                 | SchemaPiece::Fixed { .. } => {
                     unreachable!("Unexpected named schema piece in anonymous schema position")
@@ -1746,6 +1747,20 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                         map.serialize_entry("size", size)?;
                         map.end()
                     }
+                    SchemaPiece::Decimal {
+                        scale,
+                        precision,
+                        fixed_size: Some(size),
+                    } => {
+                        let mut map = serializer.serialize_map(Some(6))?;
+                        map.serialize_entry("type", "fixed")?;
+                        map.serialize_entry("logicalType", "decimal")?;
+                        map.serialize_entry("name", &name)?;
+                        map.serialize_entry("size", size)?;
+                        map.serialize_entry("precision", precision)?;
+                        map.serialize_entry("scale", scale)?;
+                        map.end()
+                    }
                     SchemaPiece::Null
                     | SchemaPiece::Boolean
                     | SchemaPiece::Int
@@ -1755,7 +1770,9 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     | SchemaPiece::Date
                     | SchemaPiece::TimestampMilli
                     | SchemaPiece::TimestampMicro
-                    | SchemaPiece::Decimal { .. }
+                    | SchemaPiece::Decimal {
+                        fixed_size: None, ..
+                    }
                     | SchemaPiece::Bytes
                     | SchemaPiece::String
                     | SchemaPiece::Array(_)
@@ -2151,6 +2168,9 @@ mod tests {
             scale: 5,
             fixed_size: Some(8),
         };
+        assert_eq!(schema.top_node().inner, &expected);
+        let serialized = serde_json::to_value(schema).unwrap().to_string();
+        let schema = Schema::parse_str(&serialized).unwrap();
         assert_eq!(schema.top_node().inner, &expected);
 
         let schema = Schema::parse_str(
