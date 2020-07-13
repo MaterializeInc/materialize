@@ -1155,6 +1155,13 @@ impl SchemaParser {
             .get("size")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| ParseSchemaError::new("No `size` in fixed"))?;
+        if size <= 0 {
+            return Err(ParseSchemaError::new(format!(
+                "Fixed values require a positive size attribute, found: {}",
+                size
+            ))
+            .into());
+        }
 
         let logical_type = complex.get("logicalType").and_then(|v| v.as_str());
 
@@ -1946,11 +1953,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_invalid_schema() {
-        assert!(Schema::parse_str("invalid").is_err());
-    }
-
-    #[test]
     fn test_primitive_schema() {
         assert_eq!(
             SchemaPieceOrNamed::Piece(SchemaPiece::Null),
@@ -2001,12 +2003,6 @@ mod tests {
             )),
             schema.top
         );
-    }
-
-    #[test]
-    fn test_union_unsupported_schema() {
-        let schema = Schema::parse_str(r#"["null", ["null", "int"], "string"]"#);
-        assert!(schema.is_err());
     }
 
     #[test]
