@@ -1671,6 +1671,7 @@ impl<'a> Serialize for SchemaSerContext<'a> {
                     }
                     map.serialize_entry("precision", precision)?;
                     map.serialize_entry("scale", scale)?;
+                    map.serialize_entry("logicalType", "decimal")?;
                     map.end()
                 }
                 SchemaPiece::Bytes => serializer.serialize_str("bytes"),
