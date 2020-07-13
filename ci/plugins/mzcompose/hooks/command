@@ -18,7 +18,8 @@ mzcompose() {
 service=$BUILDKITE_PLUGIN_MZCOMPOSE_RUN
 run_args=("$service")
 if [[ "${BUILDKITE_COMMAND:-}" ]]; then
-    run_args+=("$BUILDKITE_COMMAND")
+    # shellcheck disable=SC2206
+    run_args+=($BUILDKITE_COMMAND)
 fi
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
