@@ -114,7 +114,7 @@ Materialize is built on top of [differential dataflow](https://github.com/Timely
 
 Materialize is written entirely in Rust.
 
-Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://mtrlz.dev/api/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
+Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://mtrlz.dev/api/rust/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
 
 Contributions are welcome. Prospective code contributors might find the [good first issue tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3A%22D-good+first+issue%22) useful. We value all contributions equally, but bug reports are more equal.
 
