@@ -1858,7 +1858,6 @@ where
             _ => (),
         }
         let mut dataflow = DataflowDesc::new(name);
-        // let as_of = ;
         dataflow.set_as_of(connector.get_frontier());
         self.import_source_or_view(&id, &from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
