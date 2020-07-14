@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Test complex reordered/resolved schemas.
-# The schemas are a straightforward copy and paste from test_complex_resolutions
+# The schemas are mostly a copy and paste from test_complex_resolutions
 # in mod avro. The code duplication is warranted because making that
 # test exercise the new decode/deserialize API would
 # invert the dependency structure, requiring mod avro to depend
@@ -120,15 +120,8 @@ $ set reader-schema={
                   "type": {
                       "type": "enum",
                       "symbols": ["Hearts", "Spades", "Diamonds", "Clubs", "Jokers"],
-                      "name": "Suit"
-                  }
-              },
-              {
-                  "name": "f4",
-                  "type": {
-                      "name": "variant1",
-                      "type": "fixed",
-                      "size": 1
+                      "name": "Suit",
+                      "default": "Diamonds"
                   }
               },
               {
@@ -151,15 +144,15 @@ $ kafka-ingest format=avro topic=avro-data schema=${writer-schema} publish=true 
 { "f5": 1234, "f4": [0], "f3": 2345, "f2": "Diamonds", "f1": [0, 1, 2, 3] }
 
 $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} publish=true timestamp=1
-{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": 3456, "f2": "Jokers", "f4": [9], "f5": [0,1,2,3,4,5,6,7,8,9] }
+{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": 3456, "f2": "Jokers", "f5": [0,1,2,3,4,5,6,7,8,9] }
 
 > CREATE MATERIALIZED SOURCE avro_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> SELECT (f0).f0_0, (f0).f0_1, f11, f12, f13, f2, f4, f51, f52
+> SELECT (f0).f0_0, (f0).f0_1, f11, f12, f13, f2, f51, f52
   FROM avro_data
-f0_0 f0_1 f11 f12 f13 f2 f4 f51 f52
+f0_0 f0_1 f11 f12 f13 f2 f51 f52
 ---
-7777 bar \x00\x01\x02\x03 <null> <null> Diamonds \x00 <null> 1234
-9999 <null> <null> <null> 3456 Jokers \t \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>
+7777 bar \x00\x01\x02\x03 <null> <null> Diamonds <null> 1234
+9999 <null> <null> <null> 3456 Jokers \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>

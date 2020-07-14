@@ -91,6 +91,25 @@ pub fn from_json(json: &JsonValue, schema: SchemaNode) -> Result<Value, String> 
                 scale: *scale,
             }))
         }
+        (JsonValue::Array(items), SchemaPiece::Fixed { size }) => {
+            let bytes = match items
+                .iter()
+                .map(|x| x.as_i64().and_then(|x| u8::try_from(x).ok()))
+                .collect::<Option<Vec<u8>>>()
+            {
+                Some(bytes) => bytes,
+                None => return Err("fixed was not represented by byte array".into()),
+            };
+            if *size != bytes.len() {
+                Err(format!(
+                    "expected fixed size {}, got {}",
+                    *size,
+                    bytes.len()
+                ))
+            } else {
+                Ok(Value::Fixed(*size, bytes))
+            }
+        }
         (JsonValue::String(s), SchemaPiece::Json) => {
             let j = serde_json::from_str(s).map_err(|e| e.to_string())?;
             Ok(Value::Json(j))
