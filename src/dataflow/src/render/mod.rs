@@ -249,6 +249,15 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
             // Load declared sources into the rendering context.
             for (src_id, mut src) in dataflow.source_imports.clone() {
+                if let Some(operator) = &mut src.operators {
+                    // if src.operator is trivial, convert it to None
+                    if operator.predicates.is_empty()
+                        && operator.projection == (0..src.desc.typ().arity()).collect::<Vec<_>>()
+                    {
+                        src.operators = None;
+                    }
+                }
+
                 if let SourceConnector::External {
                     connector,
                     encoding,
@@ -320,7 +329,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         &dataflow.debug_name,
                                         worker_index,
                                         as_of_frontier.clone(),
-                                        &mut src.operators,
+                                        &src.operators,
                                         src.desc.typ(),
                                     );
 

@@ -85,6 +85,14 @@ impl PredicatePushdown {
         get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
     ) {
         relation.visit_mut_pre(&mut |e| {
+            // TODO(#2592): we want to replace everything inside the braces
+            // with the single line below
+            // `self.action(e, &mut get_predicates);`
+            // This is so that you have a series of dependent views
+            // A->B->C, you want to push propagated filters
+            // from A all the way past B to C if possible.
+            // Before this replacement can be done, we need to figure out
+            // replanning joins after the new predicates are pushed down.
             if let RelationExpr::Filter { input, predicates } = e {
                 if let RelationExpr::Get { id, .. } = **input {
                     // We can report the predicates upward in `get_predicates`,

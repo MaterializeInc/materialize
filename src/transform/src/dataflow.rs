@@ -24,10 +24,12 @@ use std::collections::{HashMap, HashSet};
 /// projection information, though it could certainly generalize beyond.
 pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
     optimize_dataflow_filters(dataflow);
-    // TODO: once the propagated filters are removed from the
-    // RelationExpr they come from, it would be useful for demand
-    // to be optimized after filters that way demand only includes
-    // the columns that are still necessary after the filters are applied.
+    // TODO: when the linear operator contract ensures that propagated
+    // predicates are always applied, projections and filters can be removed
+    // from where they come from. Once projections and filters can be removed,
+    // TODO: it would be useful for demand to be optimized after filters
+    // that way demand only includes the columns that are still necessary after
+    // the filters are applied.
     optimize_dataflow_demand(dataflow);
 }
 
@@ -98,7 +100,6 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
                 .as_mut()
                 .take_dangerous()
                 .filter(list.iter().cloned());
-            // TODO: remove the predicates in `list` from the earlier objects
         }
         transform.dataflow_transform(build_desc.relation_expr.as_mut(), &mut predicates);
     }
