@@ -352,6 +352,17 @@ pub struct SimpleMapAccess<'a, R: AvroRead> {
     remaining: usize,
 }
 
+impl<'a, R: AvroRead> SimpleMapAccess<'a, R> {
+    fn new(entry_schema: SchemaNode<'a>, r: &'a mut R) -> Self {
+        Self {
+            entry_schema,
+            r,
+            done: false,
+            remaining: 0,
+        }
+    }
+}
+
 impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
     type R = R;
     fn next_entry<'b>(&'b mut self) -> Result<Option<(String, AvroEntryAccess<'b, R>)>, Error> {
@@ -740,12 +751,7 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
             }
             SchemaPiece::Map(inner) => {
                 // See logic for `SchemaPiece::Array` above. Maps are encoded similarly.
-                let mut m = SimpleMapAccess {
-                    entry_schema: self.schema.step(inner),
-                    r,
-                    done: false,
-                    remaining: 0,
-                };
+                let mut m = SimpleMapAccess::new(self.schema.step(inner), r);
                 d.map(&mut m)
             }
             SchemaPiece::Union(inner) => {
