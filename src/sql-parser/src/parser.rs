@@ -2575,9 +2575,12 @@ impl Parser {
                 index_name: self.parse_object_name()?,
             })
         } else {
-            Ok(Statement::ShowVariable {
-                variable: self.parse_identifier()?,
-            })
+            let variable = if self.parse_keywords(vec!["TRANSACTION", "ISOLATION", "LEVEL"]) {
+                Ident::new("transaction_isolation")
+            } else {
+                self.parse_identifier()?
+            };
+            Ok(Statement::ShowVariable { variable })
         }
     }
 

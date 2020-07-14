@@ -17,7 +17,6 @@
 //! [`Var`](var::Var)s and the elements of prepared statements.
 
 use std::collections::HashMap;
-use std::fmt;
 
 use failure::bail;
 
@@ -88,9 +87,16 @@ const TIMEZONE: ServerVar<&str> = ServerVar {
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
+const TRANSACTION_ISOLATION: ServerVar<&str> = ServerVar {
+    name: unicase::Ascii::new("transaction_isolation"),
+    value: "serializable",
+    description: "Sets the current transaction's isolation level (PostgreSQL).",
+};
+
 const DUMMY_CONNECTION_ID: u32 = 0;
 
 /// A `Session` holds SQL state that is attached to a session.
+#[derive(Debug)]
 pub struct Session {
     application_name: SessionVar<str>,
     client_encoding: ServerVar<&'static str>,
@@ -101,6 +107,7 @@ pub struct Session {
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     timezone: ServerVar<&'static str>,
+    transaction_isolation: ServerVar<&'static str>,
     conn_id: u32,
     /// The current state of the the session's transaction
     transaction: TransactionStatus,
@@ -111,25 +118,6 @@ pub struct Session {
     /// Portals are primarily a way to retrieve the results for a query with all
     /// parameters bound.
     portals: HashMap<String, Portal>,
-}
-
-impl fmt::Debug for Session {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("Session")
-            .field("application_name", &self.application_name())
-            .field("client_encoding", &self.client_encoding())
-            .field("database", &self.database())
-            .field("date_style", &self.date_style())
-            .field("extra_float_digits", &self.extra_float_digits())
-            .field("search_path", &self.search_path())
-            .field("server_version", &self.server_version())
-            .field("sql_safe_updates", &self.sql_safe_updates())
-            .field("timezone", &self.timezone())
-            .field("transaction", &self.transaction())
-            .field("prepared_statements", &self.prepared_statements.keys())
-            .field("portals", &self.portals.keys())
-            .finish()
-    }
 }
 
 impl Session {
@@ -146,6 +134,7 @@ impl Session {
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             timezone: TIMEZONE,
+            transaction_isolation: TRANSACTION_ISOLATION,
             conn_id,
             transaction: TransactionStatus::Idle,
             prepared_statements: HashMap::new(),
@@ -166,6 +155,7 @@ impl Session {
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             timezone: TIMEZONE,
+            transaction_isolation: TRANSACTION_ISOLATION,
             conn_id: DUMMY_CONNECTION_ID,
             transaction: TransactionStatus::Idle,
             prepared_statements: HashMap::new(),
@@ -191,6 +181,7 @@ impl Session {
             &self.server_version,
             &self.sql_safe_updates,
             &self.timezone,
+            &self.transaction_isolation,
         ]
     }
 
@@ -235,6 +226,8 @@ impl Session {
             Ok(&self.sql_safe_updates)
         } else if name == TIMEZONE.name {
             Ok(&self.timezone)
+        } else if name == TRANSACTION_ISOLATION.name {
+            Ok(&self.transaction_isolation)
         } else {
             bail!("unknown parameter: {}", name)
         }
@@ -274,6 +267,8 @@ impl Session {
             } else {
                 Ok(())
             }
+        } else if name == TRANSACTION_ISOLATION.name {
+            bail!("parameter {} is read only", TRANSACTION_ISOLATION.name);
         } else {
             bail!("unknown parameter: {}", name)
         }
@@ -322,6 +317,12 @@ impl Session {
     /// Returns the value of the `timezone` configuration parameter.
     pub fn timezone(&self) -> &'static str {
         self.timezone.value
+    }
+
+    /// Returns the value of the `transaction_isolation` configuration
+    /// parameter.
+    pub fn transaction_isolation(&self) -> &'static str {
+        self.transaction_isolation.value
     }
 
     /// Put the session into a transaction

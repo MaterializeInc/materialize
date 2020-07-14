@@ -8,15 +8,16 @@
 # by the Apache License, Version 2.0.
 
 > SHOW ALL
-application_name    ""                                         "Sets the application name to be reported in statistics and logs (PostgreSQL)."
-client_encoding     UTF8                                       "Sets the client's character set encoding (PostgreSQL)."
-database            materialize                                "Sets the current database (CockroachDB)."
-extra_float_digits  3                                          "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
-DateStyle           "ISO, MDY"                                 "Sets the display format for date and time values (PostgreSQL)."
-search_path         "mz_catalog, pg_catalog, public, mz_temp"  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
-server_version      9.5.0                                      "Shows the server version (PostgreSQL)."
-sql_safe_updates    false                                      "Prohibits SQL statements that may be overly destructive (CockroachDB)."
-TimeZone            UTC                                        "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
+application_name       ""                                         "Sets the application name to be reported in statistics and logs (PostgreSQL)."
+client_encoding        UTF8                                       "Sets the client's character set encoding (PostgreSQL)."
+database               materialize                                "Sets the current database (CockroachDB)."
+extra_float_digits     3                                          "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
+DateStyle              "ISO, MDY"                                 "Sets the display format for date and time values (PostgreSQL)."
+search_path            "mz_catalog, pg_catalog, public, mz_temp"  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
+server_version         9.5.0                                      "Shows the server version (PostgreSQL)."
+sql_safe_updates       false                                      "Prohibits SQL statements that may be overly destructive (CockroachDB)."
+TimeZone               UTC                                        "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
+transaction_isolation  serializable                               "Sets the current transaction's isolation level (PostgreSQL)."
 
 > SHOW client_encoding
 UTF8
@@ -40,3 +41,8 @@ true
 > SET sql_safe_updates = false
 > SHOW sql_safe_updates
 false
+
+# The `transaction_isolation` variable has dedicated syntax as mandated by the
+# SQL standard.
+> SHOW TRANSACTION ISOLATION LEVEL
+serializable
