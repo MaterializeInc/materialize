@@ -82,6 +82,7 @@ const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
 };
 
 const TIMEZONE: ServerVar<&str> = ServerVar {
+    // TimeZone has nonstandard capitalization for historical reasons.
     name: unicase::Ascii::new("TimeZone"),
     value: "UTC",
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
