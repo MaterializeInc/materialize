@@ -2536,7 +2536,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#535d5af77fa2ef5074d75305a3e3fc1177ef92df"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6afa7738ee9fc7960d3a48755154fe09f5d72304"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -2551,7 +2551,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#535d5af77fa2ef5074d75305a3e3fc1177ef92df"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6afa7738ee9fc7960d3a48755154fe09f5d72304"
 dependencies = [
  "proc-macro-hack",
  "static-metric-proc-macros",
@@ -3384,7 +3384,7 @@ checksum = "47e4b8c631c998468961a9ea159f064c5c8499b95b5e4a34b77849d45949d540"
 [[package]]
 name = "static-metric-proc-macros"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#535d5af77fa2ef5074d75305a3e3fc1177ef92df"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6afa7738ee9fc7960d3a48755154fe09f5d72304"
 dependencies = [
  "lazy_static",
  "proc-macro-hack",
