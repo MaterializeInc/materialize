@@ -815,13 +815,11 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                     .into());
                 }
                 match &permutation[index] {
-                    Err(e) => {
-                        return Err(DecodeError::new(format!(
-                            "Union variant not found in reader schema: {}",
-                            e
-                        ))
-                        .into())
-                    }
+                    Err(e) => Err(DecodeError::new(format!(
+                        "Union variant not found in reader schema: {}",
+                        e
+                    ))
+                    .into()),
                     Ok((index, variant)) => {
                         self.schema = self.schema.step(variant);
                         d.union_branch(*index, *n_reader_variants, *reader_null_variant, self, r)
@@ -903,11 +901,11 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                             if let Some((reader_index, symbol)) = default.clone() {
                                 d.enum_variant(&symbol, reader_index)
                             } else {
-                                return Err(DecodeError::new(format!(
+                                Err(DecodeError::new(format!(
                                     "Enum symbol {} at index {} in writer schema not found in reader",
                                     missing, index
                                 ))
-                                    .into());
+                                    .into())
                             }
                         }
                         Ok((index, name)) => d.enum_variant(name, *index),
