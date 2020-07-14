@@ -970,22 +970,36 @@ fn test_partially_broken_union() {
     let writer_schema = Schema::parse_str(writer_schema).unwrap();
     let reader_schema = Schema::parse_str(reader_schema).unwrap();
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
-    let datum_to_write = Value::Union(2, Box::new(Value::Long(42)));
-    let datum_to_read = Value::Union(1, Box::new(Value::Long(42)));
+    let datum_to_write = Value::Union {
+        index: 2,
+        inner: Box::new(Value::Long(42)),
+        n_variants: 3,
+        null_variant: None,
+    };
+    let datum_to_read = Value::Union {
+        index: 1,
+        inner: Box::new(Value::Long(42)),
+        n_variants: 2,
+        null_variant: None,
+    };
     let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
     let datum_read = from_avro_datum(&resolved_schema, &mut encoded.as_slice()).unwrap();
     assert_eq!(datum_to_read, datum_read);
-    let err_datum_to_write = Value::Union(
-        0,
-        Box::new(Value::Record(vec![("a".into(), Value::Long(42))])),
-    );
+    let err_datum_to_write = Value::Union {
+        index: 0,
+        inner: Box::new(Value::Record(vec![("a".into(), Value::Long(42))])),
+        n_variants: 3,
+        null_variant: None,
+    };
     let err_encoded = to_avro_datum(&writer_schema, err_datum_to_write).unwrap();
     let err_read = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice()).unwrap_err();
     assert!(err_read.to_string().contains("Failed to match"));
-    let err_datum_to_write = Value::Union(
-        1,
-        Box::new(Value::Record(vec![("b".into(), Value::Long(42))])),
-    );
+    let err_datum_to_write = Value::Union {
+        index: 1,
+        inner: Box::new(Value::Record(vec![("b".into(), Value::Long(42))])),
+        n_variants: 3,
+        null_variant: None,
+    };
     let err_encoded = to_avro_datum(&writer_schema, err_datum_to_write).unwrap();
     let err_read = from_avro_datum(&resolved_schema, &mut err_encoded.as_slice()).unwrap_err();
     assert!(err_read

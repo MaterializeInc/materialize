@@ -714,27 +714,20 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                 d.scalar(Scalar::Date(val))
             }
             SchemaPiece::TimestampMilli => {
-                let total_millis = zag_i32(r)?;
-                let seconds = total_millis / 1000;
-                let millis = (total_millis % 1000) as u32;
-                let val = NaiveDateTime::from_timestamp_opt(seconds as i64, millis * 1_000_000)
-                    .ok_or_else(|| {
-                        DecodeError::new(format!("Invalid ms timestamp {}.{}", seconds, millis))
-                    })?;
-                d.scalar(Scalar::Timestamp(val))
+                let total_millis = zag_i64(r)?;
+                let scalar = match build_ts_value(total_millis, TsUnit::Millis)? {
+                    Value::Timestamp(ts) => Scalar::Timestamp(ts),
+                    _ => unreachable!(),
+                };
+                d.scalar(scalar)
             }
             SchemaPiece::TimestampMicro => {
                 let total_micros = zag_i64(r)?;
-                let seconds = total_micros / 1_000_000;
-                let micros = (total_micros % 1_000_000) as u32;
-                let val =
-                    NaiveDateTime::from_timestamp_opt(seconds, micros * 1000).ok_or_else(|| {
-                        DecodeError::new(format!(
-                            "Invalid microsecond timestamp: {}.{}",
-                            seconds, micros
-                        ))
-                    })?;
-                d.scalar(Scalar::Timestamp(val))
+                let scalar = match build_ts_value(total_micros, TsUnit::Micros)? {
+                    Value::Timestamp(ts) => Scalar::Timestamp(ts),
+                    _ => unreachable!(),
+                };
+                d.scalar(scalar)
             }
             SchemaPiece::Decimal {
                 precision,
@@ -842,11 +835,23 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                 reader_null_variant,
             } => {
                 let index = decode_long_nonneg(r)? as usize;
+                if index >= permutation.len() {
+                    return Err(DecodeError::new(format!(
+                        "Union variant out of bounds for writer schema: {}; max {}",
+                        index,
+                        permutation.len()
+                    ))
+                    .into());
+                }
                 match &permutation[index] {
-                    None => {
-                        Err(DecodeError::new("Union variant not found in reader schema").into())
+                    Err(e) => {
+                        return Err(DecodeError::new(format!(
+                            "Union variant not found in reader schema: {}",
+                            e
+                        ))
+                        .into())
                     }
-                    Some((index, variant)) => {
+                    Ok((index, variant)) => {
                         self.schema = self.schema.step(variant);
                         d.union_branch(*index, *n_reader_variants, *reader_null_variant, self, r)
                     }
@@ -879,7 +884,11 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                 // }
                 // d.end_record()
             }
-            SchemaPiece::Enum { doc: _, symbols } => {
+            SchemaPiece::Enum {
+                symbols,
+                doc: _,
+                default_idx: _,
+            } => {
                 let index = decode_int_nonneg(r)? as usize;
                 match symbols.get(index) {
                     None => Err(DecodeError::new(format!(
@@ -905,7 +914,11 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                 let mut a = ResolvedRecordAccess::new(defaults, fields, r, self.schema);
                 d.record(&mut a)
             }
-            SchemaPiece::ResolveEnum { doc: _, symbols } => {
+            SchemaPiece::ResolveEnum {
+                doc: _,
+                symbols,
+                default,
+            } => {
                 let index = decode_int_nonneg(r)? as usize;
                 match symbols.get(index) {
                     None => Err(DecodeError::new(format!(
@@ -915,14 +928,47 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
                     ))
                     .into()),
                     Some(op) => match op {
-                        None => Err(DecodeError::new(format!(
-                            "Enum symbol at index {} in writer schema not found in reader",
-                            index
-                        ))
-                        .into()),
-                        Some((name, index)) => d.enum_variant(name, *index),
+                        Err(missing) => {
+                            if let Some((reader_index, symbol)) = default.clone() {
+                                d.enum_variant(&symbol, reader_index)
+                            } else {
+                                return Err(DecodeError::new(format!(
+                                    "Enum symbol {} at index {} in writer schema not found in reader",
+                                    missing, index
+                                ))
+                                    .into());
+                            }
+                        }
+                        Ok((index, name)) => d.enum_variant(name, *index),
                     },
                 }
+            }
+            SchemaPiece::ResolveIntTsMilli => {
+                let total_millis = zag_i32(r)?;
+                let scalar = match build_ts_value(total_millis as i64, TsUnit::Millis)? {
+                    Value::Timestamp(ts) => Scalar::Timestamp(ts),
+                    _ => unreachable!(),
+                };
+                d.scalar(scalar)
+            }
+            SchemaPiece::ResolveIntTsMicro => {
+                let total_micros = zag_i32(r)?;
+                let scalar = match build_ts_value(total_micros as i64, TsUnit::Micros)? {
+                    Value::Timestamp(ts) => Scalar::Timestamp(ts),
+                    _ => unreachable!(),
+                };
+                d.scalar(scalar)
+            }
+            SchemaPiece::ResolveDateTimestamp => {
+                let days = zag_i32(r)?;
+
+                let date = NaiveDate::from_ymd(1970, 1, 1)
+                    .checked_add_signed(chrono::Duration::days(days.into()))
+                    .ok_or_else(|| {
+                        DecodeError::new(format!("Invalid num days from epoch: {0}", days))
+                    })?;
+                let dt = date.and_hms(0, 0, 0);
+                d.scalar(Scalar::Timestamp(dt))
             }
         }
     }
@@ -1227,7 +1273,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
             if let Value::Int(index) = decode_int(reader)? {
                 if index >= 0 && (index as usize) < symbols.len() {
                     match symbols[index as usize].clone() {
-                        Ok((symbol, index)) => Ok(Value::Enum(index as i32, symbol)),
+                        Ok((index, symbol)) => Ok(Value::Enum(index, symbol)),
                         Err(missing) => {
                             if let Some((reader_index, symbol)) = default.clone() {
                                 Ok(Value::Enum(reader_index, symbol))

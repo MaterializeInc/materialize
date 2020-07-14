@@ -435,7 +435,7 @@ impl<'a> SchemaResolver<'a> {
                     .map(|s| {
                         r_map
                             .get(s)
-                            .map(|i| (s.clone(), *i))
+                            .map(|i| (*i, s.clone()))
                             .ok_or_else(|| s.clone())
                     })
                     .collect();

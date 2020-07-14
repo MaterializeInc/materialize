@@ -2260,6 +2260,8 @@ mod tests {
                     }),
                 )),
             ],
+            n_reader_variants: 2,
+            reader_null_variant: Some(0),
         };
         assert_eq!(resolved.top_node().inner, &expected);
     }
