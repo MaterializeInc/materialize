@@ -1018,20 +1018,23 @@ impl SchemaParser {
     fn parse_bytes(complex: &Map<String, Value>) -> Result<SchemaPiece, Error> {
         let logical_type = complex.get("logicalType").and_then(|v| v.as_str());
 
-        Ok(match logical_type {
-            Some("decimal") => {
-                let (precision, scale) = Self::parse_decimal(complex)?;
-                SchemaPiece::Decimal {
-                    precision,
-                    scale,
-                    fixed_size: None,
+        if let Some("decimal") = logical_type {
+            match Self::parse_decimal(complex) {
+                Ok((precision, scale)) => {
+                    return Ok(SchemaPiece::Decimal {
+                        precision,
+                        scale,
+                        fixed_size: None,
+                    })
                 }
+                Err(e) => warn!(
+                    "parsing decimal as regular bytes due to parse error: {:?}, {:?}",
+                    complex, e
+                ),
             }
-            _ => {
-                debug!("parsing complex type as regular bytes: {:?}", complex);
-                SchemaPiece::Bytes
-            }
-        })
+        }
+
+        Ok(SchemaPiece::Bytes)
     }
 
     /// Parse a [`serde_json::Value`] representing an Avro Int type
@@ -1141,26 +1144,32 @@ impl SchemaParser {
 
         let logical_type = complex.get("logicalType").and_then(|v| v.as_str());
 
-        Ok(match logical_type {
-            Some("decimal") => {
-                let (precision, scale) = Self::parse_decimal(complex)?;
-                let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
-                if precision > max {
-                    return Err(ParseSchemaError::new(format!(
-                        "Decimal precision {} requires more than {} bytes of space",
-                        precision, size,
-                    ))
-                    .into());
+        if let Some("decimal") = logical_type {
+            match Self::parse_decimal(complex) {
+                Ok((precision, scale)) => {
+                    let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
+                    if precision > max {
+                        return Err(ParseSchemaError::new(format!(
+                            "Decimal precision {} requires more than {} bytes of space",
+                            precision, size,
+                        ))
+                        .into());
+                    }
+                    return Ok(SchemaPiece::Decimal {
+                        precision,
+                        scale,
+                        fixed_size: Some(size as usize),
+                    });
                 }
-                SchemaPiece::Decimal {
-                    precision,
-                    scale,
-                    fixed_size: Some(size as usize),
-                }
+                Err(e) => warn!(
+                    "parsing decimal as fixed due to parse error: {:?}, {:?}",
+                    complex, e
+                ),
             }
-            _ => SchemaPiece::Fixed {
-                size: size as usize,
-            },
+        }
+
+        Ok(SchemaPiece::Fixed {
+            size: size as usize,
         })
     }
 }
@@ -2172,44 +2181,6 @@ mod tests {
             fixed_size: None,
         };
         check_schema(schema, expected);
-
-        let res = Schema::parse_str(
-            r#"{
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": 12,
-                "scale": 13
-            }"#,
-        );
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "Failed to parse schema: Decimal scale is greater than precision"
-        );
-
-        let res = Schema::parse_str(
-            r#"{
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": -12
-            }"#,
-        );
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "Failed to parse schema: Decimal precision must be greater than zero"
-        );
-
-        let res = Schema::parse_str(
-            r#"{
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": 12,
-                "scale": -5
-            }"#,
-        );
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "Failed to parse schema: Decimal scale must be greater than zero"
-        );
 
         let res = Schema::parse_str(
             r#"{
