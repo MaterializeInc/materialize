@@ -323,7 +323,7 @@ pub fn decode<'a, R: Read>(schema: SchemaNode<'a>, reader: &'a mut R) -> Result<
         SchemaPiece::Enum { ref symbols, .. } => {
             if let Value::Int(index) = decode_int(reader)? {
                 let index = index as usize;
-                if index <= symbols.len() {
+                if index < symbols.len() {
                     let symbol = symbols[index].clone();
                     Ok(Value::Enum(index, symbol))
                 } else {
