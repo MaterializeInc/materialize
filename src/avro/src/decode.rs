@@ -846,12 +846,6 @@ impl<'a> AvroDeserializer for GeneralDeserializer<'a> {
             } => {
                 let mut a = SimpleRecordAccess::new(self.schema, r, fields);
                 d.record(&mut a)
-                // d.begin_record()?;
-                // for field in fields {
-                //     d.record_field(&field.name, field.position)?;
-                //     decode_new(schema.step(&field.schema), r, d)?;
-                // }
-                // d.end_record()
             }
             SchemaPiece::Enum {
                 symbols,
