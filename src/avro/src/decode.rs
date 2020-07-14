@@ -1108,5 +1108,5 @@ pub fn decode<'a, R: AvroRead>(schema: SchemaNode<'a>, reader: &'a mut R) -> Res
     let mut d = ValueDecoder::new();
     let mut dsr = GeneralDeserializer { schema };
     dsr.deserialize(reader, &mut d)?;
-    d.value.ok_or_else(|| format_err!("No value decoed"))
+    d.value.ok_or_else(|| format_err!("No value decoded"))
 }
