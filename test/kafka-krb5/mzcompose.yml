@@ -74,14 +74,15 @@ services:
         wait-for-it --timeout=30 materialized:6875 &&
         wait-for-it --timeout=30 kafka:9092 &&
         testdrive
-        --kafka-url=SASL_PLAINTEXT://kafka:9092
+        --kafka-addr=kafka:9092
+        --kafka-option=security.protocol=SASL_PLAINTEXT
+        --kafka-option=sasl.kerberos.keytab=/share/secrets/testdrive.key
+        --kafka-option=sasl.kerberos.service.name=kafka
+        --kafka-option=sasl.kerberos.principal=testdrive@CI.MATERIALIZE.IO
         --materialized-url=postgres://ignored@materialized:6875
-        --krb5-keytab=/share/secrets/testdrive.key
-        --krb5-service-name=kafka
-        --krb5-principal=testdrive@CI.MATERIALIZE.IO
         $$*
       - bash
-    command: test/krb5/smoketest.td
+    command: test/kafka-krb5/smoketest.td
     volumes:
       - ../../:/workdir
       - secrets:/share/secrets

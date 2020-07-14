@@ -31,13 +31,15 @@ async fn run() -> Result<(), Error> {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
+
     // Confluent options.
     opts.optopt(
         "",
-        "kafka-url",
-        "kafka bootstrap URL",
+        "kafka-addr",
+        "kafka bootstrap address",
         "ENCRYPTION://HOST:PORT",
     );
+    opts.optmulti("", "kafka-option", "kafka configuration option", "KEY=VAL");
     opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
 
     // TLS options.
@@ -48,7 +50,6 @@ async fn run() -> Result<(), Error> {
         "PATH",
     );
     opts.optopt("", "cert-password", "Keystore password", "PASSWORD");
-    opts.optopt("", "root-cert", "Path to the root CA's cert (.pem)", "PATH");
 
     // Kerberos options.
     opts.optopt("", "krb5-keytab", "Path to the Kerberos keystab", "PATH");
@@ -88,6 +89,7 @@ async fn run() -> Result<(), Error> {
         "PATH",
     );
     opts.optflag("h", "help", "show this usage information");
+
     let usage_details = opts.usage("usage: testdrive [options] FILE");
     let opts = opts
         .parse(&args[1..])
@@ -104,9 +106,16 @@ async fn run() -> Result<(), Error> {
         });
     }
 
+    // Confluent options.
     let mut config = Config::default();
-    if let Some(addr) = opts.opt_str("kafka-url") {
-        config.kafka_url = addr;
+    if let Some(addr) = opts.opt_str("kafka-addr") {
+        config.kafka_addr = addr;
+    }
+    for opt in opts.opt_strs("kafka-option") {
+        let mut pieces = opt.splitn(2, '=');
+        let key = pieces.next().unwrap_or("").to_owned();
+        let val = pieces.next().unwrap_or("").to_owned();
+        config.kafka_opts.push((key, val));
     }
     if let Some(url) = opts.opt_str("schema-registry-url") {
         config.schema_registry_url = url.parse().map_err(|e| Error::General {
@@ -115,42 +124,16 @@ async fn run() -> Result<(), Error> {
             hints: vec![],
         })?;
     }
+
+    // TLS options.
     if let Some(path) = opts.opt_str("cert") {
-        if std::fs::metadata(&path).is_err() {
-            return Err(Error::General {
-                ctx: "certificate path does not exist".into(),
-                cause: None,
-                hints: vec![],
-            });
-        }
-        config.keystore_path = Some(path);
+        config.cert_path = Some(path);
     }
-    config.keystore_pass = opts.opt_str("cert-password");
-    if let Some(path) = opts.opt_str("root-cert") {
-        if std::fs::metadata(&path).is_err() {
-            return Err(Error::General {
-                ctx: "root certificate path does not exist".into(),
-                cause: None,
-                hints: vec![],
-            });
-        }
-        config.root_cert_path = Some(path);
+    if let Some(pass) = opts.opt_str("cert-password") {
+        config.cert_pass = Some(pass);
     }
 
-    if let Some(path) = opts.opt_str("krb5-keytab") {
-        if std::fs::metadata(&path).is_err() {
-            return Err(Error::General {
-                ctx: "Kerberos keytab path does not exist".into(),
-                cause: None,
-                hints: vec![],
-            });
-        }
-        config.krb5_keytab_path = Some(path);
-    }
-
-    config.krb5_service_name = opts.opt_str("krb5-service-name");
-    config.krb5_principal = opts.opt_str("krb5-principal");
-
+    // AWS options.
     if let (Ok(Some(region)), None) = (opts.opt_get("aws-region"), opts.opt_str("aws-endpoint")) {
         // Standard AWS region without a custom endpoint. Try to find actual AWS
         // credentials.
@@ -184,6 +167,8 @@ async fn run() -> Result<(), Error> {
                 .unwrap_or_else(|| "http://localhost:4566".into()),
         };
     }
+
+    // Materialize options.
     if let Some(url) = opts.opt_str("materialized-url") {
         config.materialized_pgconfig = url.parse().map_err(|e| Error::General {
             ctx: "parsing materialized url".into(),
@@ -191,7 +176,6 @@ async fn run() -> Result<(), Error> {
             hints: vec![],
         })?;
     }
-
     if let Some(path) = opts.opt_str("validate-catalog") {
         config.materialized_catalog_path = Some(path.into());
     }

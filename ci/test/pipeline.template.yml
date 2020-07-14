@@ -78,20 +78,30 @@ steps:
     label: ":lock: Kafka SSL smoke test"
     depends_on: build
     timeout_in_minutes: 30
-    inputs: [test/ssl/smoketest.td]
+    inputs: [test/kafka-ssl/smoketest.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/ssl/mzcompose.yml
+          config: test/kafka-ssl/mzcompose.yml
           run: testdrive
 
   - id: kafka-krb5
     label: ":hotdog: Kafka Kerberos smoke test"
     depends_on: build
     timeout_in_minutes: 30
-    inputs: [test/krb5/smoketest.td]
+    inputs: [test/kafka-krb5/smoketest.td]
     plugins:
       - ./ci/plugins/mzcompose:
-          config: test/krb5/mzcompose.yml
+          config: test/kafka-krb5/mzcompose.yml
+          run: testdrive
+
+  - id: kafka-sasl-plain
+    label: ":hotdog: Kafka SASL PLAIN smoke test"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/kafka-sasl-plain/smoketest.td]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/kafka-sasl-plain/mzcompose.yml
           run: testdrive
 
   - id: testdrive-purgatory

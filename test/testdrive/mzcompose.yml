@@ -19,7 +19,7 @@ services:
         wait-for-it --timeout=30 schema-registry:8081 &&
         wait-for-it --timeout=30 materialized:6875 &&
         testdrive
-        --kafka-url=plaintext://kafka:9092
+        --kafka-addr=kafka:9092
         --aws-region=us-east-2
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://ignored@materialized:6875
