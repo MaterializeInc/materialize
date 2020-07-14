@@ -1027,11 +1027,13 @@ impl SchemaParser {
                         fixed_size: None,
                     })
                 }
-                Err(e) => debug!("{}", e),
+                Err(e) => warn!(
+                    "parsing decimal as regular bytes due to parse error: {:?}, {:?}",
+                    complex, e
+                ),
             }
         }
 
-        debug!("parsing complex type as regular bytes: {:?}", complex);
         Ok(SchemaPiece::Bytes)
     }
 
@@ -1159,11 +1161,13 @@ impl SchemaParser {
                         fixed_size: Some(size as usize),
                     });
                 }
-                Err(e) => debug!("{}", e),
+                Err(e) => warn!(
+                    "parsing decimal as fixed due to parse error: {:?}, {:?}",
+                    complex, e
+                ),
             }
         }
 
-        debug!("parsing complex type as fixed: {:?}", complex);
         Ok(SchemaPiece::Fixed {
             size: size as usize,
         })
