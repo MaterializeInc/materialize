@@ -19,6 +19,8 @@ sql_safe_updates       false                                      "Prohibits SQL
 TimeZone               UTC                                        "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation  serializable                               "Sets the current transaction's isolation level (PostgreSQL)."
 
+> SET application_name = 'foo'
+
 > SHOW client_encoding
 UTF8
 
@@ -42,7 +44,25 @@ true
 > SHOW sql_safe_updates
 false
 
+# `database` is tested elsewhere.
+
+> SET extra_float_digits = 1
+
+! SET DateStyle = 'ooga booga'
+parameter DateStyle is read only
+
+# `search_path` is tested elsewhere.
+
+! SET server_version = "9.6.0"
+parameter server_version is read only
+
+! SET TimeZone = 'nope'
+parameter TimeZone can only be set to UTC
+
 # The `transaction_isolation` variable has dedicated syntax as mandated by the
 # SQL standard.
 > SHOW TRANSACTION ISOLATION LEVEL
 serializable
+
+! SET transaction_isolation = 'read committed'
+parameter transaction_isolation is read only
