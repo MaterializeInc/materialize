@@ -51,6 +51,21 @@ pub enum Scalar {
     Timestamp(NaiveDateTime),
 }
 
+impl From<Scalar> for Value {
+    fn from(s: Scalar) -> Self {
+        match s {
+            Scalar::Null => Value::Null,
+            Scalar::Boolean(v) => Value::Boolean(v),
+            Scalar::Int(v) => Value::Int(v),
+            Scalar::Long(v) => Value::Long(v),
+            Scalar::Float(v) => Value::Float(v),
+            Scalar::Double(v) => Value::Double(v),
+            Scalar::Date(v) => Value::Date(v),
+            Scalar::Timestamp(v) => Value::Timestamp(v),
+        }
+    }
+}
+
 /// Represents any valid Avro value
 /// More information about Avro values can be found in the
 /// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)

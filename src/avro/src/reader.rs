@@ -8,13 +8,13 @@
 // by the Apache License, Version 2.0.
 
 //! Logic handling reading from Avro format at user level.
-use std::io::{ErrorKind, Read};
+use std::io::ErrorKind;
 use std::str::{from_utf8, FromStr};
 
 use failure::Error;
 use serde_json::from_slice;
 
-use crate::decode::decode;
+use crate::decode::{decode, AvroRead};
 use crate::schema::{
     resolve_schemas, FullName, NamedSchemaPiece, ParseSchemaError, RecordField,
     ResolvedDefaultValueField, SchemaNodeOrNamed, SchemaPiece, SchemaPieceOrNamed,
@@ -43,7 +43,7 @@ pub(crate) struct Block<R> {
     resolved_schema: Option<Schema>,
 }
 
-impl<R: Read> Block<R> {
+impl<R: AvroRead> Block<R> {
     pub(crate) fn new(reader: R, reader_schema: Option<&Schema>) -> Result<Block<R>, Error> {
         let mut block = Block {
             reader,
@@ -229,7 +229,7 @@ pub struct Reader<R> {
     errored: bool,
 }
 
-impl<R: Read> Reader<R> {
+impl<R: AvroRead> Reader<R> {
     /// Creates a `Reader` given something implementing the `tokio::io::AsyncRead` trait to read from.
     /// No reader `Schema` will be set.
     ///
@@ -267,7 +267,7 @@ impl<R: Read> Reader<R> {
     }
 }
 
-impl<R: Read> Iterator for Reader<R> {
+impl<R: AvroRead> Iterator for Reader<R> {
     type Item = Result<Value, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -820,7 +820,7 @@ impl<'a> SchemaResolver<'a> {
 /// **NOTE** This function has a quite small niche of usage and does NOT take care of reading the
 /// header and consecutive data blocks; use [`Reader`](struct.Reader.html) if you don't know what
 /// you are doing, instead.
-pub fn from_avro_datum<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
+pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
     let value = decode(schema.top_node(), reader)?;
     Ok(value)
 }

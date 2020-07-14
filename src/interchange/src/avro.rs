@@ -11,7 +11,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
-use std::{io::Read, iter};
+use std::iter;
 
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
@@ -30,7 +30,7 @@ use avro::schema::{
 use avro::{
     give_value,
     types::{DecimalValue, Scalar, Value},
-    AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRecordAccess, GeneralDeserializer, Skip,
+    AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, GeneralDeserializer,
     TrivialDecoder, ValueOrReader,
 };
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
@@ -145,7 +145,7 @@ impl<'a> AvroStringDecoder<'a> {
 }
 
 impl<'a> AvroDecode for AvroStringDecoder<'a> {
-    fn string<'b, R: Read + Skip>(&mut self, r: ValueOrReader<'b, &'b str, R>) -> Result<()> {
+    fn string<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b str, R>) -> Result<()> {
         if self.decoded {
             bail!("Attempted to decode two strings");
         }
@@ -171,7 +171,7 @@ enum DbzSnapshot {
 struct AvroDbzSnapshotDecoder(Option<DbzSnapshot>);
 
 impl AvroDecode for AvroDbzSnapshotDecoder {
-    fn union_branch<'a, R: Read + Skip, D: AvroDeserializer>(
+    fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
         &mut self,
         _idx: usize,
         _n_variants: usize,
@@ -195,7 +195,7 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
             _ => bail!("`snapshot` value had unexpected type"),
         }
     }
-    fn string<'a, R: Read + Skip>(&mut self, r: ValueOrReader<'a, &'a str, R>) -> Result<()> {
+    fn string<'a, R: AvroRead>(&mut self, r: ValueOrReader<'a, &'a str, R>) -> Result<()> {
         let mut s = SmallVec::<[u8; 8]>::new();
         let s = match r {
             ValueOrReader::Value(val) => val.as_bytes(),
@@ -219,7 +219,7 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
 }
 
 impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
-    fn record<R: Read + Skip, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "snapshot" => {
@@ -266,7 +266,7 @@ struct OptionalRowDecoder<'a> {
 }
 
 impl<'a> AvroDecode for OptionalRowDecoder<'a> {
-    fn union_branch<'b, R: Read + Skip, D: AvroDeserializer>(
+    fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
         &mut self,
         idx: usize,
         _n_variants: usize,
@@ -300,10 +300,7 @@ pub struct AvroDebeziumDecoder<'a> {
 }
 
 impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
-    fn record<R: std::io::Read + avro::Skip, A: AvroRecordAccess<R>>(
-        &mut self,
-        a: &mut A,
-    ) -> Result<()> {
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "before" => {
@@ -365,10 +362,7 @@ pub struct AvroFlatDecoder<'a> {
 
 impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     #[inline]
-    fn record<R: std::io::Read + avro::Skip, A: AvroRecordAccess<R>>(
-        &mut self,
-        a: &mut A,
-    ) -> Result<()> {
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
         let mut str_buf = std::mem::take(self.buf);
         let mut pack_record = |rp: &mut RowPacker| -> Result<()> {
             let mut expected = 0;
@@ -413,7 +407,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn union_branch<'b, R: Read + Skip, D: AvroDeserializer>(
+    fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
         &mut self,
         idx: usize,
         n_variants: usize,
@@ -440,20 +434,6 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     }
 
     #[inline]
-    fn begin_map(&mut self) -> Result<()> {
-        bail!("Avro maps are not (yet?) supported");
-    }
-    #[inline]
-    fn map_key<'b, R: std::io::Read + avro::Skip>(
-        &mut self,
-        _r: ValueOrReader<'b, &'b str, R>,
-    ) -> Result<()> {
-        unreachable!("begin_map should have been called first");
-    }
-    #[inline]
-    fn end_map(&mut self) -> Result<()> {
-        unreachable!("begin_map should have been called first");
-    }
     #[inline]
     fn enum_variant(&mut self, symbol: &str, _idx: usize) -> Result<()> {
         self.packer.push(Datum::String(symbol));
@@ -480,7 +460,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn decimal<'b, R: std::io::Read + avro::Skip>(
+    fn decimal<'b, R: AvroRead>(
         &mut self,
         _precision: usize,
         _scale: usize,
@@ -499,10 +479,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn bytes<'b, R: std::io::Read + avro::Skip>(
-        &mut self,
-        r: ValueOrReader<'b, &'b [u8], R>,
-    ) -> Result<()> {
+    fn bytes<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<()> {
         let buf = match r {
             ValueOrReader::Value(val) => val,
             ValueOrReader::Reader { len, r } => {
@@ -515,10 +492,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn string<'b, R: std::io::Read + avro::Skip>(
-        &mut self,
-        r: ValueOrReader<'b, &'b str, R>,
-    ) -> Result<()> {
+    fn string<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b str, R>) -> Result<()> {
         let s = match r {
             ValueOrReader::Value(val) => val,
             ValueOrReader::Reader { len, r } => {
@@ -535,7 +509,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn json<'b, R: std::io::Read + avro::Skip>(
+    fn json<'b, R: AvroRead>(
         &mut self,
         r: ValueOrReader<'b, &'b serde_json::Value, R>,
     ) -> Result<()> {
@@ -554,10 +528,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn fixed<'b, R: std::io::Read + avro::Skip>(
-        &mut self,
-        r: ValueOrReader<'b, &'b [u8], R>,
-    ) -> Result<()> {
+    fn fixed<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<()> {
         self.bytes(r)
     }
     #[inline]
