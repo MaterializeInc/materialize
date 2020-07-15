@@ -14,6 +14,7 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
+use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
 use std::str;
@@ -22,7 +23,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use lazy_static::lazy_static;
 use postgres::error::SqlState;
-use prometheus::{register_int_counter, IntCounter};
+use prometheus::{register_uint_counter, UIntCounter};
 use tokio::io::{self, AsyncRead, AsyncReadExt};
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -35,7 +36,7 @@ use crate::message::{
 };
 
 lazy_static! {
-    static ref BYTES_SENT: IntCounter = register_int_counter!(
+    static ref BYTES_SENT: UIntCounter = register_uint_counter!(
         "mz_pg_sent_bytes",
         "total number of bytes sent to clients from pgwire"
     )
@@ -157,7 +158,7 @@ impl Encoder<BackendMessage> for Codec {
         dst.put_u8(byte);
 
         // Write message length placeholder. The true length is filled in later.
-        let start_len = dst.len();
+        let base = dst.len();
         dst.put_u32(0);
 
         // Write message contents.
@@ -166,10 +167,10 @@ impl Encoder<BackendMessage> for Codec {
                 overall_format,
                 column_formats,
             } => {
-                dst.put_i8(overall_format as i8);
-                dst.put_i16(column_formats.len() as i16);
+                dst.put_format_i8(overall_format);
+                dst.put_length_i16(column_formats.len())?;
                 for format in column_formats {
-                    dst.put_i16(format as i16);
+                    dst.put_format_i16(format);
                 }
             }
             BackendMessage::CopyData(data) => {
@@ -180,7 +181,7 @@ impl Encoder<BackendMessage> for Codec {
                 dst.put_u32(0);
             }
             BackendMessage::RowDescription(fields) => {
-                dst.put_u16(fields.len() as u16);
+                dst.put_length_i16(fields.len())?;
                 for f in &fields {
                     dst.put_string(&f.name.to_string());
                     dst.put_u32(f.table_id);
@@ -189,19 +190,24 @@ impl Encoder<BackendMessage> for Codec {
                     dst.put_i16(f.type_len);
                     dst.put_i32(f.type_mod);
                     // TODO: make the format correct
-                    dst.put_u16(f.format as u16);
+                    dst.put_format_i16(f.format);
                 }
             }
             BackendMessage::DataRow(fields) => {
-                dst.put_u16(fields.len() as u16);
+                dst.put_length_i16(fields.len())?;
                 for (f, (ty, format)) in fields.iter().zip(&self.encode_state) {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
-                        f.encode(ty, *format, dst);
+                        f.encode(ty, *format, dst)?;
                         let len = dst.len() - base - 4;
-                        let len = (len as u32).to_be_bytes();
-                        dst[base..base + 4].copy_from_slice(&len);
+                        let len = i32::try_from(len).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                "length of encoded data row field does not fit into an i32",
+                            )
+                        })?;
+                        dst[base..base + 4].copy_from_slice(&len.to_be_bytes());
                     } else {
                         dst.put_i32(-1);
                     }
@@ -235,7 +241,7 @@ impl Encoder<BackendMessage> for Codec {
                 dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
-                dst.put_u16(params.len() as u16);
+                dst.put_length_i16(params.len())?;
                 for param in params {
                     dst.put_u32(param.oid());
                 }
@@ -269,11 +275,18 @@ impl Encoder<BackendMessage> for Codec {
             ),
         }
 
-        // Overwrite length placeholder with true length.
-        let len = dst.len() - start_len;
-        NetworkEndian::write_u32(&mut dst[start_len..start_len + 4], len as u32);
+        let len = dst.len() - base;
         // TODO: consider finding some way to not do this per-row
-        BYTES_SENT.inc_by(len as i64);
+        BYTES_SENT.inc_by(u64::cast_from(dst.len() - base));
+
+        // Overwrite length placeholder with true length.
+        let len = i32::try_from(len).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "length of encoded message does not fit into an i32",
+            )
+        })?;
+        dst[base..base + 4].copy_from_slice(&len.to_be_bytes());
 
         Ok(())
     }
@@ -281,12 +294,34 @@ impl Encoder<BackendMessage> for Codec {
 
 trait Pgbuf: BufMut {
     fn put_string(&mut self, s: &str);
+    fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error>;
+    fn put_format_i8(&mut self, format: pgrepr::Format);
+    fn put_format_i16(&mut self, format: pgrepr::Format);
 }
 
 impl<B: BufMut> Pgbuf for B {
     fn put_string(&mut self, s: &str) {
         self.put(s.as_bytes());
         self.put_u8(b'\0');
+    }
+
+    fn put_length_i16(&mut self, len: usize) -> Result<(), io::Error> {
+        let len = i16::try_from(len)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "length does not fit in an i16"))?;
+        self.put_i16(len);
+        Ok(())
+    }
+
+    fn put_format_i8(&mut self, format: pgrepr::Format) {
+        self.put_i8(match format {
+            pgrepr::Format::Text => 0,
+            pgrepr::Format::Binary => 1,
+        })
+    }
+
+    fn put_format_i16(&mut self, format: pgrepr::Format) {
+        self.put_i8(0);
+        self.put_format_i8(format);
     }
 }
 

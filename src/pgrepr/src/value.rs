@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
+use std::io;
 use std::str;
 
 use bytes::{BufMut, BytesMut};
@@ -163,10 +165,11 @@ impl Value {
     }
 
     /// Serializes this value to `buf` in the specified `format`.
-    pub fn encode(&self, ty: &Type, format: Format, buf: &mut BytesMut) {
+    pub fn encode(&self, ty: &Type, format: Format, buf: &mut BytesMut) -> Result<(), io::Error> {
         match format {
             Format::Text => {
                 self.encode_text(buf);
+                Ok(())
             }
             Format::Binary => self.encode_binary(ty, buf),
         }
@@ -200,7 +203,7 @@ impl Value {
 
     /// Serializes this value to `buf` using the [binary encoding
     /// format](Format::Binary).
-    pub fn encode_binary(&self, ty: &Type, buf: &mut BytesMut) {
+    pub fn encode_binary(&self, ty: &Type, buf: &mut BytesMut) -> Result<(), io::Error> {
         let is_null = match self {
             Value::Bool(b) => b.to_sql(&PgType::BOOL, buf),
             Value::Bytea(b) => b.to_sql(&PgType::BYTEA, buf),
@@ -222,7 +225,13 @@ impl Value {
                 Ok(postgres_types::IsNull::No)
             }
             Value::Record(fields) => {
-                buf.put_i32(fields.len() as i32);
+                let nfields = i32::try_from(fields.len()).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        "number of record fields does not fit into an i32",
+                    )
+                })?;
+                buf.put_i32(nfields);
                 let field_types = match ty {
                     Type::Record(fields) => fields,
                     _ => unreachable!(),
@@ -234,10 +243,15 @@ impl Value {
                         Some(f) => {
                             let base = buf.len();
                             buf.put_i32(0);
-                            f.encode_binary(ty, buf);
+                            f.encode_binary(ty, buf)?;
                             let len = buf.len() - base - 4;
-                            let len = (len as u32).to_be_bytes();
-                            buf[base..base + 4].copy_from_slice(&len);
+                            let len = i32::try_from(len).map_err(|_| {
+                                io::Error::new(
+                                    io::ErrorKind::Other,
+                                    "length of encoded record field does not fit into an i32",
+                                )
+                            })?;
+                            buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
                         }
                     }
                 }
@@ -248,6 +262,7 @@ impl Value {
         if let IsNull::Yes = is_null {
             panic!("encode_binary impossibly called on a null value")
         }
+        Ok(())
     }
 
     /// Deserializes a value of type `ty` from `raw` using the specified

@@ -48,3 +48,9 @@ impl CastFrom<u64> for usize {
         from as usize
     }
 }
+
+impl CastFrom<usize> for u64 {
+    fn cast_from(from: usize) -> u64 {
+        from as u64
+    }
+}

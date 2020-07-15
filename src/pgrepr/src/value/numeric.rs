@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![allow(clippy::as_conversions)]
+
 use std::convert::TryInto;
 use std::error::Error;
 use std::fmt;

@@ -10,9 +10,12 @@
 // TODO(benesch): remove this module if upstream adds implementations of FromSql
 // to tuples directly: https://github.com/sfackler/rust-postgres/pull/626.
 
+use std::convert::TryFrom;
 use std::error::Error;
 
 use postgres_types::{private, FromSql, Kind, Type, WrongType};
+
+use ore::cast::CastFrom;
 
 /// A wrapper for tuples that implements [`FromSql`] for PostgreSQL composite
 /// types.
@@ -30,7 +33,7 @@ macro_rules! impl_tuple {
                 mut raw: &'a [u8],
             ) -> Result<Record<($($ty_ident,)*)>, Box<dyn Error + Sync + Send>> {
                 let num_fields = private::read_be_i32(&mut raw)?;
-                if num_fields as usize != $n {
+                if usize::cast_from(num_fields) != $n {
                     return Err(format!(
                         "Postgres record field count does not match Rust tuple length: {} vs {}",
                         num_fields,
@@ -39,7 +42,8 @@ macro_rules! impl_tuple {
                 }
 
                 $(
-                    let oid = private::read_be_i32(&mut raw)? as u32;
+                    let oid = private::read_be_i32(&mut raw)?;
+                    let oid = u32::try_from(oid).map_err(|_| format!("OIDs cannot be negative: {}", oid))?;
                     let ty = match Type::from_oid(oid) {
                         None => {
                             return Err(format!(
