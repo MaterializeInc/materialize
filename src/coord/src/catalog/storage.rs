@@ -11,6 +11,7 @@ use std::path::Path;
 
 use rusqlite::params;
 use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use expr::GlobalId;
@@ -81,6 +82,13 @@ const MIGRATIONS: &[&str] = &[
         offset blob NOT NULL,
         PRIMARY KEY (sid, vid, pid, timestamp)
     );",
+    // Introduces settings table to support persistent node settings.
+    //
+    // Introduced in v0.4.0.
+    "CREATE TABLE settings (
+        name TEXT PRIMARY KEY,
+        value TEXT
+    );",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -104,7 +112,10 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn open(path: Option<&Path>) -> Result<Connection, Error> {
+    pub fn open(
+        path: Option<&Path>,
+        experimental_mode: Option<bool>,
+    ) -> Result<(Connection, bool), Error> {
         let mut sqlite = match path {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
@@ -141,7 +152,74 @@ impl Connection {
             tx.commit()?;
         }
 
-        Ok(Connection { inner: sqlite })
+        let experimental_mode = Self::set_or_get_experimental_mode(&mut sqlite, experimental_mode)?;
+
+        Ok((Connection { inner: sqlite }, experimental_mode))
+    }
+
+    /// Sets catalog's `experimental_mode` setting on initialization or gets
+    /// that value.
+    ///
+    /// Note that using `None` for `experimental_mode` is appropriate when
+    /// reading the catalog outside the context of starting the server.
+    ///
+    /// # Errors
+    ///
+    /// - If server was initialized and `experimental_mode.unwrap()` does not
+    ///   match the initialized value.
+    ///
+    ///   This means that experimental mode:
+    ///   - Can only be enabled on initialization
+    ///   - Cannot be disabled once enabled
+    ///
+    /// # Panics
+    ///
+    /// - If server has not been initialized and `experimental_mode.is_none()`.
+    fn set_or_get_experimental_mode(
+        sqlite: &mut rusqlite::Connection,
+        experimental_mode: Option<bool>,
+    ) -> Result<bool, Error> {
+        let tx = sqlite.transaction()?;
+        let current_setting: Option<String> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE name = 'experimental_mode';",
+                params![],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let res = match (current_setting, experimental_mode) {
+            // Server init
+            (None, Some(experimental_mode)) => {
+                tx.execute(
+                    "INSERT INTO settings VALUES ('experimental_mode', ?);",
+                    params![experimental_mode],
+                )?;
+                Ok(experimental_mode)
+            }
+            // Server reboot
+            (Some(cs), Some(experimental_mode)) => {
+                let current_setting = cs.parse::<usize>().unwrap() != 0;
+                if current_setting && !experimental_mode {
+                    // Setting is true but was not given `--experimental` flag.
+                    Err(Error::new(ErrorKind::ExperimentalModeRequired))
+                } else if !current_setting && experimental_mode {
+                    // Setting is false but was given `--experimental` flag.
+                    Err(Error::new(ErrorKind::ExperimentalModeUnavailable))
+                } else {
+                    Ok(experimental_mode)
+                }
+            }
+            // Reading existing catalog
+            (Some(cs), None) => Ok(cs.parse::<usize>().unwrap() != 0),
+            // Shouldn't happen!
+            (None, None) => {
+                tx.commit()?;
+                panic!("experimental_mode not set in catalog and not provided on server init")
+            }
+        };
+        tx.commit()?;
+        res
     }
 
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {
