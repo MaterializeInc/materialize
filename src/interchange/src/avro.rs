@@ -32,7 +32,7 @@ use avro::{
     give_value,
     types::{DecimalValue, Scalar, Value},
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, GeneralDeserializer,
-    TrivialDecoder, ValueOrReader,
+    TrivialDecoder, ValueDecoder, ValueOrReader,
 };
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
@@ -113,52 +113,30 @@ pub struct DebeziumSourceCoordinates {
     row: usize,
 }
 struct DebeziumSourceDecoder<'a> {
-    snapshot: Option<bool>,
-    pos: Option<i64>,
-    row: Option<i64>,
     file_buf: &'a mut Vec<u8>,
-    has_file: bool,
-}
-impl<'a> DebeziumSourceDecoder<'a> {
-    fn coords(self) -> Result<DebeziumSourceCoordinates> {
-        let snapshot = self.snapshot.ok_or_else(|| format_err!("no snapshot"))?;
-        let pos = self.pos.ok_or_else(|| format_err!("no pos"))? as usize;
-        let row = self.row.ok_or_else(|| format_err!("no row"))? as usize;
-        if !self.has_file {
-            bail!("no file");
-        }
-        Ok(DebeziumSourceCoordinates { snapshot, pos, row })
-    }
 }
 
 struct AvroStringDecoder<'a> {
     pub buf: &'a mut Vec<u8>,
-    pub decoded: bool,
 }
 
 impl<'a> AvroStringDecoder<'a> {
     pub fn with_buf(buf: &'a mut Vec<u8>) -> Self {
-        Self {
-            buf,
-            decoded: false,
-        }
+        Self { buf }
     }
 }
 
 impl<'a> AvroDecode for AvroStringDecoder<'a> {
-    fn string<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b str, R>) -> Result<()> {
-        if self.decoded {
-            bail!("Attempted to decode two strings");
-        }
-        self.decoded = true;
+    type Out = ();
+    fn string<'b, R: AvroRead>(self, r: ValueOrReader<'b, &'b str, R>) -> Result<Self::Out> {
         match r {
             ValueOrReader::Value(val) => {
                 self.buf.resize_with(val.len(), Default::default);
-                val.as_bytes().read_exact(&mut self.buf)?;
+                val.as_bytes().read_exact(self.buf)?;
             }
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
-                r.read_exact(&mut self.buf)?;
+                r.read_exact(self.buf)?;
             }
         }
         Ok(())
@@ -172,34 +150,31 @@ enum DbzSnapshot {
     False,
 }
 
-struct AvroDbzSnapshotDecoder(Option<DbzSnapshot>);
-
+struct AvroDbzSnapshotDecoder;
 impl AvroDecode for AvroDbzSnapshotDecoder {
+    type Out = Option<DbzSnapshot>;
     fn union_branch<'a, R: AvroRead, D: AvroDeserializer>(
-        &mut self,
+        self,
         _idx: usize,
         _n_variants: usize,
         _null_variant: Option<usize>,
         deserializer: &'a mut D,
         reader: &'a mut R,
-    ) -> Result<()> {
+    ) -> Result<Self::Out> {
         deserializer.deserialize(reader, self)
     }
-    fn scalar(&mut self, scalar: Scalar) -> Result<()> {
+    fn scalar(self, scalar: Scalar) -> Result<Self::Out> {
         match scalar {
-            Scalar::Null => Ok(()),
-            Scalar::Boolean(val) => {
-                self.0 = Some(if val {
-                    DbzSnapshot::True
-                } else {
-                    DbzSnapshot::False
-                });
-                Ok(())
-            }
+            Scalar::Null => Ok(None),
+            Scalar::Boolean(val) => Ok(Some(if val {
+                DbzSnapshot::True
+            } else {
+                DbzSnapshot::False
+            })),
             _ => bail!("`snapshot` value had unexpected type"),
         }
     }
-    fn string<'a, R: AvroRead>(&mut self, r: ValueOrReader<'a, &'a str, R>) -> Result<()> {
+    fn string<'a, R: AvroRead>(self, r: ValueOrReader<'a, &'a str, R>) -> Result<Self::Out> {
         let mut s = SmallVec::<[u8; 8]>::new();
         let s = match r {
             ValueOrReader::Value(val) => val.as_bytes(),
@@ -209,7 +184,7 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
                 &s
             }
         };
-        self.0 = Some(match s {
+        Ok(Some(match s {
             b"true" => DbzSnapshot::True,
             b"last" => DbzSnapshot::Last,
             b"false" => DbzSnapshot::False,
@@ -217,78 +192,89 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
                 "`snapshot` had unexpected value {}",
                 String::from_utf8_lossy(s)
             ),
-        });
-        Ok(())
+        }))
     }
 }
 
 impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
-    fn record<R: AvroRead, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
+    type Out = DebeziumSourceCoordinates;
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(self, a: &mut A) -> Result<Self::Out> {
+        let mut snapshot = false;
+        let mut pos = None;
+        let mut row = None;
+        let mut has_file = false;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "snapshot" => {
-                    let mut d = AvroDbzSnapshotDecoder(None);
-                    field.decode_field(&mut d)?;
-                    self.snapshot = Some(match d.0 {
+                    let d = AvroDbzSnapshotDecoder;
+                    let maybe_snapshot = field.decode_field(d)?;
+                    snapshot = match maybe_snapshot {
                         None | Some(DbzSnapshot::False) => false,
                         Some(DbzSnapshot::True) | Some(DbzSnapshot::Last) => true,
-                    });
+                    };
                 }
                 "pos" => {
-                    self.pos = Some(
-                        field
-                            .decode_to_value()?
-                            .into_integral()
+                    let next = ValueDecoder;
+                    let val = field.decode_field(next)?;
+
+                    pos = Some(
+                        val.into_integral()
                             .ok_or_else(|| format_err!("\"pos\" is not an integer"))?,
                     );
                 }
                 "row" => {
-                    self.row = Some(
-                        field
-                            .decode_to_value()?
-                            .into_integral()
+                    let next = ValueDecoder;
+                    let val = field.decode_field(next)?;
+
+                    row = Some(
+                        val.into_integral()
                             .ok_or_else(|| format_err!("\"row\" is not an integer"))?,
                     );
                 }
                 "file" => {
-                    let mut d = AvroStringDecoder::with_buf(self.file_buf);
-                    field.decode_field(&mut d)?;
-                    self.has_file = d.decoded;
+                    let d = AvroStringDecoder::with_buf(self.file_buf);
+                    field.decode_field(d)?;
+                    has_file = true;
                 }
                 _ => {
-                    field.decode_field(&mut TrivialDecoder)?;
+                    field.decode_field(TrivialDecoder)?;
                 }
             }
         }
-        Ok(())
+        let pos = pos.ok_or_else(|| format_err!("no pos"))? as usize;
+        let row = row.ok_or_else(|| format_err!("no row"))? as usize;
+        if !has_file {
+            bail!("no file");
+        }
+        Ok(DebeziumSourceCoordinates { snapshot, pos, row })
     }
 }
 struct OptionalRowDecoder<'a> {
     pub packer: &'a mut RowPacker,
     pub buf: &'a mut Vec<u8>,
-    pub decoded_row: bool,
 }
 
 impl<'a> AvroDecode for OptionalRowDecoder<'a> {
+    type Out = bool;
     fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
-        &mut self,
+        self,
         idx: usize,
         _n_variants: usize,
         null_variant: Option<usize>,
         deserializer: &'b mut D,
         reader: &'b mut R,
-    ) -> Result<()> {
+    ) -> Result<Self::Out> {
         if Some(idx) == null_variant {
             // we are done, the row is null!
-            Ok(())
+            Ok(false)
         } else {
-            self.decoded_row = true;
-            let mut d = AvroFlatDecoder {
-                packer: &mut self.packer,
-                buf: &mut self.buf,
+            let d = AvroFlatDecoder {
+                packer: self.packer,
+                buf: self.buf,
                 is_top: true,
             };
-            deserializer.deserialize(reader, &mut d)
+            deserializer.deserialize(reader, d)?;
+            Ok(true)
         }
     }
 }
@@ -298,24 +284,24 @@ pub struct AvroDebeziumDecoder<'a> {
     pub packer: &'a mut RowPacker,
     pub buf: &'a mut Vec<u8>,
     pub file_buf: &'a mut Vec<u8>,
-    pub before: Option<Row>,
-    pub after: Option<Row>,
-    pub coords: Option<DebeziumSourceCoordinates>,
 }
 
 impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
-    fn record<R: AvroRead, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
+    type Out = (DiffPair<Row>, Option<DebeziumSourceCoordinates>);
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(self, a: &mut A) -> Result<Self::Out> {
+        let mut before = None;
+        let mut after = None;
+        let mut coords = None;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "before" => {
-                    let mut d = OptionalRowDecoder {
-                        packer: &mut self.packer,
-                        buf: &mut self.buf,
-                        decoded_row: false,
+                    let d = OptionalRowDecoder {
+                        packer: self.packer,
+                        buf: self.buf,
                     };
-                    field.decode_field(&mut d)?;
+                    let decoded_row = field.decode_field(d)?;
 
-                    self.before = if d.decoded_row {
+                    before = if decoded_row {
                         self.packer.push(Datum::Int64(-1));
                         Some(self.packer.finish_and_reuse())
                     } else {
@@ -323,14 +309,13 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                     }
                 }
                 "after" => {
-                    let mut d = OptionalRowDecoder {
-                        packer: &mut self.packer,
-                        buf: &mut self.buf,
-                        decoded_row: false,
+                    let d = OptionalRowDecoder {
+                        packer: self.packer,
+                        buf: self.buf,
                     };
-                    field.decode_field(&mut d)?;
+                    let decoded_row = field.decode_field(d)?;
 
-                    self.after = if d.decoded_row {
+                    after = if decoded_row {
                         self.packer.push(Datum::Int64(1));
                         Some(self.packer.finish_and_reuse())
                     } else {
@@ -338,22 +323,17 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                     }
                 }
                 "source" => {
-                    let mut d = DebeziumSourceDecoder {
-                        snapshot: None,
-                        pos: None,
-                        row: None,
-                        file_buf: &mut self.file_buf,
-                        has_file: false,
+                    let d = DebeziumSourceDecoder {
+                        file_buf: self.file_buf,
                     };
-                    field.decode_field(&mut d)?;
-                    self.coords = Some(d.coords()?);
+                    coords = Some(field.decode_field(d)?);
                 }
                 _ => {
-                    field.decode_field(&mut TrivialDecoder)?;
+                    field.decode_field(TrivialDecoder)?;
                 }
             }
         }
-        Ok(())
+        Ok((DiffPair { before, after }, coords))
     }
 }
 
@@ -365,17 +345,13 @@ pub struct AvroFlatDecoder<'a> {
 }
 
 impl<'a> AvroDecode for AvroFlatDecoder<'a> {
+    type Out = ();
     #[inline]
-    fn record<R: AvroRead, A: AvroRecordAccess<R>>(&mut self, a: &mut A) -> Result<()> {
+    fn record<R: AvroRead, A: AvroRecordAccess<R>>(self, a: &mut A) -> Result<Self::Out> {
         let mut str_buf = std::mem::take(self.buf);
         let mut pack_record = |rp: &mut RowPacker| -> Result<()> {
             let mut expected = 0;
             let mut stash = vec![];
-            let mut dec = AvroFlatDecoder {
-                packer: rp,
-                buf: &mut str_buf,
-                is_top: false,
-            };
             // The idea here is that if the deserializer gives us fields in the order we're expecting,
             // we can decode them directly into the row.
             // If not, we need to decode them into a Value (the old, slow decoding path) and stash them,
@@ -386,11 +362,17 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             // Maybe instead, we should decode to separate sub-RowPackers and then add an API
             // to RowPacker that just copies in the bytes from another one.
             while let Some((_name, idx, f)) = a.next_field()? {
+                let dec = AvroFlatDecoder {
+                    packer: rp,
+                    buf: &mut str_buf,
+                    is_top: false,
+                };
                 if idx == expected {
                     expected += 1;
-                    f.decode_field(&mut dec)?;
+                    f.decode_field(dec)?;
                 } else {
-                    let val = f.decode_to_value()?;
+                    let next = ValueDecoder;
+                    let val = f.decode_field(next)?;
                     stash.push((idx, val));
                 }
             }
@@ -398,7 +380,12 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             for (idx, val) in stash {
                 assert!(idx == expected);
                 expected += 1;
-                give_value(&mut dec, &val)?;
+                let dec = AvroFlatDecoder {
+                    packer: rp,
+                    buf: &mut str_buf,
+                    is_top: false,
+                };
+                give_value(dec, &val)?;
             }
             Ok(())
         };
@@ -412,22 +399,27 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     }
     #[inline]
     fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
-        &mut self,
+        self,
         idx: usize,
         n_variants: usize,
         null_variant: Option<usize>,
         deserializer: &'b mut D,
         reader: &'b mut R,
-    ) -> Result<()> {
+    ) -> Result<Self::Out> {
         if null_variant == Some(idx) {
             for _ in 0..n_variants - 1 {
                 self.packer.push(Datum::Null)
             }
         } else {
             for i in 0..n_variants {
+                let dec = AvroFlatDecoder {
+                    packer: self.packer,
+                    buf: self.buf,
+                    is_top: false,
+                };
                 if null_variant != Some(i) {
                     if i == idx {
-                        deserializer.deserialize(reader, self)?;
+                        deserializer.deserialize(reader, dec)?;
                     } else {
                         self.packer.push(Datum::Null)
                     }
@@ -438,13 +430,12 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     }
 
     #[inline]
-    #[inline]
-    fn enum_variant(&mut self, symbol: &str, _idx: usize) -> Result<()> {
+    fn enum_variant(self, symbol: &str, _idx: usize) -> Result<Self::Out> {
         self.packer.push(Datum::String(symbol));
         Ok(())
     }
     #[inline]
-    fn scalar(&mut self, scalar: avro::types::Scalar) -> Result<()> {
+    fn scalar(self, scalar: avro::types::Scalar) -> Result<Self::Out> {
         match scalar {
             avro::types::Scalar::Null => self.packer.push(Datum::Null),
             avro::types::Scalar::Boolean(val) => {
@@ -465,16 +456,16 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     }
     #[inline]
     fn decimal<'b, R: AvroRead>(
-        &mut self,
+        self,
         _precision: usize,
         _scale: usize,
         r: ValueOrReader<'b, &'b [u8], R>,
-    ) -> Result<()> {
+    ) -> Result<Self::Out> {
         let buf = match r {
             ValueOrReader::Value(val) => val,
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
-                r.read_exact(&mut self.buf)?;
+                r.read_exact(self.buf)?;
                 &self.buf
             }
         };
@@ -483,12 +474,12 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn bytes<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<()> {
+    fn bytes<'b, R: AvroRead>(self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<Self::Out> {
         let buf = match r {
             ValueOrReader::Value(val) => val,
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
-                r.read_exact(&mut self.buf)?;
+                r.read_exact(self.buf)?;
                 &self.buf
             }
         };
@@ -496,7 +487,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn string<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b str, R>) -> Result<()> {
+    fn string<'b, R: AvroRead>(self, r: ValueOrReader<'b, &'b str, R>) -> Result<Self::Out> {
         let s = match r {
             ValueOrReader::Value(val) => val,
             ValueOrReader::Reader { len, r } => {
@@ -505,7 +496,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
                 // directly when r is &[u8].
                 // It probably doesn't make a huge difference though.
                 self.buf.resize_with(len, Default::default);
-                r.read_exact(&mut self.buf)?;
+                r.read_exact(self.buf)?;
                 std::str::from_utf8(&self.buf)?
             }
         };
@@ -514,9 +505,9 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     }
     #[inline]
     fn json<'b, R: AvroRead>(
-        &mut self,
+        self,
         r: ValueOrReader<'b, &'b serde_json::Value, R>,
-    ) -> Result<()> {
+    ) -> Result<Self::Out> {
         match r {
             ValueOrReader::Value(val) => {
                 *self.packer =
@@ -524,7 +515,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             }
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
-                r.read_exact(&mut self.buf)?;
+                r.read_exact(self.buf)?;
                 *self.packer =
                     JsonbPacker::new(std::mem::take(self.packer)).pack_slice(&self.buf)?;
             }
@@ -532,19 +523,24 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
     #[inline]
-    fn fixed<'b, R: AvroRead>(&mut self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<()> {
+    fn fixed<'b, R: AvroRead>(self, r: ValueOrReader<'b, &'b [u8], R>) -> Result<Self::Out> {
         self.bytes(r)
     }
     #[inline]
-    fn array<A: AvroArrayAccess>(&mut self, a: &mut A) -> Result<()> {
+    fn array<A: AvroArrayAccess>(mut self, a: &mut A) -> Result<Self::Out> {
+        self.is_top = false;
         let mut str_buf = std::mem::take(self.buf);
         self.packer.push_list_with(|rp| -> Result<()> {
-            let mut dec = AvroFlatDecoder {
-                packer: rp,
-                buf: &mut str_buf,
-                is_top: false,
-            };
-            while a.decode_next(&mut dec)? {}
+            loop {
+                let next = AvroFlatDecoder {
+                    packer: rp,
+                    buf: &mut str_buf,
+                    is_top: false,
+                };
+                if a.decode_next(next)?.is_none() {
+                    break;
+                }
+            }
             Ok(())
         })?;
         *self.buf = str_buf;
@@ -1272,23 +1268,20 @@ impl Decoder {
         };
 
         let result = if self.envelope == EnvelopeType::Debezium {
-            let mut dec = AvroDebeziumDecoder {
+            let dec = AvroDebeziumDecoder {
                 packer: &mut self.packer,
                 buf: &mut self.buf1,
                 file_buf: &mut self.buf2,
-                before: None,
-                after: None,
-                coords: None,
             };
             let mut dsr: GeneralDeserializer = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
             // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
             let dedup = self.debezium_dedup.as_mut().unwrap();
-            dsr.deserialize(&mut bytes, &mut dec)?;
-            let should_use = if let Some(source) = dec.coords {
+            let (diff, coords) = dsr.deserialize(&mut bytes, dec)?;
+            let should_use = if let Some(source) = coords {
                 // TODO - avoid the unnecessary utf8 check here.
-                let file = std::str::from_utf8(dec.file_buf)?;
+                let file = std::str::from_utf8(&self.buf2)?;
                 source.snapshot
                     || dedup.should_use_record(
                         file,
@@ -1302,10 +1295,7 @@ impl Decoder {
                 true
             };
             if should_use {
-                DiffPair {
-                    before: dec.before,
-                    after: dec.after,
-                }
+                diff
             } else {
                 DiffPair {
                     before: None,
@@ -1313,7 +1303,7 @@ impl Decoder {
                 }
             }
         } else {
-            let mut dec = AvroFlatDecoder {
+            let dec = AvroFlatDecoder {
                 packer: &mut self.packer,
                 buf: &mut self.buf1,
                 is_top: true,
@@ -1321,10 +1311,10 @@ impl Decoder {
             let mut dsr: GeneralDeserializer = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
-            dsr.deserialize(&mut bytes, &mut dec)?;
+            dsr.deserialize(&mut bytes, dec)?;
             DiffPair {
                 before: None,
-                after: Some(dec.packer.finish_and_reuse()),
+                after: Some(self.packer.finish_and_reuse()),
             }
         };
         log::trace!(
