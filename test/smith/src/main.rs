@@ -82,7 +82,7 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
     let mut prev = None;
 
     while remaining > 0 {
-        let count = if remaining > 500 { 500 } else { remaining };
+        let count = if remaining > 5000 { 5000 } else { remaining };
 
         let request = http_client
             .post(config.fuzzer_url.clone())
