@@ -1983,6 +1983,66 @@ impl BinaryFunc {
         }
     }
 
+    /// Whether the function might return NULL even if none of its inputs are
+    /// NULL.
+    ///
+    /// This is presently conservative, and may indicate that a function
+    /// introduces nulls even when it does not.
+    pub fn introduces_nulls(&self) -> bool {
+        use BinaryFunc::*;
+        match self {
+            And
+            | Or
+            | Eq
+            | NotEq
+            | Lt
+            | Lte
+            | Gt
+            | Gte
+            | AddInt32
+            | AddInt64
+            | AddFloat32
+            | AddFloat64
+            | AddTimestampInterval
+            | AddTimestampTzInterval
+            | AddDateTime
+            | AddDateInterval
+            | AddTimeInterval
+            | AddInterval
+            | SubInterval
+            | AddDecimal
+            | SubInt32
+            | SubInt64
+            | SubFloat32
+            | SubFloat64
+            | SubTimestamp
+            | SubTimestampTz
+            | SubTimestampInterval
+            | SubTimestampTzInterval
+            | SubDate
+            | SubDateInterval
+            | SubTime
+            | SubTimeInterval
+            | SubDecimal
+            | MulInt32
+            | MulInt64
+            | MulFloat32
+            | MulFloat64
+            | MulDecimal
+            | DivInt32
+            | DivInt64
+            | DivFloat32
+            | DivFloat64
+            | DivDecimal
+            | ModInt32
+            | ModInt64
+            | ModFloat32
+            | ModFloat64
+            | ModDecimal => false,
+            _ => true,
+        }
+    }
+
     pub fn is_infix_op(&self) -> bool {
         use BinaryFunc::*;
         match self {

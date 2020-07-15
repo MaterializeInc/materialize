@@ -286,9 +286,19 @@ impl ScalarExpr {
             |e: &ScalarExpr| ScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&relation_type));
         self.visit_mut(&mut |e| match e {
             ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) | ScalarExpr::CallNullary(_) => (),
-            ScalarExpr::CallUnary { expr, .. } => {
+            ScalarExpr::CallUnary { func, expr } => {
                 if expr.is_literal() {
                     *e = eval(e);
+                } else if *func == UnaryFunc::IsNull {
+                    // (<expr1> <op> <expr2>) IS NULL can often be simplified to
+                    // (<expr1> IS NULL) OR (<expr2> IS NULL).
+                    if let ScalarExpr::CallBinary { func, expr1, expr2 } = &mut **expr {
+                        if func.propagates_nulls() && !func.introduces_nulls() {
+                            let expr1 = expr1.take().call_unary(UnaryFunc::IsNull);
+                            let expr2 = expr2.take().call_unary(UnaryFunc::IsNull);
+                            *e = expr1.call_binary(expr2, BinaryFunc::Or);
+                        }
+                    }
                 }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
@@ -354,19 +364,23 @@ impl ScalarExpr {
                         },
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     }
-                } else if *func == BinaryFunc::And && (expr1.is_literal() || expr2.is_literal()) {
+                } else if *func == BinaryFunc::And {
                     // If we are here, not both inputs are literals.
                     if expr1.is_literal_false() || expr2.is_literal_true() {
                         *e = expr1.take();
                     } else if expr2.is_literal_false() || expr1.is_literal_true() {
                         *e = expr2.take();
+                    } else if expr1 == expr2 {
+                        *e = expr1.take();
                     }
-                } else if *func == BinaryFunc::Or && (expr1.is_literal() || expr2.is_literal()) {
+                } else if *func == BinaryFunc::Or {
                     // If we are here, not both inputs are literals.
                     if expr1.is_literal_true() || expr2.is_literal_false() {
                         *e = expr1.take();
                     } else if expr2.is_literal_true() || expr1.is_literal_false() {
                         *e = expr2.take();
+                    } else if expr1 == expr2 {
+                        *e = expr1.take();
                     }
                 }
             }

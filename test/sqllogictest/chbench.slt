@@ -1101,19 +1101,19 @@ ORDER BY supplier_cnt DESC
 
 %5 =
 | Get %3
-| ArrangeBy ()
+| ArrangeBy (#0)
 
 %6 =
 | Get materialize.public.supplier (u34)
-| Filter "^.*bad.*$" ~(#6)
+| ArrangeBy (#0)
 
 %7 =
-| Join %5 %6
-| | implementation = Differential %6 %5.()
-| | demand = (#0, #1)
-| Filter ((#0 = #1) || isnull((#0 != #1)))
-| Distinct group=(#0)
+| Join %5 %6 (= #0 #1)
+| | implementation = DeltaQuery %5 %6.(#0) | %6 %5.(#0)
+| | demand = (#0, #7)
+| Filter "^.*bad.*$" ~(#7)
 | Negate
+| Project (#0)
 
 %8 =
 | Get %3
