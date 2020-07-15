@@ -39,7 +39,7 @@ pub fn pre_arrange_from_upsert_transforms<G>(
     debug_name: &str,
     worker_index: usize,
     as_of_frontier: Antichain<Timestamp>,
-    linear_operator: &Option<LinearOperator>,
+    linear_operator: &mut Option<LinearOperator>,
     src_type: &RelationType,
 ) -> (
     Stream<G, (Row, Option<Row>, Timestamp)>,
@@ -99,7 +99,7 @@ where
         worker_index,
     );
 
-    apply_linear_operators(&decoded, &linear_operator, src_type)
+    apply_linear_operators(&decoded, linear_operator, src_type)
 }
 
 /// Produces at most one entry for each `(key, time)` pair.
@@ -175,7 +175,7 @@ where
 /// whereas the input stream is `Stream<G, (key, Option<value>, Timestamp)>
 fn apply_linear_operators<G>(
     stream: &Stream<G, (Row, Option<Row>, Timestamp)>,
-    linear_operator: &Option<LinearOperator>,
+    linear_operator: &mut Option<LinearOperator>,
     src_type: &RelationType,
 ) -> (
     Stream<G, (Row, Option<Row>, Timestamp)>,
@@ -184,9 +184,10 @@ fn apply_linear_operators<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let operator = linear_operator.take();
     let mut row_packer = repr::RowPacker::new();
 
-    if let Some(operator) = linear_operator {
+    if let Some(operator) = operator {
         // Determine replacement values for unused columns.
         // This is copied over from applying linear operators to
         // the non-upsert case.
@@ -210,7 +211,7 @@ where
         // must be replaced with (key, None) in case if there was previously a
         // row with the same key that matched the predicate.
         let key_col_len = src_type.keys[0].len();
-        let mut predicates = operator.predicates.clone();
+        let mut predicates = operator.predicates;
         let mut key_predicates = Vec::new();
         predicates.retain(|p| {
             let key_predicate = p.support().into_iter().all(|c| c < key_col_len);

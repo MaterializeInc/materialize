@@ -329,7 +329,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         &dataflow.debug_name,
                                         worker_index,
                                         as_of_frontier.clone(),
-                                        &src.operators,
+                                        &mut src.operators,
                                         src.desc.typ(),
                                     );
 
