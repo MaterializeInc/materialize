@@ -26,6 +26,9 @@ extra_lints=(
     # Wildcard dependencies are, by definition, incorrect. It is impossible
     # to be compatible with all future breaking changes in a crate.
     clippy::wildcard_dependencies
+
+    # the `todo!` macro should not appear in production code.
+    clippy::todo
 )
 
 # Add lints to this list freely, but please add a comment with justification
