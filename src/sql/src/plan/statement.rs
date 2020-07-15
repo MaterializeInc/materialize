@@ -1903,4 +1903,8 @@ impl<'a> StatementContext<'a> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }
+
+    pub fn allow_experimental(&self) -> bool {
+        self.catalog.allow_experimental()
+    }
 }

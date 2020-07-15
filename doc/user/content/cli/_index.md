@@ -14,6 +14,7 @@ Flag | Default | Modifies
 [`--address-file`](#horizontally-scaled-clusters) | N/A |  Address of all coordinating Materialize nodes
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
+[`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
 [`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
@@ -157,3 +158,37 @@ Production deployments typically should not use self-signed certificates.
 Acquire a certificate from a proper certificate authority (CA) instead.
 
 [OpenSSL]: https://www.openssl.org
+
+### Experimental mode
+
+{{< warning >}}
+
+If you want to use experimental mode, you should **really** read the section below!
+
+{{< /warning >}}
+
+Materialize offers access to experimental features through the
+`--experimental` flag. However, as experimental features shift, there is no
+guarantee that future versions of Materialize will be interoperable with the
+experimental features.
+
+Using experimental mode means that **you are likely to lose access to all of
+your sources and views within Materialize** and will have to recreate them and
+re-ingest all of your data.
+
+Because of this volatility, **nodes started in experimental mode, must always be
+started in experimental mode**.
+
+We recommend only using experimental mode to explore Materialize, i.e. not in
+production. If your explorations yield interesting results or things you'd like
+to see changed, let us know on [GitHub][gh-feature].
+
+#### Disabling experimental mode
+
+You cannot disable experimental mode for a node. You can, however, extract your
+view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
+etc.), and then create a new node with those items.
+
+[gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
+[scv]: /sql/show-create-view
+[scs]: /sql/show-create-source

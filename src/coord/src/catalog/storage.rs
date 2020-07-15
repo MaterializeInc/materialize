@@ -63,7 +63,15 @@ const MIGRATIONS: &[&str] = &[
      INSERT INTO schemas VALUES
          (1, NULL, 'mz_catalog'),
          (2, NULL, 'pg_catalog'),
-         (3, 1, 'public');",
+         (3, 1, 'public');
+
+    CREATE TABLE experimental_mode (
+        val BOOL PRIMARY KEY DEFAULT FALSE,
+        singleton_guarantee int UNIQUE DEFAULT 1,
+        CHECK(singleton_guarantee = 1)
+    );
+
+    INSERT INTO experimental_mode (val) VALUES (0);",
     // Adjusts timestamp table to support multi-partition Kafka topics.
     //
     // Introduced for v0.1.4.
@@ -142,6 +150,28 @@ impl Connection {
         }
 
         Ok(Connection { inner: sqlite })
+    }
+
+    /// Checks that experimental mode is acknowledged if it was previously
+    /// enabled and allows setting from `false` to `true`.
+    pub fn check_and_set_experimental_mode(
+        &mut self,
+        experimental_mode: bool,
+    ) -> Result<(), Error> {
+        let tx = self.inner.transaction()?;
+        let current_experimental_setting: bool =
+            tx.query_row("SELECT val FROM experimental_mode", params![], |row| {
+                row.get(0)
+            })?;
+        if current_experimental_setting && !experimental_mode {
+            return Err(Error::new(ErrorKind::ExperimentalModeRequired));
+        }
+        tx.execute(
+            "UPDATE experimental_mode SET val = ? WHERE singleton_guarantee = 1",
+            params![experimental_mode],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {

@@ -43,6 +43,7 @@ pub(crate) enum ErrorKind {
         dependee: String,
         message: String,
     },
+    ExperimentalModeRequired,
 }
 
 impl Error {
@@ -77,7 +78,8 @@ impl std::error::Error for Error {
             | ErrorKind::InvalidTemporaryDependency(_)
             | ErrorKind::InvalidTemporarySchema
             | ErrorKind::UnsatisfiableLoggingDependency { .. }
-            | ErrorKind::AmbiguousRename { .. } => None,
+            | ErrorKind::AmbiguousRename { .. }
+            | ErrorKind::ExperimentalModeRequired => None,
             ErrorKind::Storage(e) => Some(e),
         }
     }
@@ -134,6 +136,12 @@ impl fmt::Display for Error {
                     )
                 }
             }
+            ErrorKind::ExperimentalModeRequired => write!(
+                f,
+                r#"Materialize previously started with --experimental to enable experimental features,
+so now must be started in experimental mode. For more details, see
+https://materialize.io/docs/cli#experimental-mode"#
+            ),
         }
     }
 }

@@ -152,6 +152,18 @@ fn run() -> Result<(), failure::Error> {
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
 
+    // Feature options.
+    opts.optflag(
+        "",
+        "experimental",
+        "enable experimental features\
+        \
+        WARNING! If experimental features change you can lose the ability to boot Materialize\
+        with your existing catalog of sources and views\
+        \
+        For more details, see https://materialize.io/docs/cli#experimental-mode",
+    );
+
     let popts = opts.parse(&args[1..])?;
 
     // Handle options that request informational output.
@@ -314,6 +326,12 @@ environment:{}",
     // Inform the user about what they are using, and how to contact us.
     beta_splash();
 
+    let experimental_mode = popts.opt_present("experimental");
+
+    if experimental_mode {
+        experimental_splash();
+    }
+
     let _server = materialized::serve(materialized::Config {
         threads,
         process,
@@ -325,6 +343,7 @@ environment:{}",
         tls,
         data_directory: Some(data_directory),
         symbiosis_url,
+        experimental_mode,
     })?;
 
     // Block forever.
@@ -413,6 +432,30 @@ to improve both our software and your queries! Please reach out at:
     Email: support@materialize.io
     Twitter: @MaterializeInc
 =======================================================================
+"
+    );
+}
+
+/// Print to the screen information about how to contact us.
+fn experimental_splash() {
+    eprintln!(
+        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                               WARNING!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Starting Materialize in experimental mode means:
+
+- This node's catalog of views and sources are unstable.
+
+  If you use any version of Materialize besides this one, you might
+  not be able to start the Materialize node. To fix this, you'll have
+  to remove all of Materialize's data (e.g. rm -rf mzdata) and start
+  the node anew.
+
+- You must always start this node in experimental mode; it can no
+  longer be started in non-experimental/regular mode.q
+
+For more details, see https://materialize.io/docs/cli#experimental-mode
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 "
     );
 }

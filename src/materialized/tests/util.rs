@@ -26,6 +26,7 @@ pub struct Config {
     data_directory: Option<PathBuf>,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
+    experimental_mode: bool,
 }
 
 impl Default for Config {
@@ -34,6 +35,7 @@ impl Default for Config {
             data_directory: None,
             logging_granularity: Some(Duration::from_millis(10)),
             tls: None,
+            experimental_mode: false,
         }
     }
 }
@@ -60,6 +62,11 @@ impl Config {
         });
         self
     }
+
+    pub fn enable_experimental(mut self) -> Self {
+        self.experimental_mode = true;
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
@@ -74,6 +81,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         symbiosis_url: None,
         listen_addr: None,
         tls: config.tls,
+        experimental_mode: config.experimental_mode,
     })?);
     let client = server.connect()?;
     Ok((server, client))

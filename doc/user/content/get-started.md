@@ -11,7 +11,7 @@ To help you get started with Materialize, we'll:
 - Explore its API
 - Set up a real-time stream to perform aggregations on Wikipedia user edits.
 
-{{< cta href=/katacoda?intro-wikipedia target=_blank >}}
+{{< cta href="/katacoda?intro-wikipedia" target="_blank" >}}
 Try the demo in your browser →
 {{</ cta >}}
 

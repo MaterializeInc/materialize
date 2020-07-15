@@ -407,6 +407,7 @@ impl State {
                 frequency: Duration::from_millis(10),
             },
             logical_compaction_window: None,
+            experimental_mode: true,
         })?;
 
         let coord_thread = thread::spawn(move || coord.serve(cmd_rx)).join_on_drop();

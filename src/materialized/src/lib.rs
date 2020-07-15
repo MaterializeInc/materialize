@@ -123,6 +123,8 @@ pub struct Config {
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
+    /// Support for experimental features.
+    pub experimental_mode: bool,
 }
 
 impl Config {
@@ -282,6 +284,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             },
             logical_compaction_window: config.logical_compaction_window,
             executor: &executor,
+            experimental_mode: config.experimental_mode,
         })?;
         Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
     } else {
