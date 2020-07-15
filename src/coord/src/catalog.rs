@@ -71,6 +71,7 @@ pub struct Catalog {
     storage: Arc<Mutex<storage::Connection>>,
     startup_time: SystemTime,
     nonce: u64,
+    experimental_mode: bool,
 }
 
 #[derive(Debug)]
@@ -307,7 +308,7 @@ impl Catalog {
     /// Opens or creates a `Catalog` that stores data at `path`. The
     /// `initialize` callback will be invoked after database and schemas are
     /// loaded but before any persisted user items are loaded.
-    pub fn open<F>(path: Option<&Path>, f: F) -> Result<Catalog, Error>
+    pub fn open<F>(path: Option<&Path>, experimental_mode: bool, f: F) -> Result<Catalog, Error>
     where
         F: FnOnce(&mut Self),
     {
@@ -322,8 +323,13 @@ impl Catalog {
             storage: Arc::new(Mutex::new(storage)),
             startup_time: SystemTime::now(),
             nonce: rand::random(),
+            experimental_mode,
         };
         catalog.create_temporary_schema(SYSTEM_CONN_ID);
+
+        catalog
+            .storage()
+            .check_and_set_experimental_mode(experimental_mode)?;
 
         let databases = catalog.storage().load_databases()?;
         for (id, name) in databases {
@@ -1312,6 +1318,10 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
 
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn sql::catalog::CatalogItem {
         self.catalog.get_by_id(id)
+    }
+
+    fn experimental_mode(&self) -> bool {
+        self.catalog.experimental_mode
     }
 }
 

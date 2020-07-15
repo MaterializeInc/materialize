@@ -81,6 +81,13 @@ const MIGRATIONS: &[&str] = &[
         offset blob NOT NULL,
         PRIMARY KEY (sid, vid, pid, timestamp)
     );",
+    // Introduces settings table to support persistent node settings.
+    //
+    // Introduced in v0.4.0.
+    "CREATE TABLE settings (
+        name TEXT PRIMARY KEY,
+        value TEXT
+    );",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -142,6 +149,69 @@ impl Connection {
         }
 
         Ok(Connection { inner: sqlite })
+    }
+
+    /// Checks a node's experimental mode setting and sets it for new nodes.
+    pub fn check_and_set_experimental_mode(
+        &mut self,
+        experimental_mode: bool,
+    ) -> Result<(), Error> {
+        let tx = self.inner.transaction()?;
+        let current_setting: Option<String> = match tx.query_row(
+            "SELECT value FROM settings WHERE name = 'experimental_mode';",
+            params![],
+            |row| row.get(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => {
+                println!("returning usqlite::Error {}", e);
+                return Err(e.into());
+            }
+        };
+
+        if let Some(current_setting) = current_setting {
+            let current_setting = match current_setting.as_str() {
+                "0" => false,
+                "1" => true,
+                _ => unreachable!(),
+            };
+            // Setting is true but was not given `--experimental` flag.
+            if current_setting && !experimental_mode {
+                return Err(Error::new(ErrorKind::ExperimentalModeRequired));
+            } else if !current_setting && experimental_mode {
+                return Err(Error::new(ErrorKind::ExperimentalModeUnavailable));
+            }
+        } else {
+            tx.execute(
+                "INSERT INTO settings VALUES ('experimental_mode', ?);",
+                params![experimental_mode],
+            )?;
+            if experimental_mode {
+                eprintln!(
+                    "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                               WARNING!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Starting Materialize in experimental mode means:
+
+- This node's catalog of views and sources are unstable.
+
+  If you use any version of Materialize besides this one, you might
+  not be able to start the Materialize node. To fix this, you'll have
+  to remove all of Materialize's data (e.g. rm -rf mzdata) and start
+  the node anew.
+
+- You must always start this node in experimental mode; it can no
+  longer be started in non-experimental/regular mode.
+
+For more details, see https://materialize.io/docs/cli#experimental-mode
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+"
+                );
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn load_databases(&self) -> Result<Vec<(i64, String)>, Error> {

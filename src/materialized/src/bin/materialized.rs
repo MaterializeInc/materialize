@@ -152,6 +152,13 @@ fn run() -> Result<(), failure::Error> {
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
 
+    // Feature options.
+    opts.optflag(
+        "",
+        "experimental",
+        "enable experimental features (DANGEROUS)",
+    );
+
     let popts = opts.parse(&args[1..])?;
 
     // Handle options that request informational output.
@@ -325,6 +332,7 @@ environment:{}",
         tls,
         data_directory: Some(data_directory),
         symbiosis_url,
+        experimental_mode: popts.opt_present("experimental"),
     })?;
 
     // Block forever.
