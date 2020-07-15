@@ -167,6 +167,7 @@ lazy_static! {
     static ref IGNORED_LOGICAL_TYPES: Vec<(&'static str, Value)> = vec![
         // Unknown logical type
         (r#"{"type": "string", "logicalType": "unknown-logical-type"}"#, Value::String("string".into())),
+        (r#"{"type": "int", "logicalType": "date1"}"#, Value::Int(1)),
         // Decimal logical type
         (r#"{"type": "bytes", "logicalType": "decimal", "scale": 0}"#, Value::Bytes(vec![])),
         (r#"{"type": "bytes", "logicalType": "decimal", "precision": 2.4, "scale": 0}"#, Value::Bytes(vec![])),
@@ -190,8 +191,22 @@ lazy_static! {
          Value::Fixed(2, vec![0, 0])),
         (r#"{"type": "float", "logicalType": "decimal", "precision": 2, "scale": 0}"#,
          Value::Float(0.0)),
-         // UUID logical type - #3577
-         // (r#"{"type": "string", "logicalType": "uuid"}"#, Value::String("string".into())),
+        // Date logical type
+        (r#"{"type": "long", "logicalType": "date"}"#, Value::Long(19)),
+        // Time-millis logical type
+        (r#"{"type": "int", "logicalType": "time-milis"}"#, Value::Int(7)),
+        (r#"{"type": "long", "logicalType": "time-millis"}"#, Value::Long(2)),
+        // Time-micros logical type
+        (r#"{"type": "long", "logicalType": "time-micro"}"#, Value::Long(13)),
+        (r#"{"type": "int", "logicalType": "time-micros"}"#, Value::Int(42)),
+        // Timestamp-millis logical type
+        (r#"{"type": "long", "logicalType": "timestamp-milis"}"#, Value::Long(61)),
+        (r#"{"type": "int", "logicalType": "timestamp-millis"}"#, Value::Int(34)),
+        // Timestamp-micros logical type
+        (r#"{"type": "long", "logicalType": "timestamp-micro"}"#, Value::Long(3)),
+        (r#"{"type": "int", "logicalType": "timestamp-micros"}"#, Value::Int(1010)),
+        // UUID logical type - #3577
+        // (r#"{"type": "string", "logicalType": "uuid"}"#, Value::String("string".into())),
     ];
 }
 
