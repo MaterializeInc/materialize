@@ -85,10 +85,10 @@ lazy_static! {
         (r#"{"type": "map",
              "values": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}"#, Value::Map(HashMap::new())),
         // Union examples
-        (r#"["null", "int"]"#, Value::Union(0, Box::new(Value::Null))),
-        (r#"["null", "int"]"#, Value::Union(1, Box::new(Value::Int(42)))),
-        (r#"["null", "double", "string", "int"]"#, Value::Union(3, Box::new(Value::Int(42)))),
-        (r#"["string", "null", "long"]"#, Value::Union(0, Box::new(Value::String("string".to_owned())))),
+        (r#"["null", "int"]"#, Value::Union{index:0, inner:Box::new(Value::Null),n_variants:2,null_variant:Some(0)}),
+         (r#"["null", "int"]"#, Value::Union{index:1, inner:Box::new(Value::Int(42)),n_variants:2,null_variant:Some(0)}),
+        (r#"["null", "double", "string", "int"]"#, Value::Union{index:3, inner:Box::new(Value::Int(42)),n_variants:4,null_variant:Some(0)}),
+        (r#"["string", "null", "long"]"#, Value::Union{index:0, inner:Box::new(Value::String("string".into())),n_variants:3,null_variant:Some(1)}),
         // Record examples
         (r#"{"type": "record",
                      "name": "Interop",
@@ -124,7 +124,7 @@ lazy_static! {
                            ("nullField".into(), Value::Null),
                            ("arrayField".into(), Value::Array(vec![Value::Double(0.0)])),
                            ("mapField".into(), Value::Map(HashMap::new())),
-                           ("unionField".into(), Value::Union(1, Box::new(Value::Double(0.0)))),
+                           ("unionField".into(), Value::Union{index:1, inner:Box::new(Value::Double(0.0)),n_variants:3,null_variant:None}),
                            ("enumField".into(), Value::Enum(1, "B".into())),
                            ("fixedField".into(), Value::Fixed(4, vec![0, 0, 0, 0])),
                            ("recordField".into(), Value::Record(vec![("label".into(), Value::String("string".into())),
@@ -132,7 +132,7 @@ lazy_static! {
         (r#"{"type": "record", "name": "ipAddr",
                      "fields": [{"name": "addr", "type": [{"name": "IPv6", "type": "fixed", "size": 16},
                                                           {"name": "IPv4", "type": "fixed", "size": 4}]}]}"#,
-         Value::Record(vec![("addr".into(), Value::Union(1, Box::new(Value::Fixed(4, vec![0, 0, 0, 0]))))])),
+         Value::Record(vec![("addr".into(), Value::Union{index:1, inner:Box::new(Value::Fixed(4, vec![0, 0, 0, 0])),n_variants:2,null_variant:None})])),
         // Doc examples
         (r#"{"type": "record", "name": "TestDoc", "doc": "Doc string",
                      "fields": [{"name": "name", "type": "string", "doc": "Doc String"}]}"#,

@@ -8,13 +8,13 @@
 // by the Apache License, Version 2.0.
 
 //! Logic handling reading from Avro format at user level.
-use std::io::{ErrorKind, Read};
+use std::io::ErrorKind;
 use std::str::{from_utf8, FromStr};
 
 use failure::Error;
 use serde_json::from_slice;
 
-use crate::decode::decode;
+use crate::decode::{decode, AvroRead};
 use crate::schema::{
     resolve_schemas, FullName, NamedSchemaPiece, ParseSchemaError, RecordField,
     ResolvedDefaultValueField, SchemaNodeOrNamed, SchemaPiece, SchemaPieceOrNamed,
@@ -43,7 +43,7 @@ pub(crate) struct Block<R> {
     resolved_schema: Option<Schema>,
 }
 
-impl<R: Read> Block<R> {
+impl<R: AvroRead> Block<R> {
     pub(crate) fn new(reader: R, reader_schema: Option<&Schema>) -> Result<Block<R>, Error> {
         let mut block = Block {
             reader,
@@ -229,7 +229,7 @@ pub struct Reader<R> {
     errored: bool,
 }
 
-impl<R: Read> Reader<R> {
+impl<R: AvroRead> Reader<R> {
     /// Creates a `Reader` given something implementing the `tokio::io::AsyncRead` trait to read from.
     /// No reader `Schema` will be set.
     ///
@@ -267,7 +267,7 @@ impl<R: Read> Reader<R> {
     }
 }
 
-impl<R: Read> Iterator for Reader<R> {
+impl<R: AvroRead> Iterator for Reader<R> {
     type Item = Result<Value, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -433,11 +433,10 @@ impl<'a> SchemaResolver<'a> {
                 let symbols = w_symbols
                     .iter()
                     .map(|s| {
-                        if let Some(idx) = r_map.get(&s) {
-                            Ok((*idx, s.clone()))
-                        } else {
-                            Err(s.clone())
-                        }
+                        r_map
+                            .get(s)
+                            .map(|i| (*i, s.clone()))
+                            .ok_or_else(|| s.clone())
                     })
                     .collect();
                 SchemaPiece::ResolveEnum {
@@ -583,17 +582,36 @@ impl<'a> SchemaResolver<'a> {
                         Ok((r_idx, resolved))
                     })
                     .collect();
-                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveUnionUnion { permutation })
+                let n_reader_variants = r_inner.variants().len();
+                let reader_null_variant = r_inner
+                    .variants()
+                    .iter()
+                    .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
+                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveUnionUnion {
+                    permutation,
+                    n_reader_variants,
+                    reader_null_variant,
+                })
             }
             // Writer is concrete; reader is union
             (other, SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(r_inner))) => {
+                let n_reader_variants = r_inner.variants().len();
+                let reader_null_variant = r_inner
+                    .variants()
+                    .iter()
+                    .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
                 let (index, r_inner) = r_inner
                     .match_ref(other, &self.writer_to_reader_names)
                     .ok_or_else(|| {
                         SchemaResolutionError::new("No matching schema in union".to_string())
                     })?;
                 let inner = Box::new(self.resolve(writer.step_ref(other), reader.step(r_inner))?);
-                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveConcreteUnion { index, inner })
+                SchemaPieceOrNamed::Piece(SchemaPiece::ResolveConcreteUnion {
+                    index,
+                    inner,
+                    n_reader_variants,
+                    reader_null_variant,
+                })
             }
             // Writer is union; reader is concrete
             (SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(w_inner)), other) => {
@@ -802,7 +820,7 @@ impl<'a> SchemaResolver<'a> {
 /// **NOTE** This function has a quite small niche of usage and does NOT take care of reading the
 /// header and consecutive data blocks; use [`Reader`](struct.Reader.html) if you don't know what
 /// you are doing, instead.
-pub fn from_avro_datum<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
+pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
     let value = decode(schema.top_node(), reader)?;
     Ok(value)
 }
@@ -865,7 +883,12 @@ mod tests {
 
         assert_eq!(
             from_avro_datum(&schema, &mut encoded).unwrap(),
-            Value::Union(1, Box::new(Value::Long(0)))
+            Value::Union {
+                index: 1,
+                inner: Box::new(Value::Long(0)),
+                n_variants: 2,
+                null_variant: Some(0)
+            }
         );
     }
 

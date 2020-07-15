@@ -1,5 +1,4 @@
 // Copyright Materialize, Inc. All rights reserved.
-//
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 //
@@ -247,45 +246,141 @@ pub fn bench_avro(c: &mut Criterion) {
     fn since_epoch(days: i64) -> NaiveDate {
         NaiveDate::from_ymd(1970, 1, 1).add(Duration::days(days))
     }
-    #[rustfmt::skip]
     let record = AvroValue::Record(vec![
-        ("before".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
-        ("after".into(), AvroValue::Union(1, Box::new(AvroValue::Record(vec![
-            ("l_orderkey".into(), AvroValue::Int(1)),
-            ("l_partkey".into(), AvroValue::Int(155_190)),
-            ("l_suppkey".into(), AvroValue::Int(7706)),
-            ("l_linenumber".into(), AvroValue::Int(1)),
-            ("l_quantity".into(), AvroValue::Double(17.0)),
-            ("l_extendedprice".into(), AvroValue::Double(21168.23)),
-            ("l_discount".into(), AvroValue::Double(0.04)),
-            ("l_tax".into(), AvroValue::Double(0.02)),
-            ("l_returnflag".into(), AvroValue::String("N".into())),
-            ("l_linestatus".into(), AvroValue::String("O".into())),
-            ("l_shipdate".into(), AvroValue::Date(since_epoch(9567))),
-            ("l_commitdate".into(), AvroValue::Date(since_epoch(9537))),
-            ("l_receiptdate".into(), AvroValue::Date(since_epoch(9567))),
-            ("l_shipinstruct".into(), AvroValue::String("DELIVER IN PERSON".into())),
-            ("l_shipmode".into(), AvroValue::String("TRUCK".into())),
-            ("l_comment".into(), AvroValue::String("egular courts above the".into())),
-        ])))),
-        ("source".into(), AvroValue::Record(vec![
-            ("version".into(), AvroValue::Union(1, Box::new(AvroValue::String("0.9.5.Final".into())))),
-            ("connector".into(), AvroValue::Union(1, Box::new(AvroValue::String("mysql".into())))),
-            ("name".into(), AvroValue::String("tpch".into())),
-            ("server_id".into(), AvroValue::Long(0)),
-            ("ts_sec".into(), AvroValue::Long(0)),
-            ("gtid".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
-            ("file".into(), AvroValue::String("binlog.000004".into())),
-            ("pos".into(), AvroValue::Long(951_896_181)),
-            ("row".into(), AvroValue::Int(0)),
-            ("snapshot".into(), AvroValue::Union(0, Box::new(AvroValue::Boolean(true)))),
-            ("thread".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
-            ("db".into(), AvroValue::Union(1, Box::new(AvroValue::String("tpch".into())))),
-            ("table".into(), AvroValue::Union(1, Box::new(AvroValue::String("lineitem".into())))),
-            ("query".into(), AvroValue::Union(0, Box::new(AvroValue::Null))),
-        ])),
+        (
+            "before".into(),
+            AvroValue::Union {
+                index: 0,
+                inner: Box::new(AvroValue::Null),
+                n_variants: 2,
+                null_variant: Some(0),
+            },
+        ),
+        (
+            "after".into(),
+            AvroValue::Union {
+                index: 1,
+                inner: Box::new(AvroValue::Record(vec![
+                    ("l_orderkey".into(), AvroValue::Int(1)),
+                    ("l_partkey".into(), AvroValue::Int(155_190)),
+                    ("l_suppkey".into(), AvroValue::Int(7706)),
+                    ("l_linenumber".into(), AvroValue::Int(1)),
+                    ("l_quantity".into(), AvroValue::Double(17.0)),
+                    ("l_extendedprice".into(), AvroValue::Double(21168.23)),
+                    ("l_discount".into(), AvroValue::Double(0.04)),
+                    ("l_tax".into(), AvroValue::Double(0.02)),
+                    ("l_returnflag".into(), AvroValue::String("N".into())),
+                    ("l_linestatus".into(), AvroValue::String("O".into())),
+                    ("l_shipdate".into(), AvroValue::Date(since_epoch(9567))),
+                    ("l_commitdate".into(), AvroValue::Date(since_epoch(9537))),
+                    ("l_receiptdate".into(), AvroValue::Date(since_epoch(9567))),
+                    (
+                        "l_shipinstruct".into(),
+                        AvroValue::String("DELIVER IN PERSON".into()),
+                    ),
+                    ("l_shipmode".into(), AvroValue::String("TRUCK".into())),
+                    (
+                        "l_comment".into(),
+                        AvroValue::String("egular courts above the".into()),
+                    ),
+                ])),
+                n_variants: 2,
+                null_variant: Some(0),
+            },
+        ),
+        (
+            "source".into(),
+            AvroValue::Record(vec![
+                (
+                    "version".into(),
+                    AvroValue::Union {
+                        index: 1,
+                        inner: Box::new(AvroValue::String("0.9.5.Final".into())),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
+                (
+                    "connector".into(),
+                    AvroValue::Union {
+                        index: 1,
+                        inner: Box::new(AvroValue::String("mysql".into())),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
+                ("name".into(), AvroValue::String("tpch".into())),
+                ("server_id".into(), AvroValue::Long(0)),
+                ("ts_sec".into(), AvroValue::Long(0)),
+                (
+                    "gtid".into(),
+                    AvroValue::Union {
+                        index: 0,
+                        inner: Box::new(AvroValue::Null),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
+                ("file".into(), AvroValue::String("binlog.000004".into())),
+                ("pos".into(), AvroValue::Long(951_896_181)),
+                ("row".into(), AvroValue::Int(0)),
+                (
+                    "snapshot".into(),
+                    AvroValue::Union {
+                        index: 0,
+                        inner: Box::new(AvroValue::Boolean(true)),
+                        n_variants: 2,
+                        null_variant: Some(1),
+                    },
+                ),
+                (
+                    "thread".into(),
+                    AvroValue::Union {
+                        index: 0,
+                        inner: Box::new(AvroValue::Null),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
+                (
+                    "db".into(),
+                    AvroValue::Union {
+                        index: 1,
+                        inner: Box::new(AvroValue::String("tpch".into())),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
+                (
+                    "table".into(),
+                    AvroValue::Union {
+                        index: 1,
+                        inner: Box::new(AvroValue::String("lineitem".into())),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
+                (
+                    "query".into(),
+                    AvroValue::Union {
+                        index: 0,
+                        inner: Box::new(AvroValue::Null),
+                        n_variants: 2,
+                        null_variant: Some(0),
+                    },
+                ),
+            ]),
+        ),
         ("op".into(), AvroValue::String("c".into())),
-        ("ts_ms".into(), AvroValue::Union(1, Box::new(AvroValue::Long(1_560_886_948_093)))),
+        (
+            "ts_ms".into(),
+            AvroValue::Union {
+                index: 1,
+                inner: Box::new(AvroValue::Long(1_560_886_948_093)),
+                n_variants: 2,
+                null_variant: Some(0),
+            },
+        ),
     ]);
 
     let mut buf = Vec::new();

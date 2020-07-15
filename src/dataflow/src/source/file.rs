@@ -32,6 +32,7 @@ use crate::operator::StreamExt;
 use crate::server::{TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate};
 use crate::source::util::source;
 use crate::source::{SourceConfig, SourceStatus, SourceToken};
+use avro::{AvroRead, Skip};
 
 /// Strategies for streaming content from a file.
 #[derive(PartialEq, Eq)]
@@ -54,6 +55,13 @@ struct ForeverTailedFile<Ev, Handle> {
     // alive
     _h: Handle,
 }
+
+impl<Ev, H> Skip for ForeverTailedFile<Ev, H> {
+    fn skip(&mut self, len: usize) -> Result<(), failure::Error> {
+        self.inner.skip(len)
+    }
+}
+impl<Ev, H> AvroRead for ForeverTailedFile<Ev, H> {}
 
 impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -117,7 +125,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     iter_ctor: Ctor,
 ) where
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
-    Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err>,
+    Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<failure::Error>,
 {
     let file = match std::fs::File::open(&path).with_context(|e| {
@@ -351,7 +359,7 @@ pub fn file<G, Ctor, I, Out, Err>(
 where
     G: Scope<Timestamp = Timestamp>,
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
-    Ctor: FnOnce(Box<dyn Read + Send>) -> Result<I, Err> + Send + 'static,
+    Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err> + Send + 'static,
     Err: Into<failure::Error> + Send + 'static,
     Out: Send + Clone + 'static,
 {
