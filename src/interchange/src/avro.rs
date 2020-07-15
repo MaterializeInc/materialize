@@ -151,7 +151,10 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
         }
         self.decoded = true;
         match r {
-            ValueOrReader::Value(_val) => todo!(),
+            ValueOrReader::Value(val) => {
+                self.buf.resize_with(val.len(), Default::default);
+                val.as_bytes().read_exact(&mut self.buf)?;
+            }
             ValueOrReader::Reader { len, r } => {
                 self.buf.resize_with(len, Default::default);
                 r.read_exact(&mut self.buf)?;
