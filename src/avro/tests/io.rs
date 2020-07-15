@@ -780,6 +780,14 @@ fn test_complex_resolutions() {
                         null_variant: Some(1),
                     },
                 ),
+                (
+                    "f0_2".to_owned(),
+                    Value::Map(
+                        vec![("a".to_string(), Value::Long(42))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ),
             ]),
         ),
         (
@@ -846,10 +854,17 @@ fn test_complex_resolutions() {
                                     },
                                     "null"
                                 ]
+                            },
+                            {
+                                "name": "f0_2",
+                                "type": {
+                                    "type": "map",
+                                    "values": "long"
+                                }
                             }
                         ]
                     },
-                    "default": {"f0_1": "bar", "f0_0": 1.234}
+                    "default": {"f0_1": "bar", "f0_0": 1.234, "f0_2": {"a": 42}}
                 },
                 {
                     "name": "f1",

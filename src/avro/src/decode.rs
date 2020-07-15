@@ -246,6 +246,38 @@ impl<'a> AvroRecordAccess<&'a [u8]> for ValueRecordAccess<'a> {
     }
 }
 
+struct ValueMapAccess<'a> {
+    values: &'a [(String, Value)],
+    i: usize,
+}
+
+impl<'a> ValueMapAccess<'a> {
+    fn new(values: &'a [(String, Value)]) -> Self {
+        Self { values, i: 0 }
+    }
+}
+
+impl<'a> AvroMapAccess for ValueMapAccess<'a> {
+    type R = &'a [u8];
+    fn next_entry<'b>(
+        &'b mut self,
+    ) -> Result<Option<(String, AvroFieldAccess<'b, Self::R>)>, Error> {
+        assert!(self.i <= self.values.len());
+        if self.i == self.values.len() {
+            Ok(None)
+        } else {
+            let (name, val) = &self.values[self.i];
+            self.i += 1;
+            Ok(Some((
+                name.clone(),
+                AvroFieldAccess {
+                    schema: SchemaOrDefault::Default(val),
+                },
+            )))
+        }
+    }
+}
+
 struct ResolvedRecordAccess<'a, R: AvroRead> {
     defaults: &'a [ResolvedDefaultValueField],
     i_defaults: usize,
@@ -328,21 +360,7 @@ pub trait AvroMapAccess {
     type R: AvroRead;
     fn next_entry<'b>(
         &'b mut self,
-    ) -> Result<Option<(String, AvroEntryAccess<'b, Self::R>)>, Error>;
-}
-
-pub struct AvroEntryAccess<'a, R: AvroRead> {
-    schema: SchemaNode<'a>,
-    r: &'a mut R,
-}
-
-impl<'a, R: AvroRead> AvroEntryAccess<'a, R> {
-    pub fn decode_entry<D: AvroDecode>(&mut self, d: &mut D) -> Result<(), Error> {
-        let mut dsr = GeneralDeserializer {
-            schema: self.schema,
-        };
-        dsr.deserialize(self.r, d)
-    }
+    ) -> Result<Option<(String, AvroFieldAccess<'b, Self::R>)>, Error>;
 }
 
 pub struct SimpleMapAccess<'a, R: AvroRead> {
@@ -365,7 +383,7 @@ impl<'a, R: AvroRead> SimpleMapAccess<'a, R> {
 
 impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
     type R = R;
-    fn next_entry<'b>(&'b mut self) -> Result<Option<(String, AvroEntryAccess<'b, R>)>, Error> {
+    fn next_entry<'b>(&'b mut self) -> Result<Option<(String, AvroFieldAccess<'b, R>)>, Error> {
         if self.done {
             return Ok(None);
         }
@@ -393,9 +411,8 @@ impl<'a, R: AvroRead> AvroMapAccess for SimpleMapAccess<'a, R> {
         self.r.read_exact(&mut key_buf)?;
         let key = String::from_utf8(key_buf)?;
 
-        let a = AvroEntryAccess {
-            schema: self.entry_schema,
-            r: self.r,
+        let a = AvroFieldAccess {
+            schema: SchemaOrDefault::Schema(self.r, self.entry_schema),
         };
         Ok(Some((key, a)))
     }
@@ -640,7 +657,11 @@ pub fn give_value<D: AvroDecode>(d: &mut D, v: &Value) -> Result<(), Error> {
             let mut a = ValueArrayAccess::new(val);
             d.array(&mut a)
         }
-        Value::Map(_val) => todo!(),
+        Value::Map(val) => {
+            let vals: Vec<_> = val.clone().into_iter().collect();
+            let mut m = ValueMapAccess::new(vals.as_slice());
+            d.map(&mut m)
+        }
         Value::Record(val) => {
             let mut a = ValueRecordAccess::new(val);
             d.record(&mut a)
@@ -1097,8 +1118,8 @@ impl AvroDecode for ValueDecoder {
         assert!(self.value.is_none());
         let mut entries = HashMap::new();
         let mut d = ValueDecoder::new();
-        while let Some((name, mut a)) = m.next_entry()? {
-            a.decode_entry(&mut d)?;
+        while let Some((name, a)) = m.next_entry()? {
+            a.decode_field(&mut d)?;
             let val = d
                 .value
                 .take()
