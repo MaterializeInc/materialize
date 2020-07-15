@@ -1153,17 +1153,14 @@ impl SchemaParser {
                 Ok((precision, scale)) => {
                     let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
                     if precision > max {
-                        return Err(ParseSchemaError::new(format!(
-                            "Decimal precision {} requires more than {} bytes of space",
-                            precision, size,
-                        ))
-                        .into());
+                        warn!("Decimal precision {} requires more than {} bytes of space, parsing as fixed", precision, size);
+                    } else {
+                        return Ok(SchemaPiece::Decimal {
+                            precision,
+                            scale,
+                            fixed_size: Some(size as usize),
+                        });
                     }
-                    return Ok(SchemaPiece::Decimal {
-                        precision,
-                        scale,
-                        fixed_size: Some(size as usize),
-                    });
                 }
                 Err(e) => warn!(
                     "parsing decimal as fixed due to parse error: {:?}, {:?}",
@@ -2202,21 +2199,6 @@ mod tests {
             fixed_size: None,
         };
         check_schema(schema, expected);
-
-        let res = Schema::parse_str(
-            r#"{
-                "type": "fixed",
-                "name": "dec",
-                "size": 5,
-                "logicalType": "decimal",
-                "precision": 12,
-                "scale": 5
-            }"#,
-        );
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "Failed to parse schema: Decimal precision 12 requires more than 5 bytes of space"
-        );
 
         let res = Schema::parse_str(
             r#"["bytes", {

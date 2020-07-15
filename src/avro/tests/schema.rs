@@ -165,7 +165,7 @@ lazy_static! {
     //  than its precision, then implementations should ignore the logical type and use the underlying
     //  Avro type."
     static ref IGNORED_LOGICAL_TYPES: Vec<(&'static str, Value)> = vec![
-        (r#"{"type": "string", "logicalType": "uuid"}"#, Value::String("string".into())),
+        // Unknown logical type
         (r#"{"type": "string", "logicalType": "unknown-logical-type"}"#, Value::String("string".into())),
         // Decimal logical type
         (r#"{"type": "bytes", "logicalType": "decimal", "scale": 0}"#, Value::Bytes(vec![])),
@@ -180,6 +180,18 @@ lazy_static! {
          Value::Fixed(1, vec![0])),
         (r#"{"type": "fixed", "logicalType": "decimal", "name": "test", "size": 1, "precision": 2, "scale": 3}"#,
          Value::Fixed(1, vec![0])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "TestIgnored", "precision": -10, "scale": 2, "size": 5}"#,
+         Value::Fixed(5, vec![0, 0, 0, 0, 0])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "TestIgnored", "scale": 2, "size": 5}"#,
+         Value::Fixed(5, vec![0, 0, 0, 0, 0,])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "TestIgnored", "precision": 2, "scale": 3, "size": 2}"#,
+         Value::Fixed(2, vec![0, 0])),
+        (r#"{"type": "fixed", "logicalType": "decimal", "name": "TestIgnored", "precision": 311, "size": 2}"#,
+         Value::Fixed(2, vec![0, 0])),
+        (r#"{"type": "float", "logicalType": "decimal", "precision": 2, "scale": 0}"#,
+         Value::Float(0.0)),
+         // UUID logical type - #3577
+         // (r#"{"type": "string", "logicalType": "uuid"}"#, Value::String("string".into())),
     ];
 }
 
