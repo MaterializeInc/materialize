@@ -204,9 +204,6 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
             CHECK (e05)
         ) WITH (e06 = 1);
         CREATE VIEW f01 (f02) WITH (f03 = 1) AS SELECT * FROM f04;
-        ALTER TABLE g01 ADD CONSTRAINT g02 PRIMARY KEY (g03);
-        ALTER TABLE h01 ADD CONSTRAINT h02 FOREIGN KEY (h03) REFERENCES h04 (h05);
-        ALTER TABLE i01 ADD CONSTRAINT i02 UNIQUE (i03);
         DROP TABLE j01;
         DROP VIEW k01;
         COPY l01 (l02) FROM stdin;
@@ -219,6 +216,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     )?;
 
     #[rustfmt::skip]  // rustfmt loses the structure of the expected vector by wrapping all lines
+
     let expected = vec![
         "a01", "a02", "a03", "a04", "a05", "a06", "a07", "a08", "a09", "a10", "a11", "a12",
         "a13", "a14", "a15", "a16", "a17", "a18", "a19", "a20", "a21", "a22", "a23", "a24",
@@ -231,9 +229,6 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         "d01", "d02",
         "e01", "e02", "e03", "e04", "e05", "e06",
         "f01", "f02", "f03", "f04",
-        "g01", "g02", "g03",
-        "h01", "h02", "h03", "h04", "h05",
-        "i01", "i02", "i03",
         "j01",
         "k01",
         "l01", "l02",

@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row};
+use sql::ast::display::AstDisplay;
 use sql::names::{DatabaseSpecifier, FullName, PartialName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
@@ -212,6 +213,49 @@ impl CatalogItem {
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
         self.conn_id().is_some()
+    }
+
+    /// Returns a clone of `self` with all instances of `from` renamed to `to`
+    /// (with the option of including the item's own name) or errors if request
+    /// is ambiguous.
+    fn rename_item_refs(
+        &self,
+        from: FullName,
+        to_item_name: String,
+        rename_self: bool,
+    ) -> Result<CatalogItem, String> {
+        let do_rewrite = |create_sql: String| -> Result<String, String> {
+            let mut create_stmt = sql::parse::parse(create_sql).unwrap().into_element();
+            if rename_self {
+                sql::ast::transform::create_stmt_rename(&mut create_stmt, to_item_name.clone());
+            }
+            // Determination of what constitutes an ambiguous request is done here.
+            sql::ast::transform::create_stmt_rename_refs(&mut create_stmt, from, to_item_name)?;
+            Ok(create_stmt.to_ast_string_stable())
+        };
+
+        match self {
+            CatalogItem::Index(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Index(i))
+            }
+            CatalogItem::Sink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Sink(i))
+            }
+            CatalogItem::Source(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Source(i))
+            }
+            CatalogItem::View(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::View(i))
+            }
+        }
     }
 }
 
@@ -734,6 +778,11 @@ impl Catalog {
                 schema_name: String,
             },
             DropItem(GlobalId),
+            UpdateItem {
+                id: GlobalId,
+                name: FullName,
+                item: CatalogItem,
+            },
         }
 
         let temporary_ids = self.temporary_ids(&ops)?;
@@ -741,11 +790,11 @@ impl Catalog {
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
         for op in ops {
-            actions.push(match op {
-                Op::CreateDatabase { name } => Action::CreateDatabase {
+            actions.extend(match op {
+                Op::CreateDatabase { name } => vec![Action::CreateDatabase {
                     id: tx.insert_database(&name)?,
                     name,
-                },
+                }],
                 Op::CreateSchema {
                     database_name,
                     schema_name,
@@ -759,11 +808,11 @@ impl Catalog {
                             return Err(Error::new(ErrorKind::ReadOnlySystemSchema(schema_name)));
                         }
                     };
-                    Action::CreateSchema {
+                    vec![Action::CreateSchema {
                         id: tx.insert_schema(database_id, &schema_name)?,
                         database_name,
                         schema_name,
-                    }
+                    }]
                 }
                 Op::CreateItem { id, name, item } => {
                     if item.is_temporary() {
@@ -794,11 +843,11 @@ impl Catalog {
                         tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
                     }
 
-                    Action::CreateItem { id, name, item }
+                    vec![Action::CreateItem { id, name, item }]
                 }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
-                    Action::DropDatabase { name }
+                    vec![Action::DropDatabase { name }]
                 }
                 Op::DropSchema {
                     database_name,
@@ -811,18 +860,69 @@ impl Catalog {
                         }
                     };
                     tx.remove_schema(database_id, &schema_name)?;
-                    Action::DropSchema {
+                    vec![Action::DropSchema {
                         database_name,
                         schema_name,
-                    }
+                    }]
                 }
                 Op::DropItem(id) => {
                     if !self.get_by_id(&id).item().is_temporary() {
                         tx.remove_item(id)?;
                     }
-                    Action::DropItem(id)
+                    vec![Action::DropItem(id)]
                 }
-            })
+                Op::RenameItem { id, to_name } => {
+                    let mut actions = Vec::new();
+
+                    let entry = self.by_id.get(&id).unwrap();
+
+                    let mut to_full_name = entry.name.clone();
+                    to_full_name.item = to_name;
+
+                    // Rename item itself.
+                    let item = entry
+                        .item
+                        .rename_item_refs(entry.name.clone(), to_full_name.item.clone(), true)
+                        .map_err(|e| {
+                            Error::new(ErrorKind::AmbiguousRename {
+                                depender: entry.name.to_string(),
+                                dependee: entry.name.to_string(),
+                                message: e,
+                            })
+                        })?;
+                    let serialized_item = self.serialize_item(&item);
+
+                    for id in entry.used_by() {
+                        let dependent_item = self.by_id.get(&id).unwrap();
+                        let updated_item = dependent_item
+                            .item
+                            .rename_item_refs(entry.name.clone(), to_full_name.item.clone(), false)
+                            .map_err(|e| {
+                                Error::new(ErrorKind::AmbiguousRename {
+                                    depender: dependent_item.name.to_string(),
+                                    dependee: entry.name.to_string(),
+                                    message: e,
+                                })
+                            })?;
+
+                        let serialized_item = self.serialize_item(&updated_item);
+
+                        tx.update_item(id.clone(), &dependent_item.name.item, &serialized_item)?;
+                        actions.push(Action::UpdateItem {
+                            id: id.clone(),
+                            name: dependent_item.name.clone(),
+                            item: updated_item,
+                        });
+                    }
+                    tx.update_item(id.clone(), &to_full_name.item, &serialized_item)?;
+                    actions.push(Action::UpdateItem {
+                        id,
+                        name: to_full_name,
+                        item,
+                    });
+                    actions
+                }
+            });
         }
         tx.commit()?;
         drop(storage); // release immutable borrow on `self` so we can borrow mutably below
@@ -918,6 +1018,29 @@ impl Catalog {
                         indexes.remove(i);
                     }
                     OpStatus::DroppedItem(metadata)
+                }
+
+                Action::UpdateItem { id, name, item } => {
+                    let mut entry = self.by_id.remove(&id).unwrap();
+                    info!(
+                        "update {} {} ({})",
+                        entry.item.type_string(),
+                        entry.name,
+                        id
+                    );
+                    assert_eq!(entry.uses(), item.uses());
+                    let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+                    let schema_items = &mut self
+                        .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
+                        .expect("catalog out of sync")
+                        .items;
+                    schema_items.remove(&entry.name.item);
+                    entry.name = name;
+                    entry.item = item;
+                    schema_items.insert(entry.name.item.clone(), id);
+                    self.by_id.insert(id, entry);
+
+                    OpStatus::UpdatedItem
                 }
             })
             .collect())
@@ -1055,6 +1178,10 @@ pub enum Op {
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
     /// may be violated.
     DropItem(GlobalId),
+    RenameItem {
+        id: GlobalId,
+        to_name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1065,6 +1192,7 @@ pub enum OpStatus {
     DroppedDatabase,
     DroppedSchema,
     DroppedItem(CatalogEntry),
+    UpdatedItem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

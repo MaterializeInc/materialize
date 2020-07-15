@@ -113,7 +113,8 @@ pub fn describe_statement(
         | Statement::SetVariable { .. }
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
-        | Statement::Commit { .. } => (None, vec![]),
+        | Statement::Commit { .. }
+        | Statement::AlterObjectRename { .. } => (None, vec![]),
 
         Statement::Explain {
             stage, explainee, ..
@@ -253,6 +254,12 @@ pub fn handle_statement(
         Statement::StartTransaction { .. } => Ok(Plan::StartTransaction),
         Statement::Commit { .. } => Ok(Plan::CommitTransaction),
         Statement::Rollback { .. } => Ok(Plan::AbortTransaction),
+        Statement::AlterObjectRename {
+            object_type,
+            if_exists,
+            name,
+            to_item_name,
+        } => handle_alter_object_rename(scx, object_type, if_exists, name, to_item_name),
         Statement::CreateDatabase {
             name,
             if_not_exists,
@@ -362,6 +369,42 @@ fn handle_tail(
             entry.item_type(),
         ),
     }
+}
+
+fn handle_alter_object_rename(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: ObjectName,
+    to_item_name: Ident,
+) -> Result<Plan, failure::Error> {
+    let id = match scx.resolve_item(name.clone()) {
+        Ok(from_name) => {
+            let entry = scx.catalog.get_item(&from_name);
+            if entry.item_type() != object_type {
+                bail!("{} is a {} not a {}", name, entry.item_type(), object_type)
+            }
+            let mut proposed_name = name.0;
+            let last = proposed_name.last_mut().unwrap();
+            *last = to_item_name.clone();
+            if scx.resolve_item(ObjectName(proposed_name)).is_ok() {
+                bail!("{} is already taken by item in schema", to_item_name)
+            }
+            Some(entry.id())
+        }
+        Err(_) if if_exists => {
+            // TODO(benesch): generate a notice indicating this
+            // item does not exist.
+            None
+        }
+        Err(err) => return Err(err),
+    };
+
+    Ok(Plan::AlterItemRename {
+        id,
+        to_name: normalize::ident(to_item_name),
+        object_type,
+    })
 }
 
 fn finish_show_where(

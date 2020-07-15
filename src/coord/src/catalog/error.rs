@@ -19,7 +19,9 @@ pub struct Error {
 
 #[derive(Debug)]
 pub(crate) enum ErrorKind {
-    Corruption { detail: String },
+    Corruption {
+        detail: String,
+    },
     IdExhaustion,
     UnknownDatabase(String),
     UnknownSchema(String),
@@ -32,8 +34,15 @@ pub(crate) enum ErrorKind {
     SchemaNotEmpty(String),
     InvalidTemporaryDependency(String),
     InvalidTemporarySchema,
-    UnsatisfiableLoggingDependency { depender_name: String },
+    UnsatisfiableLoggingDependency {
+        depender_name: String,
+    },
     Storage(rusqlite::Error),
+    AmbiguousRename {
+        depender: String,
+        dependee: String,
+        message: String,
+    },
 }
 
 impl Error {
@@ -67,7 +76,8 @@ impl std::error::Error for Error {
             | ErrorKind::SchemaNotEmpty(_)
             | ErrorKind::InvalidTemporaryDependency(_)
             | ErrorKind::InvalidTemporarySchema
-            | ErrorKind::UnsatisfiableLoggingDependency { .. } => None,
+            | ErrorKind::UnsatisfiableLoggingDependency { .. }
+            | ErrorKind::AmbiguousRename { .. } => None,
             ErrorKind::Storage(e) => Some(e),
         }
     }
@@ -109,6 +119,21 @@ impl fmt::Display for Error {
                 depender_name
             ),
             ErrorKind::Storage(e) => write!(f, "sqlite error: {}", e),
+            ErrorKind::AmbiguousRename {
+                depender,
+                dependee,
+                message,
+            } => {
+                if depender == dependee {
+                    write!(f, "renaming conflict: in {}, {}", dependee, message)
+                } else {
+                    write!(
+                        f,
+                        "renaming conflict: in {}, which uses {}, {}",
+                        depender, dependee, message
+                    )
+                }
+            }
         }
     }
 }

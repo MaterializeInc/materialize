@@ -9,6 +9,8 @@
 
 use std::fmt;
 
+use sql_parser::ast::{Ident, ObjectName};
+
 /// The fully-qualified name of an item in the catalog.
 ///
 /// Catalog names compare case sensitively. Normalization is the responsibility
@@ -50,6 +52,18 @@ impl From<Option<String>> for DatabaseSpecifier {
             None => DatabaseSpecifier::Ambient,
             Some(name) => DatabaseSpecifier::Name(name),
         }
+    }
+}
+
+impl From<FullName> for ObjectName {
+    fn from(full_name: FullName) -> ObjectName {
+        let mut name_parts = Vec::new();
+        if let DatabaseSpecifier::Name(database) = full_name.database {
+            name_parts.push(Ident::new(database));
+        }
+        name_parts.push(Ident::new(full_name.schema));
+        name_parts.push(Ident::new(full_name.item));
+        ObjectName(name_parts)
     }
 }
 

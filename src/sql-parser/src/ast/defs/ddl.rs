@@ -259,31 +259,6 @@ impl AstDisplay for Connector {
 }
 impl_display!(Connector);
 
-/// An `ALTER TABLE` (`Statement::AlterTable`) operation
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AlterTableOperation {
-    /// `ADD <table_constraint>`
-    AddConstraint(TableConstraint),
-    /// TODO: implement `DROP CONSTRAINT <name>`
-    DropConstraint { name: Ident },
-}
-
-impl AstDisplay for AlterTableOperation {
-    fn fmt(&self, f: &mut AstFormatter) {
-        match self {
-            AlterTableOperation::AddConstraint(c) => {
-                f.write_str("ADD ");
-                f.write_node(c);
-            }
-            AlterTableOperation::DropConstraint { name } => {
-                f.write_str("DROP CONSTRAINT ");
-                f.write_node(name);
-            }
-        }
-    }
-}
-impl_display!(AlterTableOperation);
-
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

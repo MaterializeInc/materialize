@@ -13,7 +13,7 @@
 
 mod kafka_util;
 
-pub use sql_parser::ast;
+pub mod ast;
 pub mod catalog;
 pub mod names;
 pub mod normalize;
