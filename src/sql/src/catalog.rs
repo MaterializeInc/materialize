@@ -128,6 +128,9 @@ pub trait Catalog: fmt::Debug {
     ///
     /// Panics if `id` does not specify a valid item.
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
+
+    /// Expresses whether or not the catalog allows experimental mode features.
+    fn experimental_mode(&self) -> bool;
 }
 
 /// An item in a [`Catalog`].
@@ -251,5 +254,9 @@ impl Catalog for DummyCatalog {
 
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
         unimplemented!();
+    }
+
+    fn experimental_mode(&self) -> bool {
+        false
     }
 }
