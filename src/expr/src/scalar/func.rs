@@ -18,6 +18,7 @@ use encoding::DecoderTrap;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
+use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
@@ -2279,6 +2280,7 @@ pub enum UnaryFunc {
     CastJsonbOrNullToJsonb,
     CastJsonbToFloat64,
     CastJsonbToBool,
+    CastRecordToString { ty: ScalarType },
     CeilFloat32,
     CeilFloat64,
     CeilDecimal(u8),
@@ -2395,6 +2397,7 @@ impl UnaryFunc {
             UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
             UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
+            UnaryFunc::CastRecordToString { ty } => Ok(cast_record_to_string(a, ty, temp_storage)),
             UnaryFunc::CeilFloat32 => Ok(ceil_float32(a)),
             UnaryFunc::CeilFloat64 => Ok(ceil_float64(a)),
             UnaryFunc::CeilDecimal(scale) => Ok(ceil_decimal(a, *scale)),
@@ -2480,6 +2483,7 @@ impl UnaryFunc {
             | CastTimestampTzToString
             | CastIntervalToString
             | CastBytesToString
+            | CastRecordToString { .. }
             | TrimWhitespace
             | TrimLeadingWhitespace
             | TrimTrailingWhitespace => ColumnType::new(ScalarType::String).nullable(in_nullable),
@@ -2686,6 +2690,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
             UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
             UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
+            UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
             UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
             UnaryFunc::CeilDecimal(_) => f.write_str("ceildec"),
@@ -2817,6 +2822,53 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
 
 fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     temp_storage.make_datum(|packer| packer.push_list(datums))
+}
+
+fn cast_record_to_string<'a>(a: Datum, ty: &ScalarType, temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, a, ty);
+    Datum::String(temp_storage.push_string(buf))
+}
+
+fn stringify_datum<'a, B>(buf: &mut B, d: Datum<'a>, ty: &ScalarType) -> strconv::Nestable
+where
+    B: FormatBuffer,
+{
+    use ScalarType::*;
+    match &ty {
+        Bool => strconv::format_bool(buf, d.unwrap_bool()),
+        Int32 => strconv::format_int32(buf, d.unwrap_int32()),
+        Int64 => strconv::format_int64(buf, d.unwrap_int64()),
+        Float32 => strconv::format_float32(buf, d.unwrap_float32()),
+        Float64 => strconv::format_float64(buf, d.unwrap_float64()),
+        Decimal(_, s) => strconv::format_decimal(buf, &d.unwrap_decimal().with_scale(*s)),
+        Date => strconv::format_date(buf, d.unwrap_date()),
+        Time => strconv::format_time(buf, d.unwrap_time()),
+        Timestamp => strconv::format_timestamp(buf, d.unwrap_timestamp()),
+        TimestampTz => strconv::format_timestamptz(buf, d.unwrap_timestamptz()),
+        Interval => strconv::format_interval(buf, d.unwrap_interval()),
+        Bytes => strconv::format_bytes(buf, d.unwrap_bytes()),
+        String => strconv::format_string(buf, d.unwrap_str()),
+        Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
+        Record { fields } => {
+            let mut fields = fields.iter();
+            strconv::format_record(buf, &d.unwrap_list(), |buf, d| {
+                let (_name, ty) = fields.next().unwrap();
+                if d.is_null() {
+                    buf.write_null()
+                } else {
+                    stringify_datum(buf.nonnull_buffer(), d, ty)
+                }
+            })
+        }
+        List(elem_type) => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
+            if d.is_null() {
+                buf.write_null()
+            } else {
+                stringify_datum(buf.nonnull_buffer(), d, elem_type)
+            }
+        }),
+    }
 }
 
 fn record_get(a: Datum, i: usize) -> Datum {

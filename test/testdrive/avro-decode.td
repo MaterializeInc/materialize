@@ -150,9 +150,9 @@ $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} publish=true 
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> SELECT (f0).f0_0, (f0).f0_1, f11, f12, f13, f2, f51, f52
+> SELECT f0::text, f11, f12, f13, f2, f51, f52
   FROM avro_data
-f0_0 f0_1 f11 f12 f13 f2 f51 f52
+f0 f11 f12 f13 f2 f51 f52
 ---
-7777 bar \x00\x01\x02\x03 <null> <null> Diamonds <null> 1234
-9999 <null> <null> <null> 3456 Jokers \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>
+(7777,bar) \x00\x01\x02\x03 <null> <null> Diamonds <null> 1234
+(9999,) <null> <null> 3456 Jokers \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>

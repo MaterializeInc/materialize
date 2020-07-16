@@ -333,6 +333,10 @@ lazy_static! {
 
             // RECORD
             (Record { fields: vec![] }, JsonbAny) => CastOp::F(to_jsonb_any_record_cast),
+            (Record { fields: vec![] }, Explicit(String)) => CastOp::F(|ecx, e, _to_type| {
+                let ty = ecx.scalar_type(&e);
+                Ok(e.call_unary(CastRecordToString { ty }))
+            }),
 
             // JSONB
             (Jsonb, Explicit(Bool)) => CastJsonbToBool,
