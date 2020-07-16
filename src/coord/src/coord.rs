@@ -96,6 +96,7 @@ where
     pub executor: &'a tokio::runtime::Handle,
     pub timestamp: TimestampConfig,
     pub logical_compaction_window: Option<Duration>,
+    pub experimental_mode: bool,
 }
 
 /// Glues the external world to the Timely workers.
@@ -164,7 +165,12 @@ where
         };
 
         let optimizer = Optimizer::default();
-        let catalog = open_catalog(config.data_directory, config.logging, optimizer)?;
+        let catalog = open_catalog(
+            config.data_directory,
+            config.logging,
+            optimizer,
+            Some(config.experimental_mode),
+        )?;
         let logical_compaction_window_ms = config.logical_compaction_window.map(|d| {
             let millis = d.as_millis();
             if millis > Timestamp::max_value() as u128 {
@@ -2494,6 +2500,7 @@ fn open_catalog(
     data_directory: Option<&Path>,
     logging_config: Option<&LoggingConfig>,
     mut optimizer: Optimizer,
+    experimental_mode: Option<bool>,
 ) -> Result<Catalog, failure::Error> {
     let path = if let Some(data_directory) = data_directory {
         Some(data_directory.join("catalog"))
@@ -2502,7 +2509,7 @@ fn open_catalog(
     };
     let path = path.as_deref();
     Ok(if let Some(logging_config) = logging_config {
-        Catalog::open(path, |catalog| {
+        Catalog::open(path, experimental_mode, |catalog| {
             for log_src in logging_config.active_logs() {
                 let view_name = FullName {
                     database: DatabaseSpecifier::Ambient,
@@ -2613,7 +2620,7 @@ fn open_catalog(
             }
         })?
     } else {
-        Catalog::open(path, |_| ())?
+        Catalog::open(path, experimental_mode, |_| ())?
     })
 }
 
@@ -2627,6 +2634,7 @@ pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
         Some(data_directory),
         Some(&logging_config),
         Optimizer::default(),
+        None,
     )?;
     Ok(catalog.dump())
 }
