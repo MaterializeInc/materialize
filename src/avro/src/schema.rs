@@ -494,6 +494,13 @@ impl Name {
         let name = complex
             .name()
             .ok_or_else(|| ParseSchemaError::new("No `name` field"))?;
+        if name.is_empty() {
+            return Err(ParseSchemaError::new(format!(
+                "Name cannot be the empty string: {:?}",
+                complex
+            ))
+            .into());
+        }
 
         let namespace = complex.string("namespace");
 
