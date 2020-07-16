@@ -100,7 +100,6 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::io::BufRead;
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -118,6 +117,7 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
+use avro::types::Value;
 use avro::Schema;
 use dataflow_types::Timestamp;
 use dataflow_types::*;
@@ -129,7 +129,6 @@ use repr::{Datum, RelationType, Row, RowArena};
 use self::context::{ArrangementFlavor, Context};
 use super::sink;
 use super::source;
-use super::source::FileReadStyle;
 use super::source::{SourceConfig, SourceToken};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_values};
@@ -137,7 +136,7 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
 use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
-use crate::source::KafkaSourceInfo;
+use crate::source::{FileSourceInfo, KafkaSourceInfo};
 
 mod arrange_by;
 mod context;
@@ -310,20 +309,21 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         worker_id: worker_index,
                         // Assumption: worker.peers() == total number of workers in Materialize
                         worker_count: worker_peers,
+                        encoding: encoding.clone(),
                     };
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {
                             ExternalSourceConnector::Kafka(_) => {
                                 let (source, capability) =
-                                    source::create_source::<_, KafkaSourceInfo>(
+                                    source::create_source::<_, KafkaSourceInfo, _>(
                                         source_config,
                                         connector,
                                     );
 
                                 let (transformed, new_err_collection) =
                                     upsert::pre_arrange_from_upsert_transforms(
-                                        &source,
+                                        &source.0,
                                         encoding,
                                         key_encoding,
                                         &dataflow.debug_name,
@@ -358,93 +358,80 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
                         }
                     } else {
-                        let (stream, capability) =
-                            if let ExternalSourceConnector::AvroOcf(c) = connector {
-                                // Distribute read responsibility among workers.
-                                let read_style = if c.tail {
-                                    FileReadStyle::TailFollowFd
-                                } else {
-                                    FileReadStyle::ReadOnce
-                                };
-
-                                let reader_schema = match &encoding {
-                                    DataEncoding::AvroOcf { reader_schema } => reader_schema,
-                                    _ => unreachable!(
-                                        "Internal error: \
+                        let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) =
+                            connector.clone()
+                        {
+                            let ((source, err_source), capability) =
+                                source::create_source::<_, FileSourceInfo<Value>, Value>(
+                                    source_config,
+                                    connector,
+                                );
+                            err_collection = err_collection.concat(
+                                &err_source
+                                    .map(DataflowError::SourceError)
+                                    .pass_through("AvroOCF-errors")
+                                    .as_collection(),
+                            );
+                            let reader_schema = match &encoding {
+                                DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                                _ => unreachable!(
+                                    "Internal error: \
                                          Avro OCF schema should have already been resolved.\n\
                                         Encoding is: {:?}",
-                                        encoding
-                                    ),
-                                };
-                                let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                                let ctor = {
-                                    let reader_schema = reader_schema.clone();
-                                    move |file| avro::Reader::with_schema(&reader_schema, file)
-                                };
-
-                                let ((source, err_source), capability) =
-                                    source::file(source_config, c.path, read_style, ctor);
-                                err_collection = err_collection.concat(
-                                    &err_source
-                                        .map(DataflowError::SourceError)
-                                        .pass_through("AvroOCF-errors")
-                                        .as_collection(),
-                                );
-                                (
-                                    decode_avro_values(
-                                        &source,
-                                        &envelope,
-                                        reader_schema,
-                                        &dataflow.debug_name,
-                                    ),
-                                    capability,
-                                )
-                            } else {
-                                let ((ok_source, err_source), capability) = match connector {
-                                    ExternalSourceConnector::Kafka(_) => {
-                                        let (ok_source, cap) =
-                                            source::create_source::<_, KafkaSourceInfo>(
-                                                source_config,
-                                                connector,
-                                            );
-                                        ((ok_source, operator::empty(region)), cap)
-                                    }
-                                    ExternalSourceConnector::Kinesis(kc) => {
-                                        let (ok_source, cap) = source::kinesis(source_config, kc);
-                                        ((ok_source, operator::empty(region)), cap)
-                                    }
-                                    ExternalSourceConnector::File(c) => {
-                                        let read_style = if c.tail {
-                                            FileReadStyle::TailFollowFd
-                                        } else {
-                                            FileReadStyle::ReadOnce
-                                        };
-                                        let ctor =
-                                            |file| Ok(std::io::BufReader::new(file).split(b'\n'));
-                                        source::file(source_config, c.path, read_style, ctor)
-                                    }
-                                    ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-                                };
-                                err_collection = err_collection.concat(
-                                    &err_source
-                                        .map(DataflowError::SourceError)
-                                        .pass_through("source-errors")
-                                        .as_collection(),
-                                );
-
-                                // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
-                                // a hypothetical future avro_extract, protobuf_extract, etc.
-                                let stream = decode_values(
-                                    &ok_source,
-                                    encoding,
-                                    &dataflow.debug_name,
-                                    &envelope,
-                                    &mut src.operators,
-                                    fast_forwarded,
-                                );
-
-                                (stream, capability)
+                                    encoding
+                                ),
                             };
+
+                            let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                            (
+                                decode_avro_values(
+                                    &source,
+                                    &envelope,
+                                    reader_schema,
+                                    &dataflow.debug_name,
+                                ),
+                                capability,
+                            )
+                        } else {
+                            let ((ok_source, err_source), capability) = match connector.clone() {
+                                ExternalSourceConnector::Kafka(_) => {
+                                    source::create_source::<_, KafkaSourceInfo, _>(
+                                        source_config,
+                                        connector,
+                                    )
+                                }
+                                ExternalSourceConnector::Kinesis(kc) => {
+                                    let (ok_source, cap) = source::kinesis(source_config, kc);
+                                    ((ok_source, operator::empty(region)), cap)
+                                }
+                                ExternalSourceConnector::File(_) => {
+                                    source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
+                                        source_config,
+                                        connector,
+                                    )
+                                }
+                                ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                            };
+                            err_collection = err_collection.concat(
+                                &err_source
+                                    .map(DataflowError::SourceError)
+                                    .pass_through("source-errors")
+                                    .as_collection(),
+                            );
+
+                            // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+                            // a hypothetical future avro_extract, protobuf_extract, etc.
+                            let stream = decode_values(
+                                &ok_source,
+                                encoding,
+                                &dataflow.debug_name,
+                                &envelope,
+                                &mut src.operators,
+                                fast_forwarded,
+                            );
+
+                            (stream, capability)
+                        };
 
                         let mut collection = match envelope {
                             Envelope::None => stream.as_collection(),
