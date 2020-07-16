@@ -609,7 +609,7 @@ impl AvroDecode for TrivialDecoder {
         self.maybe_skip(r)
     }
     fn array<A: AvroArrayAccess>(self, a: &mut A) -> Result<(), Error> {
-        while let Some(_) = a.decode_next(TrivialDecoder)? {}
+        while a.decode_next(TrivialDecoder)?.is_some() {}
         Ok(())
     }
 }
