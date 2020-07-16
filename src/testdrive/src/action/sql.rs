@@ -310,7 +310,8 @@ impl FailSqlAction {
                         } else {
                             Err(format!(
                                 "expected error containing '{}', but got '{}'",
-                                self.cmd.expected_error, err
+                                self.cmd.expected_error,
+                                err.message()
                             ))
                         }
                     }
