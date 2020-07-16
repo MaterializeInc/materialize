@@ -726,7 +726,7 @@ impl ScalarExpr {
                 let scalar_type = &parameters.types[*n - 1];
                 let row = Row::pack(&[datum]);
                 let column_type = ColumnType::new(scalar_type.clone()).nullable(datum.is_null());
-                mem::replace(self, ScalarExpr::Literal(row, column_type));
+                *self = ScalarExpr::Literal(row, column_type);
             }
             ScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(parameters),
             ScalarExpr::CallBinary { expr1, expr2, .. } => {

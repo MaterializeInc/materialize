@@ -1290,8 +1290,8 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     };
                     let stream_name = match arn.resource {
                         Resource::Path(path) => {
-                            if path.starts_with("stream/") {
-                                String::from(&path["stream/".len()..])
+                            if let Some(path) = path.strip_prefix("stream/") {
+                                path.to_owned()
                             } else {
                                 bail!("Unable to parse stream name from resource path: {}", path);
                             }

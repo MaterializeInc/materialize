@@ -37,9 +37,9 @@ extra_lints=(
 #
 # Please keep this list alphabetically sorted.
 disabled_lints=(
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#block_in_if_condition_stmt
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#blocks_in_if_conditions
     #
-    # clippy::block_in_if_condition_stmt prohibits complicated blocks in `if`
+    # clippy::blocks_in_if_conditions prohibits complicated blocks in `if`
     # statements, like:
     #
     #     if { let difficult_answer = big_computation(); difficult_answer == 42 } { .. }
@@ -50,7 +50,7 @@ disabled_lints=(
     #    assert!(vec.iter().all(|item| {
     #        // ...
     #    }))
-    clippy::block_in_if_condition_stmt
+    clippy::blocks_in_if_conditions
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#clone_on_copy
     #

@@ -1520,8 +1520,7 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
         // TODO(benesch): Kafka supports fetching these in bulk, but
         // rust-rdkafka does not. That would save us a lot of requests on
         // large topics.
-        for i in 0..current_partition_count {
-            let pid: i32 = i.try_into().expect("invalid partition id");
+        for pid in 0..current_partition_count {
             match consumer.fetch_watermarks(&c.topic, pid, Duration::from_secs(30)) {
                 Ok((_low, high)) => {
                     let max_offset = MAX_AVAILABLE_OFFSET.with_label_values(&[
