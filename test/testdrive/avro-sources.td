@@ -362,3 +362,8 @@ a b
 2 3
 -1 7
 3 4
+
+! CREATE SOURCE recurisve
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
+  FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
+ERROR: validating avro value schema: Recursively defined type in schema: .a

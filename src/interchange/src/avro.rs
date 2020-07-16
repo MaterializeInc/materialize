@@ -677,6 +677,18 @@ fn get_named_columns<'a>(
             bail!(format_err!("Empty or null-only unions are not supported"));
         } else {
             for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
+                let named_idx = match v {
+                    SchemaPieceOrNamed::Named(idx) => Some(*idx),
+                    _ => None,
+                };
+                if let Some(named_idx) = named_idx {
+                    if !seen_avro_nodes.insert(named_idx) {
+                        bail!(
+                            "Recursively defined type in schema: {}",
+                            v.get_human_name(schema.root)
+                        );
+                    }
+                }
                 let node = schema.step(v);
                 if let SchemaPiece::Union(_) = node.inner {
                     unreachable!("Internal error: directly nested avro union!");
@@ -699,6 +711,9 @@ fn get_named_columns<'a>(
                 let ty = validate_schema_2(seen_avro_nodes, node)?;
                 let nullable = vs.len() > 1;
                 columns.push((name.into(), ColumnType::new(ty).nullable(nullable)));
+                if let Some(named_idx) = named_idx {
+                    seen_avro_nodes.remove(&named_idx);
+                }
             }
         }
         Ok(columns)
@@ -743,6 +758,18 @@ fn validate_schema_2(
         SchemaPiece::Record { fields, .. } => {
             let mut columns = vec![];
             for f in fields {
+                let named_idx = match &f.schema {
+                    SchemaPieceOrNamed::Named(idx) => Some(*idx),
+                    _ => None,
+                };
+                if let Some(named_idx) = named_idx {
+                    if !seen_avro_nodes.insert(named_idx) {
+                        bail!(
+                            "Recursively defined type in schema: {}",
+                            f.schema.get_human_name(schema.root)
+                        );
+                    }
+                }
                 let next_node = schema.step(&f.schema);
                 columns.extend(
                     get_named_columns(seen_avro_nodes, next_node, &f.name)?
@@ -751,12 +778,31 @@ fn validate_schema_2(
                         // fields are always nullable.
                         .map(|(name, coltype)| (name, coltype.scalar_type)),
                 );
+                if let Some(named_idx) = named_idx {
+                    seen_avro_nodes.remove(&named_idx);
+                }
             }
             ScalarType::Record { fields: columns }
         }
         SchemaPiece::Array(inner) => {
+            let named_idx = match inner.as_ref() {
+                SchemaPieceOrNamed::Named(idx) => Some(*idx),
+                _ => None,
+            };
+            if let Some(named_idx) = named_idx {
+                if !seen_avro_nodes.insert(named_idx) {
+                    bail!(
+                        "Recursively defined type in schema: {}",
+                        inner.get_human_name(schema.root)
+                    );
+                }
+            }
             let next_node = schema.step(inner);
-            ScalarType::List(Box::new(validate_schema_2(seen_avro_nodes, next_node)?))
+            let ret = ScalarType::List(Box::new(validate_schema_2(seen_avro_nodes, next_node)?));
+            if let Some(named_idx) = named_idx {
+                seen_avro_nodes.remove(&named_idx);
+            }
+            ret
         }
 
         _ => bail!("Unsupported type in schema: {:?}", schema.inner),
