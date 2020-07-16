@@ -580,14 +580,14 @@ where
 
 pub fn format_list<F, T>(
     buf: &mut F,
-    elems: &[T],
-    mut format_elem: impl FnMut(ListElementWriter<F>, &T) -> Nestable,
+    elems: impl IntoIterator<Item = T>,
+    mut format_elem: impl FnMut(ListElementWriter<F>, T) -> Nestable,
 ) -> Nestable
 where
     F: FormatBuffer,
 {
     buf.write_char('{');
-    let mut elems = elems.iter().peekable();
+    let mut elems = elems.into_iter().peekable();
     while let Some(elem) = elems.next() {
         let start = buf.len();
         if let Nestable::MayNeedEscaping = format_elem(ListElementWriter(buf), elem) {
@@ -722,14 +722,14 @@ where
 
 pub fn format_record<F, T>(
     buf: &mut F,
-    elems: &[T],
-    mut format_elem: impl FnMut(RecordElementWriter<F>, &T) -> Nestable,
+    elems: impl IntoIterator<Item = T>,
+    mut format_elem: impl FnMut(RecordElementWriter<F>, T) -> Nestable,
 ) -> Nestable
 where
     F: FormatBuffer,
 {
     buf.write_char('(');
-    let mut elems = elems.iter().peekable();
+    let mut elems = elems.into_iter().peekable();
     while let Some(elem) = elems.next() {
         let start = buf.len();
         if let Nestable::MayNeedEscaping = format_elem(RecordElementWriter(buf), elem) {
