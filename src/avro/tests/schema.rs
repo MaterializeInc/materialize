@@ -22,10 +22,14 @@ lazy_static! {
         r#"invalid"#,
         r#"{"no_type": "test"}"#,
         // Fixed examples
+        r#"{"type": "fixed", "size": 1}"#, // Fixed type requires a name
+        r#"{"type": "fixed", "name": "", "size": 1}"#, // Name cannot be empty string
         r#"{"type": "fixed", "name": "Missing size"}"#,
         r#"{"type": "fixed", "size": 314}",
         r#"{"type": "fixed", "size": 314, "name": "dr. spaceman"#, // AVRO-621
         // Enum examples
+        r#"{"type": "enum", "symbols": ["A", "B"]}"#, // Enum type requires a name
+        r#"{"type": "enum", "name": "", "symbols": ["A", "B"]}"#, // Name cannot be empty string
         r#"{"type": "enum", "name": "Status", "symbols": "Normal Caution Critical"}"#,
         r#"{"type": "enum", "name": [0, 1, 1, 2, 3, 5, 8],
             "symbols": ["Golden", "Mean"]}"#,
@@ -44,6 +48,11 @@ lazy_static! {
             {"type": "array", "items": "string"}]"#,
         r#"["null", ["null", "int"], "string"]"#,
         // Record examples
+        r#"{"type": "fields": [{"name": "addr", "type": [{"name": "IPv6", "type": "fixed", "size": 16},
+                                                         {"name": "IPv4", "type": "fixed", "size": 4}]}]}"#, // Record type requires a name
+        r#"{"type": "record", "name": "",
+                     "fields": [{"name": "addr", "type": [{"name": "IPv6", "type": "fixed", "size": 16},
+                                                          {"name": "IPv4", "type": "fixed", "size": 4}]}]}"#, // Name cannot be empty string
         r#"{"type": "record", "name": "Address",
             "fields": [{"type": "string"}, {"type": "string", "name": "City"}]}"#,
         r#"{"type": "record", "name": "Event",
