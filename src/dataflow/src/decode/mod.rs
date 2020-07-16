@@ -282,7 +282,7 @@ where
         value_encoding.op_name()
     );
     let avro_err = "Failed to create Avro decoder";
-    let decoded_stream = match (key_encoding, value_encoding) {
+    match (key_encoding, value_encoding) {
         (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
             stream,
             OffsetDecoderState::from(bytes_to_datum),
@@ -362,19 +362,7 @@ where
             &op_name,
         ),
         _ => unreachable!("Unsupported encoding combination"),
-    };
-    decoded_stream.map({
-        let mut row_packer = RowPacker::new();
-        move |(key, value, timestamp)| {
-            if let Some(value) = value {
-                row_packer.extend_by_row(&key);
-                row_packer.extend_by_row(&value);
-                (key, Some(row_packer.finish_and_reuse()), timestamp)
-            } else {
-                (key, None, timestamp)
-            }
-        }
-    })
+    }
 }
 
 fn decode_values_inner<G, V, C>(

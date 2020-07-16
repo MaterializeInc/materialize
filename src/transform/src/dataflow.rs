@@ -23,8 +23,14 @@ use std::collections::{HashMap, HashSet};
 /// This method is currently limited in scope to propagating filtering and
 /// projection information, though it could certainly generalize beyond.
 pub fn optimize_dataflow(dataflow: &mut DataflowDesc) {
-    optimize_dataflow_demand(dataflow);
     optimize_dataflow_filters(dataflow);
+    // TODO: when the linear operator contract ensures that propagated
+    // predicates are always applied, projections and filters can be removed
+    // from where they come from. Once projections and filters can be removed,
+    // TODO: it would be useful for demand to be optimized after filters
+    // that way demand only includes the columns that are still necessary after
+    // the filters are applied.
+    optimize_dataflow_demand(dataflow);
 }
 
 /// Pushes demand information from published outputs to dataflow inputs.
@@ -95,7 +101,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
                 .take_dangerous()
                 .filter(list.iter().cloned());
         }
-        transform.action(build_desc.relation_expr.as_mut(), &mut predicates)
+        transform.dataflow_transform(build_desc.relation_expr.as_mut(), &mut predicates);
     }
 
     // Push predicate information into the SourceDesc.

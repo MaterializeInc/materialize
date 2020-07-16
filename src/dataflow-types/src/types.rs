@@ -657,6 +657,8 @@ pub struct IndexDesc {
     pub keys: Vec<ScalarExpr>,
 }
 
+// TODO: change contract to ensure that the operator is always applied to
+// streams of rows
 /// In-place restrictions that can be made to rows.
 ///
 /// These fields indicate *optional* information that may applied to
