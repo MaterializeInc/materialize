@@ -769,7 +769,7 @@ impl State {
                 .expect("futures channel should not fail");
             let resp = block_on(rx).expect("futures channel should not fail");
             resp.result?;
-            mem::replace(&mut self.session, resp.session);
+            self.session = resp.session;
         }
 
         // Bind.
@@ -793,7 +793,7 @@ impl State {
                 })
                 .expect("futures channel should not fail");
             let resp = block_on(rx).expect("futures channel should not fail");
-            mem::replace(&mut self.session, resp.session);
+            self.session = resp.session;
             Ok((desc, resp.result?))
         }
     }

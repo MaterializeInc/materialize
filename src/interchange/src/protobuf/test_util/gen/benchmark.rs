@@ -23,7 +23,7 @@
 /// of protobuf runtime.
 // const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_2_16_2;
 
-#[derive(PartialEq,Clone,Default)]
+#[derive(PartialEq, Clone, Default)]
 pub struct Value {
     // message fields
     pub l_orderkey: i32,
@@ -60,7 +60,6 @@ impl Value {
 
     // int32 l_orderkey = 1;
 
-
     pub fn get_l_orderkey(&self) -> i32 {
         self.l_orderkey
     }
@@ -74,7 +73,6 @@ impl Value {
     }
 
     // int32 l_partkey = 2;
-
 
     pub fn get_l_partkey(&self) -> i32 {
         self.l_partkey
@@ -90,7 +88,6 @@ impl Value {
 
     // int32 l_suppkey = 3;
 
-
     pub fn get_l_suppkey(&self) -> i32 {
         self.l_suppkey
     }
@@ -104,7 +101,6 @@ impl Value {
     }
 
     // int32 l_linenumber = 4;
-
 
     pub fn get_l_linenumber(&self) -> i32 {
         self.l_linenumber
@@ -120,7 +116,6 @@ impl Value {
 
     // double l_quantity = 5;
 
-
     pub fn get_l_quantity(&self) -> f64 {
         self.l_quantity
     }
@@ -134,7 +129,6 @@ impl Value {
     }
 
     // double l_extendedprice = 6;
-
 
     pub fn get_l_extendedprice(&self) -> f64 {
         self.l_extendedprice
@@ -150,7 +144,6 @@ impl Value {
 
     // double l_discount = 7;
 
-
     pub fn get_l_discount(&self) -> f64 {
         self.l_discount
     }
@@ -165,7 +158,6 @@ impl Value {
 
     // double l_tax = 8;
 
-
     pub fn get_l_tax(&self) -> f64 {
         self.l_tax
     }
@@ -179,7 +171,6 @@ impl Value {
     }
 
     // string l_returnflag = 9;
-
 
     pub fn get_l_returnflag(&self) -> &str {
         &self.l_returnflag
@@ -206,7 +197,6 @@ impl Value {
 
     // string l_linestatus = 10;
 
-
     pub fn get_l_linestatus(&self) -> &str {
         &self.l_linestatus
     }
@@ -232,7 +222,6 @@ impl Value {
 
     // int32 l_shipdate = 11;
 
-
     pub fn get_l_shipdate(&self) -> i32 {
         self.l_shipdate
     }
@@ -246,7 +235,6 @@ impl Value {
     }
 
     // int32 l_commitdate = 12;
-
 
     pub fn get_l_commitdate(&self) -> i32 {
         self.l_commitdate
@@ -262,7 +250,6 @@ impl Value {
 
     // int32 l_receiptdate = 13;
 
-
     pub fn get_l_receiptdate(&self) -> i32 {
         self.l_receiptdate
     }
@@ -276,7 +263,6 @@ impl Value {
     }
 
     // string l_shipinstruct = 14;
-
 
     pub fn get_l_shipinstruct(&self) -> &str {
         &self.l_shipinstruct
@@ -303,7 +289,6 @@ impl Value {
 
     // string l_shipmode = 15;
 
-
     pub fn get_l_shipmode(&self) -> &str {
         &self.l_shipmode
     }
@@ -328,7 +313,6 @@ impl Value {
     }
 
     // string l_comment = 16;
-
 
     pub fn get_l_comment(&self) -> &str {
         &self.l_comment
@@ -359,105 +343,155 @@ impl ::protobuf::Message for Value {
         true
     }
 
-    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+    fn merge_from(
+        &mut self,
+        is: &mut ::protobuf::CodedInputStream<'_>,
+    ) -> ::protobuf::ProtobufResult<()> {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int32()?;
                     self.l_orderkey = tmp;
-                },
+                }
                 2 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int32()?;
                     self.l_partkey = tmp;
-                },
+                }
                 3 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int32()?;
                     self.l_suppkey = tmp;
-                },
+                }
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int32()?;
                     self.l_linenumber = tmp;
-                },
+                }
                 5 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_double()?;
                     self.l_quantity = tmp;
-                },
+                }
                 6 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_double()?;
                     self.l_extendedprice = tmp;
-                },
+                }
                 7 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_double()?;
                     self.l_discount = tmp;
-                },
+                }
                 8 => {
                     if wire_type != ::protobuf::wire_format::WireTypeFixed64 {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_double()?;
                     self.l_tax = tmp;
-                },
+                }
                 9 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.l_returnflag)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.l_returnflag,
+                    )?;
+                }
                 10 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.l_linestatus)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.l_linestatus,
+                    )?;
+                }
                 11 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int32()?;
                     self.l_shipdate = tmp;
-                },
+                }
                 12 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int32()?;
                     self.l_commitdate = tmp;
-                },
+                }
                 13 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int32()?;
                     self.l_receiptdate = tmp;
-                },
+                }
                 14 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.l_shipinstruct)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.l_shipinstruct,
+                    )?;
+                }
                 15 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.l_shipmode)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.l_shipmode,
+                    )?;
+                }
                 16 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.l_comment)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.l_comment,
+                    )?;
+                }
                 _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
-                },
+                    ::protobuf::rt::read_unknown_or_skip_group(
+                        field_number,
+                        wire_type,
+                        is,
+                        self.mut_unknown_fields(),
+                    )?;
+                }
             };
         }
         ::std::result::Result::Ok(())
@@ -468,16 +502,32 @@ impl ::protobuf::Message for Value {
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
         if self.l_orderkey != 0 {
-            my_size += ::protobuf::rt::value_size(1, self.l_orderkey, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                1,
+                self.l_orderkey,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if self.l_partkey != 0 {
-            my_size += ::protobuf::rt::value_size(2, self.l_partkey, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                2,
+                self.l_partkey,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if self.l_suppkey != 0 {
-            my_size += ::protobuf::rt::value_size(3, self.l_suppkey, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                3,
+                self.l_suppkey,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if self.l_linenumber != 0 {
-            my_size += ::protobuf::rt::value_size(4, self.l_linenumber, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                4,
+                self.l_linenumber,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if self.l_quantity != 0. {
             my_size += 9;
@@ -498,13 +548,25 @@ impl ::protobuf::Message for Value {
             my_size += ::protobuf::rt::string_size(10, &self.l_linestatus);
         }
         if self.l_shipdate != 0 {
-            my_size += ::protobuf::rt::value_size(11, self.l_shipdate, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                11,
+                self.l_shipdate,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if self.l_commitdate != 0 {
-            my_size += ::protobuf::rt::value_size(12, self.l_commitdate, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                12,
+                self.l_commitdate,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if self.l_receiptdate != 0 {
-            my_size += ::protobuf::rt::value_size(13, self.l_receiptdate, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                13,
+                self.l_receiptdate,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if !self.l_shipinstruct.is_empty() {
             my_size += ::protobuf::rt::string_size(14, &self.l_shipinstruct);
@@ -520,7 +582,10 @@ impl ::protobuf::Message for Value {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(
+        &self,
+        os: &mut ::protobuf::CodedOutputStream<'_>,
+    ) -> ::protobuf::ProtobufResult<()> {
         if self.l_orderkey != 0 {
             os.write_int32(1, self.l_orderkey)?;
         }
@@ -604,93 +669,142 @@ impl ::protobuf::Message for Value {
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> =
+            ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt32,
+            >(
                 "l_orderkey",
-                |m: &Value| { &m.l_orderkey },
-                |m: &mut Value| { &mut m.l_orderkey },
+                |m: &Value| &m.l_orderkey,
+                |m: &mut Value| &mut m.l_orderkey,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt32,
+            >(
                 "l_partkey",
-                |m: &Value| { &m.l_partkey },
-                |m: &mut Value| { &mut m.l_partkey },
+                |m: &Value| &m.l_partkey,
+                |m: &mut Value| &mut m.l_partkey,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt32,
+            >(
                 "l_suppkey",
-                |m: &Value| { &m.l_suppkey },
-                |m: &mut Value| { &mut m.l_suppkey },
+                |m: &Value| &m.l_suppkey,
+                |m: &mut Value| &mut m.l_suppkey,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt32,
+            >(
                 "l_linenumber",
-                |m: &Value| { &m.l_linenumber },
-                |m: &mut Value| { &mut m.l_linenumber },
+                |m: &Value| &m.l_linenumber,
+                |m: &mut Value| &mut m.l_linenumber,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeDouble,
+            >(
                 "l_quantity",
-                |m: &Value| { &m.l_quantity },
-                |m: &mut Value| { &mut m.l_quantity },
+                |m: &Value| &m.l_quantity,
+                |m: &mut Value| &mut m.l_quantity,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeDouble,
+            >(
                 "l_extendedprice",
-                |m: &Value| { &m.l_extendedprice },
-                |m: &mut Value| { &mut m.l_extendedprice },
+                |m: &Value| &m.l_extendedprice,
+                |m: &mut Value| &mut m.l_extendedprice,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeDouble,
+            >(
                 "l_discount",
-                |m: &Value| { &m.l_discount },
-                |m: &mut Value| { &mut m.l_discount },
+                |m: &Value| &m.l_discount,
+                |m: &mut Value| &mut m.l_discount,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeDouble>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeDouble,
+            >(
                 "l_tax",
-                |m: &Value| { &m.l_tax },
-                |m: &mut Value| { &mut m.l_tax },
+                |m: &Value| &m.l_tax,
+                |m: &mut Value| &mut m.l_tax,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "l_returnflag",
-                |m: &Value| { &m.l_returnflag },
-                |m: &mut Value| { &mut m.l_returnflag },
+                |m: &Value| &m.l_returnflag,
+                |m: &mut Value| &mut m.l_returnflag,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "l_linestatus",
-                |m: &Value| { &m.l_linestatus },
-                |m: &mut Value| { &mut m.l_linestatus },
+                |m: &Value| &m.l_linestatus,
+                |m: &mut Value| &mut m.l_linestatus,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt32,
+            >(
                 "l_shipdate",
-                |m: &Value| { &m.l_shipdate },
-                |m: &mut Value| { &mut m.l_shipdate },
+                |m: &Value| &m.l_shipdate,
+                |m: &mut Value| &mut m.l_shipdate,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt32,
+            >(
                 "l_commitdate",
-                |m: &Value| { &m.l_commitdate },
-                |m: &mut Value| { &mut m.l_commitdate },
+                |m: &Value| &m.l_commitdate,
+                |m: &mut Value| &mut m.l_commitdate,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt32>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt32,
+            >(
                 "l_receiptdate",
-                |m: &Value| { &m.l_receiptdate },
-                |m: &mut Value| { &mut m.l_receiptdate },
+                |m: &Value| &m.l_receiptdate,
+                |m: &mut Value| &mut m.l_receiptdate,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "l_shipinstruct",
-                |m: &Value| { &m.l_shipinstruct },
-                |m: &mut Value| { &mut m.l_shipinstruct },
+                |m: &Value| &m.l_shipinstruct,
+                |m: &mut Value| &mut m.l_shipinstruct,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "l_shipmode",
-                |m: &Value| { &m.l_shipmode },
-                |m: &mut Value| { &mut m.l_shipmode },
+                |m: &Value| &m.l_shipmode,
+                |m: &mut Value| &mut m.l_shipmode,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "l_comment",
-                |m: &Value| { &m.l_comment },
-                |m: &mut Value| { &mut m.l_comment },
+                |m: &Value| &m.l_comment,
+                |m: &mut Value| &mut m.l_comment,
             ));
             ::protobuf::reflect::MessageDescriptor::new_pb_name::<Value>(
                 "Value",
                 fields,
-                file_descriptor_proto()
+                file_descriptor_proto(),
             )
         })
     }
@@ -735,7 +849,7 @@ impl ::protobuf::reflect::ProtobufValue for Value {
     }
 }
 
-#[derive(PartialEq,Clone,Default)]
+#[derive(PartialEq, Clone, Default)]
 pub struct Connector {
     // message fields
     pub version: ::std::string::String,
@@ -770,7 +884,6 @@ impl Connector {
 
     // string version = 1;
 
-
     pub fn get_version(&self) -> &str {
         &self.version
     }
@@ -795,7 +908,6 @@ impl Connector {
     }
 
     // string connector = 2;
-
 
     pub fn get_connector(&self) -> &str {
         &self.connector
@@ -822,7 +934,6 @@ impl Connector {
 
     // string name = 3;
 
-
     pub fn get_name(&self) -> &str {
         &self.name
     }
@@ -848,7 +959,6 @@ impl Connector {
 
     // int64 server_id = 4;
 
-
     pub fn get_server_id(&self) -> i64 {
         self.server_id
     }
@@ -863,7 +973,6 @@ impl Connector {
 
     // int64 ts_sec = 5;
 
-
     pub fn get_ts_sec(&self) -> i64 {
         self.ts_sec
     }
@@ -877,7 +986,6 @@ impl Connector {
     }
 
     // string gtid = 6;
-
 
     pub fn get_gtid(&self) -> &str {
         &self.gtid
@@ -904,7 +1012,6 @@ impl Connector {
 
     // string file = 7;
 
-
     pub fn get_file(&self) -> &str {
         &self.file
     }
@@ -930,7 +1037,6 @@ impl Connector {
 
     // int64 pos = 8;
 
-
     pub fn get_pos(&self) -> i64 {
         self.pos
     }
@@ -944,7 +1050,6 @@ impl Connector {
     }
 
     // int64 row = 9;
-
 
     pub fn get_row(&self) -> i64 {
         self.row
@@ -960,7 +1065,6 @@ impl Connector {
 
     // bool snapshot = 10;
 
-
     pub fn get_snapshot(&self) -> bool {
         self.snapshot
     }
@@ -975,7 +1079,6 @@ impl Connector {
 
     // int64 thread = 11;
 
-
     pub fn get_thread(&self) -> i64 {
         self.thread
     }
@@ -989,7 +1092,6 @@ impl Connector {
     }
 
     // string db = 12;
-
 
     pub fn get_db(&self) -> &str {
         &self.db
@@ -1016,7 +1118,6 @@ impl Connector {
 
     // string table = 13;
 
-
     pub fn get_table(&self) -> &str {
         &self.table
     }
@@ -1041,7 +1142,6 @@ impl Connector {
     }
 
     // string query = 14;
-
 
     pub fn get_query(&self) -> &str {
         &self.query
@@ -1072,79 +1172,127 @@ impl ::protobuf::Message for Connector {
         true
     }
 
-    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+    fn merge_from(
+        &mut self,
+        is: &mut ::protobuf::CodedInputStream<'_>,
+    ) -> ::protobuf::ProtobufResult<()> {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.version)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.version,
+                    )?;
+                }
                 2 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.connector)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.connector,
+                    )?;
+                }
                 3 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.name)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.name,
+                    )?;
+                }
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int64()?;
                     self.server_id = tmp;
-                },
+                }
                 5 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int64()?;
                     self.ts_sec = tmp;
-                },
+                }
                 6 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.gtid)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.gtid,
+                    )?;
+                }
                 7 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.file)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.file,
+                    )?;
+                }
                 8 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int64()?;
                     self.pos = tmp;
-                },
+                }
                 9 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int64()?;
                     self.row = tmp;
-                },
+                }
                 10 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_bool()?;
                     self.snapshot = tmp;
-                },
+                }
                 11 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int64()?;
                     self.thread = tmp;
-                },
+                }
                 12 => {
                     ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.db)?;
-                },
+                }
                 13 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.table)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.table,
+                    )?;
+                }
                 14 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.query)?;
-                },
+                    ::protobuf::rt::read_singular_proto3_string_into(
+                        wire_type,
+                        is,
+                        &mut self.query,
+                    )?;
+                }
                 _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
-                },
+                    ::protobuf::rt::read_unknown_or_skip_group(
+                        field_number,
+                        wire_type,
+                        is,
+                        self.mut_unknown_fields(),
+                    )?;
+                }
             };
         }
         ::std::result::Result::Ok(())
@@ -1164,10 +1312,15 @@ impl ::protobuf::Message for Connector {
             my_size += ::protobuf::rt::string_size(3, &self.name);
         }
         if self.server_id != 0 {
-            my_size += ::protobuf::rt::value_size(4, self.server_id, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                4,
+                self.server_id,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if self.ts_sec != 0 {
-            my_size += ::protobuf::rt::value_size(5, self.ts_sec, ::protobuf::wire_format::WireTypeVarint);
+            my_size +=
+                ::protobuf::rt::value_size(5, self.ts_sec, ::protobuf::wire_format::WireTypeVarint);
         }
         if !self.gtid.is_empty() {
             my_size += ::protobuf::rt::string_size(6, &self.gtid);
@@ -1176,16 +1329,22 @@ impl ::protobuf::Message for Connector {
             my_size += ::protobuf::rt::string_size(7, &self.file);
         }
         if self.pos != 0 {
-            my_size += ::protobuf::rt::value_size(8, self.pos, ::protobuf::wire_format::WireTypeVarint);
+            my_size +=
+                ::protobuf::rt::value_size(8, self.pos, ::protobuf::wire_format::WireTypeVarint);
         }
         if self.row != 0 {
-            my_size += ::protobuf::rt::value_size(9, self.row, ::protobuf::wire_format::WireTypeVarint);
+            my_size +=
+                ::protobuf::rt::value_size(9, self.row, ::protobuf::wire_format::WireTypeVarint);
         }
         if self.snapshot != false {
             my_size += 2;
         }
         if self.thread != 0 {
-            my_size += ::protobuf::rt::value_size(11, self.thread, ::protobuf::wire_format::WireTypeVarint);
+            my_size += ::protobuf::rt::value_size(
+                11,
+                self.thread,
+                ::protobuf::wire_format::WireTypeVarint,
+            );
         }
         if !self.db.is_empty() {
             my_size += ::protobuf::rt::string_size(12, &self.db);
@@ -1201,7 +1360,10 @@ impl ::protobuf::Message for Connector {
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(
+        &self,
+        os: &mut ::protobuf::CodedOutputStream<'_>,
+    ) -> ::protobuf::ProtobufResult<()> {
         if !self.version.is_empty() {
             os.write_string(1, &self.version)?;
         }
@@ -1279,83 +1441,124 @@ impl ::protobuf::Message for Connector {
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> =
+            ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "version",
-                |m: &Connector| { &m.version },
-                |m: &mut Connector| { &mut m.version },
+                |m: &Connector| &m.version,
+                |m: &mut Connector| &mut m.version,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "connector",
-                |m: &Connector| { &m.connector },
-                |m: &mut Connector| { &mut m.connector },
+                |m: &Connector| &m.connector,
+                |m: &mut Connector| &mut m.connector,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "name",
-                |m: &Connector| { &m.name },
-                |m: &mut Connector| { &mut m.name },
+                |m: &Connector| &m.name,
+                |m: &mut Connector| &mut m.name,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt64,
+            >(
                 "server_id",
-                |m: &Connector| { &m.server_id },
-                |m: &mut Connector| { &mut m.server_id },
+                |m: &Connector| &m.server_id,
+                |m: &mut Connector| &mut m.server_id,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt64,
+            >(
                 "ts_sec",
-                |m: &Connector| { &m.ts_sec },
-                |m: &mut Connector| { &mut m.ts_sec },
+                |m: &Connector| &m.ts_sec,
+                |m: &mut Connector| &mut m.ts_sec,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "gtid",
-                |m: &Connector| { &m.gtid },
-                |m: &mut Connector| { &mut m.gtid },
+                |m: &Connector| &m.gtid,
+                |m: &mut Connector| &mut m.gtid,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "file",
-                |m: &Connector| { &m.file },
-                |m: &mut Connector| { &mut m.file },
+                |m: &Connector| &m.file,
+                |m: &mut Connector| &mut m.file,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt64,
+            >(
                 "pos",
-                |m: &Connector| { &m.pos },
-                |m: &mut Connector| { &mut m.pos },
+                |m: &Connector| &m.pos,
+                |m: &mut Connector| &mut m.pos,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt64,
+            >(
                 "row",
-                |m: &Connector| { &m.row },
-                |m: &mut Connector| { &mut m.row },
+                |m: &Connector| &m.row,
+                |m: &mut Connector| &mut m.row,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeBool>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeBool,
+            >(
                 "snapshot",
-                |m: &Connector| { &m.snapshot },
-                |m: &mut Connector| { &mut m.snapshot },
+                |m: &Connector| &m.snapshot,
+                |m: &mut Connector| &mut m.snapshot,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt64,
+            >(
                 "thread",
-                |m: &Connector| { &m.thread },
-                |m: &mut Connector| { &mut m.thread },
+                |m: &Connector| &m.thread,
+                |m: &mut Connector| &mut m.thread,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
-                "db",
-                |m: &Connector| { &m.db },
-                |m: &mut Connector| { &mut m.db },
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
+                "db", |m: &Connector| &m.db, |m: &mut Connector| &mut m.db
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "table",
-                |m: &Connector| { &m.table },
-                |m: &mut Connector| { &mut m.table },
+                |m: &Connector| &m.table,
+                |m: &mut Connector| &mut m.table,
             ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
                 "query",
-                |m: &Connector| { &m.query },
-                |m: &mut Connector| { &mut m.query },
+                |m: &Connector| &m.query,
+                |m: &mut Connector| &mut m.query,
             ));
             ::protobuf::reflect::MessageDescriptor::new_pb_name::<Connector>(
                 "Connector",
                 fields,
-                file_descriptor_proto()
+                file_descriptor_proto(),
             )
         })
     }
@@ -1398,7 +1601,7 @@ impl ::protobuf::reflect::ProtobufValue for Connector {
     }
 }
 
-#[derive(PartialEq,Clone,Default)]
+#[derive(PartialEq, Clone, Default)]
 pub struct Record {
     // message fields
     pub tcph_tcph_lineitem_value: ::protobuf::SingularPtrField<Value>,
@@ -1423,9 +1626,10 @@ impl Record {
 
     // .bench.Value tcph_tcph_lineitem_value = 1;
 
-
     pub fn get_tcph_tcph_lineitem_value(&self) -> &Value {
-        self.tcph_tcph_lineitem_value.as_ref().unwrap_or_else(|| <Value as ::protobuf::Message>::default_instance())
+        self.tcph_tcph_lineitem_value
+            .as_ref()
+            .unwrap_or_else(|| <Value as ::protobuf::Message>::default_instance())
     }
     pub fn clear_tcph_tcph_lineitem_value(&mut self) {
         self.tcph_tcph_lineitem_value.clear();
@@ -1451,14 +1655,17 @@ impl Record {
 
     // Take field
     pub fn take_tcph_tcph_lineitem_value(&mut self) -> Value {
-        self.tcph_tcph_lineitem_value.take().unwrap_or_else(|| Value::new())
+        self.tcph_tcph_lineitem_value
+            .take()
+            .unwrap_or_else(|| Value::new())
     }
 
     // .bench.Connector source = 2;
 
-
     pub fn get_source(&self) -> &Connector {
-        self.source.as_ref().unwrap_or_else(|| <Connector as ::protobuf::Message>::default_instance())
+        self.source
+            .as_ref()
+            .unwrap_or_else(|| <Connector as ::protobuf::Message>::default_instance())
     }
     pub fn clear_source(&mut self) {
         self.source.clear();
@@ -1489,7 +1696,6 @@ impl Record {
 
     // string op = 3;
 
-
     pub fn get_op(&self) -> &str {
         &self.op
     }
@@ -1515,7 +1721,6 @@ impl Record {
 
     // int64 ts_ms = 4;
 
-
     pub fn get_ts_ms(&self) -> i64 {
         self.ts_ms
     }
@@ -1535,38 +1740,52 @@ impl ::protobuf::Message for Record {
             if !v.is_initialized() {
                 return false;
             }
-        };
+        }
         for v in &self.source {
             if !v.is_initialized() {
                 return false;
             }
-        };
+        }
         true
     }
 
-    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+    fn merge_from(
+        &mut self,
+        is: &mut ::protobuf::CodedInputStream<'_>,
+    ) -> ::protobuf::ProtobufResult<()> {
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.tcph_tcph_lineitem_value)?;
-                },
+                    ::protobuf::rt::read_singular_message_into(
+                        wire_type,
+                        is,
+                        &mut self.tcph_tcph_lineitem_value,
+                    )?;
+                }
                 2 => {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.source)?;
-                },
+                }
                 3 => {
                     ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.op)?;
-                },
+                }
                 4 => {
                     if wire_type != ::protobuf::wire_format::WireTypeVarint {
-                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(
+                            wire_type,
+                        ));
                     }
                     let tmp = is.read_int64()?;
                     self.ts_ms = tmp;
-                },
+                }
                 _ => {
-                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
-                },
+                    ::protobuf::rt::read_unknown_or_skip_group(
+                        field_number,
+                        wire_type,
+                        is,
+                        self.mut_unknown_fields(),
+                    )?;
+                }
             };
         }
         ::std::result::Result::Ok(())
@@ -1588,14 +1807,18 @@ impl ::protobuf::Message for Record {
             my_size += ::protobuf::rt::string_size(3, &self.op);
         }
         if self.ts_ms != 0 {
-            my_size += ::protobuf::rt::value_size(4, self.ts_ms, ::protobuf::wire_format::WireTypeVarint);
+            my_size +=
+                ::protobuf::rt::value_size(4, self.ts_ms, ::protobuf::wire_format::WireTypeVarint);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
-    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+    fn write_to_with_cached_sizes(
+        &self,
+        os: &mut ::protobuf::CodedOutputStream<'_>,
+    ) -> ::protobuf::ProtobufResult<()> {
         if let Some(ref v) = self.tcph_tcph_lineitem_value.as_ref() {
             os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
@@ -1647,33 +1870,48 @@ impl ::protobuf::Message for Record {
     }
 
     fn descriptor_static() -> &'static ::protobuf::reflect::MessageDescriptor {
-        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::LazyV2::INIT;
+        static descriptor: ::protobuf::rt::LazyV2<::protobuf::reflect::MessageDescriptor> =
+            ::protobuf::rt::LazyV2::INIT;
         descriptor.get(|| {
             let mut fields = ::std::vec::Vec::new();
-            fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Value>>(
-                "tcph_tcph_lineitem_value",
-                |m: &Record| { &m.tcph_tcph_lineitem_value },
-                |m: &mut Record| { &mut m.tcph_tcph_lineitem_value },
+            fields.push(
+                ::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<
+                    _,
+                    ::protobuf::types::ProtobufTypeMessage<Value>,
+                >(
+                    "tcph_tcph_lineitem_value",
+                    |m: &Record| &m.tcph_tcph_lineitem_value,
+                    |m: &mut Record| &mut m.tcph_tcph_lineitem_value,
+                ),
+            );
+            fields.push(
+                ::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<
+                    _,
+                    ::protobuf::types::ProtobufTypeMessage<Connector>,
+                >(
+                    "source",
+                    |m: &Record| &m.source,
+                    |m: &mut Record| &mut m.source,
+                ),
+            );
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeString,
+            >(
+                "op", |m: &Record| &m.op, |m: &mut Record| &mut m.op
             ));
-            fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Connector>>(
-                "source",
-                |m: &Record| { &m.source },
-                |m: &mut Record| { &mut m.source },
-            ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
-                "op",
-                |m: &Record| { &m.op },
-                |m: &mut Record| { &mut m.op },
-            ));
-            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeInt64>(
+            fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<
+                _,
+                ::protobuf::types::ProtobufTypeInt64,
+            >(
                 "ts_ms",
-                |m: &Record| { &m.ts_ms },
-                |m: &mut Record| { &mut m.ts_ms },
+                |m: &Record| &m.ts_ms,
+                |m: &mut Record| &mut m.ts_ms,
             ));
             ::protobuf::reflect::MessageDescriptor::new_pb_name::<Record>(
                 "Record",
                 fields,
-                file_descriptor_proto()
+                file_descriptor_proto(),
             )
         })
     }
@@ -1737,14 +1975,14 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x04\x20\x01(\x03R\x04tsMsb\x06proto3\
 ";
 
-static file_descriptor_proto_lazy: ::protobuf::rt::LazyV2<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::rt::LazyV2::INIT;
+static file_descriptor_proto_lazy: ::protobuf::rt::LazyV2<
+    ::protobuf::descriptor::FileDescriptorProto,
+> = ::protobuf::rt::LazyV2::INIT;
 
 fn parse_descriptor_proto() -> ::protobuf::descriptor::FileDescriptorProto {
     ::protobuf::parse_from_bytes(file_descriptor_proto_data).unwrap()
 }
 
 pub fn file_descriptor_proto() -> &'static ::protobuf::descriptor::FileDescriptorProto {
-    file_descriptor_proto_lazy.get(|| {
-        parse_descriptor_proto()
-    })
+    file_descriptor_proto_lazy.get(|| parse_descriptor_proto())
 }
