@@ -14,21 +14,23 @@ use std::time::Duration;
 
 use differential_dataflow::operators::count::CountTotal;
 use timely::communication::Allocate;
-use timely::dataflow::operators::capture::EventLink;
+use timely::dataflow::operators::capture::event::EventIterator;
 use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
-use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
 use repr::Datum;
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
-pub fn construct<A: Allocate>(
+pub fn construct<A: Allocate, R>(
     worker: &mut timely::worker::Worker<A>,
-    config: &LoggingConfig,
-    linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
-) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
+    config: &dataflow_types::logging::LoggingConfig,
+    linked: R,
+) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)>
+where
+    R: EventIterator<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)> + 'static,
+{
     let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.

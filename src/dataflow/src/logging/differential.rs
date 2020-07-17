@@ -14,7 +14,7 @@ use std::time::Duration;
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::operators::count::CountTotal;
 use timely::communication::Allocate;
-use timely::dataflow::operators::capture::EventLink;
+use timely::dataflow::operators::capture::event::EventIterator;
 use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
@@ -23,11 +23,14 @@ use dataflow_types::Timestamp;
 use repr::{Datum, RowPacker};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
-pub fn construct<A: Allocate>(
+pub fn construct<A: Allocate, R>(
     worker: &mut timely::worker::Worker<A>,
     config: &dataflow_types::logging::LoggingConfig,
-    linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
-) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
+    linked: R,
+) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)>
+where
+    R: EventIterator<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)> + 'static,
+{
     let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow(move |scope| {
