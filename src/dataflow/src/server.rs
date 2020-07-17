@@ -350,6 +350,9 @@ where
             let td_recv = td_listen.incoming().next().unwrap().unwrap();
             let dd_recv = dd_listen.incoming().next().unwrap().unwrap();
 
+            td_recv.set_nonblocking(true).unwrap();
+            dd_recv.set_nonblocking(true).unwrap();
+
             // Wrap TCP streams so that they can be replayed as timely streams.
             use ::timely::logging::WorkerIdentifier;
             let t_replay =
