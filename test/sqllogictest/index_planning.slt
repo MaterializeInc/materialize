@@ -33,7 +33,8 @@ explain plan for select b, c from foo where a = 5
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5)
-| Project (#1, #2)
+
+Finish order_by=() limit=none offset=0 project=(#1, #2)
 
 EOF
 

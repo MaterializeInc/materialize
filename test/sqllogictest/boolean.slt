@@ -196,7 +196,9 @@ FROM x
 %0 =
 | Get materialize.public.x (u5)
 | Map (#0 != #1), (#0 = #1), (#0 >= #1), (#0 <= #1), (#0 < #1), (#0 > #1), !((#2 @> {}))
-| Project (#4..#9, #3, #10)
+| Project (#0..#9, #3, #10)
+
+Finish order_by=() limit=none offset=0 project=(#4..#11)
 
 EOF
 
@@ -211,7 +213,9 @@ FROM y
 ----
 %0 =
 | Get materialize.public.y (u7)
-| Project (#0)
+| Project (#0, #1, #0)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -224,7 +228,8 @@ FROM y
 %0 =
 | Get materialize.public.y (u7)
 | Map (!(#1) || null)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -238,7 +243,8 @@ FROM y
 %0 =
 | Get materialize.public.y (u7)
 | Map (#1 && null)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -251,7 +257,8 @@ FROM y
 %0 =
 | Get materialize.public.y (u7)
 | Map (#1 || null)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -264,6 +271,7 @@ FROM y
 %0 =
 | Get materialize.public.y (u7)
 | Map (!(#1) && null)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF

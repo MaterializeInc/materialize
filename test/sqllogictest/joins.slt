@@ -116,8 +116,9 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 %3 =
 | Join %0 %1 %2 (= #2 (#0 + 1)) (= #4 (#0 + #2))
 | | implementation = Differential %0 %1.(#0) %2.(#0)
-| | demand = (#0, #3, #5)
-| Project (#0, #3, #5)
+| | demand = (#0..#5)
+
+Finish order_by=() limit=none offset=0 project=(#0, #3, #5)
 
 EOF
 

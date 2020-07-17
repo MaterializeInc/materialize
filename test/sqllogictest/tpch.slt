@@ -163,9 +163,8 @@ ORDER BY
 | Filter (#10 <= 1998-12-01)
 | Reduce group=(#8, #9) sum(#4) sum(#5) sum((#5 * (100dec - #6))) sum(((#5 * (100dec - #6)) * (100dec + #7))) countall(null) countall(null) sum(#6) countall(null) countall(true)
 | Map (((#2 * 10000000dec) / i64todec(if (#6 = 0) then {null} else {#6})) / 10dec), (((#3 * 10000000dec) / i64todec(if (#7 = 0) then {null} else {#7})) / 10dec), (((#8 * 10000000dec) / i64todec(if (#9 = 0) then {null} else {#9})) / 10dec)
-| Project (#0..#5, #11..#13, #10)
 
-Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0..#9)
+Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0..#5, #11..#13, #10)
 
 EOF
 
@@ -230,7 +229,7 @@ ORDER BY
 %5 =
 | Join %0 %1 %2 %3 %4 (= #23 #25) (= #12 #21) (= #9 #17) (= #0 #16)
 | | implementation = DeltaQuery %0 %2.(#0) %1.(#0) %3.(#0) %4.(#0) | %1 %3.(#0) %4.(#0) %2.(#1) %0.(#0) | %2 %0.(#0) %1.(#0) %3.(#0) %4.(#0) | %3 %4.(#0) %1.(#3) %2.(#1) %0.(#0) | %4 %3.(#2) %1.(#3) %2.(#1) %0.(#0)
-| | demand = (#0, #2, #4, #5, #10, #11, #13..#15, #19, #22, #26)
+| | demand = (#0..#15, #18..#20, #22..#24, #26, #27)
 | Filter "^.*BRASS$" ~(#4), (#5 = 15), (#26 = "EUROPE")
 
 %6 =
@@ -268,10 +267,10 @@ ORDER BY
 %13 =
 | Join %6 %12 (= #0 #28) (= #19 #29)
 | | implementation = Differential %6 %12.(#0, #1)
-| | demand = (#0, #2, #10, #11, #13..#15, #22)
-| Project (#14, #10, #22, #0, #2, #11, #13, #15)
+| | demand = (#0..#15, #18..#20, #22..#24, #26, #27)
+| Project (#0..#15, #0, #9, #18..#20, #12, #22..#24, #23, #26, #27)
 
-Finish order_by=(#0 desc, #2 asc, #1 asc, #3 asc) limit=none offset=0 project=(#0..#7)
+Finish order_by=(#14 desc, #22 asc, #10 asc, #0 asc) limit=none offset=0 project=(#14, #10, #22, #0, #2, #11, #13, #15)
 
 EOF
 
@@ -319,9 +318,8 @@ ORDER BY
 | | demand = (#6, #8, #12, #15, #22, #23, #27)
 | Filter (#6 = "BUILDING"), (#12 < 1995-03-15), (#27 > 1995-03-15)
 | Reduce group=(#8, #12, #15) sum((#22 * (100dec - #23)))
-| Project (#0, #3, #1, #2)
 
-Finish order_by=(#1 desc, #2 asc) limit=none offset=0 project=(#0..#3)
+Finish order_by=(#3 desc, #1 asc) limit=none offset=0 project=(#0, #3, #1, #2)
 
 EOF
 
@@ -641,9 +639,8 @@ ORDER BY
 | Filter (#4 = "ECONOMY ANODIZED STEEL"), (#58 = "AMERICA"), (#36 <= 1996-12-31), (#36 >= 1995-01-01)
 | Reduce group=(date_part_year_tstz(datetotstz(#36))) sum(if (#54 = "BRAZIL") then {(#21 * (100dec - #22))} else {0dec}) sum((#21 * (100dec - #22)))
 | Map (((#1 * 10000000dec) / #2) * 1000dec)
-| Project (#0, #3)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #3)
 
 EOF
 
@@ -776,9 +773,8 @@ ORDER BY
 | | demand = (#0..#2, #4, #5, #7, #12, #22, #23, #25, #34)
 | Filter (#25 = "R"), (#12 < 1994-01-01), (datetots(#12) < 1994-01-01 00:00:00), (#12 >= 1993-10-01)
 | Reduce group=(#0, #1, #5, #4, #34, #2, #7) sum((#22 * (100dec - #23)))
-| Project (#0, #1, #7, #2, #4, #5, #3, #6)
 
-Finish order_by=(#2 desc) limit=none offset=0 project=(#0..#7)
+Finish order_by=(#7 desc) limit=none offset=0 project=(#0, #1, #7, #2, #4, #5, #3, #6)
 
 EOF
 
@@ -1037,7 +1033,8 @@ WHERE
 %7 =
 | Union %3 %6
 | Map ((((10000dec * #0) * 10000000dec) / #1) * 1000dec)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -1094,10 +1091,10 @@ ORDER BY
 %3 =
 | Join %0 %1 %2 (= #0 #7) (= #8 #9)
 | | implementation = Differential %0 %1.(#0) %2.(#0)
-| | demand = (#0..#2, #4, #8)
-| Project (#0..#2, #4, #8)
+| | demand = (#0..#6, #8)
+| Project (#0..#6, #0, #8)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#4)
+Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2, #4, #8)
 
 EOF
 
@@ -1276,7 +1273,8 @@ WHERE
 %12 =
 | Union %8 %11
 | Map ((#0 * 10000000dec) / 70dec)
-| Project (#1)
+
+Finish order_by=() limit=none offset=0 project=(#1)
 
 EOF
 
@@ -1490,7 +1488,7 @@ ORDER BY
 %2 =
 | Join %0 %1 (= #3 #7)
 | | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#3)
-| | demand = (#0..#2, #8)
+| | demand = (#0..#6, #8..#10)
 | Filter (#8 = "CANADA")
 
 %3 =
@@ -1559,10 +1557,10 @@ ORDER BY
 %16 =
 | Join %10 %15 (= #0 #11)
 | | implementation = Differential %10 %15.(#0)
-| | demand = (#1, #2)
-| Project (#1, #2)
+| | demand = (#0..#6, #8..#10)
+| Project (#0..#6, #3, #8..#10)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#1 asc) limit=none offset=0 project=(#1, #2)
 
 EOF
 
@@ -1854,20 +1852,20 @@ ORDER BY
 
 %2 =
 | InnerJoin %0 %1 on true
-| Filter ((select(%3) && (#3 = #7)) && (#8 = "CANADA"))
+| Filter ((select(%4) && (#3 = #7)) && (#8 = "CANADA"))
 | |
-| | %3 =
+| | %4 =
 | | | Get materialize.public.partsupp (u11)
-| | | Filter (select(%4) && ((i32todec(#2) * 1000dec) > select(%6)))
+| | | Filter (select(%5) && ((i32todec(#2) * 1000dec) > select(%7)))
 | | | |
-| | | | %4 =
+| | | | %5 =
 | | | | | Get materialize.public.part (u6)
 | | | | | Filter like(#1, "forest%")
 | | | | | Project (#0)
 | | | | | Reduce group=() any(((#^0 = #0) && true))
 | | | |
 | | | |
-| | | | %6 =
+| | | | %7 =
 | | | | | Get materialize.public.lineitem (u21)
 | | | | | Filter ((((#1 = #^0) && (#2 = #^1)) && (#10 >= strtodate("1995-01-01"))) && (datetots(#10) < (strtodate("1995-01-01") + 1 year)))
 | | | | | Reduce group=() sum(#4)
@@ -1877,8 +1875,7 @@ ORDER BY
 | | | Project (#1)
 | | | Reduce group=() any(((#^0 = #0) && true))
 | |
-| Project (#1, #2)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#1 asc) limit=none offset=0 project=(#1, #2)
 
 EOF

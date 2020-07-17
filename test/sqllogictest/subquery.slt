@@ -361,7 +361,9 @@ SELECT age, ascii_num * 2 as result FROM (
 | | implementation = Differential %1 %0.(#0)
 | | demand = (#1, #3)
 | Map replace(#1, "o", "i"), substr(#4, 2, 1), ascii(#5), (#6 * 2)
-| Project (#3, #7)
+| Project (#3, #6, #7)
+
+Finish order_by=() limit=none offset=0 project=(#0, #2)
 
 EOF
 
@@ -521,8 +523,10 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 %12 =
 | Join %4 %11 (= #0 #1)
 | | implementation = Differential %11 %4.(#0)
-| | demand = (#2)
-| Project (#2)
+| | demand = (#0, #2)
+| Project (#0, #2)
+
+Finish order_by=() limit=none offset=0 project=(#1)
 
 EOF
 
@@ -582,9 +586,11 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 %12 =
 | Join %4 %11 (= #0 #1)
 | | implementation = Differential %11 %4.(#0)
-| | demand = (#2)
+| | demand = (#0, #2)
 | Map !(#2)
-| Project (#3)
+| Project (#0, #3)
+
+Finish order_by=() limit=none offset=0 project=(#1)
 
 EOF
 
@@ -645,8 +651,10 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 %12 =
 | Join %4 %11 (= #0 #1)
 | | implementation = Differential %11 %4.(#0)
-| | demand = (#2)
+| | demand = (#0, #2)
 | Map !(#2)
-| Project (#3)
+| Project (#0, #3)
+
+Finish order_by=() limit=none offset=0 project=(#1)
 
 EOF

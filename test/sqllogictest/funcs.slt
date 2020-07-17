@@ -131,7 +131,8 @@ EXPLAIN PLAN FOR SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 %0 =
 | Get materialize.public.date_trunc_timestamps (u7)
 | Map date_trunc_day_ts(#0)
-| Project (#1)
+
+Finish order_by=() limit=none offset=0 project=(#1)
 
 EOF
 
@@ -150,7 +151,8 @@ EXPLAIN PLAN FOR SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc
 | | implementation = Differential %1 %0.()
 | | demand = (#0, #1)
 | Map date_truncts(#0, #1)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -392,7 +394,8 @@ EXPLAIN PLAN FOR SELECT a IS NULL FROM t
 %0 =
 | Get materialize.public.t (u21)
 | Map isnull(#0)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -402,7 +405,8 @@ EXPLAIN PLAN FOR SELECT a + a + a + a + a IS NULL FROM t
 %0 =
 | Get materialize.public.t (u21)
 | Map isnull(#0)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -412,7 +416,8 @@ EXPLAIN PLAN FOR SELECT a + b IS NULL FROM t
 %0 =
 | Get materialize.public.t (u21)
 | Map isnull(#0)
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF
 
@@ -426,6 +431,7 @@ EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 %0 =
 | Get materialize.public.t (u21)
 | Map isnull((i32tobool(#0) && i32tobool(#1)))
-| Project (#2)
+
+Finish order_by=() limit=none offset=0 project=(#2)
 
 EOF

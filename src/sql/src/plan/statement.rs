@@ -1763,13 +1763,13 @@ fn handle_explain(
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let (mut sql_expr, _desc, finishing, _param_types) =
+    let (mut sql_expr, desc, finishing, _param_types) =
         query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
     let finishing = if is_view {
         // views don't use a separate finishing
         sql_expr.finish(finishing);
         None
-    } else if finishing.is_trivial() {
+    } else if finishing.is_trivial(desc.arity()) {
         None
     } else {
         Some(finishing)

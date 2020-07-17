@@ -26,7 +26,10 @@
 
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
-use failure::bail;
+use std::error::Error;
+use std::fmt;
+
+use itertools::Itertools;
 
 use repr::ColumnName;
 
@@ -37,6 +40,15 @@ use crate::names::PartialName;
 pub struct ScopeItemName {
     pub table_name: Option<PartialName>,
     pub column_name: Option<ColumnName>,
+    /// Whether this name is in the "priority" class or not.
+    ///
+    /// Names are divided into two classes: non-priority and priority. When
+    /// resolving a name, if the name appears as both a priority and
+    /// non-priority name, the priority name will be chosen. But if the same
+    /// name appears in the same class more than once (i.e., it appears as a
+    /// priority name twice), resolving that name will trigger an "ambiguous
+    /// name" error.
+    pub priority: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +79,7 @@ impl ScopeItem {
             names: vec![ScopeItemName {
                 table_name: None,
                 column_name,
+                priority: false,
             }],
             expr: None,
             nameable: true,
@@ -77,6 +90,14 @@ impl ScopeItem {
         self.names
             .iter()
             .any(|n| n.table_name.as_ref() == Some(&table_name))
+    }
+
+    pub fn prioritized(&self) -> ScopeItem {
+        let mut out = self.clone();
+        for name in &mut out.names {
+            name.priority = true;
+        }
+        out
     }
 }
 
@@ -104,6 +125,7 @@ impl Scope {
                 names: vec![ScopeItemName {
                     table_name: table_name.clone(),
                     column_name: column_name.map(|n| n.into()),
+                    priority: false,
                 }],
                 expr: None,
                 nameable: true,
@@ -151,7 +173,7 @@ impl Scope {
         &'a self,
         matches: Matches,
         name_in_error: &str,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error>
+    ) -> Result<(ColumnRef, &'a ScopeItemName), ScopeResolutionError>
     where
         Matches: Fn(&ScopeItemName) -> bool,
     {
@@ -163,19 +185,23 @@ impl Scope {
                     .iter()
                     .map(move |name| (level, column, item, name))
             })
-            .filter(|(_level, _column, item, name)| (matches)(name) && item.nameable);
+            .filter(|(_level, _column, item, name)| (matches)(name) && item.nameable)
+            .sorted_by_key(|(level, _column, _item, name)| (*level, !name.priority));
         match results.next() {
-            None => bail!("column \"{}\" does not exist", name_in_error),
+            None => Err(ScopeResolutionError::NotFound(name_in_error.to_owned())),
             Some((level, column, _item, name)) => {
                 if results
-                    .find(|(level2, column2, item, _name)| {
-                        column != *column2 && level == *level2 && item.nameable
+                    .find(|(level2, column2, item, name2)| {
+                        column != *column2
+                            && level == *level2
+                            && item.nameable
+                            && name.priority == name2.priority
                     })
                     .is_none()
                 {
                     Ok((ColumnRef { level, column }, name))
                 } else {
-                    bail!("Column name {} is ambiguous", name_in_error)
+                    Err(ScopeResolutionError::Ambiguous(name_in_error.to_owned()))
                 }
             }
         }
@@ -184,7 +210,7 @@ impl Scope {
     pub fn resolve_column<'a>(
         &'a self,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), ScopeResolutionError> {
         self.resolve(
             |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
             column_name.as_str(),
@@ -195,7 +221,7 @@ impl Scope {
         &'a self,
         table_name: &PartialName,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), ScopeResolutionError> {
         self.resolve(
             |item: &ScopeItemName| {
                 item.table_name.as_ref() == Some(table_name)
@@ -236,4 +262,34 @@ impl Scope {
             outer_scope: self.outer_scope.clone(),
         }
     }
+
+    /// Removes cruft from planning a single SELECT statement from the scope,
+    /// readying it for use by e.g. an outer SELECT.
+    pub fn scrub(mut self) -> Self {
+        for item in &mut self.items {
+            for name in &mut item.names {
+                name.table_name = None;
+                name.priority = false;
+            }
+            item.expr = None;
+        }
+        self
+    }
 }
+
+#[derive(Debug)]
+pub enum ScopeResolutionError {
+    NotFound(String),
+    Ambiguous(String),
+}
+
+impl fmt::Display for ScopeResolutionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::NotFound(name) => write!(f, "column \"{}\" does not exist", name),
+            Self::Ambiguous(name) => write!(f, "column name \"{}\" is ambiguous", name),
+        }
+    }
+}
+
+impl Error for ScopeResolutionError {}

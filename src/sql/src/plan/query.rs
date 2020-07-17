@@ -29,8 +29,8 @@ use failure::{bail, ensure, format_err, ResultExt};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
-    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableAlias,
-    TableFactor, TableWithJoins, Value, Values,
+    ObjectName, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
+    TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
 use ::expr::{Id, RowSetFinishing};
@@ -46,7 +46,7 @@ use crate::plan::expr::{
     JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
-use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
+use crate::plan::scope::{Scope, ScopeItem, ScopeItemName, ScopeResolutionError};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastTo, CoerceTo};
@@ -211,38 +211,36 @@ pub fn plan_index_exprs<'a>(
     Ok(out)
 }
 
-fn plan_expr_or_col_index<'a>(
-    ecx: &ExprContext,
-    e: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
-    let expr = match e {
+fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr) -> Result<ScalarExpr, failure::Error> {
+    match check_col_index(&ecx.name, e, ecx.relation_type.column_types.len())? {
+        Some(column) => Ok(ScalarExpr::Column(ColumnRef { level: 0, column })),
+        _ => plan_expr(ecx, e)?.type_as_any(ecx),
+    }
+}
+
+fn check_col_index(name: &str, e: &Expr, max: usize) -> Result<Option<usize>, failure::Error> {
+    match e {
         Expr::Value(Value::Number(n)) => {
             let n = n.parse::<usize>().with_context(|err| {
                 format_err!(
                     "unable to parse column reference in {}: {}: {}",
-                    ecx.name,
+                    name,
                     err,
                     n
                 )
             })?;
-            let max = ecx.relation_type.column_types.len();
             if n < 1 || n > max {
                 bail!(
                     "column reference {} in {} is out of range (1 - {})",
                     n,
-                    ecx.name,
+                    name,
                     max
                 );
             }
-            ScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: n - 1,
-            })
-            .into()
+            Ok(Some(n - 1))
         }
-        _ => plan_expr(ecx, e)?,
-    };
-    expr.type_as_any(ecx)
+        _ => Ok(None),
+    }
 }
 
 fn plan_query(
@@ -262,50 +260,62 @@ fn plan_query(
         Some(Expr::Value(Value::Number(x))) => x.parse()?,
         _ => bail!("OFFSET must be an integer constant"),
     };
-    let (expr, scope) = plan_set_expr(qcx, &q.body)?;
-    let output_typ = qcx.relation_type(&expr);
-    let mut order_by = vec![];
-    let mut map_exprs = vec![];
-    for obe in &q.order_by {
-        let ecx = &ExprContext {
-            qcx,
-            name: "ORDER BY clause",
-            scope: &scope,
-            relation_type: &output_typ,
-            allow_aggregates: true,
-            allow_subqueries: true,
-        };
-        let expr = plan_expr_or_col_index(ecx, &obe.expr)?;
-        // If the expression is a reference to an existing column,
-        // do not introduce a new column to support it.
-        if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
-            order_by.push(ColumnOrder {
-                column,
-                desc: match obe.asc {
-                    None => false,
-                    Some(asc) => !asc,
-                },
-            });
-        } else {
-            let idx = output_typ.column_types.len() + map_exprs.len();
-            map_exprs.push(expr);
-            order_by.push(ColumnOrder {
-                column: idx,
-                desc: match obe.asc {
-                    None => false,
-                    Some(asc) => !asc,
-                },
-            });
+    match &q.body {
+        SetExpr::Select(s) if !s.distinct => {
+            let plan = plan_view_select_intrusive(
+                qcx,
+                &s.projection,
+                &s.from,
+                s.selection.as_ref(),
+                &s.group_by,
+                s.having.as_ref(),
+                &q.order_by,
+            )?;
+            let finishing = RowSetFinishing {
+                order_by: plan.order_by,
+                project: plan.project,
+                limit,
+                offset,
+            };
+            Ok((plan.expr, plan.scope, finishing))
+        }
+        _ => {
+            let (expr, scope) = plan_set_expr(qcx, &q.body)?;
+            let output_typ = qcx.relation_type(&expr);
+            let mut order_by = vec![];
+            let mut map_exprs = vec![];
+            for obe in &q.order_by {
+                let ecx = &ExprContext {
+                    qcx,
+                    name: "ORDER BY clause",
+                    scope: &scope,
+                    relation_type: &output_typ,
+                    allow_aggregates: true,
+                    allow_subqueries: true,
+                };
+                let expr = plan_expr_or_col_index(ecx, &obe.expr)?;
+                // If the expression is a reference to an existing column,
+                // do not introduce a new column to support it.
+                let column = if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
+                    column
+                } else {
+                    map_exprs.push(expr);
+                    output_typ.column_types.len() + map_exprs.len() - 1
+                };
+                order_by.push(ColumnOrder {
+                    column,
+                    desc: !obe.asc.unwrap_or(true),
+                });
+            }
+            let finishing = RowSetFinishing {
+                order_by,
+                limit,
+                project: (0..output_typ.column_types.len()).collect(),
+                offset,
+            };
+            Ok((expr.map(map_exprs), scope, finishing))
         }
     }
-
-    let finishing = RowSetFinishing {
-        order_by,
-        limit,
-        project: (0..output_typ.column_types.len()).collect(),
-        offset,
-    };
-    Ok((expr.map(map_exprs), scope, finishing))
 }
 
 fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope), failure::Error> {
@@ -477,19 +487,57 @@ fn plan_join_identity(qcx: &QueryContext) -> (RelationExpr, Scope) {
     (expr, scope)
 }
 
-fn plan_view_select(
+/// Describes how to execute a SELECT query.
+///
+/// `order_by` describes how to order the rows in `expr` *before* applying the
+/// projection. The `scope` describes the columns in `expr` *after* the
+/// projection has been applied.
+#[derive(Debug)]
+struct SelectPlan {
+    expr: RelationExpr,
+    scope: Scope,
+    order_by: Vec<ColumnOrder>,
+    project: Vec<usize>,
+}
+
+/// Plans a SELECT query with an intrusive ORDER BY clause.
+///
+/// Normally, the ORDER BY clause occurs after the columns specified in the
+/// SELECT list have been projected. In a query like
+///
+///     CREATE TABLE (a int, b int)
+///     (SELECT a FROM t) UNION (SELECT a FROM t) ORDER BY a
+///
+/// it is valid to refer to `a`, because it is explicitly selected, but it would
+/// not be valid to refer to unselected column `b`.
+///
+/// But PostgreSQL extends the standard to permit queries like
+///
+///     SELECT a FROM t ORDER BY b
+///
+/// where expressions in the ORDER BY clause can refer to *both* input columns
+/// and output columns.
+///
+/// This function handles queries of the latter class. For queries of the
+/// former class, see `plan_view_select`.
+fn plan_view_select_intrusive(
     qcx: &QueryContext,
-    s: &Select,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+    projection: &[SelectItem],
+    from: &[TableWithJoins],
+    selection: Option<&Expr>,
+    group_by: &[Expr],
+    having: Option<&Expr>,
+    order_by_exprs: &[OrderByExpr],
+) -> Result<SelectPlan, failure::Error> {
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, from_scope) =
-        s.from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
+        from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
             let (left, left_scope) = l?;
             plan_table_with_joins(qcx, left, left_scope, &JoinOperator::CrossJoin, twj)
         })?;
 
     // Step 2. Handle WHERE clause.
-    if let Some(selection) = &s.selection {
+    if let Some(selection) = &selection {
         let ecx = &ExprContext {
             qcx,
             name: "WHERE clause",
@@ -517,7 +565,7 @@ fn plan_view_select(
         let mut group_exprs = vec![];
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
-        for group_expr in &s.group_by {
+        for group_expr in group_by {
             let expr = plan_expr_or_col_index(ecx, group_expr)?;
             let new_column = group_key.len();
             // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
@@ -552,10 +600,13 @@ fn plan_view_select(
         }
         // gather aggregates
         let mut aggregate_visitor = AggregateFuncVisitor::new();
-        for p in &s.projection {
+        for p in projection {
             aggregate_visitor.visit_select_item(p);
         }
-        if let Some(having) = &s.having {
+        for o in order_by_exprs {
+            aggregate_visitor.visit_order_by_expr(o);
+        }
+        if let Some(having) = having {
             aggregate_visitor.visit_expr(having);
         }
         let ecx = &ExprContext {
@@ -573,12 +624,13 @@ fn plan_view_select(
                 names: vec![ScopeItemName {
                     table_name: None,
                     column_name: Some(sql_function.name.to_string().into()),
+                    priority: false,
                 }],
                 expr: Some(Expr::Function(sql_function.clone())),
                 nameable: true,
             });
         }
-        if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
+        if !aggregates.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
             relation_expr = relation_expr.map(group_exprs).reduce(group_key, aggregates);
             (group_scope, select_all_mapping)
@@ -592,7 +644,7 @@ fn plan_view_select(
     };
 
     // Step 4. Handle HAVING clause.
-    if let Some(having) = &s.having {
+    if let Some(having) = having {
         let ecx = &ExprContext {
             qcx,
             name: "HAVING clause",
@@ -605,12 +657,12 @@ fn plan_view_select(
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
-    // Step 5. Handle projections.
-    let project_scope = {
-        let mut project_exprs = vec![];
+    // Step 5. Handle SELECT clause.
+    let (project_key, map_scope) = {
+        let mut new_exprs = vec![];
         let mut project_key = vec![];
-        let mut project_scope = Scope::empty(Some(qcx.outer_scope.clone()));
-        for p in &s.projection {
+        let mut map_scope = group_scope.clone();
+        for p in projection {
             let ecx = &ExprContext {
                 qcx,
                 name: "SELECT clause",
@@ -622,23 +674,90 @@ fn plan_view_select(
             for (expr, scope_item) in plan_select_item(ecx, p, &from_scope, &select_all_mapping)? {
                 if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
                     project_key.push(column);
+                    // Mark the output names as prioritized, so that they shadow
+                    // any input columns of the same name.
+                    map_scope.items[column]
+                        .names
+                        .splice(..0, scope_item.prioritized().names);
                 } else {
-                    project_key.push(group_scope.len() + project_exprs.len());
-                    project_exprs.push(expr);
+                    project_key.push(group_scope.len() + new_exprs.len());
+                    new_exprs.push(expr);
+                    map_scope.items.push(scope_item.prioritized());
                 }
-                project_scope.items.push(scope_item);
             }
         }
-        relation_expr = relation_expr.map(project_exprs).project(project_key);
-        project_scope
+        relation_expr = relation_expr.map(new_exprs);
+        (project_key, map_scope)
     };
 
-    // Step 6. Handle DISTINCT.
+    // Step 6. Handle intrusive ORDER BY.
+    let order_by = {
+        let mut order_by = vec![];
+        let mut new_exprs = vec![];
+        for obe in order_by_exprs {
+            let ecx = &ExprContext {
+                qcx,
+                name: "ORDER BY clause",
+                scope: &map_scope,
+                relation_type: &qcx.relation_type(&relation_expr),
+                allow_aggregates: true,
+                allow_subqueries: true,
+            };
+
+            let expr = match check_col_index(&ecx.name, &obe.expr, project_key.len())? {
+                Some(i) => ScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: project_key[i],
+                }),
+                None => plan_expr(ecx, &obe.expr)?.type_as_any(ecx)?,
+            };
+
+            // If the expression is a reference to an existing column, do not
+            // introduce a new column to support it.
+            let column = if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
+                column
+            } else {
+                new_exprs.push(expr);
+                map_scope.len() + new_exprs.len() - 1
+            };
+            order_by.push(ColumnOrder {
+                column,
+                desc: !obe.asc.unwrap_or(true),
+            });
+        }
+        relation_expr = relation_expr.map(new_exprs);
+        order_by
+    };
+
+    Ok(SelectPlan {
+        expr: relation_expr,
+        scope: map_scope.project(&project_key).scrub(),
+        order_by,
+        project: project_key,
+    })
+}
+
+fn plan_view_select(
+    qcx: &QueryContext,
+    s: &Select,
+) -> Result<(RelationExpr, Scope), failure::Error> {
+    let order_by_exprs = &[];
+    let mut plan = plan_view_select_intrusive(
+        qcx,
+        &s.projection,
+        &s.from,
+        s.selection.as_ref(),
+        &s.group_by,
+        s.having.as_ref(),
+        order_by_exprs,
+    )?;
+    assert!(plan.order_by.is_empty());
+
     if s.distinct {
-        relation_expr = relation_expr.distinct();
+        plan.expr = plan.expr.distinct();
     }
 
-    Ok((relation_expr, project_scope))
+    Ok((plan.expr.project(plan.project), plan.scope))
 }
 
 fn plan_table_with_joins<'a>(
@@ -827,6 +946,7 @@ fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
     name.map(|n| ScopeItemName {
         table_name: None,
         column_name: Some(n),
+        priority: false,
     })
 }
 
@@ -882,6 +1002,7 @@ fn plan_select_item<'a>(
                         names: vec![ScopeItemName {
                             table_name: None,
                             column_name: Some(name.clone()),
+                            priority: false,
                         }],
                         expr: None,
                         nameable: true,
@@ -900,6 +1021,7 @@ fn plan_select_item<'a>(
                 Some(alias) => vec![ScopeItemName {
                     table_name: None,
                     column_name: Some(normalize::column_name(alias.clone())),
+                    priority: false,
                 }],
             };
             let scope_item = ScopeItem {
@@ -1451,8 +1573,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, fai
     }
 
     // If the name is unqualified, first check if it refers to a column.
-    if let Ok((i, _name)) = ecx.scope.resolve_column(&col_name) {
-        return Ok(ScalarExpr::Column(i));
+    match ecx.scope.resolve_column(&col_name) {
+        Ok((i, _name)) => return Ok(ScalarExpr::Column(i)),
+        Err(ScopeResolutionError::NotFound(_)) => (),
+        Err(e) => return Err(e.into()),
     }
 
     // The name doesn't refer to a column. Check if it refers to a table. If it
