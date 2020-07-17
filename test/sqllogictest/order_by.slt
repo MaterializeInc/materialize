@@ -51,20 +51,81 @@ SELECT a FROM foo ORDER BY (0-a)
 1
 0
 
+# ORDER BY can implicitly project columns from the inner SELECT...
+query I
+SELECT a FROM foo ORDER BY b
+----
+1
+2
+0
+
+# ...including when they are used in functions...
+query I
+SELECT a FROM foo ORDER BY b || 'blah'
+----
+1
+2
+0
+
+# ...or even in aggregate functions...
+query I
+SELECT a FROM foo GROUP BY a ORDER BY max(b)
+----
+1
+2
+0
+
+# ...unless you use DISTINCT...
+query error column "b" does not exist
+SELECT DISTINCT a FROM foo ORDER BY b
+
+# ...or a set expression.
+query error column "b" does not exist
+(SELECT a FROM foo) UNION (SELECT a FROM foo) ORDER BY b
+
+# Using a column twice and referring to it by its alias in the ORDER BY should
+# work.
+query II
+SELECT a, a AS c FROM foo ORDER BY c
+----
+0  0
+1  1
+2  2
+
+# Columns from the underlying table and columns introduced in the select list
+# can be freely matched in ORDER BY expressions.
+query I
+SELECT a + 1 AS c FROM foo ORDER BY a + c
+----
+1
+2
+3
+
+# When a name from the underlying table is shadowed, using the shadowed name in
+# the ORDER BY should refer to the column in the select list...
+query T
+SELECT b AS a FROM foo ORDER BY a
+----
+one
+two
+zero
+
+# ...unless the shadowed name is ambiguous.
+query error column name "a" is ambiguous
+SELECT 1 AS a, b AS a FROM foo ORDER BY a
+
 statement ok
 CREATE TABLE bar (a int)
 
 statement ok
 INSERT INTO bar (a) VALUES (1)
 
-# TODO(benesch): this ties into #696.
-#
-# query I nosort
-# SELECT a FROM foo ORDER BY exists (SELECT * FROM bar WHERE bar.a = foo.a), a
-# ----
-# 0
-# 2
-# 1
+query I nosort
+SELECT a FROM foo ORDER BY exists (SELECT * FROM bar WHERE bar.a = foo.a), a
+----
+0
+2
+1
 
 ### sorts, limits, and offsets in subqueries ###
 
@@ -85,10 +146,8 @@ INSERT INTO fizz(a, b) VALUES
 
 # the ORDER BY's inside the subquery are technically meaningless because they do not
 # propagate to the outer query, but we should still return correct results.
-# TODO: materialize#696 replace the current query with the one below
-# SELECT b FROM (SELECT min(b) AS b FROM fizz GROUP BY a ORDER BY a DESC)
 query T rowsort
-SELECT b FROM (SELECT a, min(b) AS b FROM fizz GROUP BY a ORDER BY a DESC)
+SELECT b FROM (SELECT min(b) AS b FROM fizz GROUP BY a ORDER BY a DESC)
 ----
 five
 four

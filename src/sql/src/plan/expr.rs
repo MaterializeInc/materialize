@@ -399,9 +399,17 @@ impl RelationExpr {
         }
     }
 
-    pub fn map(self, scalars: Vec<ScalarExpr>) -> Self {
+    pub fn map(mut self, scalars: Vec<ScalarExpr>) -> Self {
         if scalars.is_empty() {
             // The map is trivial. Suppress it.
+            self
+        } else if let RelationExpr::Map {
+            scalars: old_scalars,
+            input: _,
+        } = &mut self
+        {
+            // Map applied to a map. Fuse the maps.
+            old_scalars.extend(scalars);
             self
         } else {
             RelationExpr::Map {
@@ -694,7 +702,7 @@ impl RelationExpr {
     }
 
     pub fn finish(&mut self, finishing: expr::RowSetFinishing) {
-        if !finishing.is_trivial() {
+        if !finishing.is_trivial(self.arity()) {
             *self = RelationExpr::Project {
                 input: Box::new(RelationExpr::TopK {
                     input: Box::new(std::mem::replace(
