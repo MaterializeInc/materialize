@@ -317,18 +317,66 @@ where
             let granularity_ms =
                 std::cmp::max(1, logging.granularity_ns() / 1_000_000) as Timestamp;
 
-            // Establish loggers first, so we can either log the logging or not, as we like.
-            let t_linked = std::rc::Rc::new(EventLink::new());
-            let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
-            let d_linked = std::rc::Rc::new(EventLink::new());
-            let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
-            let m_linked = std::rc::Rc::new(EventLink::new());
-            let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
+            // As an experiment, consider allowing environment variables to indicate where
+            // to log to and where to receive logs from.
+            let td_log_send = ::std::env::var("MZ_TIMELY_LOG_SEND").unwrap();
+            let td_log_recv = ::std::env::var("MZ_TIMELY_LOG_RECV").unwrap();
+            let dd_log_send = ::std::env::var("MZ_DIFFERENTIAL_LOG_SEND").unwrap();
+            let dd_log_recv = ::std::env::var("MZ_DIFFERENTIAL_LOG_RECV").unwrap();
+
+            use ::differential_dataflow::logging::DifferentialEvent;
+            use ::std::net::TcpListener;
+            use ::std::time::Duration;
+            use ::timely::dataflow::operators::capture::event::binary::{EventReader, EventWriter};
+            use ::timely::logging::TimelyEvent;
+
+            // Prepare TCP listeners for each of the logging streams.
+            let td_listen = TcpListener::bind(td_log_recv).unwrap();
+            let dd_listen = TcpListener::bind(dd_log_recv).unwrap();
+
+            // Attempt to connect to existing TCP listeners.
+            let mut td_send = None;
+            while td_send.is_none() {
+                td_send = TcpStream::connect(&td_log_send).ok()
+            }
+            let td_send = td_send.unwrap();
+            let mut dd_send = None;
+            while dd_send.is_none() {
+                dd_send = TcpStream::connect(&dd_log_send).ok();
+            }
+            let dd_send = dd_send.unwrap();
+
+            // Block until we receive a TCP connection to read from.
+            let td_recv = td_listen.incoming().next().unwrap().unwrap();
+            let dd_recv = dd_listen.incoming().next().unwrap().unwrap();
+
+            // Wrap TCP streams so that they can be replayed as timely streams.
+            use ::timely::logging::WorkerIdentifier;
+            let t_replay =
+                EventReader::<Timestamp, (Duration, WorkerIdentifier, TimelyEvent), _>::new(
+                    td_recv,
+                );
+            let d_replay =
+                EventReader::<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent), _>::new(
+                    dd_recv,
+                );
+
+            // Wrap TCP send streams so that we can log into them.
+            let mut t_logger = BatchLogger::new(EventWriter::new(td_send), granularity_ms);
+            let mut d_logger = BatchLogger::new(EventWriter::new(dd_send), granularity_ms);
+
+            // // Establish loggers first, so we can either log the logging or not, as we like.
+            // let t_replay = std::rc::Rc::new(EventLink::new());
+            // let mut t_logger = BatchLogger::new(t_replay.clone(), granularity_ms);
+            // let d_replay = std::rc::Rc::new(EventLink::new());
+            // let mut d_logger = BatchLogger::new(d_replay.clone(), granularity_ms);
+            let m_replay = std::rc::Rc::new(EventLink::new());
+            let mut m_logger = BatchLogger::new(m_replay.clone(), granularity_ms);
 
             // Construct logging dataflows and endpoints before registering any.
-            let t_traces = logging::timely::construct(&mut self.inner, logging, t_linked);
-            let d_traces = logging::differential::construct(&mut self.inner, logging, d_linked);
-            let m_traces = logging::materialized::construct(&mut self.inner, logging, m_linked);
+            let t_traces = logging::timely::construct(&mut self.inner, logging, t_replay);
+            let d_traces = logging::differential::construct(&mut self.inner, logging, d_replay);
+            let m_traces = logging::materialized::construct(&mut self.inner, logging, m_replay);
 
             // Register each logger endpoint.
             self.inner
