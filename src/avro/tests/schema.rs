@@ -148,6 +148,11 @@ lazy_static! {
          Value::Record(vec![("name".into(), Value::String("string".into()))])),
         (r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"], "doc": "Doc String"}"#,
          Value::Enum(0, "A".into())),
+        // Custom properties
+        (r#"{"type":"int", "customProp":"val"}"#, Value::Int(123)),
+        (r#"{"type":"enum", "name":"Suit", "namespace":"org.apache.test", "aliases":["org.apache.test.OldSuit"],
+         "doc":"Card Suits", "customProp":"val", "symbols":["SPADES", "HEARTS", "DIAMONDS", "CLUBS"]}"#,
+         Value::Enum(0, "SPADES".to_owned())),
     ];
 
     static ref VALID_LOGICAL_TYPES: Vec<(&'static str, Value)> = vec![

@@ -142,6 +142,7 @@ dependencies = [
  "log",
  "md-5",
  "rand",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
