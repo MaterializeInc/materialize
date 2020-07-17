@@ -15,6 +15,7 @@ use std::fmt;
 use digest::Digest;
 use failure::{Error, Fail};
 use log::{debug, warn};
+use regex::Regex;
 use serde::{
     ser::{SerializeMap, SerializeSeq},
     Serialize, Serializer,
@@ -517,6 +518,17 @@ impl Name {
         } else {
             (complex.string("namespace"), name)
         };
+
+        if !Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$")
+            .unwrap()
+            .is_match(&name)
+        {
+            return Err(ParseSchemaError::new(format!(
+                "Invalid name. Must start with [A-Za-z_] and subsequently only contain [A-Za-z0-9_]. Found: {}",
+                name
+            ))
+                .into());
+        }
 
         let aliases: Option<Vec<String>> = complex
             .get("aliases")
@@ -2319,7 +2331,11 @@ mod tests {
         );
 
         // Same as above, ignore any provided namespace.
-        let schema = Schema::parse_str(r#"{"type": "enum", "namespace": "namespace", "name": "name.has.dots", "symbols": ["A", "B"]}"#).unwrap();
+        let schema = Schema::parse_str(
+            r#"{"type": "enum", "namespace": "namespace",
+            "name": "name.has.dots", "symbols": ["A", "B"]}"#,
+        )
+        .unwrap();
         assert_eq!(schema.named.len(), 1);
         assert_eq!(
             schema.named[0].name,
@@ -2328,6 +2344,94 @@ mod tests {
                 namespace: "name.has".into()
             }
         );
+
+        // Use default namespace when namespace is not provided.
+        // Materialize uses "" as the default namespace.
+        let schema = Schema::parse_str(
+            r#"{"type": "record", "name": "TestDoc", "doc": "Doc string",
+            "fields": [{"name": "name", "type": "string"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(schema.named.len(), 1);
+        assert_eq!(
+            schema.named[0].name,
+            FullName {
+                name: "TestDoc".into(),
+                namespace: "".into()
+            }
+        );
+
+        // Empty namespace strings should be allowed.
+        let schema = Schema::parse_str(
+            r#"{"type": "record", "namespace": "", "name": "TestDoc", "doc": "Doc string",
+            "fields": [{"name": "name", "type": "string"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(schema.named.len(), 1);
+        assert_eq!(
+            schema.named[0].name,
+            FullName {
+                name: "TestDoc".into(),
+                namespace: "".into()
+            }
+        );
+
+        // Equality of names is defined on the FullName and is case-sensitive.
+        let first = Schema::parse_str(
+            r#"{"type": "fixed", "namespace": "namespace",
+            "name": "name", "size": 1}"#,
+        )
+        .unwrap();
+        let second = Schema::parse_str(
+            r#"{"type": "fixed", "name": "namespace.name",
+            "size": 1}"#,
+        )
+        .unwrap();
+        assert_eq!(first.named[0].name, second.named[0].name);
+
+        let first = Schema::parse_str(
+            r#"{"type": "fixed", "namespace": "namespace",
+            "name": "name", "size": 1}"#,
+        )
+        .unwrap();
+        let second = Schema::parse_str(
+            r#"{"type": "fixed", "name": "namespace.Name",
+            "size": 1}"#,
+        )
+        .unwrap();
+        assert_ne!(first.named[0].name, second.named[0].name);
+
+        let first = Schema::parse_str(
+            r#"{"type": "fixed", "namespace": "Namespace",
+            "name": "name", "size": 1}"#,
+        )
+        .unwrap();
+        let second = Schema::parse_str(
+            r#"{"type": "fixed", "namespace": "namespace",
+            "name": "name", "size": 1}"#,
+        )
+        .unwrap();
+        assert_ne!(first.named[0].name, second.named[0].name);
+
+        // The name portion of a fullname, record field names, and enum symbols must:
+        // start with [A-Za-z_] and subsequently contain only [A-Za-z0-9_]
+        assert!(Schema::parse_str(
+            r#"{"type": "record", "name": "99 problems but a name aint one",
+            "fields": [{"name": "name", "type": "string"}]}"#
+        )
+        .is_err());
+
+        assert!(Schema::parse_str(
+            r#"{"type": "record", "name": "!!!",
+            "fields": [{"name": "name", "type": "string"}]}"#
+        )
+        .is_err());
+
+        assert!(Schema::parse_str(
+            r#"{"type": "record", "name": "_valid_until_©",
+            "fields": [{"name": "name", "type": "string"}]}"#
+        )
+        .is_err());
     }
 
     // Tests to ensure Schema is Send + Sync. These tests don't need to _do_ anything, if they can
