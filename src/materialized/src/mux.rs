@@ -116,8 +116,7 @@ pub trait ConnectionHandler {
     fn match_handshake(&self, buf: &[u8]) -> bool;
 
     /// Handles the connection.
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>)
-        -> Result<(), failure::Error>;
+    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error>;
 }
 
 #[async_trait]
@@ -126,10 +125,7 @@ impl ConnectionHandler for pgwire::Server {
         pgwire::match_handshake(buf)
     }
 
-    async fn handle_connection(
-        &self,
-        conn: SniffedStream<TcpStream>,
-    ) -> Result<(), failure::Error> {
+    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
         self.handle_connection(conn).await
     }
 }
@@ -140,10 +136,7 @@ impl ConnectionHandler for http::Server {
         self.match_handshake(buf)
     }
 
-    async fn handle_connection(
-        &self,
-        conn: SniffedStream<TcpStream>,
-    ) -> Result<(), failure::Error> {
+    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
         self.handle_connection(conn).await
     }
 }
@@ -154,10 +147,7 @@ impl ConnectionHandler for comm::Switchboard<SniffedStream<TcpStream>> {
         comm::protocol::match_handshake(buf)
     }
 
-    async fn handle_connection(
-        &self,
-        conn: SniffedStream<TcpStream>,
-    ) -> Result<(), failure::Error> {
+    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
         self.handle_connection(conn).err_into().await
     }
 }

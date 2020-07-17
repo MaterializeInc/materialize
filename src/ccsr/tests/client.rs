@@ -26,7 +26,7 @@ lazy_static! {
 }
 
 #[tokio::test]
-async fn test_client() -> Result<(), failure::Error> {
+async fn test_client() -> Result<(), anyhow::Error> {
     let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build();
 
     let existing_subjects = client.list_subjects().await?;
@@ -103,7 +103,7 @@ async fn test_client() -> Result<(), failure::Error> {
 }
 
 #[tokio::test]
-async fn test_client_errors() -> Result<(), failure::Error> {
+async fn test_client_errors() -> Result<(), anyhow::Error> {
     let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build();
 
     // Get-by-id-specific errors.
@@ -134,7 +134,7 @@ async fn test_client_errors() -> Result<(), failure::Error> {
 }
 
 #[tokio::test]
-async fn test_server_errors() -> Result<(), failure::Error> {
+async fn test_server_errors() -> Result<(), anyhow::Error> {
     // When the schema registry gracefully reports an error by including a
     // properly-formatted JSON document in the response, the specific error code
     // and message should be propagated.
@@ -250,7 +250,7 @@ fn assert_raw_schemas_eq(schema1: &str, schema2: &str) {
     assert_eq!(schema1, schema2);
 }
 
-async fn count_schemas(client: &Client, subject_prefix: &str) -> Result<usize, failure::Error> {
+async fn count_schemas(client: &Client, subject_prefix: &str) -> Result<usize, anyhow::Error> {
     Ok(client
         .list_subjects()
         .await?

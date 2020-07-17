@@ -13,8 +13,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
+use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use failure::bail;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
@@ -304,7 +304,7 @@ impl CatalogItem {
 
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
-    pub fn desc(&self) -> Result<&RelationDesc, failure::Error> {
+    pub fn desc(&self) -> Result<&RelationDesc, anyhow::Error> {
         match &self.item {
             CatalogItem::Source(src) => Ok(&src.desc),
             CatalogItem::Sink(_) => bail!(
@@ -1116,7 +1116,7 @@ impl Catalog {
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
 
-    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, failure::Error> {
+    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env,
@@ -1288,7 +1288,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self.database
     }
 
-    fn resolve_database(&self, database_name: &str) -> Result<(), failure::Error> {
+    fn resolve_database(&self, database_name: &str) -> Result<(), anyhow::Error> {
         match self.catalog.by_name.get(database_name) {
             Some(_) => Ok(()),
             None => Err(Error::new(ErrorKind::UnknownDatabase(database_name.into())).into()),
@@ -1299,7 +1299,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self,
         database: Option<String>,
         schema_name: &str,
-    ) -> Result<DatabaseSpecifier, failure::Error> {
+    ) -> Result<DatabaseSpecifier, anyhow::Error> {
         Ok(self.catalog.resolve_schema(
             &self.database_spec(),
             database,
@@ -1308,7 +1308,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         )?)
     }
 
-    fn resolve_item(&self, name: &PartialName) -> Result<FullName, failure::Error> {
+    fn resolve_item(&self, name: &PartialName) -> Result<FullName, anyhow::Error> {
         Ok(self
             .catalog
             .resolve(self.database_spec(), self.search_path, name, self.conn_id)?)
@@ -1376,7 +1376,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         self.id()
     }
 
-    fn desc(&self) -> Result<&RelationDesc, failure::Error> {
+    fn desc(&self) -> Result<&RelationDesc, anyhow::Error> {
         Ok(self.desc()?)
     }
 

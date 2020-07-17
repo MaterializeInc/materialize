@@ -11,7 +11,7 @@ use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use failure::bail;
+use anyhow::bail;
 use futures::sink::SinkExt;
 use openssl::ssl::SslAcceptor;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -46,7 +46,7 @@ impl Server {
         }
     }
 
-    pub async fn handle_connection<A>(&self, conn: A) -> Result<(), failure::Error>
+    pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static,
     {

@@ -10,7 +10,7 @@
 use std::fs::OpenOptions;
 use std::time::Duration;
 
-use failure::{bail, format_err, ResultExt};
+use anyhow::{anyhow, bail, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
@@ -29,7 +29,7 @@ pub async fn build(
     with_snapshot: bool,
     frontier: Antichain<Timestamp>,
     id: GlobalId,
-) -> Result<SinkConnector, failure::Error> {
+) -> Result<SinkConnector, anyhow::Error> {
     match builder {
         SinkConnectorBuilder::Kafka(k) => build_kafka(k, with_snapshot, frontier, id).await,
         SinkConnectorBuilder::AvroOcf(a) => build_avro_ocf(a, with_snapshot, frontier, id),
@@ -42,7 +42,7 @@ async fn register_kafka_topic(
     replication_factor: i32,
     ccsr: &ccsr::Client,
     schema: &str,
-) -> Result<i32, failure::Error> {
+) -> Result<i32, anyhow::Error> {
     let res = client
         .create_topics(
             &[NewTopic::new(
@@ -53,7 +53,7 @@ async fn register_kafka_topic(
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
         )
         .await
-        .with_context(|e| format!("error creating new topic {} for sink: {}", topic, e))?;
+        .with_context(|| format!("error creating new topic {} for sink", topic))?;
     if res.len() != 1 {
         bail!(
             "error creating topic {} for sink: \
@@ -63,7 +63,7 @@ async fn register_kafka_topic(
         );
     }
     res.into_element()
-        .map_err(|(_, e)| format_err!("error creating topic {} for sink: {}", topic, e))?;
+        .map_err(|(_, e)| anyhow!("error creating topic {} for sink: {}", topic, e))?;
 
     // Publish value schema for the topic.
     //
@@ -73,7 +73,7 @@ async fn register_kafka_topic(
     let schema_id = ccsr
         .publish_schema(&format!("{}-value", topic), schema)
         .await
-        .with_context(|e| format!("unable to publish schema to registry in kafka sink: {}", e))?;
+        .context("unable to publish schema to registry in kafka sink")?;
 
     Ok(schema_id)
 }
@@ -83,7 +83,7 @@ async fn build_kafka(
     with_snapshot: bool,
     frontier: Antichain<Timestamp>,
     id: GlobalId,
-) -> Result<SinkConnector, failure::Error> {
+) -> Result<SinkConnector, anyhow::Error> {
     let topic = format!("{}-{}-{}", builder.topic_prefix, id, builder.topic_suffix);
 
     // Create Kafka topic with single partition.
@@ -102,7 +102,7 @@ async fn build_kafka(
         &builder.value_schema,
     )
     .await
-    .with_context(|e| format!("error registering kafka topic for sink: {}", e))?;
+    .context("error registering kafka topic for sink")?;
 
     let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
         let consistency_topic = format!("{}-consistency", topic);
@@ -114,7 +114,7 @@ async fn build_kafka(
             &consistency_value_schema,
         )
         .await
-        .with_context(|e| format!("error registering kafka consistency topic for sink: {}", e))?;
+        .context("error registering kafka consistency topic for sink")?;
 
         Some(KafkaSinkConsistencyConnector {
             topic: consistency_topic,
@@ -140,7 +140,7 @@ fn build_avro_ocf(
     with_snapshot: bool,
     frontier: Antichain<Timestamp>,
     id: GlobalId,
-) -> Result<SinkConnector, failure::Error> {
+) -> Result<SinkConnector, anyhow::Error> {
     let mut name = match builder.path.file_stem() {
         None => bail!(
             "unable to read file name from path {}",
@@ -165,7 +165,7 @@ fn build_avro_ocf(
         .create_new(true)
         .open(&path)
         .map_err(|e| {
-            format_err!(
+            anyhow!(
                 "unable to create avro ocf sink file {} : {}",
                 path.display(),
                 e

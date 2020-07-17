@@ -14,9 +14,9 @@ use std::fmt;
 use std::io::Read;
 use std::iter;
 
+use anyhow::{anyhow, bail, Result};
 use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
-use failure::{bail, format_err};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::warn;
@@ -38,7 +38,6 @@ use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
 
-use crate::error::Result;
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
@@ -219,7 +218,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
 
                     pos = Some(
                         val.into_integral()
-                            .ok_or_else(|| format_err!("\"pos\" is not an integer"))?,
+                            .ok_or_else(|| anyhow!("\"pos\" is not an integer"))?,
                     );
                 }
                 "row" => {
@@ -228,7 +227,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
 
                     row = Some(
                         val.into_integral()
-                            .ok_or_else(|| format_err!("\"row\" is not an integer"))?,
+                            .ok_or_else(|| anyhow!("\"row\" is not an integer"))?,
                     );
                 }
                 "file" => {
@@ -241,8 +240,8 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                 }
             }
         }
-        let pos = pos.ok_or_else(|| format_err!("no pos"))? as usize;
-        let row = row.ok_or_else(|| format_err!("no row"))? as usize;
+        let pos = pos.ok_or_else(|| anyhow!("no pos"))? as usize;
+        let row = row.ok_or_else(|| anyhow!("no row"))? as usize;
         if !has_file {
             bail!("no file");
         }
@@ -670,7 +669,7 @@ fn get_named_columns<'a>(
         let mut columns = vec![];
         let vs = us.variants();
         if vs.is_empty() || (vs.len() == 1 && is_null(&vs[0])) {
-            bail!(format_err!("Empty or null-only unions are not supported"));
+            bail!(anyhow!("Empty or null-only unions are not supported"));
         } else {
             for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
                 let named_idx = match v {
@@ -1085,7 +1084,7 @@ fn take_field_by_index(
     fields: &mut [(String, Value)],
 ) -> Result<Value> {
     let (name, value) = fields.get_mut(idx).ok_or_else(|| {
-        format_err!(
+        anyhow!(
             "Value does not match schema: \"{}\" field not at index {}",
             expected_name,
             idx
@@ -1166,21 +1165,21 @@ impl DebeziumDecodeState {
                             &mut source_fields,
                         )?
                         .into_string()
-                        .ok_or_else(|| format_err!("\"file\" is not a string"))?;
+                        .ok_or_else(|| anyhow!("\"file\" is not a string"))?;
                         let pos_val = take_field_by_index(
                             schema_indices.source_pos_idx,
                             "pos",
                             &mut source_fields,
                         )?
                         .into_integral()
-                        .ok_or_else(|| format_err!("\"pos\" is not an integer"))?;
+                        .ok_or_else(|| anyhow!("\"pos\" is not an integer"))?;
                         let row_val = take_field_by_index(
                             schema_indices.source_row_idx,
                             "row",
                             &mut source_fields,
                         )?
                         .into_integral()
-                        .ok_or_else(|| format_err!("\"row\" is not an integer"))?;
+                        .ok_or_else(|| anyhow!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
                         if !self.dedup.should_use_record(
@@ -1812,8 +1811,8 @@ impl SchemaCache {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context;
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-    use failure::ResultExt;
     use ordered_float::OrderedFloat;
     use serde::Deserialize;
     use std::fs::File;

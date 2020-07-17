@@ -2,12 +2,13 @@
 //
 // Use of this software is governed by the Apache License, Version 2.0
 
+use std::fmt;
 use std::i64;
+use std::io::Read;
 use std::sync::Once;
 
-use failure::{Error, Fail};
+use anyhow::Error;
 use serde_json::{Map, Value};
-use std::io::Read;
 
 /// Maximum number of bytes that can be allocated when decoding
 /// Avro-encoded values. This is a protection against ill-formed
@@ -17,8 +18,7 @@ pub static mut MAX_ALLOCATION_BYTES: usize = 512 * 1024 * 1024;
 static MAX_ALLOCATION_BYTES_ONCE: Once = Once::new();
 
 /// Describes errors happened trying to allocate too many bytes
-#[derive(Fail, Debug)]
-#[fail(display = "Allocation error: {}", _0)]
+#[derive(Debug)]
 pub struct AllocationError(String);
 
 impl AllocationError {
@@ -30,9 +30,16 @@ impl AllocationError {
     }
 }
 
+impl fmt::Display for AllocationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Allocation error: {}", self.0)
+    }
+}
+
+impl std::error::Error for AllocationError {}
+
 /// Describes errors happened while decoding Avro data.
-#[derive(Fail, Debug)]
-#[fail(display = "Decoding error: {}", _0)]
+#[derive(Debug)]
 pub struct DecodeError(String);
 
 impl DecodeError {
@@ -43,6 +50,14 @@ impl DecodeError {
         DecodeError(msg.into())
     }
 }
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Decoding error: {}", self.0)
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 pub trait MapHelper {
     fn string(&self, key: &str) -> Option<String>;

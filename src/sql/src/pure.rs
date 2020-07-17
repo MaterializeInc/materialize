@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use failure::{bail, ResultExt};
+use anyhow::{bail, Context};
 use tokio::io::AsyncBufReadExt;
 
 use repr::strconv;
@@ -26,7 +26,7 @@ use crate::normalize;
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
 /// time to complete.
-pub async fn purify(mut stmt: Statement) -> Result<Statement, failure::Error> {
+pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
     if let Statement::CreateSource {
         col_names,
         connector,
@@ -84,7 +84,7 @@ async fn purify_format(
     col_names: &mut Vec<Ident>,
     file: Option<tokio::fs::File>,
     connector_options: &HashMap<String, String>,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     match format {
         Some(Format::Avro(schema)) => match schema {
             AvroSchema::CsrUrl {
@@ -168,17 +168,17 @@ pub struct Schema {
 async fn get_remote_avro_schema(
     schema_registry_config: ccsr::ClientConfig,
     topic: String,
-) -> Result<Schema, failure::Error> {
+) -> Result<Schema, anyhow::Error> {
     let ccsr_client = schema_registry_config.clone().build();
 
     let value_schema_name = format!("{}-value", topic);
     let value_schema = ccsr_client
         .get_schema_by_subject(&value_schema_name)
         .await
-        .with_context(|err| {
+        .with_context(|| {
             format!(
-                "fetching latest schema for subject '{}' from registry: {}",
-                value_schema_name, err
+                "fetching latest schema for subject '{}' from registry",
+                value_schema_name
             )
         })?;
     let subject = format!("{}-key", topic);

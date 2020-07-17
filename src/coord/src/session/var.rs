@@ -13,7 +13,7 @@
 
 use std::borrow::Borrow;
 
-use failure::bail;
+use anyhow::bail;
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
 pub trait Var {
@@ -96,7 +96,7 @@ where
 }
 
 impl SessionVar<bool> {
-    pub fn set(&mut self, value: &str) -> Result<(), failure::Error> {
+    pub fn set(&mut self, value: &str) -> Result<(), anyhow::Error> {
         if value == "t" || value == "true" || value == "on" {
             self.value = Some(true)
         } else if value == "f" || value == "false" || value == "off" {
@@ -123,7 +123,7 @@ impl Var for SessionVar<bool> {
 }
 
 impl SessionVar<str> {
-    pub fn set(&mut self, value: &str) -> Result<(), failure::Error> {
+    pub fn set(&mut self, value: &str) -> Result<(), anyhow::Error> {
         self.value = Some(value.to_owned());
         Ok(())
     }
@@ -144,7 +144,7 @@ impl Var for SessionVar<str> {
 }
 
 impl SessionVar<i32> {
-    pub fn set(&mut self, value: &str) -> Result<(), failure::Error> {
+    pub fn set(&mut self, value: &str) -> Result<(), anyhow::Error> {
         match value.parse() {
             Ok(value) => {
                 self.value = Some(value);

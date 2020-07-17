@@ -36,8 +36,8 @@ use std::str;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::{anyhow, bail};
 use bytes::BytesMut;
-use failure::{bail, format_err, ResultExt};
 use futures::executor::block_on;
 use itertools::izip;
 use lazy_static::lazy_static;
@@ -58,15 +58,15 @@ use crate::util;
 #[derive(Debug)]
 pub enum Outcome<'a> {
     Unsupported {
-        error: failure::Error,
+        error: anyhow::Error,
         location: Location,
     },
     ParseFailure {
-        error: failure::Error,
+        error: anyhow::Error,
         location: Location,
     },
     PlanFailure {
-        error: failure::Error,
+        error: anyhow::Error,
         location: Location,
     },
     UnexpectedPlanSuccess {
@@ -134,15 +134,9 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error, location } => {
-                write_err(&format!("Unsupported:{}", location), error, f)
-            }
-            ParseFailure { error, location } => {
-                write_err(&format!("ParseFailure:{}", location), error, f)
-            }
-            PlanFailure { error, location } => {
-                write_err(&format!("PlanFailure:{}", location), error, f)
-            }
+            Unsupported { error, location } => write!(f, "Unsupported:{}:\n{}", location, error),
+            ParseFailure { error, location } => write!(f, "ParseFailure:{}:\n{}", location, error),
+            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{}", location, error),
             UnexpectedPlanSuccess {
                 expected_error,
                 location,
@@ -284,16 +278,6 @@ impl Outcomes {
     }
 }
 
-/// Write an error and its causes in a common format
-fn write_err(kind: &str, error: &impl failure::AsFail, f: &mut fmt::Formatter) -> fmt::Result {
-    let error = error.as_fail();
-    write!(f, "{0}: {1} ({1:?})", kind, error)?;
-    for cause in error.iter_causes() {
-        write!(f, "\n    caused by: {}", cause)?;
-    }
-    Ok(())
-}
-
 const NUM_TIMELY_WORKERS: usize = 3;
 
 pub(crate) struct State {
@@ -387,7 +371,7 @@ fn format_row(
 }
 
 impl State {
-    pub fn start() -> Result<Self, failure::Error> {
+    pub fn start() -> Result<Self, anyhow::Error> {
         let logging_config = None;
         let process_id = 0;
 
@@ -432,7 +416,7 @@ impl State {
         })
     }
 
-    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
+    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, anyhow::Error> {
         match &record {
             Record::Statement {
                 expected_error,
@@ -472,7 +456,7 @@ impl State {
         expected_rows_affected: Option<usize>,
         sql: &'a str,
         location: Location,
-    ) -> Result<Outcome<'a>, failure::Error> {
+    ) -> Result<Outcome<'a>, anyhow::Error> {
         lazy_static! {
             static ref UNSUPPORTED_INDEX_STATEMENT_REGEX: Regex =
                 Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap();
@@ -508,10 +492,7 @@ impl State {
                         }
 
                         _ => Ok(Outcome::PlanFailure {
-                            error: failure::format_err!(
-                                "Query did not insert any rows, expected {}",
-                                expected,
-                            ),
+                            error: anyhow!("Query did not insert any rows, expected {}", expected,),
                             location,
                         }),
                     },
@@ -533,7 +514,7 @@ impl State {
         sql: &'a str,
         output: &'a Result<QueryOutput, &'a str>,
         location: Location,
-    ) -> Result<Outcome<'a>, failure::Error> {
+    ) -> Result<Outcome<'a>, anyhow::Error> {
         // get statement
         let statements = match sql::parse::parse(sql.to_string()) {
             Ok(statements) => statements,
@@ -568,7 +549,7 @@ impl State {
                 let desc = desc.expect("RelationDesc missing for query that returns rows");
                 let rows = match block_on(rx)? {
                     PeekResponse::Rows(rows) => Ok(rows),
-                    PeekResponse::Error(e) => Err(format_err!("{}", e)),
+                    PeekResponse::Error(e) => Err(anyhow!("{}", e)),
                     PeekResponse::Canceled => {
                         panic!("sqllogictest query cannot possibly be canceled")
                     }
@@ -577,7 +558,7 @@ impl State {
             }
             Ok(other) => {
                 return Ok(Outcome::PlanFailure {
-                    error: failure::format_err!(
+                    error: anyhow!(
                         "Query did not result in SendingRows, instead got {:?}",
                         other
                     ),
@@ -748,7 +729,7 @@ impl State {
     pub(crate) fn run_sql(
         &mut self,
         sql: &str,
-    ) -> Result<(Option<RelationDesc>, ExecuteResponse), failure::Error> {
+    ) -> Result<(Option<RelationDesc>, ExecuteResponse), anyhow::Error> {
         let stmts = sql::parse::parse(sql.into())?;
         let stmt = if stmts.len() == 1 {
             stmts.into_iter().next().unwrap()
@@ -810,7 +791,7 @@ fn print_record(record: &Record) {
     }
 }
 
-pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcomes, failure::Error> {
+pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
     let mut state = State::start().unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
@@ -825,7 +806,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcome
 
         let outcome = state
             .run_record(&record)
-            .with_context(|err| format!("In {}:\n{}", source, err))
+            .map_err(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
         // Print failures in verbose mode.
@@ -852,19 +833,19 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Result<Outcome
     Ok(outcomes)
 }
 
-pub fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, failure::Error> {
+pub fn run_file(filename: &Path, verbosity: usize) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
     run_string(&format!("{}", filename.display()), &input, verbosity)
 }
 
-pub fn run_stdin(verbosity: usize) -> Result<Outcomes, failure::Error> {
+pub fn run_stdin(verbosity: usize) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input)?;
     run_string("<stdin>", &input, verbosity)
 }
 
-pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), failure::Error> {
+pub fn rewrite_file(filename: &Path, _verbosity: usize) -> Result<(), anyhow::Error> {
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
     let mut input = String::new();

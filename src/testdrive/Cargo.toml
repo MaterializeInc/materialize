@@ -15,7 +15,6 @@ bytes = "0.5.6"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
 coord = { path = "../coord" }
-failure = "0.1.8"
 futures = "0.3"
 getopts = "0.2"
 interchange = { path = "../interchange" }

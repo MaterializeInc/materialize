@@ -8,7 +8,6 @@ publish = false
 [dependencies]
 bytes = "0.5"
 fallible-iterator = "0.2.0"
-failure = "0.1"
 futures = "0.3"
 lazy_static = "1.4.0"
 libc = "0.2.73"

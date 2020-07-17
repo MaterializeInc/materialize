@@ -27,8 +27,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use compile_time_run::run_command_str;
-use failure::format_err;
 use futures::channel::mpsc;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use stream_cancel::{StreamExt as _, Trigger, Tripwire};
@@ -145,7 +145,7 @@ pub struct TlsConfig {
 }
 
 impl TlsConfig {
-    fn acceptor(&self) -> Result<SslAcceptor, failure::Error> {
+    fn acceptor(&self) -> Result<SslAcceptor, anyhow::Error> {
         let mut builder = SslAcceptor::mozilla_modern_v5(SslMethod::tls())?;
         builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
@@ -154,7 +154,7 @@ impl TlsConfig {
 }
 
 /// Start a `materialized` server.
-pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
+pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     let start_time = Instant::now();
 
     // Construct shared channels for SQL command and result exchange, and
@@ -265,7 +265,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
         executor.clone(),
         logging_config.clone(),
     )
-    .map_err(|s| format_err!("{}", s))?;
+    .map_err(|s| anyhow!("{}", s))?;
 
     // Initialize coordinator, but only on the primary.
     //

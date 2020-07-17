@@ -293,7 +293,7 @@ pub trait SourceInfo<Out> {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Result<Option<SourceMessage<Out>>, failure::Error>;
+    ) -> Result<Option<SourceMessage<Out>>, anyhow::Error>;
 
     /// Buffer a message that cannot get timestamped
     fn buffer_message(&mut self, message: SourceMessage<Out>);
