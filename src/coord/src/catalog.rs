@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
-use repr::{RelationDesc, Row};
+use repr::{RelationDesc, Row, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::names::{DatabaseSpecifier, FullName, PartialName};
 use sql::plan::{Params, Plan, PlanContext};
@@ -162,6 +162,48 @@ pub struct Index {
     pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<ScalarExpr>,
+}
+
+/// Represents a catalog view. When adding a new one, ensure you add it to the all_views() vector.
+#[derive(Debug, Copy, Clone)]
+pub enum CatalogView {
+    MzKafkaSinks,
+}
+
+// TODO(justin): lots of overlap here with the logging views, can/should
+// they be unified?
+impl CatalogView {
+    pub fn all_views() -> Vec<CatalogView> {
+        vec![CatalogView::MzKafkaSinks]
+    }
+
+    pub fn name(&self) -> String {
+        match self {
+            CatalogView::MzKafkaSinks => "mz_kafka_sinks",
+        }
+        .into()
+    }
+
+    pub fn id(&self) -> GlobalId {
+        match self {
+            CatalogView::MzKafkaSinks => GlobalId::System(55),
+        }
+    }
+
+    pub fn index_id(&self) -> GlobalId {
+        match self {
+            CatalogView::MzKafkaSinks => GlobalId::System(56),
+        }
+    }
+
+    pub fn desc(&self) -> RelationDesc {
+        match self {
+            CatalogView::MzKafkaSinks => RelationDesc::empty()
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("topic", ScalarType::String)
+                .with_key(vec![0]),
+        }
+    }
 }
 
 impl CatalogItem {

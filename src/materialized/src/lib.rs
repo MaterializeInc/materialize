@@ -278,6 +278,7 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
             num_timely_workers,
             symbiosis_url: config.symbiosis_url.as_deref(),
             logging: logging_config.as_ref(),
+            logging_granularity: config.logging_granularity,
             data_directory: config.data_directory.as_deref(),
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,

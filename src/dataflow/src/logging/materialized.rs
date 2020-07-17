@@ -52,15 +52,6 @@ pub enum MaterializedEvent {
         /// Globally unique identifier for the source on which the dataflow depends.
         source: GlobalId,
     },
-    /// Kafka sink.
-    KafkaSink {
-        /// Globally unique identifer for the sink.
-        id: GlobalId,
-        /// Name of the topic written to.
-        topic: String,
-        /// True for insertions, false for deletions.
-        insert: bool,
-    },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Available frontier information for views.
@@ -125,7 +116,6 @@ pub fn construct<A: Allocate>(
         let (mut primary_out, primary) = demux.new_output();
         let (mut foreign_out, foreign) = demux.new_output();
         let (mut catalog_out, catalog) = demux.new_output();
-        let (mut kafka_sinks_out, kafka_sinks) = demux.new_output();
         let (mut avro_ocf_sinks_out, avro_ocf_sinks) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
@@ -143,7 +133,6 @@ pub fn construct<A: Allocate>(
                 let mut primary = primary_out.activate();
                 let mut foreign = foreign_out.activate();
                 let mut catalog = catalog_out.activate();
-                let mut kafka_sinks = kafka_sinks_out.activate();
                 let mut avro_ocf_sinks = avro_ocf_sinks_out.activate();
 
                 input.for_each(|time, data| {
@@ -156,7 +145,6 @@ pub fn construct<A: Allocate>(
                     let mut primary_session = primary.session(&time);
                     let mut foreign_session = foreign.session(&time);
                     let mut catalog_session = catalog.session(&time);
-                    let mut kafka_sinks_session = kafka_sinks.session(&time);
                     let mut avro_ocf_sinks_session = avro_ocf_sinks.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
@@ -257,16 +245,6 @@ pub fn construct<A: Allocate>(
                                         key.0, source, worker,
                                     ),
                                 }
-                            }
-                            MaterializedEvent::KafkaSink { id, topic, insert } => {
-                                kafka_sinks_session.give((
-                                    row_packer.pack(&[
-                                        Datum::String(&id.to_string()),
-                                        Datum::String(&topic),
-                                    ]),
-                                    time_ms,
-                                    if insert { 1 } else { -1 },
-                                ))
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
                                 peek_session.give((peek, worker, is_install, time_ns))
@@ -390,7 +368,6 @@ pub fn construct<A: Allocate>(
                 row_packer.pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
             }
         });
-        let kafka_sinks = kafka_sinks.as_collection();
         let avro_ocf_sinks = avro_ocf_sinks.as_collection();
 
         // Duration statistics derive from the non-rounded event times.
@@ -487,10 +464,6 @@ pub fn construct<A: Allocate>(
                 foreign_key,
             ),
             (LogVariant::Materialized(MaterializedLog::Catalog), catalog),
-            (
-                LogVariant::Materialized(MaterializedLog::KafkaSinks),
-                kafka_sinks,
-            ),
             (
                 LogVariant::Materialized(MaterializedLog::AvroOcfSinks),
                 avro_ocf_sinks,

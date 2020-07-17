@@ -88,7 +88,6 @@ pub enum MaterializedLog {
     PrimaryKeys,
     ForeignKeys,
     Catalog,
-    KafkaSinks,
     AvroOcfSinks,
 }
 
@@ -111,7 +110,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys),
             LogVariant::Materialized(MaterializedLog::ForeignKeys),
             LogVariant::Materialized(MaterializedLog::Catalog),
-            LogVariant::Materialized(MaterializedLog::KafkaSinks),
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks),
         ]
     }
@@ -139,7 +137,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys",
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys",
             LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names",
-            LogVariant::Materialized(MaterializedLog::KafkaSinks) => "mz_kafka_sinks",
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => "mz_avro_ocf_sinks",
         }
     }
@@ -163,7 +160,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(27),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(29),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(31),
-            LogVariant::Materialized(MaterializedLog::KafkaSinks) => GlobalId::system(55),
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => GlobalId::system(57),
         }
     }
@@ -187,7 +183,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(28),
             LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(30),
             LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(32),
-            LogVariant::Materialized(MaterializedLog::KafkaSinks) => GlobalId::system(56),
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => GlobalId::system(58),
         }
     }
@@ -307,11 +302,6 @@ impl LogVariant {
                 .with_nonnull_column("name", ScalarType::String)
                 .with_key(vec![0]),
 
-            LogVariant::Materialized(MaterializedLog::KafkaSinks) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("topic", ScalarType::String)
-                .with_key(vec![0]),
-
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => RelationDesc::empty()
                 .with_nonnull_column("global_id", ScalarType::String)
                 .with_nonnull_column("path", ScalarType::Bytes)
@@ -369,7 +359,6 @@ impl LogVariant {
                 ),
             ],
             LogVariant::Materialized(MaterializedLog::Catalog) => vec![],
-            LogVariant::Materialized(MaterializedLog::KafkaSinks) => vec![],
             LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => vec![],
         }
     }
