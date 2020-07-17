@@ -503,13 +503,17 @@ impl Name {
         }
 
         let (namespace, name) = if let Some(index) = name.rfind('.') {
-            let namespace = name[..index].to_owned();
-            let new_name = name[index + 1..].to_owned();
-            warn!(
-                "Found dots in name {}, translating to namespace {} and name {}",
-                name, namespace, new_name
-            );
-            (Some(namespace), new_name)
+            let computed_namespace = name[..index].to_owned();
+            let computed_name = name[index + 1..].to_owned();
+            if let Some(provided_namespace) = complex.string("namespace") {
+                if provided_namespace != computed_namespace {
+                    warn!(
+                        "Found dots in name {}, updating to namespace {} and name {}",
+                        name, computed_namespace, computed_name
+                    );
+                }
+            }
+            (Some(computed_namespace), computed_name)
         } else {
             (complex.string("namespace"), name)
         };
