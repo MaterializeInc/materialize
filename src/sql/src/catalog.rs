@@ -11,6 +11,7 @@
 
 //! Catalog abstraction layer.
 
+use std::error::Error;
 use std::fmt;
 use std::time::SystemTime;
 
@@ -69,7 +70,7 @@ pub trait Catalog: fmt::Debug {
     /// [`resolve_item`], but there is no such thing as a "partial" database
     /// name. All database names are full names. This function amounts to an
     /// existence check for the named database.
-    fn resolve_database(&self, database_name: &str) -> Result<(), anyhow::Error>;
+    fn resolve_database(&self, database_name: &str) -> Result<(), CatalogError>;
 
     /// Resolves a partially-specified schema name.
     ///
@@ -82,7 +83,7 @@ pub trait Catalog: fmt::Debug {
         &self,
         database_name: Option<String>,
         schema_name: &str,
-    ) -> Result<DatabaseSpecifier, anyhow::Error>;
+    ) -> Result<DatabaseSpecifier, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -96,7 +97,7 @@ pub trait Catalog: fmt::Debug {
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialName) -> Result<FullName, anyhow::Error>;
+    fn resolve_item(&self, item_name: &PartialName) -> Result<FullName, CatalogError>;
 
     /// Lists the databases in the catalog.
     fn list_databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a>;
@@ -148,7 +149,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self) -> Result<&RelationDesc, anyhow::Error>;
+    fn desc(&self) -> Result<&RelationDesc, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
@@ -196,6 +197,43 @@ impl fmt::Display for CatalogItemType {
     }
 }
 
+/// An error returned by the catalog.
+#[derive(Debug)]
+pub enum CatalogError {
+    /// Unknown database.
+    UnknownDatabase(String),
+    /// Unknown schema.
+    UnknownSchema(String),
+    /// Unknown item.
+    UnknownItem(String),
+    /// Invalid attempt to depend on a sink.
+    InvalidSinkDependency(String),
+    /// Invalid attempt to depend on an index.
+    InvalidIndexDependency(String),
+}
+
+impl fmt::Display for CatalogError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
+            Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
+            Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::InvalidSinkDependency(name) => write!(
+                f,
+                "catalog item '{}' is a sink and so cannot be depended upon",
+                name
+            ),
+            Self::InvalidIndexDependency(name) => write!(
+                f,
+                "catalog item '{}' is an index and so cannot be depended upon",
+                name
+            ),
+        }
+    }
+}
+
+impl Error for CatalogError {}
+
 /// A dummy [`Catalog`] implementation.
 ///
 /// This implementation is suitable for use in tests that plan queries which are
@@ -216,7 +254,7 @@ impl Catalog for DummyCatalog {
         "dummy"
     }
 
-    fn resolve_database(&self, _: &str) -> Result<(), anyhow::Error> {
+    fn resolve_database(&self, _: &str) -> Result<(), CatalogError> {
         unimplemented!();
     }
 
@@ -224,11 +262,11 @@ impl Catalog for DummyCatalog {
         &self,
         _: Option<String>,
         _: &str,
-    ) -> Result<DatabaseSpecifier, anyhow::Error> {
+    ) -> Result<DatabaseSpecifier, CatalogError> {
         unimplemented!();
     }
 
-    fn resolve_item(&self, _: &PartialName) -> Result<FullName, anyhow::Error> {
+    fn resolve_item(&self, _: &PartialName) -> Result<FullName, CatalogError> {
         unimplemented!();
     }
 

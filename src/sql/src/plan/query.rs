@@ -42,16 +42,17 @@ use repr::{
 };
 
 use crate::names::PartialName;
+use crate::normalize;
+use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
     JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
-use crate::plan::scope::{Scope, ScopeItem, ScopeItemName, ScopeResolutionError};
+use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastTo, CoerceTo};
-use crate::{normalize, unsupported};
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -1579,7 +1580,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     })
 }
 
-fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, anyhow::Error> {
+fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, PlanError> {
     let mut names = names.to_vec();
     let col_name = normalize::column_name(names.pop().unwrap());
 
@@ -1593,8 +1594,8 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, any
     // If the name is unqualified, first check if it refers to a column.
     match ecx.scope.resolve_column(&col_name) {
         Ok((i, _name)) => return Ok(ScalarExpr::Column(i)),
-        Err(ScopeResolutionError::NotFound(_)) => (),
-        Err(e) => return Err(e.into()),
+        Err(PlanError::UnknownColumn(_)) => (),
+        Err(e) => return Err(e),
     }
 
     // The name doesn't refer to a column. Check if it refers to a table. If it
@@ -1633,7 +1634,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, any
         });
     }
 
-    bail!("column \"{}\" does not exist", col_name);
+    Err(PlanError::UnknownColumn(col_name.to_string()))
 }
 
 fn plan_function<'a>(

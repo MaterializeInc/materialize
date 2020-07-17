@@ -11,6 +11,23 @@
 
 #![deny(missing_debug_implementations)]
 
+macro_rules! unsupported {
+    ($feature:expr) => {
+        return Err(crate::plan::error::PlanError::Unsupported {
+            feature: $feature.to_string(),
+            issue_no: None,
+        }
+        .into());
+    };
+    ($issue:expr, $feature:expr) => {
+        return Err(crate::plan::error::PlanError::Unsupported {
+            feature: $feature.to_string(),
+            issue_no: Some($issue),
+        }
+        .into());
+    };
+}
+
 mod kafka_util;
 
 pub mod ast;
@@ -20,13 +37,3 @@ pub mod normalize;
 pub mod parse;
 pub mod plan;
 pub mod pure;
-
-#[macro_export]
-macro_rules! unsupported {
-    ($feature:expr) => {
-        bail!("{} not yet supported", $feature)
-    };
-    ($issue:expr, $feature:expr) => {
-        bail!("{} not yet supported, see https://github.com/MaterializeInc/materialize/issues/{} for more details", $feature, $issue)
-    };
-}

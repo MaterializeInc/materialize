@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use expr::GlobalId;
 use ore::cast::CastFrom;
+use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName};
 
 use crate::catalog::error::{Error, ErrorKind};
@@ -311,9 +312,9 @@ impl Transaction<'_> {
             .query_row(params![database_name], |row| row.get(0))
         {
             Ok(id) => Ok(id),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Err(Error::new(
-                ErrorKind::UnknownDatabase(database_name.to_owned()),
-            )),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                Err(SqlCatalogError::UnknownDatabase(database_name.to_owned()).into())
+            }
             Err(err) => Err(err.into()),
         }
     }
@@ -326,7 +327,7 @@ impl Transaction<'_> {
         {
             Ok(id) => Ok(id),
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                Err(Error::new(ErrorKind::UnknownSchema(schema_name.to_owned())))
+                Err(SqlCatalogError::UnknownSchema(schema_name.to_owned()).into())
             }
             Err(err) => Err(err.into()),
         }
@@ -391,7 +392,7 @@ impl Transaction<'_> {
         if n == 1 {
             Ok(())
         } else {
-            Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned())))
+            Err(SqlCatalogError::UnknownDatabase(name.to_owned()).into())
         }
     }
 
@@ -404,7 +405,7 @@ impl Transaction<'_> {
         if n == 1 {
             Ok(())
         } else {
-            Err(Error::new(ErrorKind::UnknownSchema(schema_name.to_owned())))
+            Err(SqlCatalogError::UnknownSchema(schema_name.to_owned()).into())
         }
     }
 
@@ -417,7 +418,7 @@ impl Transaction<'_> {
         if n == 1 {
             Ok(())
         } else {
-            Err(Error::new(ErrorKind::UnknownItem(id.to_string())))
+            Err(SqlCatalogError::UnknownItem(id.to_string()).into())
         }
     }
 
@@ -430,7 +431,7 @@ impl Transaction<'_> {
         if n == 1 {
             Ok(())
         } else {
-            Err(Error::new(ErrorKind::UnknownItem(id.to_string())))
+            Err(SqlCatalogError::UnknownItem(id.to_string()).into())
         }
     }
 

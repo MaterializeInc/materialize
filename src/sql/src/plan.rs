@@ -38,6 +38,7 @@ use crate::catalog::Catalog;
 use crate::names::{DatabaseSpecifier, FullName};
 
 pub(crate) mod decorrelate;
+pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod func;
@@ -49,6 +50,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 
 pub use self::expr::RelationExpr;
+pub use error::PlanError;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::scalar_type_from_sql;
 pub use statement::StatementContext;

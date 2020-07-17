@@ -11,6 +11,8 @@ use std::fmt;
 
 use backtrace::Backtrace;
 
+use sql::catalog::CatalogError as SqlCatalogError;
+
 #[derive(Debug)]
 pub struct Error {
     pub(crate) kind: ErrorKind,
@@ -23,9 +25,7 @@ pub(crate) enum ErrorKind {
         detail: String,
     },
     IdExhaustion,
-    UnknownDatabase(String),
-    UnknownSchema(String),
-    UnknownItem(String),
+    Sql(SqlCatalogError),
     DatabaseAlreadyExists(String),
     SchemaAlreadyExists(String),
     ItemAlreadyExists(String),
@@ -62,14 +62,17 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
+impl From<SqlCatalogError> for Error {
+    fn from(e: SqlCatalogError) -> Error {
+        Error::new(ErrorKind::Sql(e))
+    }
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.kind {
             ErrorKind::Corruption { .. }
             | ErrorKind::IdExhaustion
-            | ErrorKind::UnknownDatabase(_)
-            | ErrorKind::UnknownSchema(_)
-            | ErrorKind::UnknownItem(_)
             | ErrorKind::DatabaseAlreadyExists(_)
             | ErrorKind::SchemaAlreadyExists(_)
             | ErrorKind::ItemAlreadyExists(_)
@@ -82,6 +85,7 @@ impl std::error::Error for Error {
             | ErrorKind::AmbiguousRename { .. }
             | ErrorKind::ExperimentalModeRequired
             | ErrorKind::ExperimentalModeUnavailable => None,
+            ErrorKind::Sql(e) => Some(e),
             ErrorKind::Storage(e) => Some(e),
         }
     }
@@ -92,9 +96,7 @@ impl fmt::Display for Error {
         match &self.kind {
             ErrorKind::Corruption { detail } => write!(f, "corrupt catalog: {}", detail),
             ErrorKind::IdExhaustion => write!(f, "id counter overflows i64"),
-            ErrorKind::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
-            ErrorKind::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
-            ErrorKind::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            ErrorKind::Sql(e) => write!(f, "{}", e),
             ErrorKind::DatabaseAlreadyExists(name) => {
                 write!(f, "database '{}' already exists", name)
             }
