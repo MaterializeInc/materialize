@@ -97,7 +97,7 @@ impl Server {
         METHODS.contains(&buf)
     }
 
-    pub async fn handle_connection<A>(&self, conn: SniffedStream<A>) -> Result<(), failure::Error>
+    pub async fn handle_connection<A>(&self, conn: SniffedStream<A>) -> Result<(), anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
     {
@@ -110,7 +110,7 @@ impl Server {
         }
     }
 
-    async fn handle_connection_inner<A>(&self, conn: A) -> Result<(), failure::Error>
+    async fn handle_connection_inner<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin + 'static,
     {
@@ -134,7 +134,7 @@ impl Server {
     }
 }
 
-async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error> {
+async fn handle_home(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
     Ok(Response::new(Body::from(format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -160,7 +160,7 @@ async fn handle_home(_: Request<Body>) -> Result<Response<Body>, failure::Error>
 async fn handle_prometheus(
     _: Request<Body>,
     start_time: Instant,
-) -> Result<Response<Body>, failure::Error> {
+) -> Result<Response<Body>, anyhow::Error> {
     let metric_families = load_prom_metrics(start_time);
     let encoder = prometheus::TextEncoder::new();
     let mut buffer = Vec::new();
@@ -175,7 +175,7 @@ async fn handle_prometheus(
 async fn handle_status(
     _: Request<Body>,
     start_time: Instant,
-) -> Result<Response<Body>, failure::Error> {
+) -> Result<Response<Body>, anyhow::Error> {
     let metric_families = load_prom_metrics(start_time);
 
     let desired_metrics = {
@@ -373,7 +373,7 @@ impl PromMetric<'_> {
 async fn handle_internal_catalog(
     _: Request<Body>,
     mut cmdq_tx: UnboundedSender<coord::Command>,
-) -> Result<Response<Body>, failure::Error> {
+) -> Result<Response<Body>, anyhow::Error> {
     let (tx, rx) = futures::channel::oneshot::channel();
     cmdq_tx.send(coord::Command::DumpCatalog { tx }).await?;
     let dump = rx.await?;
@@ -383,7 +383,7 @@ async fn handle_internal_catalog(
         .unwrap())
 }
 
-async fn handle_unknown(_: Request<Body>) -> Result<Response<Body>, failure::Error> {
+async fn handle_unknown(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
     Ok(Response::builder()
         .status(403)
         .body(Body::from("bad request"))

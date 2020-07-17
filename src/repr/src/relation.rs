@@ -11,7 +11,7 @@ use std::fmt;
 use std::iter;
 use std::vec;
 
-use failure::bail;
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use crate::ScalarType;
@@ -39,7 +39,7 @@ impl ColumnType {
         }
     }
 
-    pub fn union(&self, other: &Self) -> Result<Self, failure::Error> {
+    pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         if self.scalar_type != other.scalar_type {
             bail!(
                 "Can't union types: {:?} and {:?}",

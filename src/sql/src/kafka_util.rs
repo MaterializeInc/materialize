@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use ccsr::tls::{Certificate, Identity};
 use reqwest::Url;
 
-use failure::bail;
+use anyhow::bail;
 use log::{debug, error, info, warn};
 use rdkafka::consumer::BaseConsumer;
 use sql_parser::ast::Value;
@@ -70,7 +70,7 @@ impl Config {
         self.name.replace("_", ".")
     }
 
-    fn validate_val(&self, val: &Value) -> Result<String, failure::Error> {
+    fn validate_val(&self, val: &Value) -> Result<String, anyhow::Error> {
         let val = match (&self.val_type, val) {
             (ValType::String, Value::String(v)) => v.to_string(),
             (ValType::Path, Value::String(v)) => {
@@ -92,7 +92,7 @@ impl Config {
 fn extract(
     input: &HashMap<String, Value>,
     configs: &[Config],
-) -> Result<HashMap<String, String>, failure::Error> {
+) -> Result<HashMap<String, String>, anyhow::Error> {
     let mut out = HashMap::new();
     for config in configs {
         let value = match input.get(config.name) {
@@ -118,7 +118,7 @@ fn extract(
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &HashMap<String, Value>,
-) -> Result<HashMap<String, String>, failure::Error> {
+) -> Result<HashMap<String, String>, anyhow::Error> {
     extract(
         with_options,
         &[
@@ -166,7 +166,7 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 ///   For example, when using Kerberos auth, and the named principal does not
 ///   exist.
-pub fn test_config(options: &HashMap<String, String>) -> Result<(), failure::Error> {
+pub fn test_config(options: &HashMap<String, String>) -> Result<(), anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
     for (k, v) in options {
         config.set(k, v);
@@ -252,7 +252,7 @@ pub fn generate_ccsr_client_config(
     csr_url: Url,
     kafka_options: &HashMap<String, String>,
     ccsr_options: &HashMap<String, Value>,
-) -> Result<ccsr::ClientConfig, failure::Error> {
+) -> Result<ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = ccsr::ClientConfig::new(csr_url);
 
     if let Some(ca_path) = kafka_options.get("ssl.ca.location") {

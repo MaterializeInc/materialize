@@ -25,7 +25,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use failure::{bail, ResultExt};
+use anyhow::{bail, Context};
 use futures::executor::block_on;
 use futures::future::{self, TryFutureExt};
 use futures::sink::SinkExt;
@@ -72,14 +72,14 @@ pub enum Message {
     StatementReady {
         session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
-        result: Result<sql::ast::Statement, failure::Error>,
+        result: Result<sql::ast::Statement, anyhow::Error>,
         params: Params,
     },
     SinkConnectorReady {
         session: Session,
         tx: ClientTransmitter<ExecuteResponse>,
         id: GlobalId,
-        result: Result<SinkConnector, failure::Error>,
+        result: Result<SinkConnector, anyhow::Error>,
     },
     Shutdown,
 }
@@ -147,7 +147,7 @@ impl<C> Coordinator<C>
 where
     C: comm::Connection,
 {
-    pub fn new(config: Config<C>) -> Result<Self, failure::Error> {
+    pub fn new(config: Config<C>) -> Result<Self, anyhow::Error> {
         let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
         config.executor.enter(|| {
             let res = Self::new_core(config);
@@ -158,7 +158,7 @@ where
         })
     }
 
-    fn new_core(config: Config<C>) -> Result<Self, failure::Error> {
+    fn new_core(config: Config<C>) -> Result<Self, anyhow::Error> {
         let mut broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
 
         let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
@@ -252,7 +252,7 @@ where
                         coord.determine_frontier(sink.as_of, sink.from)?,
                         id,
                     ))
-                    .with_context(|e| format!("recreating sink {}: {}", name, e))?;
+                    .with_context(|| format!("recreating sink {}", name))?;
                     coord.handle_sink_connector_ready(id, connector);
                 }
                 CatalogItem::Index(index) => match id {
@@ -415,11 +415,11 @@ where
                 }) => {
                     let result = session
                         .get_portal(&portal_name)
-                        .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))
+                        .ok_or_else(|| anyhow::format_err!("portal does not exist {:?}", portal_name))
                         .and_then(|portal| {
                             session
                                 .get_prepared_statement(&portal.statement_name)
-                                .ok_or_else(|| failure::format_err!(
+                                .ok_or_else(|| anyhow::format_err!(
                                     "statement for portal does not exist portal={:?} statement={:?}",
                                     portal_name,
                                     portal.statement_name
@@ -846,7 +846,7 @@ where
         &mut self,
         name: String,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let ops = vec![
             catalog::Op::CreateDatabase { name: name.clone() },
             catalog::Op::CreateSchema {
@@ -866,7 +866,7 @@ where
         database_name: DatabaseSpecifier,
         schema_name: String,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let op = catalog::Op::CreateSchema {
             database_name,
             schema_name,
@@ -884,7 +884,7 @@ where
         name: FullName,
         desc: RelationDesc,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let source_id = self.catalog.allocate_id()?;
         let source = catalog::Source {
             create_sql: "TODO (see #2755)".to_string(),
@@ -942,7 +942,7 @@ where
         source: sql::plan::Source,
         if_not_exists: bool,
         materialized: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let source = catalog::Source {
             create_sql: source.create_sql,
             plan_cx: pcx,
@@ -1081,7 +1081,7 @@ where
         conn_id: u32,
         materialize: bool,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let mut ops = vec![];
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
@@ -1148,7 +1148,7 @@ where
         name: FullName,
         index: sql::plan::Index,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let index = catalog::Index {
             create_sql: index.create_sql,
             plan_cx: pcx,
@@ -1171,7 +1171,7 @@ where
         }
     }
 
-    fn sequence_drop_database(&mut self, name: String) -> Result<ExecuteResponse, failure::Error> {
+    fn sequence_drop_database(&mut self, name: String) -> Result<ExecuteResponse, anyhow::Error> {
         let ops = self.catalog.drop_database_ops(name);
         self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedDatabase)
@@ -1181,7 +1181,7 @@ where
         &mut self,
         database_name: DatabaseSpecifier,
         schema_name: String,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let ops = self.catalog.drop_schema_ops(database_name, schema_name);
         self.catalog_transact(ops)?;
         Ok(ExecuteResponse::DroppedSchema)
@@ -1191,7 +1191,7 @@ where
         &mut self,
         items: Vec<GlobalId>,
         ty: ObjectType,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let ops = self.catalog.drop_items_ops(&items);
         self.catalog_transact(ops)?;
         Ok(match ty {
@@ -1207,7 +1207,7 @@ where
     fn sequence_show_all_variables(
         &mut self,
         session: &Session,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let mut row_packer = RowPacker::new();
         Ok(send_immediate_rows(
             session
@@ -1228,7 +1228,7 @@ where
         &self,
         session: &Session,
         name: String,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let variable = session.get(&name)?;
         let row = Row::pack(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
@@ -1239,7 +1239,7 @@ where
         session: &mut Session,
         name: String,
         value: String,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         session.set(&name, &value)?;
         Ok(ExecuteResponse::SetVariable { name })
     }
@@ -1251,7 +1251,7 @@ where
         when: PeekWhen,
         finishing: RowSetFinishing,
         materialize: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
         // See if the query is introspecting its own logical timestamp, and
@@ -1408,7 +1408,7 @@ where
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
         let frontier = self.determine_frontier(ts, source_id)?;
@@ -1442,7 +1442,7 @@ where
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
                 let mut explanation = raw_plan.explain(&self.catalog);
@@ -1490,7 +1490,7 @@ where
         updates: Vec<(Row, isize)>,
         affected_rows: usize,
         kind: MutationKind,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let timestamp = self.get_write_ts();
         let updates = updates
             .into_iter()
@@ -1519,7 +1519,7 @@ where
         full: bool,
         show_queryable: bool,
         limit_materialized: bool,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let view_information = ids
             .into_iter()
             .filter_map(|(name, id)| {
@@ -1572,7 +1572,7 @@ where
         id: Option<GlobalId>,
         to_name: String,
         object_type: ObjectType,
-    ) -> Result<ExecuteResponse, failure::Error> {
+    ) -> Result<ExecuteResponse, anyhow::Error> {
         let id = match id {
             Some(id) => id,
             // None is generated by `IF EXISTS`
@@ -1585,7 +1585,7 @@ where
         }
     }
 
-    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), failure::Error> {
+    fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
         let mut sources_to_drop = vec![];
         let mut views_to_drop = vec![];
         let mut sinks_to_drop = vec![];
@@ -2135,7 +2135,7 @@ where
         &mut self,
         source: &RelationExpr,
         when: PeekWhen,
-    ) -> Result<Timestamp, failure::Error> {
+    ) -> Result<Timestamp, anyhow::Error> {
         if self.symbiosis.is_some() {
             // In symbiosis mode, we enforce serializability by forcing all
             // PEEKs to peek at the latest input time.
@@ -2253,7 +2253,7 @@ where
         &mut self,
         as_of: Option<u64>,
         source_id: GlobalId,
-    ) -> Result<Antichain<u64>, failure::Error> {
+    ) -> Result<Antichain<u64>, anyhow::Error> {
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
             Antichain::from_elem(self.determine_timestamp(
@@ -2389,7 +2389,7 @@ where
         session: &Session,
         stmt: sql::ast::Statement,
         params: &sql::plan::Params,
-    ) -> Result<(PlanContext, sql::plan::Plan), failure::Error> {
+    ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
         match sql::plan::plan(
             &pcx,
@@ -2417,7 +2417,7 @@ where
         session: &mut Session,
         name: String,
         stmt: Option<Statement>,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
             match sql::plan::describe(&self.catalog.for_session(session), stmt.clone()) {
                 Ok((desc, param_types)) => (desc, param_types),
@@ -2560,7 +2560,7 @@ fn open_catalog(
     logging_config: Option<&LoggingConfig>,
     mut optimizer: Optimizer,
     experimental_mode: Option<bool>,
-) -> Result<Catalog, failure::Error> {
+) -> Result<Catalog, anyhow::Error> {
     let path = if let Some(data_directory) = data_directory {
         Some(data_directory.join("catalog"))
     } else {
@@ -2721,7 +2721,7 @@ fn open_catalog(
 ///
 /// There are no guarantees about the format of the serialized state, except that
 /// the serialized state for two identical catalogs will compare identically.
-pub fn dump_catalog(data_directory: &Path) -> Result<String, failure::Error> {
+pub fn dump_catalog(data_directory: &Path) -> Result<String, anyhow::Error> {
     let logging_config = LoggingConfig::new(Duration::from_secs(0));
     let catalog = open_catalog(
         Some(data_directory),

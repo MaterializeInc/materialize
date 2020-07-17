@@ -11,7 +11,7 @@
 use std::io::ErrorKind;
 use std::str::{from_utf8, FromStr};
 
-use failure::Error;
+use anyhow::Error;
 use serde_json::from_slice;
 
 use crate::decode::{decode, AvroRead};

@@ -54,7 +54,7 @@ use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub};
 use std::str::FromStr;
 
-use failure::{bail, format_err};
+use anyhow::{anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 /// The significand of a decimal number with up to 38 digits of precision.
@@ -90,7 +90,7 @@ impl Significand {
 
     /// Parses a `Significand` from a buffer storing the two's complement
     /// representation of the significand in big-endian byte order.
-    pub fn from_twos_complement_be(input: &[u8]) -> Result<Significand, failure::Error> {
+    pub fn from_twos_complement_be(input: &[u8]) -> Result<Significand, anyhow::Error> {
         if input.len() > 16 {
             bail!("decimal exceeds maximum precision")
         }
@@ -361,7 +361,7 @@ impl Decimal {
 }
 
 impl FromStr for Decimal {
-    type Err = failure::Error;
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut significand: i128 = 0;
@@ -386,17 +386,17 @@ impl FromStr for Decimal {
                 '0'..='9' => {
                     let digit = ch
                         .to_digit(10)
-                        .ok_or_else(|| format_err!("invalid digit in numeric literal: {}", s))?;
+                        .ok_or_else(|| anyhow!("invalid digit in numeric literal: {}", s))?;
                     precision += 1;
                     if seen_decimal {
                         scale += 1;
                     }
                     significand = significand
                         .checked_mul(10)
-                        .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+                        .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
                     significand = significand
                         .checked_add(i128::from(digit))
-                        .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+                        .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
                 }
                 '.' => {
                     if !seen_decimal {
@@ -424,15 +424,15 @@ impl FromStr for Decimal {
             while let Some(&ch) = z.peek() {
                 match ch {
                     '0'..='9' => {
-                        let digit = ch.to_digit(10).ok_or_else(|| {
-                            format_err!("invalid digit in numeric literal: {}", s)
-                        })?;
-                        e_exponent = e_exponent.checked_mul(10).ok_or_else(|| {
-                            format_err!("exponent in e-notation overflows u8: {}", s)
-                        })?;
-                        e_exponent = e_exponent.checked_add(digit as u8).ok_or_else(|| {
-                            format_err!("exponent in e-notation overflows u8: {}", s)
-                        })?;
+                        let digit = ch
+                            .to_digit(10)
+                            .ok_or_else(|| anyhow!("invalid digit in numeric literal: {}", s))?;
+                        e_exponent = e_exponent
+                            .checked_mul(10)
+                            .ok_or_else(|| anyhow!("exponent in e-notation overflows u8: {}", s))?;
+                        e_exponent = e_exponent
+                            .checked_add(digit as u8)
+                            .ok_or_else(|| anyhow!("exponent in e-notation overflows u8: {}", s))?;
                     }
                     _ => break,
                 }
@@ -452,9 +452,9 @@ impl FromStr for Decimal {
         }
         if seen_e_notation {
             if e_negative {
-                scale = scale.checked_add(e_exponent).ok_or_else(|| {
-                    format_err!("numeric literal exceeds maximum precision: {}", s)
-                })?;
+                scale = scale
+                    .checked_add(e_exponent)
+                    .ok_or_else(|| anyhow!("numeric literal exceeds maximum precision: {}", s))?;
                 if scale > MAX_DECIMAL_PRECISION {
                     bail!("numeric literal exceeds maximum precision: {}", s);
                 }
@@ -464,7 +464,7 @@ impl FromStr for Decimal {
                 e_exponent -= scale;
                 scale = 0;
                 let p = 10_i128.checked_pow(e_exponent as u32).ok_or_else(|| {
-                    format_err!(
+                    anyhow!(
                         "exponent in numeric literal {} overflows i128: 10^{}",
                         s,
                         e_exponent
@@ -473,7 +473,7 @@ impl FromStr for Decimal {
 
                 significand = significand
                     .checked_mul(p)
-                    .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+                    .ok_or_else(|| anyhow!("numeric literal overflows i128: {}", s))?;
             }
         }
         Ok(Decimal { scale, significand })

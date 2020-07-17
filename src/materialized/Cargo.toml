@@ -10,6 +10,7 @@ authors = ["Materialize, Inc."]
 license = "proprietary"
 
 [dependencies]
+anyhow = "1.0.31"
 async-trait = "0.1.36"
 backtrace = { version = "0.3.50" }
 comm = { path = "../comm" }
@@ -17,7 +18,6 @@ compile-time-run = "0.2.8"
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
-failure = "0.1.8"
 futures = "0.3"
 getopts = "0.2"
 hyper = "0.13.6"

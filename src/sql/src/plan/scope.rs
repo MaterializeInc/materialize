@@ -26,7 +26,7 @@
 
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
-use failure::bail;
+use anyhow::bail;
 
 use repr::ColumnName;
 
@@ -151,7 +151,7 @@ impl Scope {
         &'a self,
         matches: Matches,
         name_in_error: &str,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error>
+    ) -> Result<(ColumnRef, &'a ScopeItemName), anyhow::Error>
     where
         Matches: Fn(&ScopeItemName) -> bool,
     {
@@ -184,7 +184,7 @@ impl Scope {
     pub fn resolve_column<'a>(
         &'a self,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), anyhow::Error> {
         self.resolve(
             |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
             column_name.as_str(),
@@ -195,7 +195,7 @@ impl Scope {
         &'a self,
         table_name: &PartialName,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), failure::Error> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), anyhow::Error> {
         self.resolve(
             |item: &ScopeItemName| {
                 item.table_name.as_ref() == Some(table_name)

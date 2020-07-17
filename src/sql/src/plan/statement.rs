@@ -12,8 +12,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
+use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
-use failure::{bail, format_err};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -98,7 +98,7 @@ pub fn make_show_objects_desc(
 pub fn describe_statement(
     catalog: &dyn Catalog,
     stmt: Statement,
-) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
+) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
     let pcx = &PlanContext::default();
     let scx = &StatementContext { catalog, pcx };
     Ok(match stmt {
@@ -243,7 +243,7 @@ pub fn handle_statement(
     catalog: &dyn Catalog,
     stmt: Statement,
     params: &Params,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let scx = &StatementContext { pcx, catalog };
     match stmt {
         Statement::Tail {
@@ -325,7 +325,7 @@ fn handle_set_variable(
     local: bool,
     variable: Ident,
     value: SetVariableValue,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     if local {
         unsupported!("SET LOCAL");
     }
@@ -339,7 +339,7 @@ fn handle_set_variable(
     })
 }
 
-fn handle_show_variable(_: &StatementContext, variable: Ident) -> Result<Plan, failure::Error> {
+fn handle_show_variable(_: &StatementContext, variable: Ident) -> Result<Plan, anyhow::Error> {
     if variable.as_str() == unicase::Ascii::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
@@ -352,7 +352,7 @@ fn handle_tail(
     from: ObjectName,
     with_snapshot: bool,
     as_of: Option<sql_parser::ast::Expr>,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let from = scx.resolve_item(from)?;
     let entry = scx.catalog.get_item(&from);
     let ts = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
@@ -377,7 +377,7 @@ fn handle_alter_object_rename(
     if_exists: bool,
     name: ObjectName,
     to_item_name: Ident,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let id = match scx.resolve_item(name.clone()) {
         Ok(from_name) => {
             let entry = scx.catalog.get_item(&from_name);
@@ -412,7 +412,7 @@ fn finish_show_where(
     filter: Option<&ShowStatementFilter>,
     rows: Vec<Vec<Datum>>,
     desc: &RelationDesc,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let (r, finishing) = query::plan_show_where(scx, filter, rows, desc)?;
 
     Ok(Plan::Peek {
@@ -426,7 +426,7 @@ fn finish_show_where(
 fn handle_show_databases(
     scx: &StatementContext,
     filter: Option<&ShowStatementFilter>,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let rows = scx
         .catalog
         .list_databases()
@@ -444,7 +444,7 @@ fn handle_show_objects(
     object_type: ObjectType,
     from: Option<ObjectName>,
     filter: Option<&ShowStatementFilter>,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let classify_id = |id| match id {
         GlobalId::System(_) => "SYSTEM",
         GlobalId::User(_) => "USER",
@@ -539,7 +539,7 @@ fn handle_show_indexes(
     extended: bool,
     from_name: ObjectName,
     filter: Option<&ShowStatementFilter>,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED INDEXES")
     }
@@ -609,7 +609,7 @@ fn handle_show_columns(
     full: bool,
     table_name: ObjectName,
     filter: Option<&ShowStatementFilter>,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     if extended {
         unsupported!("SHOW EXTENDED COLUMNS");
     }
@@ -640,7 +640,7 @@ fn handle_show_columns(
 fn handle_show_create_view(
     scx: &StatementContext,
     name: ObjectName,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let name = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::View = entry.item_type() {
@@ -656,7 +656,7 @@ fn handle_show_create_view(
 fn handle_show_create_source(
     scx: &StatementContext,
     name: ObjectName,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let name = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::Source = entry.item_type() {
@@ -672,7 +672,7 @@ fn handle_show_create_source(
 fn handle_show_create_sink(
     scx: &StatementContext,
     name: ObjectName,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let name = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::Sink = entry.item_type() {
@@ -688,7 +688,7 @@ fn handle_show_create_sink(
 fn handle_show_create_index(
     scx: &StatementContext,
     name: ObjectName,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let name = scx.resolve_item(name)?;
     let entry = scx.catalog.get_item(&name);
     if let CatalogItemType::Index = entry.item_type() {
@@ -708,7 +708,7 @@ fn kafka_sink_builder(
     topic_prefix: String,
     desc: RelationDesc,
     topic_suffix: String,
-) -> Result<SinkConnectorBuilder, failure::Error> {
+) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let schema_registry_url = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
             url,
@@ -775,7 +775,7 @@ fn avro_ocf_sink_builder(
     with_options: Vec<SqlOption>,
     path: String,
     file_name_suffix: String,
-) -> Result<SinkConnectorBuilder, failure::Error> {
+) -> Result<SinkConnectorBuilder, anyhow::Error> {
     if format.is_some() {
         bail!("avro ocf sinks cannot specify a format");
     }
@@ -796,7 +796,7 @@ fn avro_ocf_sink_builder(
     }))
 }
 
-fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, from, connector, with_options, format, with_snapshot, as_of, if_not_exists) =
         match stmt {
@@ -861,10 +861,7 @@ fn handle_create_sink(scx: &StatementContext, stmt: Statement) -> Result<Plan, f
     })
 }
 
-fn handle_create_index(
-    scx: &StatementContext,
-    mut stmt: Statement,
-) -> Result<Plan, failure::Error> {
+fn handle_create_index(scx: &StatementContext, mut stmt: Statement) -> Result<Plan, anyhow::Error> {
     let (name, on_name, key_parts, if_not_exists) = match &stmt {
         Statement::CreateIndex {
             name,
@@ -981,7 +978,7 @@ fn handle_create_database(
     _scx: &StatementContext,
     name: Ident,
     if_not_exists: bool,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     Ok(Plan::CreateDatabase {
         name: normalize::ident(name),
         if_not_exists,
@@ -992,7 +989,7 @@ fn handle_create_schema(
     scx: &StatementContext,
     mut name: ObjectName,
     if_not_exists: bool,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     if name.0.len() > 2 {
         bail!("schema name {} has more than two components", name);
     }
@@ -1016,7 +1013,7 @@ fn handle_create_view(
     scx: &StatementContext,
     mut stmt: Statement,
     params: &Params,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, stmt.clone())?;
     let (name, columns, query, temporary, materialized, if_exists, with_options) = match &mut stmt {
         Statement::CreateView {
@@ -1081,7 +1078,7 @@ fn handle_create_view(
 
 fn extract_batch_size_option(
     with_options: &mut HashMap<String, Value>,
-) -> Result<i64, failure::Error> {
+) -> Result<i64, anyhow::Error> {
     match with_options.remove("max_timestamp_batch_size") {
         None => Ok(0),
         Some(Value::Number(n)) => match n.parse::<i64>() {
@@ -1100,7 +1097,7 @@ fn extract_batch_size_option(
 
 fn extract_timestamp_frequency_option(
     with_options: &mut HashMap<String, Value>,
-) -> Result<Duration, failure::Error> {
+) -> Result<Duration, anyhow::Error> {
     match with_options.remove("timestamp_frequency_ms") {
         None => Ok(Duration::from_secs(1)),
         Some(Value::Number(n)) => match n.parse::<u64>() {
@@ -1111,7 +1108,7 @@ fn extract_timestamp_frequency_option(
     }
 }
 
-fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan, failure::Error> {
+fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow::Error> {
     match &stmt {
         Statement::CreateSource {
             name,
@@ -1126,7 +1123,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let get_encoding = |format: &Option<Format>| {
                 let format = format
                     .as_ref()
-                    .ok_or_else(|| format_err!("Source format must be specified"))?;
+                    .ok_or_else(|| anyhow!("Source format must be specified"))?;
 
                 Ok(match format {
                     Format::Bytes => DataEncoding::Bytes,
@@ -1541,7 +1538,7 @@ fn maybe_rename_columns(
     context: impl fmt::Display,
     desc: RelationDesc,
     column_names: &[Ident],
-) -> Result<RelationDesc, failure::Error> {
+) -> Result<RelationDesc, anyhow::Error> {
     if column_names.is_empty() {
         return Ok(desc);
     }
@@ -1566,7 +1563,7 @@ fn handle_drop_database(
     scx: &StatementContext,
     name: Ident,
     if_exists: bool,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let name = match scx.resolve_database_ident(name) {
         Ok(name) => name,
         Err(_) if if_exists => {
@@ -1588,7 +1585,7 @@ fn handle_drop_objects(
     if_exists: bool,
     names: Vec<ObjectName>,
     cascade: bool,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     match object_type {
         ObjectType::Schema => handle_drop_schema(scx, if_exists, names, cascade),
         ObjectType::Source | ObjectType::View | ObjectType::Index | ObjectType::Sink => {
@@ -1603,7 +1600,7 @@ fn handle_drop_schema(
     if_exists: bool,
     names: Vec<ObjectName>,
     cascade: bool,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     if names.len() != 1 {
         unsupported!("DROP SCHEMA with multiple schemas");
     }
@@ -1648,7 +1645,7 @@ fn handle_drop_items(
     if_exists: bool,
     names: Vec<ObjectName>,
     cascade: bool,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let names = names
         .into_iter()
         .map(|n| scx.resolve_item(n))
@@ -1675,7 +1672,7 @@ fn handle_drop_item(
     object_type: ObjectType,
     name: &FullName,
     cascade: bool,
-) -> Result<Option<GlobalId>, failure::Error> {
+) -> Result<Option<GlobalId>, anyhow::Error> {
     let catalog_entry = scx.catalog.get_item(name);
     if catalog_entry.id().is_system() {
         bail!(
@@ -1709,7 +1706,7 @@ fn handle_select(
     query: Query,
     as_of: Option<Expr>,
     params: &Params,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let (relation_expr, _, finishing) = handle_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
@@ -1730,7 +1727,7 @@ fn handle_explain(
     explainee: Explainee,
     options: ExplainOptions,
     params: &Params,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     let is_view = if let Explainee::View(_) = explainee {
         true
     } else {
@@ -1792,7 +1789,7 @@ fn handle_query(
     query: Query,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
     Ok((expr.decorrelate(), desc, finishing))
@@ -1861,13 +1858,13 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn resolve_default_database(&self) -> Result<DatabaseSpecifier, failure::Error> {
+    pub fn resolve_default_database(&self) -> Result<DatabaseSpecifier, anyhow::Error> {
         let name = self.catalog.default_database();
         self.catalog.resolve_database(name)?;
         Ok(DatabaseSpecifier::Name(name.into()))
     }
 
-    pub fn resolve_database(&self, name: ObjectName) -> Result<String, failure::Error> {
+    pub fn resolve_database(&self, name: ObjectName) -> Result<String, anyhow::Error> {
         if name.0.len() != 1 {
             bail!(
                 "database name '{}' does not have exactly one component",
@@ -1877,7 +1874,7 @@ impl<'a> StatementContext<'a> {
         self.resolve_database_ident(name.0.into_element())
     }
 
-    pub fn resolve_database_ident(&self, name: Ident) -> Result<String, failure::Error> {
+    pub fn resolve_database_ident(&self, name: Ident) -> Result<String, anyhow::Error> {
         let name = normalize::ident(name);
         self.catalog.resolve_database(&name)?;
         Ok(name)
@@ -1886,7 +1883,7 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_schema(
         &self,
         mut name: ObjectName,
-    ) -> Result<(DatabaseSpecifier, String), failure::Error> {
+    ) -> Result<(DatabaseSpecifier, String), anyhow::Error> {
         if name.0.len() > 2 {
             bail!(
                 "schema name '{}' cannot have more than two components",
@@ -1899,7 +1896,7 @@ impl<'a> StatementContext<'a> {
         Ok((database_spec, schema_name))
     }
 
-    pub fn resolve_item(&self, name: ObjectName) -> Result<FullName, failure::Error> {
+    pub fn resolve_item(&self, name: ObjectName) -> Result<FullName, anyhow::Error> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }

@@ -6,13 +6,13 @@ edition = "2018"
 publish = false
 
 [dependencies]
+anyhow = "1.0.31"
 avro = { path = "../avro" }
 aws-arn = "0.1.1"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
-failure = "0.1.8"
 futures = "0.3"
 interchange = { path = "../interchange" }
 itertools = "0.9"

@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::env;
 
+use anyhow::{anyhow, bail};
 use chrono::Utc;
-use failure::{bail, format_err};
 use tokio_postgres::types::FromSql;
 
 use pgrepr::Jsonb;
@@ -47,7 +47,7 @@ pub struct Postgres {
 }
 
 impl Postgres {
-    pub async fn open_and_erase(url: &str) -> Result<Self, failure::Error> {
+    pub async fn open_and_erase(url: &str) -> Result<Self, anyhow::Error> {
         let mut config: tokio_postgres::Config = url.parse()?;
         let username = whoami::username();
         if config.get_user().is_none() {
@@ -79,7 +79,7 @@ impl Postgres {
         let (client, conn) = config
             .connect(tokio_postgres::NoTls)
             .await
-            .map_err(|err| format_err!("Postgres connection failed: {}", err))?;
+            .map_err(|err| anyhow!("Postgres connection failed: {}", err))?;
 
         tokio::spawn(async move {
             if let Err(e) = conn.await {
@@ -124,7 +124,7 @@ END $$;
         pcx: &PlanContext,
         catalog: &dyn Catalog,
         stmt: &Statement,
-    ) -> Result<Plan, failure::Error> {
+    ) -> Result<Plan, anyhow::Error> {
         let scx = StatementContext { pcx, catalog };
         Ok(match stmt {
             Statement::CreateTable {
@@ -155,7 +155,7 @@ END $$;
                                 !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
                             Ok(ColumnType::new(ty).nullable(nullable))
                         })
-                        .collect::<Result<Vec<_>, failure::Error>>()?,
+                        .collect::<Result<Vec<_>, anyhow::Error>>()?,
                 );
 
                 // Handle column-level UNIQUE and PRIMARY KEY constraints.
@@ -299,11 +299,11 @@ END $$;
         &mut self,
         table_name: &FullName,
         query: String,
-    ) -> Result<Vec<Row>, failure::Error> {
+    ) -> Result<Vec<Row>, anyhow::Error> {
         let (sql_types, desc) = self
             .table_types
             .get(table_name)
-            .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
+            .ok_or_else(|| anyhow!("Unknown table: {:?}", table_name))?
             .clone();
         let mut rows = vec![];
         let postgres_rows = self.client.query(&*query, &[]).await?;
@@ -330,7 +330,7 @@ fn push_column(
     i: usize,
     sql_type: &DataType,
     nullable: bool,
-) -> Result<RowPacker, failure::Error> {
+) -> Result<RowPacker, anyhow::Error> {
     // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
     match sql_type {
@@ -437,7 +437,7 @@ fn get_column_inner<'a, T>(
     postgres_row: &'a tokio_postgres::Row,
     i: usize,
     nullable: bool,
-) -> Result<Option<T>, failure::Error>
+) -> Result<Option<T>, anyhow::Error>
 where
     T: FromSql<'a>,
 {

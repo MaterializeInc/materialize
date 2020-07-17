@@ -7,10 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt::Display;
 use std::mem::transmute;
+use std::{
+    collections::HashMap,
+    io::{Read, Seek, SeekFrom},
+};
 
+use anyhow::{bail, Error};
 use chrono::{NaiveDate, NaiveDateTime};
-use failure::{bail, Error};
 
 use crate::schema::{
     RecordField, ResolvedDefaultValueField, ResolvedRecordField, SchemaNode, SchemaPiece,
@@ -18,11 +23,6 @@ use crate::schema::{
 };
 use crate::types::{DecimalValue, Scalar, Value};
 use crate::util::{safe_len, zag_i32, zag_i64, DecodeError};
-use std::fmt::Display;
-use std::{
-    collections::HashMap,
-    io::{Read, Seek, SeekFrom},
-};
 
 #[inline]
 fn decode_long_nonneg<R: Read>(reader: &mut R) -> Result<u64, Error> {

@@ -31,9 +31,9 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
 use chrono::Utc;
-use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
 use log::{info, trace, warn};
 use once_cell::sync::OnceCell;
@@ -48,7 +48,7 @@ fn main() {
     }
 }
 
-fn run() -> Result<(), failure::Error> {
+fn run() -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
 
     let args: Vec<_> = env::args().collect();
@@ -264,8 +264,7 @@ fn run() -> Result<(), failure::Error> {
     // Configure storage.
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let symbiosis_url = popts.opt_str("symbiosis");
-    fs::create_dir_all(&data_directory)
-        .with_context(|e| format!("creating data directory: {}", e))?;
+    fs::create_dir_all(&data_directory).context("creating data directory")?;
 
     // Configure tracing.
     {
@@ -347,9 +346,8 @@ environment:{}",
     }
 }
 
-fn read_address_file(path: &str, n: usize) -> Result<Vec<SocketAddr>, failure::Error> {
-    let file =
-        File::open(path).with_context(|err| format!("opening address file {}: {}", path, err))?;
+fn read_address_file(path: &str, n: usize) -> Result<Vec<SocketAddr>, anyhow::Error> {
+    let file = File::open(path).with_context(|| format!("opening address file {}", path))?;
     let mut lines = BufReader::new(file).lines();
     let addrs = lines.by_ref().take(n).collect::<Result<Vec<_>, _>>()?;
     if addrs.len() < n || lines.next().is_some() {
@@ -362,9 +360,9 @@ fn read_address_file(path: &str, n: usize) -> Result<Vec<SocketAddr>, failure::E
             // first (#502).
             Ok(mut addrs) => match addrs.next() {
                 Some(addr) => Ok(addr),
-                None => Err(format_err!("{} did not resolve to any addresses", addr)),
+                None => Err(anyhow!("{} did not resolve to any addresses", addr)),
             },
-            Err(err) => Err(format_err!("error resolving {}: {}", addr, err)),
+            Err(err) => Err(anyhow!("error resolving {}: {}", addr, err)),
         })
         .collect::<Result<Vec<_>, _>>()?)
 }

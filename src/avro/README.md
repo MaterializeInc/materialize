@@ -21,7 +21,6 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 avro-rs = "0.6"
-failure = "0.1.5"
 serde = { version = "1.0", features = ["derive"] }
 ```
 
@@ -29,7 +28,6 @@ Then try to write and read in Avro format like below:
 
 ```rust
 use avro::{Codec, Reader, Schema, Writer, from_value, types::Record};
-use failure::Error;
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -94,7 +92,6 @@ An example of fingerprinting for the supported fingerprints:
 
 ```rust
 use avro::Schema;
-use failure::Error;
 use md5::Md5;
 use sha2::Sha256;
 

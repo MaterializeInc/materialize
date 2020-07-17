@@ -8,10 +8,12 @@
 // by the Apache License, Version 2.0.
 
 //! Logic handling writing in Avro format at user level.
+
 use std::collections::HashMap;
+use std::fmt;
 use std::io::{Seek, SeekFrom, Write};
 
-use failure::{Error, Fail};
+use anyhow::Error;
 use rand::random;
 
 use crate::encode::{encode, encode_ref, encode_to_vec};
@@ -26,8 +28,7 @@ const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
 const AVRO_OBJECT_HEADER: &[u8] = &[b'O', b'b', b'j', 1u8];
 
 /// Describes errors happened while validating Avro data.
-#[derive(Fail, Debug)]
-#[fail(display = "Validation error: {}", _0)]
+#[derive(Debug)]
 pub struct ValidationError(String);
 
 impl ValidationError {
@@ -38,6 +39,14 @@ impl ValidationError {
         ValidationError(msg.into())
     }
 }
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Validation error: {}", self.0)
+    }
+}
+
+impl std::error::Error for ValidationError {}
 
 /// Main interface for writing Avro Object Container Files.
 pub struct Writer<W> {

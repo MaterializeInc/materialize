@@ -33,7 +33,7 @@ impl AvroDecoderState {
         debug_name: String,
         worker_index: usize,
         dedup_strat: Option<DebeziumDeduplicationStrategy>,
-    ) -> Result<Self, failure::Error> {
+    ) -> Result<Self, anyhow::Error> {
         Ok(AvroDecoderState {
             decoder: Decoder::new(
                 reader_schema,

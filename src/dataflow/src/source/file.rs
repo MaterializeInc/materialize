@@ -7,25 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+use std::io::{BufRead, Read};
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Error};
+use timely::scheduling::{Activator, SyncActivator};
+
+use avro::{AvroRead, Schema, Skip};
+use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
+use expr::{PartitionId, SourceInstanceId};
+
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
-use avro::{AvroRead, Schema, Skip};
-use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
-use expr::{PartitionId, SourceInstanceId};
-use failure::Error;
-use std::collections::HashMap;
-use std::io::{BufRead, Read};
-use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
-use timely::scheduling::{Activator, SyncActivator};
 
 use avro::types::Value;
-use failure::ResultExt;
 use log::error;
 #[cfg(not(target_os = "macos"))]
 use notify::{RecursiveMode, Watcher};
@@ -248,7 +250,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         &mut self,
         _consistency_info: &mut ConsistencyInfo,
         _activator: &Activator,
-    ) -> Result<Option<SourceMessage<Out>>, failure::Error> {
+    ) -> Result<Option<SourceMessage<Out>>, anyhow::Error> {
         if let Some(message) = self.buffer.take() {
             Ok(Some(message))
         } else {
@@ -282,25 +284,24 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
 /// Blocking logic to read from a file, intended for its own thread.
 pub fn read_file_task<Ctor, I, Out, Err>(
     path: PathBuf,
-    tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
+    tx: std::sync::mpsc::SyncSender<Result<Out, anyhow::Error>>,
     activator: Option<Arc<Mutex<SyncActivator>>>,
     read_style: FileReadStyle,
     iter_ctor: Ctor,
 ) where
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
-    Err: Into<failure::Error>,
+    Err: Into<anyhow::Error>,
 {
-    let file = match std::fs::File::open(&path).with_context(|e| {
+    let file = match std::fs::File::open(&path).with_context(|| {
         format!(
-            "file source: unable to open file at path {}: {}",
+            "file source: unable to open file at path {}",
             path.to_string_lossy(),
-            e
         )
     }) {
         Ok(file) => file,
         Err(err) => {
-            let _ = tx.send(Err(err.into()));
+            let _ = tx.send(Err(err));
             return;
         }
     };
@@ -359,16 +360,15 @@ pub fn read_file_task<Ctor, I, Out, Err>(
         }
     };
 
-    match iter.map_err(Into::into).with_context(|e| {
+    match iter.map_err(Into::into).with_context(|| {
         format!(
-            "Failed to obtain records from file at path {}: {}",
+            "Failed to obtain records from file at path {}",
             path.to_string_lossy(),
-            e
         )
     }) {
         Ok(i) => send_records(i, tx, activator),
         Err(e) => {
-            let _ = tx.send(Err(e.into()));
+            let _ = tx.send(Err(e));
         }
     };
 }
@@ -396,7 +396,7 @@ struct ForeverTailedFile<Ev, Handle> {
 }
 
 impl<Ev, H> Skip for ForeverTailedFile<Ev, H> {
-    fn skip(&mut self, len: usize) -> Result<(), failure::Error> {
+    fn skip(&mut self, len: usize) -> Result<(), anyhow::Error> {
         self.inner.skip(len)
     }
 }
@@ -428,11 +428,11 @@ impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
 /// Sends a sequence of records and activates a timely operator for each.
 fn send_records<I, Out, Err>(
     iter: I,
-    tx: std::sync::mpsc::SyncSender<Result<Out, failure::Error>>,
+    tx: std::sync::mpsc::SyncSender<Result<Out, anyhow::Error>>,
     activator: Option<Arc<Mutex<SyncActivator>>>,
 ) where
     I: IntoIterator<Item = Result<Out, Err>>,
-    Err: Into<failure::Error>,
+    Err: Into<anyhow::Error>,
 {
     for record in iter {
         let record = record.map_err(Into::into);

@@ -15,14 +15,14 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use timely::progress::frontier::Antichain;
-
-use failure::ResultExt;
+use anyhow::Context;
+use regex::Regex;
 use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use timely::progress::frontier::Antichain;
 use url::Url;
 
 use expr::{
@@ -30,7 +30,6 @@ use expr::{
 };
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
-use regex::Regex;
 use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
 
 /// System-wide update type.
@@ -288,7 +287,7 @@ pub enum DataEncoding {
 impl DataEncoding {
     /// Computes the [`RelationDesc`] for the relation specified by the this
     /// data encoding and envelope.s
-    pub fn desc(&self, envelope: &Envelope) -> Result<RelationDesc, failure::Error> {
+    pub fn desc(&self, envelope: &Envelope) -> Result<RelationDesc, anyhow::Error> {
         // Add columns for the key, if using the upsert envelope.
         let key_desc = match envelope {
             Envelope::Upsert(key_encoding) => {
@@ -318,7 +317,7 @@ impl DataEncoding {
             DataEncoding::Bytes => key_desc.with_nonnull_column("data", ScalarType::Bytes),
             DataEncoding::AvroOcf { reader_schema } => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
-                    .with_context(|e| format!("validating avro ocf reader schema: {}", e))?
+                    .context("validating avro ocf reader schema")?
                     .into_iter()
                     .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty))
             }
@@ -329,12 +328,12 @@ impl DataEncoding {
             }) => {
                 let desc =
                     avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
-                        .with_context(|e| format!("validating avro value schema: {}", e))?
+                        .context("validating avro value schema")?
                         .into_iter()
                         .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
                 if let Some(key_schema) = key_schema {
                     let key = avro::validate_key_schema(key_schema, &desc)
-                        .with_context(|e| format!("validating avro key schema: {}", e))?;
+                        .context("validating avro key schema")?;
                     desc.with_key(key)
                 } else {
                     desc

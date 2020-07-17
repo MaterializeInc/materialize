@@ -8,18 +8,17 @@
 
 //! Logic handling the intermediate representation of Avro values.
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::BuildHasher;
 use std::u8;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use failure::Fail;
 use serde_json::Value as JsonValue;
 
 use crate::schema::{RecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 
 /// Describes errors happened while performing schema resolution on Avro data.
-#[derive(Fail, Debug)]
-#[fail(display = "Schema resolution error: {}", _0)]
+#[derive(Debug)]
 pub struct SchemaResolutionError(pub String);
 
 impl SchemaResolutionError {
@@ -30,6 +29,14 @@ impl SchemaResolutionError {
         SchemaResolutionError(msg.into())
     }
 }
+
+impl fmt::Display for SchemaResolutionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Schema resolution error: {}", self.0)
+    }
+}
+
+impl std::error::Error for SchemaResolutionError {}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecimalValue {
