@@ -502,7 +502,21 @@ impl Name {
             .into());
         }
 
-        let namespace = complex.string("namespace");
+        let (namespace, name) = if let Some(index) = name.rfind('.') {
+            let computed_namespace = name[..index].to_owned();
+            let computed_name = name[index + 1..].to_owned();
+            if let Some(provided_namespace) = complex.string("namespace") {
+                if provided_namespace != computed_namespace {
+                    warn!(
+                        "Found dots in name {}, updating to namespace {} and name {}",
+                        name, computed_namespace, computed_name
+                    );
+                }
+            }
+            (Some(computed_namespace), computed_name)
+        } else {
+            (complex.string("namespace"), name)
+        };
 
         let aliases: Option<Vec<String>> = complex
             .get("aliases")
@@ -514,15 +528,6 @@ impl Name {
                     .map(|alias| alias.map(|a| a.to_string()))
                     .collect::<Option<_>>()
             });
-        if let Some(ns) = &namespace {
-            if name.find('.').is_some() {
-                return Err(ParseSchemaError::new(format!(
-                    "Name {} has dot, but namespace also specified: {}",
-                    name, ns
-                ))
-                .into());
-            }
-        }
 
         Ok(Name {
             name,
@@ -2281,6 +2286,48 @@ mod tests {
         };
 
         assert_eq!("Some documentation".to_owned(), doc.unwrap());
+    }
+
+    #[test]
+    fn test_namespaces_and_names() {
+        // When name and namespace specified, full name should contain both.
+        let schema = Schema::parse_str(
+            r#"{"type": "fixed", "namespace": "namespace", "name": "name", "size": 1}"#,
+        )
+        .unwrap();
+        assert_eq!(schema.named.len(), 1);
+        assert_eq!(
+            schema.named[0].name,
+            FullName {
+                name: "name".into(),
+                namespace: "namespace".into()
+            }
+        );
+
+        // When name contains dots, parse the dot-separated name as the namespace.
+        let schema = Schema::parse_str(
+            r#"{"type": "enum", "name": "name.has.dots", "symbols": ["A", "B"]}"#,
+        )
+        .unwrap();
+        assert_eq!(schema.named.len(), 1);
+        assert_eq!(
+            schema.named[0].name,
+            FullName {
+                name: "dots".into(),
+                namespace: "name.has".into()
+            }
+        );
+
+        // Same as above, ignore any provided namespace.
+        let schema = Schema::parse_str(r#"{"type": "enum", "namespace": "namespace", "name": "name.has.dots", "symbols": ["A", "B"]}"#).unwrap();
+        assert_eq!(schema.named.len(), 1);
+        assert_eq!(
+            schema.named[0].name,
+            FullName {
+                name: "dots".into(),
+                namespace: "name.has".into()
+            }
+        );
     }
 
     // Tests to ensure Schema is Send + Sync. These tests don't need to _do_ anything, if they can
