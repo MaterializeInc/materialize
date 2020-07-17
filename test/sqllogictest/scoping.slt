@@ -81,3 +81,6 @@ SELECT totalgarbage.*
 
 query error SELECT \* with no tables specified is not valid
 SELECT *
+
+query error column name "k" is ambiguous
+SELECT k FROM (SELECT 1 AS k, 2 AS k)

@@ -887,15 +887,18 @@ false true
 # ----
 # false false
 
-# #2804
-query error does not exist
+query error concat_agg not yet supported
 SELECT concat_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
-query error does not exist
+query error json_agg not yet supported
 SELECT json_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
-query error does not exist
+# This is arguably wrong--we don't respect the inner ORDER BY--because we don't
+# support ordered aggregates. See #2415.
+query T
 SELECT jsonb_agg(s) FROM (SELECT s FROM kv ORDER BY k)
+----
+[null,"A","a","a","b","b"]
 
 # Verify that FILTER works.
 
@@ -1083,9 +1086,10 @@ SELECT v, array_agg('a') FROM kv GROUP BY v
 4     {a,a}
 NULL  {a}
 
-# #3183
-statement error Internal
+query I
 SELECT 123 FROM kv ORDER BY max(v)
+----
+123
 
 subtest string_agg
 
