@@ -1178,8 +1178,11 @@ pub struct RowSetFinishing {
 
 impl RowSetFinishing {
     /// True if the finishing does nothing to any result set.
-    pub fn is_trivial(&self) -> bool {
-        (self.limit == None) && self.order_by.is_empty() && self.offset == 0
+    pub fn is_trivial(&self, arity: usize) -> bool {
+        self.limit.is_none()
+            && self.order_by.is_empty()
+            && self.offset == 0
+            && self.project.iter().copied().eq(0..arity)
     }
     /// Applies finishing actions to a row set.
     pub fn finish(&self, rows: &mut Vec<Row>) {
