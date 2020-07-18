@@ -128,28 +128,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
-name = "avro"
-version = "0.6.5"
-dependencies = [
- "byteorder",
- "chrono",
- "crc",
- "digest",
- "failure",
- "itertools",
- "lazy_static",
- "libflate",
- "log",
- "md-5",
- "rand",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "snap",
-]
-
-[[package]]
 name = "aws-arn"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -474,7 +452,6 @@ checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 name = "coord"
 version = "0.1.0"
 dependencies = [
- "avro",
  "aws-util",
  "backtrace",
  "bincode",
@@ -492,6 +469,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "ore",
  "pgrepr",
  "prometheus",
@@ -676,7 +654,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "avro",
  "aws-util",
  "bincode",
  "ccsr",
@@ -692,6 +669,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "notify",
  "ore",
  "pdqselect",
@@ -1459,7 +1437,6 @@ dependencies = [
 name = "interchange"
 version = "0.1.0"
 dependencies = [
- "avro",
  "base64 0.12.3",
  "byteorder",
  "ccsr",
@@ -1470,6 +1447,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "num-traits",
  "ordered-float",
  "ore",
@@ -1896,6 +1874,28 @@ checksum = "396aa0f2003d7df8395cb93e09871561ccc3e785f0acb369170e8cc74ddf9226"
 dependencies = [
  "socket2",
  "winapi 0.3.8",
+]
+
+[[package]]
+name = "mz-avro"
+version = "0.6.5"
+dependencies = [
+ "byteorder",
+ "chrono",
+ "crc",
+ "digest",
+ "failure",
+ "itertools",
+ "lazy_static",
+ "libflate",
+ "log",
+ "md-5",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "snap",
 ]
 
 [[package]]
@@ -3292,7 +3292,6 @@ dependencies = [
 name = "sql"
 version = "0.1.0"
 dependencies = [
- "avro",
  "aws-arn",
  "ccsr",
  "chrono",
@@ -3304,6 +3303,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "ore",
  "parse_duration",
  "pgrepr",
@@ -3635,7 +3635,6 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "atty",
- "avro",
  "aws-util",
  "byteorder",
  "bytes",
@@ -3650,6 +3649,7 @@ dependencies = [
  "krb5-src",
  "lazy_static",
  "md-5",
+ "mz-avro",
  "ore",
  "parse_duration",
  "pgrepr",

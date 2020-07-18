@@ -1,11 +1,11 @@
 [package]
-name = "avro"
+name = "mz-avro"
 version = "0.6.5"
-authors = ["Flavien Raynaud <flavien.raynaud@gmail.com>", "Antonio Verardi <antonio.uccio.verardi@gmail.com>"]
+authors = ["Brennan Vincent <brennan@materialize.io>", "Jessica Laughlin <jessica@materialize.io>"]
 description = "Library for working with Apache Avro in Rust"
-license = "MIT"
+license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/MaterializeInc/avro-rs"
+repository = "https://github.com/MaterializeInc/materialize"
 edition = "2018"
 autobenches = false
 
