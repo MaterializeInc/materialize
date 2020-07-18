@@ -1,4 +1,4 @@
-# avro-rs
+# mz-avro
 
 A library for working with [Apache Avro](https://avro.apache.org/) in Rust.
 
