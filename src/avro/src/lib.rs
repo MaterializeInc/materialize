@@ -27,8 +27,8 @@
 //! There are basically two ways of handling Avro data in Rust:
 //!
 //! * **as Avro-specialized data types** based on an Avro schema;
-//! * **as generic Rust serde-compatible types** implementing/deriving `Serialize` and
-//! `Deserialize`;
+//! * **as generic Rust types** with custom serialization logic implementing `AvroDecode`
+//!   (currently only supports deserialization, not serialization).
 //!
 //! **avro** provides a way to read and write both these data representations easily and
 //! efficiently.
@@ -53,8 +53,8 @@
 //!
 //! # Defining a schema
 //!
-//! An Avro data cannot exist without an Avro schema. Schemas **must** be used while writing and
-//! **can** be used while reading and they carry the information regarding the type of data we are
+//! Avro data cannot exist without an Avro schema. Schemas **must** be used both while writing and
+//! reading and they carry the information regarding the type of data we are
 //! handling. Avro schemas are used for both schema validation and resolution of Avro data.
 //!
 //! Avro schemas are defined in **JSON** format and can just be parsed out of a raw string:
@@ -80,10 +80,6 @@
 //! println!("{:?}", schema);
 //! ```
 //!
-//! The library provides also a programmatic interface to define schemas without encoding them in
-//! JSON (for advanced use), but we highly recommend the JSON interface. Please read the API
-//! reference in case you are interested.
-//!
 //! For more information about schemas and what kind of information you can encapsulate in them,
 //! please refer to the appropriate section of the
 //! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
@@ -91,15 +87,12 @@
 //! # Writing data
 //!
 //! Once we have defined a schema, we are ready to serialize data in Avro, validating them against
-//! the provided schema in the process. As mentioned before, there are two ways of handling Avro
-//! data in Rust.
+//! the provided schema in the process.
 //!
 //! **NOTE:** The library also provides a low-level interface for encoding a single datum in Avro
 //! bytecode without generating markers and headers (for advanced use), but we highly recommend the
 //! `Writer` interface to be totally Avro-compatible. Please read the API reference in case you are
 //! interested.
-//!
-//! ## The avro way
 //!
 //! Given that the schema we defined above is that of an Avro *Record*, we are going to use the
 //! associated type provided by the library to specify the data we want to serialize:
@@ -138,7 +131,7 @@
 //! let encoded = writer.into_inner();
 //! ```
 //!
-//! The vast majority of the times, schemas tend to define a record as a top-level container
+//! The vast majority of the time, schemas tend to define a record as a top-level container
 //! encapsulating all the values to convert as fields and providing documentation for them, but in
 //! case we want to directly define an Avro value, the library offers that capability via the
 //! `Value` interface.
@@ -147,14 +140,6 @@
 //! use avro::types::Value;
 //!
 //! let mut value = Value::String("foo".to_string());
-//! ```
-//!
-//! The vast majority of the times, schemas tend to define a record as a top-level container
-//! encapsulating all the values to convert as fields and providing documentation for them, but in
-//! case we want to directly define an Avro value, any type implementing `Serialize` should work.
-//!
-//! ```
-//! let mut value = "foo".to_string();
 //! ```
 //!
 //! ## Using codecs to compress data
@@ -274,7 +259,7 @@
 //! For more information about schema compatibility and resolution, please refer to the
 //! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
 //!
-//! As usual, there are two ways to handle Avro data in Rust, as you can see below.
+//! There are two ways to handle deserializing Avro data in Rust, as you can see below.
 //!
 //! **NOTE:** The library also provides a low-level interface for decoding a single datum in Avro
 //! bytecode without markers and header (for advanced use), but we highly recommend the `Reader`
@@ -318,6 +303,16 @@
 //! }
 //!
 //! ```
+//!
+//! ## Custom deserialization (advanced)
+//!
+//! It is possible to avoid the intermediate stage of decoding to `Value`,
+//! by implementing `AvroDecode` for one or more structs that will determine how to decode various schema pieces.
+//!
+//! This API is in flux, and more complete documentation is coming soon. For now,
+//! [Materialize](https://github.com/MaterializeInc/materialize/blob/main/src/interchange/src/avro.rs)
+//! furnishes the most complete example.
+
 mod codec;
 mod decode;
 mod encode;
