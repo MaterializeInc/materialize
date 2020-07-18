@@ -168,15 +168,14 @@ impl<R: AvroRead> Reader<R> {
         &self.header.writer_schema
     }
 
+    /// Get a reference to the resolved schema
+    /// (or just the writer schema, if no reader schema was provided
+    ///  or the two schemas are identical)
     pub fn schema(&self) -> &Schema {
         match &self.resolved_schema {
             Some(schema) => schema,
             None => self.writer_schema(),
         }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.messages_remaining == 0
     }
 
     #[inline]
@@ -196,6 +195,10 @@ impl<R: AvroRead> Reader<R> {
         self.buf_idx += b_original - block_bytes.len();
         self.messages_remaining -= 1;
         Ok(Some(item))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.messages_remaining == 0
     }
 
     fn fill_buf(&mut self, n: usize) -> Result<(), Error> {
