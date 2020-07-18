@@ -2,7 +2,6 @@
 members = [
     "demo/billing",
     "fuzz",
-    "src/avro",
     "src/aws-util",
     "src/ccsr",
     "src/comm",

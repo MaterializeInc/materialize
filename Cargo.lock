@@ -128,28 +128,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
-name = "avro"
-version = "0.6.5"
-dependencies = [
- "byteorder",
- "chrono",
- "crc",
- "digest",
- "failure",
- "itertools",
- "lazy_static",
- "libflate",
- "log",
- "md-5",
- "rand",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "snap",
-]
-
-[[package]]
 name = "aws-arn"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -291,12 +269,6 @@ dependencies = [
  "regex-automata",
  "serde",
 ]
-
-[[package]]
-name = "build_const"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39092a32794787acd8525ee150305ff051b0aa6cc2abaf193924f5ab05425f39"
 
 [[package]]
 name = "bumpalo"
@@ -474,7 +446,6 @@ checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 name = "coord"
 version = "0.1.0"
 dependencies = [
- "avro",
  "aws-util",
  "backtrace",
  "bincode",
@@ -492,6 +463,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "ore",
  "pgrepr",
  "prometheus",
@@ -527,15 +499,6 @@ name = "core-foundation-sys"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3a71ab494c0b5b860bdc8407ae08978052417070c2ced38573a9157ad75b8ac"
-
-[[package]]
-name = "crc"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d663548de7f5cca343f1e0a48d14dcfb0e9eb4e079ec58883b7251539fa10aeb"
-dependencies = [
- "build_const",
-]
 
 [[package]]
 name = "crc32fast"
@@ -676,7 +639,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "avro",
  "aws-util",
  "bincode",
  "ccsr",
@@ -692,6 +654,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "notify",
  "ore",
  "pdqselect",
@@ -1459,7 +1422,6 @@ dependencies = [
 name = "interchange"
 version = "0.1.0"
 dependencies = [
- "avro",
  "base64 0.12.3",
  "byteorder",
  "ccsr",
@@ -1470,6 +1432,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "num-traits",
  "ordered-float",
  "ore",
@@ -1896,6 +1859,25 @@ checksum = "396aa0f2003d7df8395cb93e09871561ccc3e785f0acb369170e8cc74ddf9226"
 dependencies = [
  "socket2",
  "winapi 0.3.8",
+]
+
+[[package]]
+name = "mz-avro"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3f4f488c9533076154ba6b92b9bd7a21b800cd53fa90b8fce9b8c4b99dd08e7"
+dependencies = [
+ "chrono",
+ "digest",
+ "failure",
+ "itertools",
+ "libflate",
+ "log",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -3271,12 +3253,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "snap"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da73c8f77aebc0e40c300b93f0a5f1bece7a248a36eee287d4e095f35c7b7d6e"
-
-[[package]]
 name = "socket2"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3292,7 +3268,6 @@ dependencies = [
 name = "sql"
 version = "0.1.0"
 dependencies = [
- "avro",
  "aws-arn",
  "ccsr",
  "chrono",
@@ -3304,6 +3279,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "mz-avro",
  "ore",
  "parse_duration",
  "pgrepr",
@@ -3635,7 +3611,6 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "atty",
- "avro",
  "aws-util",
  "byteorder",
  "bytes",
@@ -3650,6 +3625,7 @@ dependencies = [
  "krb5-src",
  "lazy_static",
  "md-5",
+ "mz-avro",
  "ore",
  "parse_duration",
  "pgrepr",
