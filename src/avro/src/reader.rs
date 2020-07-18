@@ -28,49 +28,15 @@ use crate::{Codec, SchemaResolutionError};
 use sha2::Sha256;
 use std::collections::HashMap;
 
-// Internal Block reader.
 #[derive(Debug, Clone)]
-pub(crate) struct Block<R> {
-    reader: R,
-    // Internal buffering to reduce allocation.
-    buf: Vec<u8>,
-    buf_idx: usize,
-    // Number of elements expected to exist within this block.
-    message_count: usize,
+pub(crate) struct Header {
+    writer_schema: Schema,
     marker: [u8; 16],
     codec: Codec,
-    writer_schema: Schema,
-    resolved_schema: Option<Schema>,
 }
 
-impl<R: AvroRead> Block<R> {
-    pub(crate) fn new(reader: R, reader_schema: Option<&Schema>) -> Result<Block<R>, Error> {
-        let mut block = Block {
-            reader,
-            codec: Codec::Null,
-            writer_schema: Schema {
-                named: vec![],
-                indices: Default::default(),
-                top: SchemaPieceOrNamed::Piece(SchemaPiece::Null),
-            },
-            buf: vec![],
-            buf_idx: 0,
-            message_count: 0,
-            marker: [0; 16],
-            resolved_schema: None,
-        };
-
-        block.read_header(reader_schema)?;
-        Ok(block)
-    }
-
-    fn schema(&self) -> &Schema {
-        self.resolved_schema.as_ref().unwrap_or(&self.writer_schema)
-    }
-
-    /// Try to read the header and to set the writer `Schema`, the `Codec` and the marker based on
-    /// its content.
-    fn read_header(&mut self, reader_schema: Option<&Schema>) -> Result<(), Error> {
+impl Header {
+    pub fn from_reader<R: AvroRead>(reader: &mut R) -> Result<Header, Error> {
         let meta_schema = Schema {
             named: vec![],
             indices: Default::default(),
@@ -78,13 +44,13 @@ impl<R: AvroRead> Block<R> {
         };
 
         let mut buf = [0u8; 4];
-        self.reader.read_exact(&mut buf)?;
+        reader.read_exact(&mut buf)?;
 
         if buf != [b'O', b'b', b'j', 1u8] {
             return Err(DecodeError::new("wrong magic in header").into());
         }
 
-        if let Value::Map(meta) = decode(meta_schema.top_node(), &mut self.reader)? {
+        if let Value::Map(meta) = decode(meta_schema.top_node(), reader)? {
             // TODO: surface original parse schema errors instead of coalescing them here
             let json = meta
                 .get("avro.schema")
@@ -101,22 +67,11 @@ impl<R: AvroRead> Block<R> {
                         )))
                     }
                 })?;
-            let schema = Schema::parse(&json).map_err(|e| {
+            let writer_schema = Schema::parse(&json).map_err(|e| {
                 ParseSchemaError::new(format!("unable to parse json as avro schema: {}", e))
             })?;
 
-            self.writer_schema = schema;
-
-            if let Some(reader_schema) = reader_schema {
-                if reader_schema.fingerprint::<Sha256>().bytes
-                    != self.writer_schema.fingerprint::<Sha256>().bytes
-                {
-                    self.resolved_schema =
-                        Some(resolve_schemas(&self.writer_schema, reader_schema)?)
-                }
-            }
-
-            self.codec = meta
+            let codec = meta
                 .get("avro.codec")
                 .map(|val| match val {
                     Value::Bytes(ref bytes) => from_utf8(bytes.as_ref())
@@ -132,77 +87,101 @@ impl<R: AvroRead> Block<R> {
                     ))),
                 })
                 .unwrap_or(Ok(Codec::Null))?;
+
+            let mut marker = [0u8; 16];
+            reader.read_exact(&mut marker)?;
+
+            Ok(Header {
+                writer_schema,
+                marker,
+                codec,
+            })
         } else {
-            return Err(DecodeError::new("no metadata in header").into());
+            Err(DecodeError::new("no metadata in header").into())
         }
-
-        let mut buf = [0u8; 16];
-        self.reader.read_exact(&mut buf)?;
-        self.marker = buf;
-
-        Ok(())
     }
 
-    fn fill_buf(&mut self, n: usize) -> Result<(), Error> {
-        // We don't have enough space in the buffer, need to grow it.
-        if n >= self.buf.capacity() {
-            self.buf.reserve(n);
-        }
-
-        unsafe {
-            self.buf.set_len(n);
-        }
-        self.reader.read_exact(&mut self.buf[..n])?;
-        self.buf_idx = 0;
-        Ok(())
+    pub fn into_parts(self) -> (Schema, [u8; 16], Codec) {
+        (self.writer_schema, self.marker, self.codec)
     }
+}
 
-    /// Try to read a data block. The objects are stored in an internal buffer to the `Reader`.
-    fn read_block_next(&mut self) -> Result<(), Error> {
-        assert!(self.is_empty(), "Expected self to be empty!");
-        match util::read_long(&mut self.reader) {
-            Ok(block_len) => {
-                self.message_count = block_len as usize;
-                let block_bytes = util::read_long(&mut self.reader)?;
-                self.fill_buf(block_bytes as usize)?;
-                let mut marker = [0u8; 16];
-                self.reader.read_exact(&mut marker)?;
+pub struct Reader<R> {
+    header: Header,
+    inner: R,
+    errored: bool,
+    resolved_schema: Option<Schema>,
+    messages_remaining: usize,
+    // Internal buffering to reduce allocation.
+    buf: Vec<u8>,
+    buf_idx: usize,
+}
 
-                if marker != self.marker {
-                    return Err(
-                        DecodeError::new("block marker does not match header marker").into(),
-                    );
-                }
-
-                // NOTE (JAB): This doesn't fit this Reader pattern very well.
-                // `self.buf` is a growable buffer that is reused as the reader is iterated.
-                // For non `Codec::Null` variants, `decompress` will allocate a new `Vec`
-                // and replace `buf` with the new one, instead of reusing the same buffer.
-                // We can address this by using some "limited read" type to decode directly
-                // into the buffer. But this is fine, for now.
-                self.codec.decompress(&mut self.buf)?;
-
-                return Ok(());
-            }
-            Err(e) => {
-                if let ErrorKind::UnexpectedEof = e.downcast::<::std::io::Error>()?.kind() {
-                    // to not return any error in case we only finished to read cleanly from the stream
-                    return Ok(());
-                }
-            }
+impl<R: AvroRead> Reader<R> {
+    /// Creates a `Reader` given something implementing the `tokio::io::AsyncRead` trait to read from.
+    /// No reader `Schema` will be set.
+    ///
+    /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
+    pub fn new(mut inner: R) -> Result<Reader<R>, Error> {
+        let header = Header::from_reader(&mut inner)?;
+        let reader = Reader {
+            header,
+            inner,
+            errored: false,
+            resolved_schema: None,
+            messages_remaining: 0,
+            buf: vec![],
+            buf_idx: 0,
         };
-        Err(DecodeError::new("unable to read block").into())
+        Ok(reader)
     }
 
-    fn len(&self) -> usize {
-        self.message_count
+    /// Creates a `Reader` given a reader `Schema` and something implementing the `tokio::io::AsyncRead` trait
+    /// to read from.
+    ///
+    /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
+    pub fn with_schema(reader_schema: &Schema, mut inner: R) -> Result<Reader<R>, Error> {
+        let header = Header::from_reader(&mut inner)?;
+
+        let writer_schema = &header.writer_schema;
+        let resolved_schema = if reader_schema.fingerprint::<Sha256>().bytes
+            != writer_schema.fingerprint::<Sha256>().bytes
+        {
+            Some(resolve_schemas(&writer_schema, reader_schema)?)
+        } else {
+            None
+        };
+
+        Ok(Reader {
+            header,
+            errored: false,
+            resolved_schema,
+            inner,
+            messages_remaining: 0,
+            buf: vec![],
+            buf_idx: 0,
+        })
+    }
+
+    /// Get a reference to the writer `Schema`.
+    pub fn writer_schema(&self) -> &Schema {
+        &self.header.writer_schema
+    }
+
+    pub fn schema(&self) -> &Schema {
+        match &self.resolved_schema {
+            Some(schema) => schema,
+            None => self.writer_schema(),
+        }
     }
 
     fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.messages_remaining == 0
     }
 
-    fn read_next(&mut self) -> Result<Option<Value>, Error> {
+    #[inline]
+    /// Read the next Avro value from the file, if one exists.
+    pub fn read_next(&mut self) -> Result<Option<Value>, Error> {
         if self.is_empty() {
             self.read_block_next()?;
             if self.is_empty() {
@@ -215,55 +194,59 @@ impl<R: AvroRead> Block<R> {
         let schema = self.schema();
         let item = from_avro_datum(schema, &mut block_bytes)?;
         self.buf_idx += b_original - block_bytes.len();
-        self.message_count -= 1;
+        self.messages_remaining -= 1;
         Ok(Some(item))
     }
 
-    pub(crate) fn into_parts(self) -> (R, Schema, Codec, [u8; 16]) {
-        (self.reader, self.writer_schema, self.codec, self.marker)
+    fn fill_buf(&mut self, n: usize) -> Result<(), Error> {
+        // We don't have enough space in the buffer, need to grow it.
+        if n >= self.buf.capacity() {
+            self.buf.reserve(n);
+        }
+
+        unsafe {
+            self.buf.set_len(n);
+        }
+        // TODO[btv] This is UB if `self.inner` looks at the contents of the buf before writing them.
+        self.inner.read_exact(&mut self.buf[..n])?;
+        self.buf_idx = 0;
+        Ok(())
     }
-}
 
-pub struct Reader<R> {
-    block: Block<R>,
-    errored: bool,
-}
+    fn read_block_next(&mut self) -> Result<(), Error> {
+        assert!(self.is_empty(), "Expected self to be empty!");
+        match util::read_long(&mut self.inner) {
+            Ok(block_len) => {
+                self.messages_remaining = block_len as usize;
+                let block_bytes = util::read_long(&mut self.inner)?;
+                self.fill_buf(block_bytes as usize)?;
+                let mut marker = [0u8; 16];
+                self.inner.read_exact(&mut marker)?;
 
-impl<R: AvroRead> Reader<R> {
-    /// Creates a `Reader` given something implementing the `tokio::io::AsyncRead` trait to read from.
-    /// No reader `Schema` will be set.
-    ///
-    /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
-    pub fn new(reader: R) -> Result<Reader<R>, Error> {
-        let block = Block::new(reader, None)?;
-        let reader = Reader {
-            block,
-            errored: false,
+                if marker != self.header.marker {
+                    return Err(
+                        DecodeError::new("block marker does not match header marker").into(),
+                    );
+                }
+
+                // NOTE (JAB): This doesn't fit this Reader pattern very well.
+                // `self.buf` is a growable buffer that is reused as the reader is iterated.
+                // For non `Codec::Null` variants, `decompress` will allocate a new `Vec`
+                // and replace `buf` with the new one, instead of reusing the same buffer.
+                // We can address this by using some "limited read" type to decode directly
+                // into the buffer. But this is fine, for now.
+                self.header.codec.decompress(&mut self.buf)?;
+
+                return Ok(());
+            }
+            Err(e) => {
+                if let ErrorKind::UnexpectedEof = e.downcast::<::std::io::Error>()?.kind() {
+                    // to not return any error in case we only finished to read cleanly from the stream
+                    return Ok(());
+                }
+            }
         };
-        Ok(reader)
-    }
-
-    /// Creates a `Reader` given a reader `Schema` and something implementing the `tokio::io::AsyncRead` trait
-    /// to read from.
-    ///
-    /// **NOTE** The avro header is going to be read automatically upon creation of the `Reader`.
-    pub fn with_schema(schema: &Schema, reader: R) -> Result<Reader<R>, Error> {
-        let block = Block::new(reader, Some(schema))?;
-        Ok(Reader {
-            block,
-            errored: false,
-        })
-    }
-
-    /// Get a reference to the writer `Schema`.
-    pub fn writer_schema(&self) -> &Schema {
-        &self.block.writer_schema
-    }
-
-    #[inline]
-    /// Read the next Avro value from the file, if one exists.
-    pub fn read_next(&mut self) -> Result<Option<Value>, Error> {
-        self.block.read_next()
+        Err(DecodeError::new("unable to read block").into())
     }
 }
 

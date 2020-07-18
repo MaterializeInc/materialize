@@ -15,7 +15,7 @@ use failure::{Error, Fail};
 use rand::random;
 
 use crate::encode::{encode, encode_ref, encode_to_vec};
-use crate::reader::Block;
+use crate::reader::Header;
 use crate::schema::{Schema, SchemaPiece};
 use crate::types::{ToAvro, Value};
 use crate::{decode::AvroRead, Codec};
@@ -87,12 +87,12 @@ impl<W: Write> Writer<W> {
     }
 
     /// Creates a `Writer` that appends to an existing OCF file.
-    pub fn append_to(file: W) -> Result<Writer<W>, Error>
+    pub fn append_to(mut file: W) -> Result<Writer<W>, Error>
     where
         W: AvroRead + Seek + Unpin + Send,
     {
-        let block = Block::new(file, None)?;
-        let (mut file, schema, codec, marker) = block.into_parts();
+        let header = Header::from_reader(&mut file)?;
+        let (schema, marker, codec) = header.into_parts();
         file.seek(SeekFrom::End(0))?;
         Ok(Writer {
             schema,
