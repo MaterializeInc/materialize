@@ -10,9 +10,10 @@
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
+use std::ops::Add;
 use std::str;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use serde::{Deserialize, Serialize};
@@ -1333,11 +1334,10 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
     }
 
     fn truncate_week(&self) -> Self {
-        let num_days_from_monday = self.date().weekday().num_days_from_monday();
-        Self::new(
-            NaiveDate::from_ymd(self.year(), self.month(), self.day() - num_days_from_monday),
-            NaiveTime::from_hms(0, 0, 0),
-        )
+        let num_days_from_monday = self.date().weekday().num_days_from_monday() as i64;
+        let new_date = NaiveDate::from_ymd(self.year(), self.month(), self.day())
+            .add(Duration::days(-num_days_from_monday));
+        Self::new(new_date, NaiveTime::from_hms(0, 0, 0))
     }
 
     fn truncate_month(&self) -> Self {

@@ -49,6 +49,11 @@ SELECT date_trunc('week', TIMESTAMP '2019-11-26 15:56:46.241150')
 2019-11-25 00:00:00
 
 query T
+SELECT date_trunc('week', TIMESTAMP '2020-08-02 00:00:00')
+----
+2020-07-27 00:00:00
+
+query T
 SELECT date_trunc('month', TIMESTAMP '2019-11-26 15:56:46.241150')
 ----
 2019-11-01 00:00:00
