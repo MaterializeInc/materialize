@@ -54,6 +54,7 @@ Wrap your release notes at the 80 character mark.
   start.
 - Fix a bug that prevented dropping databases with cross-schema dependencies.
   {{% gh 3558 %}}
+- Allow Kafka sinks to optionally emit Debezium style [consistency metadata](/sql/create-sink/#consistency-metadata).
 
 <span id="v0.3.1"></span>
 ## 0.3.0 &rarr; 0.3.1

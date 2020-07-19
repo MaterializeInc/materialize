@@ -22,6 +22,7 @@ Component | Use
 **Sources** | Sources represent streams (e.g. Kafka) or files that provide data to Materialize.
 **Views** | Views represent queries of sources and other views that you want to save for repeated execution.
 **Indexes** | Indexes represent query results stored in memory.
+**Sinks** | Sinks represent output streams or files that Materialize sends data to.
 
 ## Sources
 
@@ -154,11 +155,23 @@ quickly, e.g. `JOIN`s.
 
 Creating additional indexes on materialized views lets you store some subset of a query's data in memory using a different structure, which can be useful if you want to perform a join over a view's data using non-primary keys (e.g. foreign keys).
 
+## Sinks
+
+Sinks are the inverse of sources and represent a connection to an external stream
+where Materialize outputs data. When a user defines a sink over a materialized view
+or source, Materialize automatically generates the required schema and writes down
+the stream of changes to that view or source. In effect, Materialize sinks act as
+change data capture (CDC) producers for the given source or view.
+
+Currently, Materialize only supports sending sink data to Kafka or Avro OCFs,
+encoded in Avro with the Debezium diff envelope.
+
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source)
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 - [`CREATE VIEW`](/sql/create-view)
 - [`CREATE INDEX`](/sql/create-index)
+- [`CREATE SINK`](/sql/create-sink)
 
 [Debezium]: http://debezium.io

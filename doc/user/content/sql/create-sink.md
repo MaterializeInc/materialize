@@ -46,6 +46,7 @@ The following options are valid within the `WITH` clause.
 Field | Value type | Description
 ------|------------|------------
 `replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
+`consistency` | `bool` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
 
 ### AS OF
 
@@ -64,6 +65,7 @@ Any further updates to these results are produced at the time when they occur. T
 - On each restart, Materialize creates new, distinct topics and files for each sink.
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
 - Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](/overview/api-components/#envelopes) to capture changes in the input view or source.
+- Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction id information inline with the data, and adds a separate transaction metadata topic.
 
 ### Kafka sinks
 
@@ -72,6 +74,75 @@ When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new 
 {topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
 ```
 You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
+
+#### Consistency metadata
+
+When requested, Materialize will send consistency metadata that describes timestamps (also called transaction ids) and relates the change data stream to them.
+
+Materialize sends two main pieces of information:
+- A timestamp for each change. This is sent inline with the change itself.
+- A count of how many changes occurred for each timestamp. This is sent as part of a separate consistency topic.
+
+Materialize uses a simplified version of the Debezium [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata) protocol to send this information.
+The generated diff envelope schema used for data messages is decorated with a `transaction` field which has the following schema.
+
+```
+{
+    "name": "transaction",
+    "type": {
+        "type": "record",
+        "name": "transaction_metadata",
+        "fields": [
+            {
+                "name": "id",
+                "type": "string"
+            }
+        ]
+    }
+}
+```
+Each message sent to Kafka has a `transaction` field, along with a `transaction_id`, in addition to it's regular `before` / `after` data fields. The `transaction_id` is equivalent to the Materialize timestamp for this record.
+
+In addition to the inline information, Materialize creates a new "consistency topic" that stores counts of how many changes were generated per `transaction_id`. This consistency topic is named using the format below.
+```nofmt
+{topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}-consistency
+```
+
+Each message in the consistency topic has the schema below.
+```
+{
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+        {
+            "name": "id",
+            "type": "string"
+        },
+        {
+            "name": "status",
+            "type": "string"
+        },
+        {
+            "name": "event_count",
+            "type": [
+                null,
+                "long"
+            ]
+        }
+    ]
+}
+```
+
+Field | Use
+------|-----
+_id_ | The transaction id this record refers to.
+_status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and it sends a `END` record after it has written all data messages for `id`.
+_event&lowbar;count_ | This field null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
+
+##### Consistency information details
+- Materialize writes consistency output to a different topic per sink.
+- There are no ordering guarantees on transaction ids in the consistency topic.
+- Multiple transactions can be interleaved in the consistency topic. In other words, there can be multiple transaction ids that have a `BEGIN` record but no corresponding `END` record simultaneously.
 
 ### Avro OCF sinks
 
