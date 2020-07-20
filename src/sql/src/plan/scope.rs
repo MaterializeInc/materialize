@@ -105,12 +105,20 @@ impl ScopeItem {
             .any(|n| n.table_name.as_ref() == Some(&table_name))
     }
 
-    pub fn prioritized(&self) -> ScopeItem {
-        let mut out = self.clone();
-        for name in &mut out.names {
-            name.priority = true;
+    pub fn short_display_name(&self) -> String {
+        match self.names.get(0) {
+            None => "?".into(),
+            Some(name) => {
+                let column_name = match &name.column_name {
+                    None => "?column?",
+                    Some(column_name) => column_name.as_str(),
+                };
+                match &name.table_name {
+                    None => column_name.into(),
+                    Some(table_name) => format!("{}.{}", table_name.item, column_name),
+                }
+            }
         }
-        out
     }
 }
 
