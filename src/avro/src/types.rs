@@ -1,4 +1,4 @@
-// Copyright Flavien Raynaud, Materialize Inc. and other contributors.
+// Copyright Materialize, Inc., Flavien Raynaud and other contributors.
 //
 // Use of this software is governed by the Apache License, Version 2.0
 //! Logic handling the intermediate representation of Avro values.
