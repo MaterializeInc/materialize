@@ -10,7 +10,6 @@
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
-use std::ops::Add;
 use std::str;
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
@@ -1335,8 +1334,10 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
 
     fn truncate_week(&self) -> Self {
         let num_days_from_monday = self.date().weekday().num_days_from_monday() as i64;
+        // TODO(rkhaitan): properly return a error if checked_sub_signed returns None
         let new_date = NaiveDate::from_ymd(self.year(), self.month(), self.day())
-            .add(Duration::days(-num_days_from_monday));
+            .checked_sub_signed(Duration::days(num_days_from_monday))
+            .expect("failed to properly subtract date for date_trunc week");
         Self::new(new_date, NaiveTime::from_hms(0, 0, 0))
     }
 
