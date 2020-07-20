@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
+use std::convert::TryFrom;
 use std::iter;
 use std::mem;
 use std::time::Instant;
@@ -18,7 +20,7 @@ use itertools::izip;
 use lazy_static::lazy_static;
 use log::{debug, trace};
 use postgres::error::SqlState;
-use prometheus::{register_histogram_vec, register_int_counter};
+use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{self, Duration};
 use tokio_util::codec::Framed;
@@ -26,6 +28,7 @@ use tokio_util::codec::Framed;
 use coord::session::Session;
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::{PeekResponse, Update};
+use ore::cast::CastFrom;
 use ore::future::OreSinkExt;
 use repr::{Datum, RelationDesc, Row, RowArena};
 use sql::ast::Statement;
@@ -63,7 +66,7 @@ lazy_static! {
         ore::stats::HISTOGRAM_BUCKETS.to_vec()
     )
     .unwrap();
-    static ref ROWS_RETURNED: prometheus::IntCounter = register_int_counter!(
+    static ref ROWS_RETURNED: prometheus::UIntCounter = register_uint_counter!(
         "mz_pg_sent_rows",
         "total number of rows sent to clients from pgwire"
     )
@@ -144,7 +147,13 @@ where
             Some(FrontendMessage::Execute {
                 portal_name,
                 max_rows,
-            }) => self.execute(session, portal_name, max_rows).await?,
+            }) => {
+                let max_rows = match usize::try_from(max_rows) {
+                    Ok(0) | Err(_) => usize::MAX, // If `max_rows < 0`, no limit.
+                    Ok(n) => n,
+                };
+                self.execute(session, portal_name, max_rows).await?
+            }
             Some(FrontendMessage::DescribeStatement { name }) => {
                 self.describe_statement(session, name).await?
             }
@@ -331,7 +340,7 @@ where
                 result: Ok(response),
                 session,
             } => {
-                let max_rows = 0;
+                let max_rows = usize::MAX;
                 self.send_execute_response(session, response, row_desc, portal_name, max_rows)
                     .await
             }
@@ -498,7 +507,7 @@ where
         &mut self,
         mut session: Session,
         portal_name: String,
-        max_rows: i32,
+        max_rows: usize,
     ) -> Result<State, comm::Error> {
         let row_desc = session
             .get_prepared_statement_for_portal(&portal_name)
@@ -660,7 +669,7 @@ where
         response: ExecuteResponse,
         row_desc: Option<RelationDesc>,
         portal_name: String,
-        max_rows: i32,
+        max_rows: usize,
     ) -> Result<State, comm::Error> {
         macro_rules! command_complete {
             ($($arg:tt)*) => {{
@@ -787,7 +796,7 @@ where
         row_desc: RelationDesc,
         portal_name: String,
         mut rows: Vec<Row>,
-        max_rows: i32,
+        max_rows: usize,
     ) -> Result<State, comm::Error> {
         let portal = session
             .get_portal_mut(&portal_name)
@@ -835,27 +844,18 @@ where
                 .collect(),
         );
 
-        let mut row_count = 0u32;
-        {
-            let row_count = &mut row_count;
-            self.send_all(
-                if max_rows > 0 && (max_rows as usize) < rows.len() {
-                    rows.drain(..max_rows as usize)
-                } else {
-                    rows.drain(..)
-                }
-                .map(move |row| {
-                    *row_count += 1;
-                    BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
-                }),
-            )
-            .await?;
-        }
-        ROWS_RETURNED.inc_by(i64::from(row_count));
+        let nrows = cmp::min(max_rows, rows.len());
+        self.send_all(
+            rows.drain(..nrows).map(move |row| {
+                BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
+            }),
+        )
+        .await?;
+        ROWS_RETURNED.inc_by(u64::cast_from(nrows));
 
         if rows.is_empty() {
             self.send(BackendMessage::CommandComplete {
-                tag: format!("SELECT {}", row_count),
+                tag: format!("SELECT {}", nrows),
             })
             .await?;
         } else {

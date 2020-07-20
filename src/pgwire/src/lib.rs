@@ -20,6 +20,8 @@
 //!   * [CockroachDB pgwire implementation](https://github.com/cockroachdb/cockroach/tree/master/pkg/sql/pgwire)
 //!   * ["Postgres on the wire" PGCon talk](https://www.pgcon.org/2014/schedule/attachments/330_postgres-for-the-wire.pdf)
 
+#![deny(clippy::as_conversions)]
+
 mod codec;
 mod id_alloc;
 mod message;

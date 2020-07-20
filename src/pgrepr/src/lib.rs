@@ -17,6 +17,7 @@
 //! example, the [`values_from_row`] function.
 
 #![forbid(missing_docs)]
+#![deny(clippy::as_conversions)]
 
 mod format;
 mod types;
