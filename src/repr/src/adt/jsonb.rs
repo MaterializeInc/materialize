@@ -103,7 +103,7 @@ impl Jsonb {
     ///
     /// Errors if any of the contained integers cannot be represented exactly as
     /// an [`f64`].
-    pub fn from_serde_json(val: serde_json::Value) -> Result<Self, failure::Error> {
+    pub fn from_serde_json(val: serde_json::Value) -> Result<Self, anyhow::Error> {
         let packer = JsonbPacker::new(RowPacker::new()).pack_serde_json(val)?;
         Ok(Jsonb {
             row: packer.finish(),
@@ -114,7 +114,7 @@ impl Jsonb {
     ///
     /// Errors if the slice is not valid JSON or if any of the contained
     /// integers cannot be represented exactly as an [`f64`].
-    pub fn from_slice(buf: &[u8]) -> Result<Jsonb, failure::Error> {
+    pub fn from_slice(buf: &[u8]) -> Result<Jsonb, anyhow::Error> {
         let packer = JsonbPacker::new(RowPacker::new()).pack_slice(buf)?;
         Ok(Jsonb {
             row: packer.finish(),
@@ -135,7 +135,7 @@ impl Jsonb {
 }
 
 impl FromStr for Jsonb {
-    type Err = failure::Error;
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let packer = JsonbPacker::new(RowPacker::new()).pack_str(s)?;
@@ -181,7 +181,7 @@ impl JsonbRef<'_> {
     ///
     /// Panics if this `JsonbRef` was constructed with a [`Datum`] that is not
     /// representable as JSON.
-    pub fn to_writer<W>(&self, writer: W) -> Result<(), failure::Error>
+    pub fn to_writer<W>(&self, writer: W) -> Result<(), anyhow::Error>
     where
         W: io::Write,
     {
@@ -236,7 +236,7 @@ impl JsonbPacker {
     ///
     /// Errors if any of the contained integers cannot be represented exactly as
     /// an [`f64`].
-    pub fn pack_serde_json(self, val: serde_json::Value) -> Result<RowPacker, failure::Error> {
+    pub fn pack_serde_json(self, val: serde_json::Value) -> Result<RowPacker, anyhow::Error> {
         let mut commands = vec![];
         Collector(&mut commands).deserialize(val)?;
         Ok(pack(self.packer, &commands))
@@ -246,7 +246,7 @@ impl JsonbPacker {
     ///
     /// Errors if the slice is not valid JSON or if any of the contained
     /// integers cannot be represented exactly as an [`f64`].
-    pub fn pack_slice(self, buf: &[u8]) -> Result<RowPacker, failure::Error> {
+    pub fn pack_slice(self, buf: &[u8]) -> Result<RowPacker, anyhow::Error> {
         let mut commands = vec![];
         let mut deserializer = serde_json::Deserializer::from_slice(buf);
         Collector(&mut commands).deserialize(&mut deserializer)?;
@@ -258,7 +258,7 @@ impl JsonbPacker {
     ///
     /// Errors if the string is not valid or JSON or if any of the contained
     /// integers cannot be represented exactly as an [`f64`].
-    pub fn pack_str(self, s: &str) -> Result<RowPacker, failure::Error> {
+    pub fn pack_str(self, s: &str) -> Result<RowPacker, anyhow::Error> {
         let mut commands = vec![];
         let mut deserializer = serde_json::Deserializer::from_str(s);
         Collector(&mut commands).deserialize(&mut deserializer)?;

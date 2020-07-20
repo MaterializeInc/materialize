@@ -244,7 +244,7 @@ where
                 session,
             } => {
                 return self
-                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
                     .await;
             }
         };
@@ -288,7 +288,7 @@ where
                 session,
             } => {
                 return self
-                    .error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                    .error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
                     .await;
             }
         };
@@ -348,7 +348,7 @@ where
                 result: Err(err),
                 session,
             } => {
-                self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                self.error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
                     .await
             }
         }
@@ -359,7 +359,7 @@ where
             Ok(stmts) => stmts,
             Err(err) => {
                 let session = match self
-                    .error(session, SqlState::SYNTAX_ERROR, err.to_string())
+                    .error(session, SqlState::SYNTAX_ERROR, format!("{:#}", err))
                     .await?
                 {
                     State::Drain(s) => s,
@@ -389,7 +389,7 @@ where
             Ok(stmts) => stmts,
             Err(err) => {
                 return self
-                    .error(session, SqlState::SYNTAX_ERROR, err.to_string())
+                    .error(session, SqlState::SYNTAX_ERROR, format!("{:#}", err))
                     .await;
             }
         };
@@ -423,7 +423,7 @@ where
                 result: Err(err),
                 session,
             } => {
-                self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                self.error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
                     .await
             }
         }
@@ -557,7 +557,7 @@ where
                 result: Err(err),
                 session,
             } => {
-                self.error(session, SqlState::INTERNAL_ERROR, err.to_string())
+                self.error(session, SqlState::INTERNAL_ERROR, format!("{:#}", err))
                     .await
             }
         }

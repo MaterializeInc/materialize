@@ -3,12 +3,18 @@
 // Use of this software is governed by the Apache License, Version 2.0
 
 //! Logic for parsing and interacting with schemas in Avro format.
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
 
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
+use std::fmt;
+use std::rc::Rc;
+
+use anyhow::Error;
 use digest::Digest;
-use failure::{Error, Fail};
+use itertools::Itertools;
 use log::{debug, warn};
 use regex::Regex;
 use serde::{
@@ -16,18 +22,11 @@ use serde::{
     Serialize, Serializer,
 };
 use serde_json::{self, Map, Value};
+use types::{DecimalValue, Value as AvroValue};
 
 use crate::reader::SchemaResolver;
 use crate::types;
 use crate::util::MapHelper;
-use failure::_core::fmt::Formatter;
-use itertools::Itertools;
-use std::cell::RefCell;
-use std::collections::hash_map::Entry;
-use std::convert::TryFrom;
-use std::fmt::Display;
-use std::rc::Rc;
-use types::{DecimalValue, Value as AvroValue};
 
 pub fn resolve_schemas(writer_schema: &Schema, reader_schema: &Schema) -> Result<Schema, Error> {
     let r_indices = reader_schema.indices.clone();
@@ -67,8 +66,7 @@ pub fn resolve_schemas(writer_schema: &Schema, reader_schema: &Schema) -> Result
 }
 
 /// Describes errors happened while parsing Avro schemas.
-#[derive(Fail, Debug)]
-#[fail(display = "Failed to parse schema: {}", _0)]
+#[derive(Debug)]
 pub struct ParseSchemaError(String);
 
 impl ParseSchemaError {
@@ -79,6 +77,14 @@ impl ParseSchemaError {
         ParseSchemaError(msg.into())
     }
 }
+
+impl fmt::Display for ParseSchemaError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Failed to parse schema: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParseSchemaError {}
 
 /// Represents an Avro schema fingerprint
 /// More information about Avro schema fingerprints can be found in the
@@ -465,8 +471,8 @@ impl FullName {
     }
 }
 
-impl Display for FullName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for FullName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}", self.namespace, self.name)
     }
 }

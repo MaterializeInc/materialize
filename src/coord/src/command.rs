@@ -58,7 +58,7 @@ pub enum Command {
 
 #[derive(Debug)]
 pub struct Response<T> {
-    pub result: Result<T, failure::Error>,
+    pub result: Result<T, anyhow::Error>,
     pub session: Session,
 }
 

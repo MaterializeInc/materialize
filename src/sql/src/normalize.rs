@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use failure::bail;
+use anyhow::bail;
 
 use ore::collections::CollectionExt;
 use repr::ColumnName;
@@ -28,7 +28,7 @@ pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
 }
 
-pub fn function_name(name: ObjectName) -> Result<String, failure::Error> {
+pub fn function_name(name: ObjectName) -> Result<String, anyhow::Error> {
     if name.0.len() != 1 {
         unsupported!("qualified function names");
     }
@@ -39,7 +39,7 @@ pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
 }
 
-pub fn object_name(mut name: ObjectName) -> Result<PartialName, failure::Error> {
+pub fn object_name(mut name: ObjectName) -> Result<PartialName, anyhow::Error> {
     if name.0.len() < 1 || name.0.len() > 3 {
         bail!(
             "qualified names must have between 1 and 3 components, got {}: {}",
@@ -87,24 +87,24 @@ pub fn unresolve(name: FullName) -> ObjectName {
 pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement,
-) -> Result<String, failure::Error> {
-    let allocate_name = |name: &ObjectName| -> Result<_, failure::Error> {
+) -> Result<String, anyhow::Error> {
+    let allocate_name = |name: &ObjectName| -> Result<_, anyhow::Error> {
         Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
     };
 
-    let allocate_temporary_name = |name: &ObjectName| -> Result<_, failure::Error> {
+    let allocate_temporary_name = |name: &ObjectName| -> Result<_, anyhow::Error> {
         Ok(unresolve(
             scx.allocate_temporary_name(object_name(name.clone())?),
         ))
     };
 
-    let resolve_item = |name: &ObjectName| -> Result<_, failure::Error> {
+    let resolve_item = |name: &ObjectName| -> Result<_, anyhow::Error> {
         Ok(unresolve(scx.resolve_item(name.clone())?))
     };
 
     struct QueryNormalizer<'a> {
         scx: &'a StatementContext<'a>,
-        err: Option<failure::Error>,
+        err: Option<anyhow::Error>,
     }
 
     impl<'a, 'ast> VisitMut<'ast> for QueryNormalizer<'a> {

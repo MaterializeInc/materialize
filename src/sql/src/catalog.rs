@@ -69,7 +69,7 @@ pub trait Catalog: fmt::Debug {
     /// [`resolve_item`], but there is no such thing as a "partial" database
     /// name. All database names are full names. This function amounts to an
     /// existence check for the named database.
-    fn resolve_database(&self, database_name: &str) -> Result<(), failure::Error>;
+    fn resolve_database(&self, database_name: &str) -> Result<(), anyhow::Error>;
 
     /// Resolves a partially-specified schema name.
     ///
@@ -82,7 +82,7 @@ pub trait Catalog: fmt::Debug {
         &self,
         database_name: Option<String>,
         schema_name: &str,
-    ) -> Result<DatabaseSpecifier, failure::Error>;
+    ) -> Result<DatabaseSpecifier, anyhow::Error>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -96,7 +96,7 @@ pub trait Catalog: fmt::Debug {
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialName) -> Result<FullName, failure::Error>;
+    fn resolve_item(&self, item_name: &PartialName) -> Result<FullName, anyhow::Error>;
 
     /// Lists the databases in the catalog.
     fn list_databases<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a>;
@@ -148,7 +148,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self) -> Result<&RelationDesc, failure::Error>;
+    fn desc(&self) -> Result<&RelationDesc, anyhow::Error>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
@@ -216,7 +216,7 @@ impl Catalog for DummyCatalog {
         "dummy"
     }
 
-    fn resolve_database(&self, _: &str) -> Result<(), failure::Error> {
+    fn resolve_database(&self, _: &str) -> Result<(), anyhow::Error> {
         unimplemented!();
     }
 
@@ -224,11 +224,11 @@ impl Catalog for DummyCatalog {
         &self,
         _: Option<String>,
         _: &str,
-    ) -> Result<DatabaseSpecifier, failure::Error> {
+    ) -> Result<DatabaseSpecifier, anyhow::Error> {
         unimplemented!();
     }
 
-    fn resolve_item(&self, _: &PartialName) -> Result<FullName, failure::Error> {
+    fn resolve_item(&self, _: &PartialName) -> Result<FullName, anyhow::Error> {
         unimplemented!();
     }
 

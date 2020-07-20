@@ -36,7 +36,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use failure::bail;
+use anyhow::bail;
 
 use ore::collections::CollectionExt;
 use repr::RelationType;
@@ -489,7 +489,7 @@ impl ScalarExpr {
     }
 
     /// Rewrites `self` into a `expr::ScalarExpr`.
-    pub fn lower_uncorrelated(self) -> Result<expr::ScalarExpr, failure::Error> {
+    pub fn lower_uncorrelated(self) -> Result<expr::ScalarExpr, anyhow::Error> {
         use self::ScalarExpr::*;
         use expr::ScalarExpr as SS;
 

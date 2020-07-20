@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::mem;
 
-use failure::bail;
+use anyhow::bail;
 
 use ore::collections::CollectionExt;
 use repr::*;
@@ -184,7 +184,7 @@ pub enum CoercibleScalarExpr {
 }
 
 impl CoercibleScalarExpr {
-    pub fn type_as(self, ecx: &ExprContext, ty: ScalarType) -> Result<ScalarExpr, failure::Error> {
+    pub fn type_as(self, ecx: &ExprContext, ty: ScalarType) -> Result<ScalarExpr, anyhow::Error> {
         let expr = typeconv::plan_coerce(ecx, self, CoerceTo::Plain(ty.clone()))?;
         let expr_ty = ecx.scalar_type(&expr);
         if ty != expr_ty {
@@ -193,7 +193,7 @@ impl CoercibleScalarExpr {
         Ok(expr)
     }
 
-    pub fn type_as_any(self, ecx: &ExprContext) -> Result<ScalarExpr, failure::Error> {
+    pub fn type_as_any(self, ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
         typeconv::plan_coerce(ecx, self, CoerceTo::Plain(ScalarType::String))
     }
 }

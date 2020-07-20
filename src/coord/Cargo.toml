@@ -6,6 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+anyhow = "1.0.31"
 avro = { path = "../avro", package = "mz-avro" }
 aws-util = { path = "../aws-util" }
 backtrace = "0.3.50"
@@ -18,7 +19,6 @@ dataflow-types = { path = "../dataflow-types" }
 derivative = "2.1"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
-failure = "0.1.8"
 futures = "0.3"
 interchange = { path = "../interchange" }
 itertools = "0.9"

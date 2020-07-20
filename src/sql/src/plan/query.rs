@@ -26,7 +26,7 @@ use std::iter;
 use std::mem;
 use std::rc::Rc;
 
-use failure::{bail, ensure, format_err, ResultExt};
+use anyhow::{anyhow, bail, ensure, Context};
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     BinaryOperator, DataType, Expr, Function, FunctionArgs, Ident, JoinConstraint, JoinOperator,
@@ -65,7 +65,7 @@ pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query,
     lifetime: QueryLifetime,
-) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
+) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), anyhow::Error> {
     transform_ast::transform_query(&mut query)?;
     let qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&qcx, &query)?;
@@ -119,7 +119,7 @@ pub fn plan_show_where(
     filter: Option<&ShowStatementFilter>,
     rows: Vec<Vec<Datum>>,
     desc: &RelationDesc,
-) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
+) -> Result<(RelationExpr, RowSetFinishing), anyhow::Error> {
     let names: Vec<Option<String>> = desc
         .iter_names()
         .map(|name| name.map(|x| x.as_str().into()))
@@ -174,7 +174,7 @@ pub fn plan_show_where(
 pub fn eval_as_of<'a>(
     scx: &'a StatementContext,
     mut expr: Expr,
-) -> Result<Timestamp, failure::Error> {
+) -> Result<Timestamp, anyhow::Error> {
     let scope = Scope::from_source(
         None,
         iter::empty::<Option<ColumnName>>(),
@@ -215,7 +215,7 @@ pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
     exprs: Vec<Expr>,
-) -> Result<Vec<::expr::ScalarExpr>, failure::Error> {
+) -> Result<Vec<::expr::ScalarExpr>, anyhow::Error> {
     let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext::root(scx, QueryLifetime::Static);
     let ecx = &ExprContext {
@@ -235,24 +235,19 @@ pub fn plan_index_exprs<'a>(
     Ok(out)
 }
 
-fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr) -> Result<ScalarExpr, failure::Error> {
+fn plan_expr_or_col_index(ecx: &ExprContext, e: &Expr) -> Result<ScalarExpr, anyhow::Error> {
     match check_col_index(&ecx.name, e, ecx.relation_type.column_types.len())? {
         Some(column) => Ok(ScalarExpr::Column(ColumnRef { level: 0, column })),
         _ => plan_expr(ecx, e)?.type_as_any(ecx),
     }
 }
 
-fn check_col_index(name: &str, e: &Expr, max: usize) -> Result<Option<usize>, failure::Error> {
+fn check_col_index(name: &str, e: &Expr, max: usize) -> Result<Option<usize>, anyhow::Error> {
     match e {
         Expr::Value(Value::Number(n)) => {
-            let n = n.parse::<usize>().with_context(|err| {
-                format_err!(
-                    "unable to parse column reference in {}: {}: {}",
-                    name,
-                    err,
-                    n
-                )
-            })?;
+            let n = n
+                .parse::<usize>()
+                .with_context(|| anyhow!("unable to parse column reference in {}: {}", name, n))?;
             if n < 1 || n > max {
                 bail!(
                     "column reference {} in {} is out of range (1 - {})",
@@ -270,7 +265,7 @@ fn check_col_index(name: &str, e: &Expr, max: usize) -> Result<Option<usize>, fa
 fn plan_query(
     qcx: &QueryContext,
     q: &Query,
-) -> Result<(RelationExpr, Scope, RowSetFinishing), failure::Error> {
+) -> Result<(RelationExpr, Scope, RowSetFinishing), anyhow::Error> {
     if !q.ctes.is_empty() {
         unsupported!(2617, "CTEs");
     }
@@ -342,7 +337,7 @@ fn plan_query(
     }
 }
 
-fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope), failure::Error> {
+fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let (mut expr, scope, finishing) = plan_query(qcx, q)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = RelationExpr::TopK {
@@ -356,7 +351,7 @@ fn plan_subquery(qcx: &QueryContext, q: &Query) -> Result<(RelationExpr, Scope),
     Ok((expr.project(finishing.project), scope))
 }
 
-fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope), failure::Error> {
+fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match q {
         SetExpr::Select(select) => plan_view_select(qcx, select),
         SetExpr::SetOperation {
@@ -552,7 +547,7 @@ fn plan_view_select_intrusive(
     group_by: &[Expr],
     having: Option<&Expr>,
     order_by_exprs: &[OrderByExpr],
-) -> Result<SelectPlan, failure::Error> {
+) -> Result<SelectPlan, anyhow::Error> {
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, from_scope) =
         from.iter().fold(Ok(plan_join_identity(qcx)), |l, twj| {
@@ -764,7 +759,7 @@ fn plan_view_select_intrusive(
 fn plan_view_select(
     qcx: &QueryContext,
     s: &Select,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let order_by_exprs = &[];
     let plan = plan_view_select_intrusive(
         qcx,
@@ -792,7 +787,7 @@ fn plan_table_with_joins<'a>(
     left_scope: Scope,
     join_operator: &JoinOperator,
     table_with_joins: &'a TableWithJoins,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let (mut left, mut left_scope) = plan_table_factor(
         qcx,
         left,
@@ -815,7 +810,7 @@ fn plan_table_factor<'a>(
     left_scope: Scope,
     join_operator: &JoinOperator,
     table_factor: &'a TableFactor,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match table_factor {
         TableFactor::Table {
             name,
@@ -882,7 +877,7 @@ fn plan_table_function(
     name: &ObjectName,
     alias: Option<&TableAlias>,
     args: &FunctionArgs,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let ident = normalize::function_name(name.clone())?;
     let args = match args {
         FunctionArgs::Star => bail!("{} does not accept * as an argument", ident),
@@ -908,7 +903,7 @@ fn plan_table_alias(
     alias: Option<&TableAlias>,
     inherent_table_name: Option<PartialName>,
     inherent_column_names: Vec<Option<ColumnName>>,
-) -> Result<Scope, failure::Error> {
+) -> Result<Scope, anyhow::Error> {
     let table_name = match alias {
         None => inherent_table_name,
         Some(TableAlias { name, .. }) => Some(PartialName {
@@ -981,7 +976,7 @@ fn plan_select_item<'a>(
     s: &'a SelectItem,
     select_all_scope: &Scope,
     select_all_mapping: &BTreeMap<usize, usize>,
-) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
+) -> Result<Vec<(ScalarExpr, ScopeItem)>, anyhow::Error> {
     match s {
         SelectItem::Expr {
             expr: Expr::QualifiedWildcard(table_name),
@@ -997,14 +992,14 @@ fn plan_select_item<'a>(
                     let expr = ScalarExpr::Column(ColumnRef {
                         level: 0,
                         column: *select_all_mapping.get(&i).ok_or_else(|| {
-                            format_err!("internal error: unable to resolve scope item {:?}", item)
+                            anyhow!("internal error: unable to resolve scope item {:?}", item)
                         })?,
                     });
                     let mut out_item = item.clone();
                     out_item.expr = None;
                     Ok((expr, out_item))
                 })
-                .collect::<Result<Vec<_>, failure::Error>>()?;
+                .collect::<Result<Vec<_>, anyhow::Error>>()?;
             if out.is_empty() {
                 bail!("no table named '{}' in scope", table_name);
             }
@@ -1066,14 +1061,14 @@ fn plan_select_item<'a>(
                     let expr = ScalarExpr::Column(ColumnRef {
                         level: 0,
                         column: *select_all_mapping.get(&i).ok_or_else(|| {
-                            format_err!("internal error: unable to resolve scope item {:?}", item)
+                            anyhow!("internal error: unable to resolve scope item {:?}", item)
                         })?,
                     });
                     let mut out_item = item.clone();
                     out_item.expr = None;
                     Ok((expr, out_item))
                 })
-                .collect::<Result<Vec<_>, failure::Error>>()?;
+                .collect::<Result<Vec<_>, anyhow::Error>>()?;
             if out.is_empty() {
                 bail!("SELECT * with no tables specified is not valid");
             }
@@ -1089,7 +1084,7 @@ fn plan_join_operator(
     left_scope: Scope,
     right: RelationExpr,
     right_scope: Scope,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match operator {
         JoinOperator::Inner(constraint) => plan_join_constraint(
             qcx,
@@ -1145,7 +1140,7 @@ fn plan_join_constraint<'a>(
     right: RelationExpr,
     right_scope: Scope,
     kind: JoinKind,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let (expr, scope) = match constraint {
         JoinConstraint::On(expr) => {
             let mut product_scope = left_scope.product(right_scope);
@@ -1242,7 +1237,7 @@ fn plan_using_constraint(
     right: RelationExpr,
     right_scope: Scope,
     kind: JoinKind,
-) -> Result<(RelationExpr, Scope), failure::Error> {
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
     let mut join_exprs = vec![];
     let mut map_exprs = vec![];
     let mut new_items = vec![];
@@ -1346,10 +1341,7 @@ fn plan_using_constraint(
     Ok((both, both_scope))
 }
 
-pub fn plan_expr<'a>(
-    ecx: &'a ExprContext,
-    e: &Expr,
-) -> Result<CoercibleScalarExpr, failure::Error> {
+pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarExpr, anyhow::Error> {
     if let Some(i) = ecx.scope.resolve_expr(e) {
         // We've already calculated this expression.
         return Ok(ScalarExpr::Column(i).into());
@@ -1488,7 +1480,7 @@ pub fn plan_homogeneous_exprs(
     name: &str,
     ecx: &ExprContext,
     exprs: &[impl std::borrow::Borrow<Expr>],
-) -> Result<Vec<ScalarExpr>, failure::Error> {
+) -> Result<Vec<ScalarExpr>, anyhow::Error> {
     assert!(!exprs.is_empty());
 
     let mut cexprs = Vec::new();
@@ -1525,7 +1517,7 @@ pub fn plan_homogeneous_exprs(
     Ok(out)
 }
 
-fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, failure::Error> {
+fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExpr, anyhow::Error> {
     let name = normalize::function_name(sql_func.name.clone())?;
     assert!(func::is_aggregate_func(&name));
 
@@ -1587,7 +1579,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     })
 }
 
-fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, failure::Error> {
+fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, anyhow::Error> {
     let mut names = names.to_vec();
     let col_name = normalize::column_name(names.pop().unwrap());
 
@@ -1647,7 +1639,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, fai
 fn plan_function<'a>(
     ecx: &ExprContext,
     sql_func: &'a Function,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let name = normalize::function_name(sql_func.name.clone())?;
     let ident = &*name;
 
@@ -1692,7 +1684,7 @@ fn plan_is_null_expr<'a>(
     ecx: &ExprContext,
     inner: &'a Expr,
     not: bool,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
     // with our type coercion rules, which treat `NULL` literals and
     // unconstrained parameters identically. Providing a type hint of string
@@ -1717,7 +1709,7 @@ fn plan_case<'a>(
     conditions: &'a [Expr],
     results: &'a [Expr],
     else_result: &'a Option<Box<Expr>>,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let mut cond_exprs = Vec::new();
     let mut result_exprs = Vec::new();
     for (c, r) in conditions.iter().zip(results) {
@@ -1750,7 +1742,7 @@ fn plan_case<'a>(
     Ok(expr)
 }
 
-fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, failure::Error> {
+fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
             let d: Decimal = s.parse()?;
@@ -1829,7 +1821,7 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
     equivalences
 }
 
-pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
+pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::Error> {
     // NOTE this needs to stay in sync with symbiosis::push_column
     Ok(match data_type {
         DataType::Boolean => ScalarType::Bool,
@@ -1875,7 +1867,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
 struct AggregateFuncVisitor<'ast> {
     aggs: Vec<&'ast Function>,
     within_aggregate: bool,
-    err: Option<failure::Error>,
+    err: Option<anyhow::Error>,
 }
 
 impl<'ast> AggregateFuncVisitor<'ast> {
@@ -1887,7 +1879,7 @@ impl<'ast> AggregateFuncVisitor<'ast> {
         }
     }
 
-    fn into_result(self) -> Result<Vec<&'ast Function>, failure::Error> {
+    fn into_result(self) -> Result<Vec<&'ast Function>, anyhow::Error> {
         match self.err {
             Some(err) => Err(err),
             None => {
@@ -1909,7 +1901,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
         if let Ok(name) = normalize::function_name(func.name.clone()) {
             if func::is_aggregate_func(&name) {
                 if self.within_aggregate {
-                    self.err = Some(format_err!("nested aggregate functions are not allowed"));
+                    self.err = Some(anyhow!("nested aggregate functions are not allowed"));
                     return;
                 }
                 self.aggs.push(func);

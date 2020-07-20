@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use failure::bail;
+use anyhow::bail;
 
 use repr::{Datum, Row, ScalarType};
 use sql::plan::Params;
@@ -208,7 +208,7 @@ impl Session {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    pub fn get(&self, name: &str) -> Result<&dyn Var, failure::Error> {
+    pub fn get(&self, name: &str) -> Result<&dyn Var, anyhow::Error> {
         if name == APPLICATION_NAME.name {
             Ok(&self.application_name)
         } else if name == CLIENT_ENCODING.name {
@@ -241,7 +241,7 @@ impl Session {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, value: &str) -> Result<(), failure::Error> {
+    pub fn set(&mut self, name: &str, value: &str) -> Result<(), anyhow::Error> {
         if name == APPLICATION_NAME.name {
             self.application_name.set(value)
         } else if name == CLIENT_ENCODING.name {
@@ -390,7 +390,7 @@ impl Session {
         statement_name: String,
         params: Vec<(Datum<'a>, ScalarType)>,
         result_formats: Vec<pgrepr::Format>,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         if !self.prepared_statements.contains_key(&statement_name) {
             bail!(
                 "statement does not exist for portal creation: \

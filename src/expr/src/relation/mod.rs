@@ -12,7 +12,6 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use failure::ResultExt;
 use serde::{Deserialize, Serialize};
 
 use repr::{ColumnType, Datum, RelationType, Row};
@@ -438,7 +437,7 @@ impl RelationExpr {
                         .zip(right_typ.column_types.iter())
                         .map(|(l, r)| l.union(r))
                         .collect::<Result<Vec<_>, _>>()
-                        .with_context(|e| format!("{}\nIn {:#?}", e, self))
+                        .map_err(|e| format!("{}\nIn {:#?}", e, self))
                         .unwrap(),
                 )
                 // Important: do not inherit keys of either input, as not unique.

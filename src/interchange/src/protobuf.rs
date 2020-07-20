@@ -9,7 +9,7 @@
 
 //! Protobuf source connector
 
-use failure::{bail, format_err, ResultExt};
+use anyhow::{anyhow, bail, Context, Result};
 use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
 use serde::de::Deserialize;
@@ -22,8 +22,6 @@ use serde_value::Value as SerdeValue;
 
 use repr::adt::decimal::Significand;
 use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, RowPacker, ScalarType};
-
-use crate::error::Result;
 
 pub mod test_util;
 
@@ -118,7 +116,7 @@ pub fn decode_descriptors(descriptors: &[u8]) -> Result<Descriptors> {
 pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Result<RelationDesc> {
     let proto_name = proto_message_name(message_name);
     let message = descriptors.message_by_name(&proto_name).ok_or_else(|| {
-        format_err!(
+        anyhow!(
             "Message {:?} not found in file descriptor set: {}",
             proto_name,
             descriptors
@@ -174,16 +172,16 @@ impl Decoder {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer =
             Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
-                .with_context(|e| format!("Creating a input stream to parse protobuf: {}", e))?;
-        let deserialized_message = SerdeValue::deserialize(&mut deserializer)
-            .with_context(|e| format!("Deserializing into rust object: {}", e))?;
+                .map_err(|e| anyhow!("Creating an input stream to parse protobuf: {}", e))?;
+        let deserialized_message =
+            SerdeValue::deserialize(&mut deserializer).context("Deserializing into rust object")?;
 
         let msg_name = &self.message_name;
         extract_row_into(
             deserialized_message,
             &self.descriptors,
             self.descriptors.message_by_name(&msg_name).ok_or_else(|| {
-                format_err!(
+                anyhow!(
                     "Message should be included in the descriptor set {:?}",
                     msg_name
                 )
@@ -273,7 +271,7 @@ fn default_datum_from_field<'a>(
 
 fn json_number<N: ToPrimitive + std::fmt::Display>(i: &N) -> Result<Datum<'static>> {
     Ok(Datum::Float64(OrderedFloat::from(i.to_f64().ok_or_else(
-        || format_err!("couldn't convert {} into an f64", i),
+        || anyhow!("couldn't convert {} into an f64", i),
     )?)))
 }
 
@@ -455,7 +453,7 @@ mod tests {
         file_descriptor_proto, Color, TestNestedRecord, TestRecord, TestRepeatedNestedRecord,
         TestRepeatedRecord,
     };
-    use failure::{bail, Error};
+    use anyhow::{bail, Error};
     use protobuf::descriptor::{FileDescriptorProto, FileDescriptorSet};
     use protobuf::{Message, RepeatedField};
     use serde_protobuf::descriptor::{
@@ -526,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proto_schema_parsing() -> Result<(), failure::Error> {
+    fn test_proto_schema_parsing() -> Result<(), anyhow::Error> {
         let mut descriptors = Descriptors::new();
         let mut m1 = MessageDescriptor::new(".test.message1");
         m1.add_field(FieldDescriptor::new(

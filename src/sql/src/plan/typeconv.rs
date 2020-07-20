@@ -14,7 +14,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
-use failure::bail;
+use anyhow::bail;
 use lazy_static::lazy_static;
 
 use expr::VariadicFunc;
@@ -27,7 +27,7 @@ use super::query::ExprContext;
 /// can be invoked with [`CastOp::gen_expr`].
 pub enum CastOp {
     U(UnaryFunc),
-    F(fn(&ExprContext, ScalarExpr, CastTo) -> Result<ScalarExpr, failure::Error>),
+    F(fn(&ExprContext, ScalarExpr, CastTo) -> Result<ScalarExpr, anyhow::Error>),
 }
 
 impl fmt::Debug for CastOp {
@@ -53,7 +53,7 @@ impl CastOp {
         ecx: &ExprContext,
         e: ScalarExpr,
         cast_to: CastTo,
-    ) -> Result<ScalarExpr, failure::Error> {
+    ) -> Result<ScalarExpr, anyhow::Error> {
         match self {
             CastOp::U(u) => Ok(e.call_unary(u.clone())),
             CastOp::F(f) => f(ecx, e, cast_to),
@@ -62,7 +62,7 @@ impl CastOp {
 }
 
 // Used when the [`ScalarExpr`] is already of the desired [`ScalarType`].
-fn noop_cast(_: &ExprContext, e: ScalarExpr, _: CastTo) -> Result<ScalarExpr, failure::Error> {
+fn noop_cast(_: &ExprContext, e: ScalarExpr, _: CastTo) -> Result<ScalarExpr, anyhow::Error> {
     Ok(e)
 }
 
@@ -71,7 +71,7 @@ fn to_jsonb_any_string_cast(
     ecx: &ExprContext,
     e: ScalarExpr,
     _: CastTo,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let s = ecx.scalar_type(&e);
     let to = CastTo::Explicit(ScalarType::String);
 
@@ -87,7 +87,7 @@ fn to_jsonb_any_f64_cast(
     ecx: &ExprContext,
     e: ScalarExpr,
     _: CastTo,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let s = ecx.scalar_type(&e);
     let to = CastTo::Explicit(ScalarType::Float64);
 
@@ -102,7 +102,7 @@ fn to_jsonb_any_record_cast(
     ecx: &ExprContext,
     e: ScalarExpr,
     _: CastTo,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let fields = match ecx.scalar_type(&e) {
         ScalarType::Record { fields } => fields,
         _ => unreachable!(),
@@ -133,7 +133,7 @@ fn from_jsonb_f64_cast(
     ecx: &ExprContext,
     e: ScalarExpr,
     cast_to: CastTo,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let from_f64_to_cast = get_cast(&ScalarType::Float64, &cast_to).unwrap();
     from_f64_to_cast.gen_expr(ecx, e.call_unary(UnaryFunc::CastJsonbToFloat64), cast_to)
 }
@@ -492,7 +492,7 @@ pub fn plan_coerce<'a>(
     ecx: &'a ExprContext,
     e: CoercibleScalarExpr,
     coerce_to: CoerceTo,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     use CoerceTo::*;
     use CoercibleScalarExpr::*;
 
@@ -600,7 +600,7 @@ pub fn plan_cast<'a>(
     ecx: &ExprContext<'a>,
     expr: ScalarExpr,
     cast_to: CastTo,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let from_scalar_type = ecx.scalar_type(&expr);
 
     let cast_op = match get_cast(&from_scalar_type, &cast_to) {

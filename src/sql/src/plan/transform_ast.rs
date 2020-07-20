@@ -13,7 +13,7 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
-use failure::bail;
+use anyhow::bail;
 use uuid::Uuid;
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
@@ -24,15 +24,15 @@ use sql_parser::ast::{
 
 use crate::normalize;
 
-pub fn transform_query<'a>(query: &'a mut Query) -> Result<(), failure::Error> {
+pub fn transform_query<'a>(query: &'a mut Query) -> Result<(), anyhow::Error> {
     run_transforms(|t, query| t.visit_query_mut(query), query)
 }
 
-pub fn transform_expr(expr: &mut Expr) -> Result<(), failure::Error> {
+pub fn transform_expr(expr: &mut Expr) -> Result<(), anyhow::Error> {
     run_transforms(|t, expr| t.visit_expr_mut(expr), expr)
 }
 
-fn run_transforms<F, A>(mut f: F, ast: &mut A) -> Result<(), failure::Error>
+fn run_transforms<F, A>(mut f: F, ast: &mut A) -> Result<(), anyhow::Error>
 where
     F: for<'ast> FnMut(&mut dyn VisitMut<'ast>, &'ast mut A),
 {
@@ -218,7 +218,7 @@ impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
 struct Desugarer {
-    status: Result<(), failure::Error>,
+    status: Result<(), anyhow::Error>,
 }
 
 impl<'ast> VisitMut<'ast> for Desugarer {
@@ -234,7 +234,7 @@ impl Desugarer {
         Desugarer { status: Ok(()) }
     }
 
-    fn visit_expr_mut_internal(&mut self, expr: &mut Expr) -> Result<(), failure::Error> {
+    fn visit_expr_mut_internal(&mut self, expr: &mut Expr) -> Result<(), anyhow::Error> {
         // `($expr)` => `$expr`
         while let Expr::Nested(e) = expr {
             *expr = e.take();

@@ -11,7 +11,7 @@
 
 use std::fmt::{self, Write};
 
-use failure::bail;
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
@@ -53,7 +53,7 @@ impl Interval {
     /// Constructs a new `Interval` with the specified units of time.
     ///
     /// `nanos` in excess of `999_999_999` are carried over into seconds.
-    pub fn new(months: i32, seconds: i64, nanos: i64) -> Result<Interval, failure::Error> {
+    pub fn new(months: i32, seconds: i64, nanos: i64) -> Result<Interval, anyhow::Error> {
         let i = Interval {
             months,
             duration: i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
@@ -201,7 +201,7 @@ impl Interval {
         &mut self,
         f: DateTimeField,
         fsec_max_precision: Option<u64>,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         use DateTimeField::*;
         match f {
             Year => {

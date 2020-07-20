@@ -12,5 +12,4 @@
 #![deny(missing_debug_implementations)]
 
 pub mod avro;
-mod error;
 pub mod protobuf;

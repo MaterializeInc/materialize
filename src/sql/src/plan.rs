@@ -223,7 +223,7 @@ pub fn plan(
     catalog: &dyn Catalog,
     stmt: Statement,
     params: &Params,
-) -> Result<Plan, failure::Error> {
+) -> Result<Plan, anyhow::Error> {
     statement::handle_statement(pcx, catalog, stmt, params)
 }
 
@@ -235,7 +235,7 @@ pub fn plan(
 pub fn describe(
     catalog: &dyn Catalog,
     stmt: Statement,
-) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), failure::Error> {
+) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), anyhow::Error> {
     let (desc, types) = statement::describe_statement(catalog, stmt)?;
     let types = types.into_iter().map(|t| pgrepr::Type::from(&t)).collect();
     Ok((desc, types))

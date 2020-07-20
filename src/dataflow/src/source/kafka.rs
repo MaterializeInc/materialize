@@ -248,7 +248,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
-    ) -> Result<Option<SourceMessage<Vec<u8>>>, failure::Error> {
+    ) -> Result<Option<SourceMessage<Vec<u8>>>, anyhow::Error> {
         let mut next_message = None;
         let consumer_count = self.get_partition_consumers_count();
         let mut attempts = 0;

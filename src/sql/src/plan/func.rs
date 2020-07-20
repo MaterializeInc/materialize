@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 
-use failure::bail;
+use anyhow::bail;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 
@@ -106,7 +106,7 @@ impl TypeCategory {
 }
 
 struct Operation<R>(
-    Box<dyn Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, failure::Error> + Send + Sync>,
+    Box<dyn Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync>,
 );
 
 /// Describes a single function's implementation.
@@ -126,7 +126,7 @@ impl<R> fmt::Debug for FuncImpl<R> {
 
 fn nullary_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext) -> Result<R, failure::Error> + Send + Sync + 'static,
+    F: Fn(&ExprContext) -> Result<R, anyhow::Error> + Send + Sync + 'static,
 {
     Operation(Box::new(move |ecx, exprs| {
         assert!(exprs.is_empty());
@@ -140,17 +140,14 @@ fn identity_op() -> Operation<ScalarExpr> {
 
 fn unary_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext, ScalarExpr) -> Result<R, failure::Error> + Send + Sync + 'static,
+    F: Fn(&ExprContext, ScalarExpr) -> Result<R, anyhow::Error> + Send + Sync + 'static,
 {
     Operation(Box::new(move |ecx, exprs| f(ecx, exprs.into_element())))
 }
 
 fn binary_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext, ScalarExpr, ScalarExpr) -> Result<R, failure::Error>
-        + Send
-        + Sync
-        + 'static,
+    F: Fn(&ExprContext, ScalarExpr, ScalarExpr) -> Result<R, anyhow::Error> + Send + Sync + 'static,
 {
     Operation(Box::new(move |ecx, exprs| {
         assert_eq!(exprs.len(), 2);
@@ -163,7 +160,7 @@ where
 
 fn variadic_op<F, R>(f: F) -> Operation<R>
 where
-    F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, failure::Error> + Send + Sync + 'static,
+    F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
 {
     Operation(Box::new(f))
 }
@@ -361,7 +358,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         ecx: &'a ExprContext<'a>,
         impls: &[FuncImpl<R>],
         cexprs: Vec<CoercibleScalarExpr>,
-    ) -> Result<R, failure::Error> {
+    ) -> Result<R, anyhow::Error> {
         // Immediately remove all `impls` we know are invalid.
         let l = cexprs.len();
         let impls = impls
@@ -376,7 +373,7 @@ impl<'a> ArgImplementationMatcher<'a> {
             .collect();
 
         // try-catch in Rust.
-        match || -> Result<R, failure::Error> {
+        match || -> Result<R, anyhow::Error> {
             let f = m.find_match(&types, impls)?;
 
             let mut exprs = Vec::new();
@@ -403,7 +400,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         &self,
         types: &[Option<ScalarType>],
         impls: Vec<&'b FuncImpl<R>>,
-    ) -> Result<&'b FuncImpl<R>, failure::Error> {
+    ) -> Result<&'b FuncImpl<R>, anyhow::Error> {
         let all_types_known = types.iter().all(|t| t.is_some());
 
         // Check for exact match.
@@ -620,7 +617,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         &self,
         arg: CoercibleScalarExpr,
         typ: &ParamType,
-    ) -> Result<ScalarExpr, failure::Error> {
+    ) -> Result<ScalarExpr, anyhow::Error> {
         use ScalarType::*;
         let coerce_to = match typ {
             ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
@@ -877,7 +874,7 @@ lazy_static! {
     };
 }
 
-fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, failure::Error> {
+fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, anyhow::Error> {
     match ecx.qcx.lifetime {
         QueryLifetime::OneShot => Ok(ScalarExpr::literal(
             Datum::from(ecx.qcx.scx.pcx.wall_time),
@@ -908,7 +905,7 @@ pub fn select_scalar_func(
     ecx: &ExprContext,
     ident: &str,
     args: &[Expr],
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let impls = match BUILTIN_IMPLS.get(ident) {
         Some(i) => i,
         None => unsupported!(ident),
@@ -1216,7 +1213,7 @@ pub fn plan_binary_op<'a>(
     op: &'a BinaryOperator,
     left: &'a Expr,
     right: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let impls = match BINARY_OP_IMPLS.get(&op) {
         Some(i) => i,
         // TODO: these require sql arrays
@@ -1283,7 +1280,7 @@ pub fn plan_unary_op<'a>(
     ecx: &ExprContext,
     op: &'a UnaryOperator,
     expr: &'a Expr,
-) -> Result<ScalarExpr, failure::Error> {
+) -> Result<ScalarExpr, anyhow::Error> {
     let impls = match UNARY_OP_IMPLS.get(&op) {
         Some(i) => i,
         None => unsupported!(op),
@@ -1419,7 +1416,7 @@ pub fn select_table_func(
     ecx: &ExprContext,
     ident: &str,
     args: &[Expr],
-) -> Result<TableFuncPlan, failure::Error> {
+) -> Result<TableFuncPlan, anyhow::Error> {
     let impls = match BUILTIN_TABLE_IMPLS.get(ident) {
         Some(i) => i,
         None => unsupported!(ident),
@@ -1513,7 +1510,7 @@ pub fn select_aggregate_func(
     ecx: &ExprContext,
     ident: &str,
     args: &[Expr],
-) -> Result<(ScalarExpr, AggregateFunc), failure::Error> {
+) -> Result<(ScalarExpr, AggregateFunc), anyhow::Error> {
     let impls = match BUILTIN_AGGREGATE_IMPLS.get(ident) {
         Some(i) => i,
         None => unsupported!(ident),

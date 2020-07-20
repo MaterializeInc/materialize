@@ -21,9 +21,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::bail;
 use avro::schema::Schema;
 use avro::types::Value;
-use failure::bail;
 use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
@@ -182,8 +182,8 @@ enum RtTimestampConnector {
 
 enum ByoTimestampConnector {
     Kafka(ByoKafkaConnector),
-    File(ByoFileConnector<Vec<u8>, failure::Error>),
-    Ocf(ByoFileConnector<Value, failure::Error>),
+    File(ByoFileConnector<Vec<u8>, anyhow::Error>),
+    Ocf(ByoFileConnector<Value, anyhow::Error>),
     Kinesis(ByoKinesisConnector),
 }
 
@@ -489,7 +489,7 @@ fn get_kafka_partitions(
     consumer: &BaseConsumer,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<i32>, failure::Error> {
+) -> Result<Vec<i32>, anyhow::Error> {
     let meta = consumer.fetch_metadata(Some(&topic), timeout)?;
     if meta.topics().len() == 0 {
         bail!("topic {} does not exist", topic);
@@ -1149,7 +1149,7 @@ impl Timestamper {
         fc: &FileSourceConnector,
         timestamp_topic: String,
         max_ts_batch: i64,
-    ) -> Option<ByoFileConnector<std::vec::Vec<u8>, failure::Error>> {
+    ) -> Option<ByoFileConnector<std::vec::Vec<u8>, anyhow::Error>> {
         let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
         let (tx, rx) = if max_ts_batch > 0 {
             std::sync::mpsc::sync_channel(max_ts_batch as usize)
@@ -1290,7 +1290,7 @@ impl Timestamper {
         fc: &FileSourceConnector,
         timestamp_topic: String,
         max_ts_batch: i64,
-    ) -> Option<ByoFileConnector<avro::types::Value, failure::Error>> {
+    ) -> Option<ByoFileConnector<avro::types::Value, anyhow::Error>> {
         let ctor = move |file| avro::Reader::new(file);
         let tail = if fc.tail {
             FileReadStyle::TailFollowFd

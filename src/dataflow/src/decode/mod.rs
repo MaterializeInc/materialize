@@ -7,8 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::iter;
+
+use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::hashable::Hashable;
+use futures::executor::block_on;
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
     channels::pushers::buffer::Session,
@@ -18,26 +22,22 @@ use timely::dataflow::{
     Scope, Stream,
 };
 
+use ::avro::{types::Value, Schema};
 use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, Diff, Envelope, Timestamp};
-use futures::executor::block_on;
+use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair};
+use log::error;
 use repr::Datum;
 use repr::{Row, RowPacker};
+
+use self::csv::csv;
+use self::regex::regex as regex_fn;
+use crate::{operator::StreamExt, source::SourceOutput};
 
 mod avro;
 mod csv;
 mod protobuf;
 mod regex;
-
-use self::csv::csv;
-use self::regex::regex as regex_fn;
-use crate::{operator::StreamExt, source::SourceOutput};
-use ::avro::{types::Value, Schema};
-use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair};
-
-use failure::format_err;
-use log::error;
-use std::iter;
 
 pub fn decode_avro_values<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Value>>,
@@ -85,7 +85,7 @@ where
                     if let Some(dbz_state) = dbz_state.as_mut() {
                         dbz_state.extract(value, top_node, index)
                     } else {
-                        Err(format_err!(
+                        Err(anyhow!(
                             "No debezium schema information -- could not decode row"
                         ))
                     }

@@ -11,7 +11,7 @@
 
 use std::borrow::ToOwned;
 
-use failure::{bail, format_err};
+use anyhow::{anyhow, bail};
 use lazy_static::lazy_static;
 use regex::Regex;
 use repr::ColumnName;
@@ -56,7 +56,7 @@ impl<'a> Parser<'a> {
         self.contents = &self.contents[upto..];
     }
 
-    pub fn split_at(&mut self, sep: &Regex) -> Result<&'a str, failure::Error> {
+    pub fn split_at(&mut self, sep: &Regex) -> Result<&'a str, anyhow::Error> {
         match sep.find(self.contents) {
             Some(found) => {
                 let result = &self.contents[..found.start()];
@@ -67,7 +67,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_record(&mut self) -> Result<Record<'a>, failure::Error> {
+    pub fn parse_record(&mut self) -> Result<Record<'a>, anyhow::Error> {
         if self.is_done() {
             return Ok(Record::Halt);
         }
@@ -91,9 +91,9 @@ impl<'a> Parser<'a> {
             "hash-threshold" => {
                 let threshold = words
                     .next()
-                    .ok_or_else(|| format_err!("missing threshold in: {}", first_line))?
+                    .ok_or_else(|| anyhow!("missing threshold in: {}", first_line))?
                     .parse::<u64>()
-                    .map_err(|err| format_err!("invalid threshold ({}) in: {}", err, first_line))?;
+                    .map_err(|err| anyhow!("invalid threshold ({}) in: {}", err, first_line))?;
                 Ok(Record::HashThreshold { threshold })
             }
 
@@ -137,7 +137,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_records(&mut self) -> Result<Vec<Record<'a>>, failure::Error> {
+    pub fn parse_records(&mut self) -> Result<Vec<Record<'a>>, anyhow::Error> {
         let mut records = vec![];
         loop {
             match self.parse_record()? {
@@ -152,7 +152,7 @@ impl<'a> Parser<'a> {
         &mut self,
         mut words: impl Iterator<Item = &'a str>,
         first_line: &'a str,
-    ) -> Result<Record<'a>, failure::Error> {
+    ) -> Result<Record<'a>, anyhow::Error> {
         let location = self.location();
         let mut expected_error = None;
         let mut rows_affected = None;
@@ -161,9 +161,9 @@ impl<'a> Parser<'a> {
                 rows_affected = Some(
                     words
                         .next()
-                        .ok_or_else(|| format_err!("missing count of rows affected"))?
+                        .ok_or_else(|| anyhow!("missing count of rows affected"))?
                         .parse::<usize>()
-                        .map_err(|err| format_err!("parsing count of rows affected: {}", err))?,
+                        .map_err(|err| anyhow!("parsing count of rows affected: {}", err))?,
                 );
             }
             Some("ok") | Some("OK") => (),
@@ -186,7 +186,7 @@ impl<'a> Parser<'a> {
         &mut self,
         mut words: std::iter::Peekable<impl Iterator<Item = &'a str>>,
         first_line: &'a str,
-    ) -> Result<Record<'a>, failure::Error> {
+    ) -> Result<Record<'a>, anyhow::Error> {
         let location = self.location();
         if words.peek() == Some(&"error") {
             let error = parse_expected_error(first_line);
@@ -205,7 +205,7 @@ impl<'a> Parser<'a> {
         let types = parse_types(
             words
                 .next()
-                .ok_or_else(|| format_err!("missing types in: {}", first_line))?,
+                .ok_or_else(|| anyhow!("missing types in: {}", first_line))?,
         )?;
         let mut sort = Sort::No;
         let mut check_column_names = false;
@@ -322,7 +322,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> Result<&'a str, failure::Error> {
+fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> Result<&'a str, anyhow::Error> {
     match sep.find(input) {
         Some(found) => {
             let result = &input[..found.start()];
@@ -334,7 +334,7 @@ fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> Result<&'a str, failure::Er
 }
 
 /// Parse a query result type string into a vec of expected types
-fn parse_types(input: &str) -> Result<Vec<Type>, failure::Error> {
+fn parse_types(input: &str) -> Result<Vec<Type>, anyhow::Error> {
     input
         .chars()
         .map(|char| {

@@ -12,7 +12,6 @@ path = "checker.rs"
 [dependencies]
 chrono = "0.4.13"
 env_logger = "0.7.1"
-failure = "0.1.7"
 futures = "0.3"
 getopts = "0.2"
 hyper = "0.13"
