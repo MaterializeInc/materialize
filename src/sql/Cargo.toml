@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-avro = { path = "../avro" }
+avro = { path = "../avro", package = "mz-avro" }
 aws-arn = "0.1.1"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"

@@ -1,11 +1,6 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc., Flavien Raynaud and other contributors.
 //
-// Use of this software is governed by the Busi{index:0,inner:Box::new(Value::Null), n_variants: (), null_variant: ()} LICENSE file.
-//
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
-
+// Use of this software is governed by the Apache License, Version 2.0
 //! Logic handling the intermediate representation of Avro values.
 use std::collections::HashMap;
 use std::hash::BuildHasher;

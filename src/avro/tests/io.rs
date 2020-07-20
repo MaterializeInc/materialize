@@ -1,23 +1,18 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc., Flavien Raynaud and other contributors.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
-//
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+// Use of this software is governed by the Apache License, Version 2.0
 
 //! Port of https://github.com/apache/avro/blob/master/lang/py/test/test_io.py
 use std::io::Cursor;
 
-use avro::schema::resolve_schemas;
-use avro::{
+use chrono::{NaiveDate, NaiveDateTime};
+use lazy_static::lazy_static;
+use mz_avro::schema::resolve_schemas;
+use mz_avro::{
     from_avro_datum, to_avro_datum,
     types::{DecimalValue, Value},
     Schema, SchemaResolutionError, ValidationError,
 };
-use chrono::{NaiveDate, NaiveDateTime};
-use lazy_static::lazy_static;
 
 lazy_static! {
     static ref SCHEMAS_TO_VALIDATE: Vec<(&'static str, Value)> = vec![
