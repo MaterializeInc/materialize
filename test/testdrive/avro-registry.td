@@ -120,18 +120,6 @@ $ set valid-key-schema={
     ]
   }
 
-$ kafka-create-topic topic=missing-data
-
-$ kafka-ingest format=avro key-format=avro topic=missing-data schema=${schema-v1} key-schema=${key-schema-missing}
-  publish=true timestamp=1
-{"b": 42} {"before": null, "after": {"a": 1}}
-
-! CREATE SOURCE data_v3
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-missing-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM
-Value schema missing primary key column: b
-
 $ kafka-create-topic topic=mismatched-data
 
 $ kafka-ingest topic=mismatched-data publish=true timestamp=3
