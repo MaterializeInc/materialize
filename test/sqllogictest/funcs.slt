@@ -53,6 +53,9 @@ SELECT date_trunc('week', TIMESTAMP '2020-08-02 00:00:00')
 ----
 2020-07-27 00:00:00
 
+query error timestamp out of range
+SELECT date_trunc('week', make_timestamp(-262144, 1, 1, 0, 0, 0))
+
 query T
 SELECT date_trunc('month', TIMESTAMP '2019-11-26 15:56:46.241150')
 ----
