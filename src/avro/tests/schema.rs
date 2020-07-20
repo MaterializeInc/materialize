@@ -5,9 +5,9 @@
 //! Port of https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
 use std::collections::HashMap;
 
-use mz_avro::{types::DecimalValue, types::Value, Schema};
 use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
+use mz_avro::{types::DecimalValue, types::Value, Schema};
 
 lazy_static! {
     static ref UNPARSEABLE_SCHEMAS: Vec<&'static str> = vec![
