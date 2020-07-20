@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Port of https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
+//! Port of tests from:
+//!     - https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
+//!     - https://github.com/apache/avro/tree/master/lang/c/tests/schema_tests
 use std::collections::HashMap;
 
 use avro::{types::DecimalValue, types::Value, Schema};
@@ -35,6 +37,7 @@ lazy_static! {
             "symbols": ["Golden", "Mean"]}"#,
         r#"{"type": "enum", "symbols": ["I", "will", "fail", "no", "name"]}"#,
         r#"{"type": "enum", "name": "Test", "symbols": ["AA", "AA"]}"#,
+        r#"{"type": "enum", "name": "2d2", "symbols": ["c3p0"]}"#,
         // Array examples
         r#"{"type": "array", "invalid": "key"}"#,
         r#"{"type": "array", "multiple": "attributes", "shouldnot": "work"}"#,
@@ -61,6 +64,7 @@ lazy_static! {
             "fields": "His vision, from the constantly passing bars"}"#,
         r#"{"name": ["Tom", "Jerry"], "type": "record",
            "fields": [{"name": "name", "type": "string"}]}"#,
+        r#"{"type": "record", "fields": "His vision, from constantly passing bars", "name": "Rainer"}"#,
     ];
 
     static ref UNPARSEABLE_LOGICAL_TYPES: Vec<&'static str> = vec![
@@ -71,13 +75,22 @@ lazy_static! {
     static ref VALID_SCHEMAS: Vec<(&'static str, Value)> = vec![
         // Primitive examples
         (r#""null""#, Value::Null),
+        (r#"{"type": "null"}"#, Value::Null),
         (r#""boolean""#, Value::Boolean(true)),
+        (r#"{"type": "boolean"}"#, Value::Boolean(false)),
+        (r#"{"type": "boolean", "default": true}"#, Value::Boolean(true)),
         (r#""string""#, Value::String("adsfasdf09809dsf-=adsf".to_string())),
+        (r#"{"type": "string"}"#, Value::String("adsfasdf09809dsf-=adsf".to_string())),
         (r#""bytes""#, Value::Bytes("12345abcd".to_string().into_bytes())),
+        (r#"{"type": "bytes"}"#, Value::Bytes("helloworld".to_string().into_bytes())),
         (r#""int""#, Value::Int(1234)),
+        (r#"{"type": "int"}"#, Value::Int(-1234)),
         (r#""long""#, Value::Long(1234)),
+        (r#"{"type": "long"}"#, Value::Long(-1234)),
         (r#""float""#, Value::Float(1234.0)),
+        (r#"{"type": "float"}"#, Value::Float(-1234.0)),
         (r#""double""#, Value::Double(1234.0)),
+        (r#"{"type": "double"}"#, Value::Double(-1.0)),
         // Fixed examples
         (r#"{"type": "fixed", "name": "Test", "size": 1}"#, Value::Fixed(1, vec![0])),
         (r#"{"type": "fixed", "name": "MyFixed", "size": 1,
@@ -95,10 +108,11 @@ lazy_static! {
              "values": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}"#, Value::Map(HashMap::new())),
         // Union examples
         (r#"["null", "int"]"#, Value::Union{index:0, inner:Box::new(Value::Null),n_variants:2,null_variant:Some(0)}),
-         (r#"["null", "int"]"#, Value::Union{index:1, inner:Box::new(Value::Int(42)),n_variants:2,null_variant:Some(0)}),
+        (r#"["null", "int"]"#, Value::Union{index:1, inner:Box::new(Value::Int(42)),n_variants:2,null_variant:Some(0)}),
         (r#"["null", "double", "string", "int"]"#, Value::Union{index:3, inner:Box::new(Value::Int(42)),n_variants:4,null_variant:Some(0)}),
         (r#"["string", "null", "long"]"#, Value::Union{index:0, inner:Box::new(Value::String("string".into())),n_variants:3,null_variant:Some(1)}),
         // Record examples
+        (r#"{"type": "record", "name": "R", "fields": []}"#, Value::Record(vec![])),
         (r#"{"type": "record",
                      "name": "Interop",
                      "namespace": "org.apache.avro",
@@ -142,6 +156,10 @@ lazy_static! {
                      "fields": [{"name": "addr", "type": [{"name": "IPv6", "type": "fixed", "size": 16},
                                                           {"name": "IPv4", "type": "fixed", "size": 4}]}]}"#,
          Value::Record(vec![("addr".into(), Value::Union{index:1, inner:Box::new(Value::Fixed(4, vec![0, 0, 0, 0])),n_variants:2,null_variant:None})])),
+        (r#"{"name": "person",
+             "type": "record",
+             "fields": [ {"name": "hacker", "type": "boolean", "default": false} ]}"#,
+         Value::Record(vec![("hacker".into(), Value::Boolean(false))])),
         // Doc examples
         (r#"{"type": "record", "name": "TestDoc", "doc": "Doc string",
                      "fields": [{"name": "name", "type": "string", "doc": "Doc String"}]}"#,
@@ -149,6 +167,7 @@ lazy_static! {
         (r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"], "doc": "Doc String"}"#,
          Value::Enum(0, "A".into())),
         // Custom properties
+        (r#"{"type": "string", "ignored": "value"}"#, Value::String("hello, world".to_string())),
         (r#"{"type":"int", "customProp":"val"}"#, Value::Int(123)),
         (r#"{"type":"enum", "name":"Suit", "namespace":"org.apache.test", "aliases":["org.apache.test.OldSuit"],
          "doc":"Card Suits", "customProp":"val", "symbols":["SPADES", "HEARTS", "DIAMONDS", "CLUBS"]}"#,
