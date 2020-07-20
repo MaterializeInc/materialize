@@ -96,22 +96,6 @@ a b
 1 42
 2 -1
 
-$ set key-schema-missing={
-    "type": "record",
-    "name": "Key",
-    "fields": [
-        {"name": "b", "type": "long"}
-    ]
-  }
-
-$ set key-schema-wrong-type={
-    "type": "record",
-    "name": "Key",
-    "fields": [
-        {"name": "a", "type": "int"}
-    ]
-  }
-
 $ set valid-key-schema={
     "type": "record",
     "name": "Key",
@@ -119,18 +103,6 @@ $ set valid-key-schema={
         {"name": "a", "type": "long"}
     ]
   }
-
-$ kafka-create-topic topic=mismatched-data
-
-$ kafka-ingest topic=mismatched-data publish=true timestamp=3
-  format=avro schema=${schema-v1} key-format=avro key-schema=${key-schema-wrong-type}
-{"a": 1} {"before": null, "after": {"a": 1}}
-
-! CREATE SOURCE data_v3
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-mismatched-data-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM
-key and value column types do not match
 
 $ kafka-ingest topic=data publish=true timestamp=5
   format=avro schema=${schema-v1} key-format=avro key-schema=${valid-key-schema}
