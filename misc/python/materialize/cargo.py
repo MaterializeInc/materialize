@@ -48,7 +48,9 @@ class Crate:
         for dep_type in ["build-dependencies", "dependencies"]:
             if dep_type in config:
                 self.path_dependencies.update(
-                    name for name, c in config[dep_type].items() if "path" in c
+                    c.get("package", name)
+                    for name, c in config[dep_type].items()
+                    if "path" in c
                 )
         self.bins = []
         if "bin" in config:

@@ -5,8 +5,8 @@
 //! Port of https://github.com/apache/avro/blob/master/lang/py/test/test_io.py
 use std::io::Cursor;
 
-use avro::schema::resolve_schemas;
-use avro::{
+use mz_avro::schema::resolve_schemas;
+use mz_avro::{
     from_avro_datum, to_avro_datum,
     types::{DecimalValue, Value},
     Schema, SchemaResolutionError, ValidationError,

@@ -5,7 +5,7 @@
 #![feature(test)]
 extern crate test;
 
-use avro::{
+use mz_avro::{
     schema::Schema,
     to_avro_datum,
     types::{Record, ToAvro, Value},

@@ -5,7 +5,7 @@
 //! Port of https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
 use std::collections::HashMap;
 
-use avro::{types::DecimalValue, types::Value, Schema};
+use mz_avro::{types::DecimalValue, types::Value, Schema};
 use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
 

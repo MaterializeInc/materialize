@@ -55,7 +55,7 @@
 //! Avro schemas are defined in **JSON** format and can just be parsed out of a raw string:
 //!
 //! ```
-//! use avro::Schema;
+//! use mz_avro::Schema;
 //!
 //! let raw_schema = r#"
 //!     {
@@ -93,9 +93,9 @@
 //! associated type provided by the library to specify the data we want to serialize:
 //!
 //! ```
-//! # use avro::Schema;
-//! use avro::types::Record;
-//! use avro::Writer;
+//! # use mz_avro::Schema;
+//! use mz_avro::types::Record;
+//! use mz_avro::Writer;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -132,7 +132,7 @@
 //! `Value` interface.
 //!
 //! ```
-//! use avro::types::Value;
+//! use mz_avro::types::Value;
 //!
 //! let mut value = Value::String("foo".to_string());
 //! ```
@@ -151,9 +151,9 @@
 //!
 //! To specify a codec to use to compress data, just specify it while creating a `Writer`:
 //! ```
-//! # use avro::Schema;
-//! use avro::Writer;
-//! use avro::Codec;
+//! # use mz_avro::Schema;
+//! use mz_avro::Writer;
+//! use mz_avro::Codec;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -177,10 +177,10 @@
 //!
 //! ```
 //!
-//! use avro::Reader;
-//! # use avro::Schema;
-//! # use avro::types::Record;
-//! # use avro::Writer;
+//! use mz_avro::Reader;
+//! # use mz_avro::Schema;
+//! # use mz_avro::types::Record;
+//! # use mz_avro::Writer;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -207,10 +207,10 @@
 //! In case, instead, we want to specify a different (but compatible) reader schema from the schema
 //! the data has been written with, we can just do as the following:
 //! ```
-//! use avro::Schema;
-//! use avro::Reader;
-//! # use avro::types::Record;
-//! # use avro::Writer;
+//! use mz_avro::Schema;
+//! use mz_avro::Reader;
+//! # use mz_avro::types::Record;
+//! # use mz_avro::Writer;
 //! #
 //! # let writer_raw_schema = r#"
 //! #     {
@@ -267,10 +267,10 @@
 //! We can just read directly instances of `Value` out of the `Reader` iterator:
 //!
 //! ```
-//! # use avro::Schema;
-//! # use avro::types::Record;
-//! # use avro::Writer;
-//! use avro::Reader;
+//! # use mz_avro::Schema;
+//! # use mz_avro::types::Record;
+//! # use mz_avro::Writer;
+//! use mz_avro::Reader;
 //! #
 //! # let raw_schema = r#"
 //! #     {

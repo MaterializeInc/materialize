@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use avro::{
+use mz_avro::{
     schema::Schema,
     types::{Record, ToAvro, Value},
     Reader, Writer,

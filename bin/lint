@@ -77,6 +77,7 @@ copyright_files=$(grep -vE \
     -e 'demo/kafka-transactions/pom.xml' \
     -e 'demo/billing/resources/views/.*\.sql\.in' \
     -e 'test/smith/resources/views/.*\.sql' \
+    -e 'src/avro/.*' \
     -e 'gen/.*\.rs' \
     <<< "$files"
 )
