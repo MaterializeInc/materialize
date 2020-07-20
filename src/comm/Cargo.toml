@@ -22,4 +22,4 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 [dev-dependencies]
 assert_cmd = "1.0"
 getopts = "0.2"
-predicates = "1.0.4"
+predicates = "1.0.5"
