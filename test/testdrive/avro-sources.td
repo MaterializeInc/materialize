@@ -344,3 +344,21 @@ a b
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored'
   FORMAT AVRO USING SCHEMA '{"type":"record","name":"a","fields":[{"name":"f","type":["a","null"]}]}'
 validating avro value schema: Recursively defined type in schema: .a
+
+$ set key-schema={"type": "string"}
+$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}
+
+$ kafka-create-topic topic=non-subset-key
+
+$ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key-schema} schema=${value-schema} publish=true
+"asdf" {"a": "asdf"}
+
+> CREATE MATERIALIZED SOURCE non_subset_key
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-subset-key-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
+
+> SELECT * FROM non_subset_key
+a
+---
+"asdf"
