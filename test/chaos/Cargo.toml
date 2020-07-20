@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.31"
 env_logger = "0.7.1"
 futures = "0.3.4"
-log = "0.4.8"
+log = "0.4.11"
 md-5 = "0.8"
 ore = { path = "../../src/ore" }
 rand = "0.7.3"

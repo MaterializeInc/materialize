@@ -10,7 +10,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.8"
-log = "0.4.8"
+log = "0.4.11"
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 tokio = "0.2"
