@@ -1332,13 +1332,12 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
         Self::new(self.date(), NaiveTime::from_hms(0, 0, 0))
     }
 
-    fn truncate_week(&self) -> Self {
+    fn truncate_week(&self) -> Result<Self, EvalError> {
         let num_days_from_monday = self.date().weekday().num_days_from_monday() as i64;
-        // TODO(rkhaitan): properly return a error if checked_sub_signed returns None
         let new_date = NaiveDate::from_ymd(self.year(), self.month(), self.day())
             .checked_sub_signed(Duration::days(num_days_from_monday))
-            .expect("failed to properly subtract date for date_trunc week");
-        Self::new(new_date, NaiveTime::from_hms(0, 0, 0))
+            .ok_or(EvalError::TimestampOutOfRange)?;
+        Ok(Self::new(new_date, NaiveTime::from_hms(0, 0, 0)))
     }
 
     fn truncate_month(&self) -> Self {
@@ -1582,7 +1581,7 @@ where
         DateTimeUnits::Decade => Ok(ts.truncate_decade().into()),
         DateTimeUnits::Year => Ok(ts.truncate_year().into()),
         DateTimeUnits::Quarter => Ok(ts.truncate_quarter().into()),
-        DateTimeUnits::Week => Ok(ts.truncate_week().into()),
+        DateTimeUnits::Week => Ok(ts.truncate_week()?.into()),
         DateTimeUnits::Day => Ok(ts.truncate_day().into()),
         DateTimeUnits::Hour => Ok(ts.truncate_hour().into()),
         DateTimeUnits::Minute => Ok(ts.truncate_minute().into()),

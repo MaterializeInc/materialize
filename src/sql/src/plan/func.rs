@@ -802,6 +802,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimLeadingWhitespace,
                 params!(String, String) => BinaryFunc::TrimLeading
             },
+            "make_timestamp" => {
+                params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp
+            },
             "mz_logical_timestamp" => {
                 params!() => nullary_op(|ecx| {
                     match ecx.qcx.lifetime {
