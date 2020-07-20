@@ -444,21 +444,10 @@ dependencies = [
 
 [[package]]
 name = "compile-time-run"
-version = "0.2.8"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521a73740e8da76308d585a02b153b8ba9c1a27289df9e4a02c18177a8ae6286"
+checksum = "b734f015dfba1d19a262f4a1d4429d01d4e484099a5ecebde2ba771dea9430a1"
 dependencies = [
- "compile-time-run-macro",
- "proc-macro-hack",
-]
-
-[[package]]
-name = "compile-time-run-macro"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c44dfc9bfdb966e22a59b2ed31001fa4cab378c3fea2de119ed3615b1699d58a"
-dependencies = [
- "proc-macro-hack",
  "proc-macro2",
  "quote",
  "syn",

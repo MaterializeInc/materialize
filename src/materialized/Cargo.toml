@@ -13,7 +13,7 @@ license = "proprietary"
 async-trait = "0.1.36"
 backtrace = { version = "0.3.50" }
 comm = { path = "../comm" }
-compile-time-run = "0.2.8"
+compile-time-run = "0.2.11"
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
