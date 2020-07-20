@@ -49,6 +49,7 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.4.0"></span>
 ## 0.4.0 (Unreleased)
 
+- Introduce the ability to [rename indexes, sinks, sources, and views](/sql/alter-rename).
 - Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
   reflects timely workers and does not limit the number of threads that materialized may
   start.

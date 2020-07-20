@@ -1,3 +1,5 @@
+alter_rename ::=
+  'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW') name 'RENAME TO' new_name
 avro_schema_spec ::=
   'CONFLUENT SCHEMA REGISTRY' url |
   'SCHEMA' ('FILE' schema_file_path | inline_schema)
