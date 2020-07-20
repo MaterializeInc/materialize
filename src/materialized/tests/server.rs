@@ -72,9 +72,7 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
             &["v"]
         );
 
-        // Test that catalog recovery correctly populates `mz_catalog_names`
-        // This test is racy, because the effects are not necessarily immediately visible.
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        // Test that catalog recovery correctly populates `mz_catalog_names`.
         assert_eq!(
             client
                 .query("SELECT * FROM mz_catalog_names", &[])?
