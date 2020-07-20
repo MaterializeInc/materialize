@@ -2432,6 +2432,76 @@ mod tests {
             "fields": [{"name": "name", "type": "string"}]}"#
         )
         .is_err());
+
+        // Use previously defined names and namespaces as type.
+        let schema = Schema::parse_str(r#"{"type": "record", "name": "org.apache.avro.tests.Hello", "fields": [
+              {"name": "f1", "type": {"type": "enum", "name": "MyEnum", "symbols": ["Foo", "Bar", "Baz"]}},
+              {"name": "f2", "type": "org.apache.avro.tests.MyEnum"},
+              {"name": "f3", "type": "MyEnum"},
+              {"name": "f4", "type": {"type": "enum", "name": "other.namespace.OtherEnum", "symbols": ["one", "two", "three"]}},
+              {"name": "f5", "type": "other.namespace.OtherEnum"},
+              {"name": "f6", "type": {"type": "enum", "name": "ThirdEnum", "namespace": "some.other", "symbols": ["Alice", "Bob"]}},
+              {"name": "f7", "type": "some.other.ThirdEnum"}
+             ]}"#).unwrap();
+        assert_eq!(schema.named.len(), 4);
+
+        if let SchemaPiece::Record { fields, .. } = schema.named[0].clone().piece {
+            assert_eq!(fields[0].schema, SchemaPieceOrNamed::Named(1)); // f1
+            assert_eq!(fields[1].schema, SchemaPieceOrNamed::Named(1)); // f2
+            assert_eq!(fields[2].schema, SchemaPieceOrNamed::Named(1)); // f3
+            assert_eq!(fields[3].schema, SchemaPieceOrNamed::Named(2)); // f4
+            assert_eq!(fields[4].schema, SchemaPieceOrNamed::Named(2)); // f5
+            assert_eq!(fields[5].schema, SchemaPieceOrNamed::Named(3)); // f6
+            assert_eq!(fields[6].schema, SchemaPieceOrNamed::Named(3)); // f7
+        } else {
+            panic!("Expected SchemaPiece::Record, found something else");
+        }
+
+        let schema = Schema::parse_str(
+            r#"{"type": "record", "name": "x.Y", "fields": [
+              {"name": "e", "type":
+                {"type": "record", "name": "Z", "fields": [
+                  {"name": "f", "type": "x.Y"},
+                  {"name": "g", "type": "x.Z"}
+                ]}
+              }
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(schema.named.len(), 2);
+
+        if let SchemaPiece::Record { fields, .. } = schema.named[0].clone().piece {
+            assert_eq!(fields[0].schema, SchemaPieceOrNamed::Named(1)); // e
+        } else {
+            panic!("Expected SchemaPiece::Record, found something else");
+        }
+
+        if let SchemaPiece::Record { fields, .. } = schema.named[1].clone().piece {
+            assert_eq!(fields[0].schema, SchemaPieceOrNamed::Named(0)); // f
+            assert_eq!(fields[1].schema, SchemaPieceOrNamed::Named(1)); // g
+        } else {
+            panic!("Expected SchemaPiece::Record, found something else");
+        }
+
+        let schema = Schema::parse_str(
+            r#"{"type": "record", "name": "R", "fields": [
+              {"name": "s", "type": {"type": "record", "namespace": "x", "name": "Y", "fields": [
+                {"name": "e", "type": {"type": "enum", "namespace": "", "name": "Z",
+                 "symbols": ["Foo", "Bar"]}
+                }
+              ]}},
+              {"name": "t", "type": "Z"}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(schema.named.len(), 3);
+
+        if let SchemaPiece::Record { fields, .. } = schema.named[0].clone().piece {
+            assert_eq!(fields[0].schema, SchemaPieceOrNamed::Named(1)); // s
+            assert_eq!(fields[1].schema, SchemaPieceOrNamed::Named(2)); // t - refers to "".Z
+        } else {
+            panic!("Expected SchemaPiece::Record, found something else");
+        }
     }
 
     // Tests to ensure Schema is Send + Sync. These tests don't need to _do_ anything, if they can
