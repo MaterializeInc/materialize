@@ -716,6 +716,7 @@ dependencies = [
  "expr",
  "failure",
  "interchange",
+ "log",
  "regex",
  "repr",
  "rusoto_core",

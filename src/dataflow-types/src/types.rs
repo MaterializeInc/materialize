@@ -20,6 +20,7 @@ use std::time::Duration;
 use timely::progress::frontier::Antichain;
 
 use failure::ResultExt;
+use log::warn;
 use rusoto_core::Region;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -334,8 +335,14 @@ impl DataEncoding {
                         .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
                 if let Some(key_schema) = key_schema {
                     let key = avro::validate_key_schema(key_schema, &desc)
-                        .with_context(|e| format!("validating avro key schema: {}", e))?;
-                    desc.with_key(key)
+                        .with_context(|e| format!("validating avro key schema: {}", e));
+                    match key {
+                        Ok(key) => desc.with_key(key),
+                        Err(e) => {
+                            warn!("Not using key due to error: {}", e);
+                            desc
+                        }
+                    }
                 } else {
                     desc
                 }
