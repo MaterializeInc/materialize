@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.31"
 metabase = { path = "../../../src/metabase"}
 itertools = "0.9"
-log = "0.4.8"
+log = "0.4.11"
 ore = { path = "../../../src/ore" }
 tokio = "0.2"
 tokio-postgres = "0.5.4"

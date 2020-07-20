@@ -9,7 +9,7 @@ exclude = ["tests/testdata"]
 [dependencies]
 failure = "0.1.8"
 lazy_static = "1.4.0"
-log = "0.4.5"
+log = "0.4.11"
 ore = { path = "../ore" }
 repr = { path = "../repr" }
 stacker = "0.1.9"

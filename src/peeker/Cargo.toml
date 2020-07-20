@@ -12,7 +12,7 @@ failure = "0.1.8"
 getopts = "0.2"
 hyper = "0.13"
 lazy_static = "1.4"
-log = "0.4.8"
+log = "0.4.11"
 ore = { path = "../ore" }
 postgres = "0.17.3"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
