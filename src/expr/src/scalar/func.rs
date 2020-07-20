@@ -12,7 +12,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::str;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
 use serde::{Deserialize, Serialize};
@@ -1333,11 +1333,12 @@ pub trait TimestampLike: chrono::Datelike + chrono::Timelike + for<'a> Into<Datu
     }
 
     fn truncate_week(&self) -> Self {
-        let num_days_from_monday = self.date().weekday().num_days_from_monday();
-        Self::new(
-            NaiveDate::from_ymd(self.year(), self.month(), self.day() - num_days_from_monday),
-            NaiveTime::from_hms(0, 0, 0),
-        )
+        let num_days_from_monday = self.date().weekday().num_days_from_monday() as i64;
+        // TODO(rkhaitan): properly return a error if checked_sub_signed returns None
+        let new_date = NaiveDate::from_ymd(self.year(), self.month(), self.day())
+            .checked_sub_signed(Duration::days(num_days_from_monday))
+            .expect("failed to properly subtract date for date_trunc week");
+        Self::new(new_date, NaiveTime::from_hms(0, 0, 0))
     }
 
     fn truncate_month(&self) -> Self {
