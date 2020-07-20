@@ -4,6 +4,16 @@ about: >
   A tracking issue for a new release of Materialize. Contributor use only.
 ---
 
+## Announce the imminent release internally
+
+- [x] create this release issue
+- [ ] Check for open issues with the [`M-milestone-blocker`][blocker-search] label,
+  include them in a list here, or state that there are none.
+  > unknown
+- [ ] Link to this issue in the `#release` slack channel
+
+[blocker-search]: https://github.com/MaterializeInc/materialize/issues?q=is%3Aissue+is%3Aopen+label%3AM-milestone-blocker
+
 ## Release candidate
 
 A release candidate is the Materialize codebase at a given commit, tested for
