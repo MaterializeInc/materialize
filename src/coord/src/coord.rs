@@ -17,7 +17,7 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
@@ -113,6 +113,7 @@ where
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of view) -> (existing indexes)
     views: HashMap<GlobalId, ViewState>,
+    tables: HashSet<GlobalId>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
@@ -197,6 +198,10 @@ where
             catalog,
             symbiosis,
             views: HashMap::new(),
+            tables: CatalogView::all_views()
+                .iter()
+                .map(|v| v.index_id())
+                .collect(),
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
@@ -222,10 +227,7 @@ where
             .collect();
         for (id, name, item) in catalog_entries {
             // Mirror each recovered catalog entry.
-            broadcast(
-                &mut coord.broadcast_tx,
-                SequencedCommand::AppendLog(MaterializedEvent::Catalog(id, name.to_string(), true)),
-            );
+            coord.report_catalog_update(id, name.to_string(), 1);
 
             match item {
                 //currently catalog item rebuild assumes that sinks and
@@ -296,25 +298,35 @@ where
         if let Some(logging_config) = logging {
             for log in logging_config.active_logs().iter() {
                 for (index, key) in log.schema().typ().keys.iter().enumerate() {
-                    broadcast(
-                        &mut coord.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
-                            log.id(),
-                            key.clone(),
-                            index,
-                        )),
-                    );
+                    let log_id = log.id().to_string();
+                    for k in key.iter() {
+                        coord.update_catalog_view(
+                            CatalogView::MzViewKeys,
+                            Row::pack(&[
+                                Datum::String(&log_id),
+                                Datum::Int64(*k as i64),
+                                Datum::Int64(index as i64),
+                            ]),
+                            1,
+                        );
+                    }
                 }
                 for (index, (parent, pairs)) in log.foreign_keys().into_iter().enumerate() {
-                    broadcast(
-                        &mut coord.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
-                            log.id(),
-                            parent,
-                            pairs,
-                            index,
-                        )),
-                    );
+                    let parent_id = parent.to_string();
+                    let child_id = log.id().to_string();
+                    for (c, p) in pairs.iter() {
+                        coord.update_catalog_view(
+                            CatalogView::MzViewForeignKeys,
+                            Row::pack(&[
+                                Datum::String(&child_id),
+                                Datum::Int64(*c as i64),
+                                Datum::String(&parent_id),
+                                Datum::Int64(*p as i64),
+                                Datum::Int64(index as i64),
+                            ]),
+                            1,
+                        );
+                    }
                 }
             }
         }
@@ -928,6 +940,7 @@ where
                     },
                 );
                 self.insert_index(index_id, &index, self.logical_compaction_window_ms);
+                self.tables.insert(index_id);
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1596,10 +1609,10 @@ where
             match status {
                 catalog::OpStatus::CreatedItem(id) => {
                     let name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
-                    self.report_catalog_update(*id, name, true);
+                    self.report_catalog_update(*id, name, 1);
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
-                    self.report_catalog_update(entry.id(), entry.name().to_string(), false);
+                    self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
                     match entry.item() {
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
@@ -1623,15 +1636,13 @@ where
                                     );
                                 }
                                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                                    broadcast(
-                                        &mut self.broadcast_tx,
-                                        SequencedCommand::AppendLog(
-                                            MaterializedEvent::AvroOcfSink {
-                                                id: entry.id(),
-                                                path: path.clone().into_os_string().into_vec(),
-                                                insert: false,
-                                            },
-                                        ),
+                                    self.update_catalog_view(
+                                        CatalogView::MzAvroOcfSinks,
+                                        Row::pack(&[
+                                            Datum::String(entry.id().to_string().as_str()),
+                                            Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                                        ]),
+                                        -1,
                                     );
                                 }
                                 _ => (),
@@ -1669,6 +1680,11 @@ where
             );
         }
         if !indexes_to_drop.is_empty() {
+            // It might be a table; just blindly remove it from `self.tables`
+            // in case it is.
+            for (id, _) in &indexes_to_drop {
+                let _ = self.tables.remove(id);
+            }
             self.drop_indexes(indexes_to_drop);
         }
 
@@ -1922,26 +1938,25 @@ where
         from: GlobalId,
         connector: SinkConnector,
     ) {
-        #[allow(clippy::single_match)]
         match &connector {
             SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
                 self.update_catalog_view(
                     CatalogView::MzKafkaSinks,
                     Row::pack(&[
-                        Datum::String(id.to_string().as_str()),
+                        Datum::String(&id.to_string()),
                         Datum::String(topic.as_str()),
                     ]),
                     1,
                 );
             }
             SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::AvroOcfSink {
-                        id,
-                        path: path.clone().into_os_string().into_vec(),
-                        insert: true,
-                    }),
+                self.update_catalog_view(
+                    CatalogView::MzAvroOcfSinks,
+                    Row::pack(&[
+                        Datum::String(&id.to_string()),
+                        Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                    ]),
+                    1,
                 );
             }
             _ => (),
@@ -2022,10 +2037,11 @@ where
         broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
     }
 
-    fn report_catalog_update(&mut self, id: GlobalId, name: String, insert: bool) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::AppendLog(MaterializedEvent::Catalog(id, name, insert)),
+    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
+        self.update_catalog_view(
+            CatalogView::MzCatalogNames,
+            Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]),
+            diff,
         );
     }
 
@@ -2136,12 +2152,6 @@ where
         source: &RelationExpr,
         when: PeekWhen,
     ) -> Result<Timestamp, failure::Error> {
-        if self.symbiosis.is_some() {
-            // In symbiosis mode, we enforce serializability by forcing all
-            // PEEKs to peek at the latest input time.
-            return Ok(self.get_read_ts());
-        }
-
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -2186,34 +2196,40 @@ where
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
-                // We peek at the largest element not in advance of `upper`, which
-                // involves a subtraction. If `upper` contains a zero timestamp there
-                // is no "prior" answer, and we do not want to peek at it as it risks
-                // hanging awaiting the response to data that may never arrive.
-                if let Some(candidate) = upper.elements().get(0) {
-                    if *candidate > 0 {
-                        candidate.saturating_sub(1)
-                    } else {
-                        let unstarted = uses_ids
-                            .iter()
-                            .filter(|id| {
-                                self.indexes
-                                    .upper_of(id)
-                                    .expect("id not found")
-                                    .less_equal(&0)
-                            })
-                            .collect::<Vec<_>>();
-                        bail!(
-                            "At least one input has no complete timestamps yet: {:?}",
-                            unstarted
-                        );
-                    }
+                if uses_ids.iter().any(|id| self.tables.contains(id)) {
+                    // If the view depends on any tables, we enforce serializability by
+                    // choosing the latest input time.
+                    self.get_read_ts()
                 } else {
-                    // A complete trace can be read in its final form with this time.
-                    //
-                    // This should only happen for literals that have no sources
-                    Timestamp::max_value()
+                    let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
+                    // We peek at the largest element not in advance of `upper`, which
+                    // involves a subtraction. If `upper` contains a zero timestamp there
+                    // is no "prior" answer, and we do not want to peek at it as it risks
+                    // hanging awaiting the response to data that may never arrive.
+                    if let Some(candidate) = upper.elements().get(0) {
+                        if *candidate > 0 {
+                            candidate.saturating_sub(1)
+                        } else {
+                            let unstarted = uses_ids
+                                .iter()
+                                .filter(|id| {
+                                    self.indexes
+                                        .upper_of(id)
+                                        .expect("id not found")
+                                        .less_equal(&0)
+                                })
+                                .collect::<Vec<_>>();
+                            bail!(
+                                "At least one input has no complete timestamps yet: {:?}",
+                                unstarted
+                            );
+                        }
+                    } else {
+                        // A complete trace can be read in its final form with this time.
+                        //
+                        // This should only happen for literals that have no sources
+                        Timestamp::max_value()
+                    }
                 }
             }
         };

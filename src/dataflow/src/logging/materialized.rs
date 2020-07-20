@@ -32,17 +32,6 @@ pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifi
     Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum MaterializedEvent {
-    /// Avro OCF sink.
-    AvroOcfSink {
-        /// Globally unique identifier for the sink.
-        id: GlobalId,
-        /// TODO(ruchirk)
-        path: Vec<u8>,
-        /// True for insertions, false for deletions.
-        insert: bool,
-    },
-    /// Map from global identifiers to string name.
-    Catalog(GlobalId, String, bool),
     /// Dataflow command, true for create and false for drop.
     Dataflow(GlobalId, bool),
     /// Dataflow depends on a named source of data.
@@ -56,12 +45,6 @@ pub enum MaterializedEvent {
     Peek(Peek, bool),
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
-    /// Primary key.
-    PrimaryKey(GlobalId, Vec<usize>, usize),
-    /// Foreign key relationship: child, parent, then pairs of child and parent columns.
-    /// The final integer is used to correlate relationships, as there could be several
-    /// foreign key relationships from one child relation to the same parent relation.
-    ForeignKey(GlobalId, GlobalId, Vec<(usize, usize)>, usize),
 }
 
 /// A logged peek event.
@@ -113,27 +96,16 @@ pub fn construct<A: Allocate>(
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
-        let (mut primary_out, primary) = demux.new_output();
-        let (mut foreign_out, foreign) = demux.new_output();
-        let (mut catalog_out, catalog) = demux.new_output();
-        let (mut avro_ocf_sinks_out, avro_ocf_sinks) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             let mut active_dataflows = std::collections::HashMap::new();
-            // Map from string name to pair of primary, and foreign key relationships.
-            let mut view_keys =
-                std::collections::HashMap::<GlobalId, (Vec<_>, Vec<(GlobalId, _, _)>)>::new();
             let mut row_packer = repr::RowPacker::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut peek = peek_out.activate();
                 let mut frontier = frontier_out.activate();
-                let mut primary = primary_out.activate();
-                let mut foreign = foreign_out.activate();
-                let mut catalog = catalog_out.activate();
-                let mut avro_ocf_sinks = avro_ocf_sinks_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -142,10 +114,6 @@ pub fn construct<A: Allocate>(
                     let mut dependency_session = dependency.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut frontier_session = frontier.session(&time);
-                    let mut primary_session = primary.session(&time);
-                    let mut foreign_session = foreign.session(&time);
-                    let mut catalog_session = catalog.session(&time);
-                    let mut avro_ocf_sinks_session = avro_ocf_sinks.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos() as Timestamp;
@@ -154,23 +122,6 @@ pub fn construct<A: Allocate>(
                         let time_ms = time_ms as Timestamp;
 
                         match datum {
-                            MaterializedEvent::AvroOcfSink { id, path, insert } => {
-                                avro_ocf_sinks_session.give((
-                                    row_packer.pack(&[
-                                        Datum::String(&id.to_string()),
-                                        Datum::Bytes(&path),
-                                    ]),
-                                    time_ms,
-                                    if insert { 1 } else { -1 },
-                                ))
-                            }
-                            MaterializedEvent::Catalog(id, name, insert) => {
-                                catalog_session.give((
-                                    (id, name),
-                                    time_ms,
-                                    if insert { 1 } else { -1 },
-                                ));
-                            }
                             MaterializedEvent::Dataflow(id, is_create) => {
                                 dataflow_session.give((id, worker, is_create, time_ns));
 
@@ -196,39 +147,6 @@ pub fn construct<A: Allocate>(
                                              name={} worker={}",
                                             key.0, worker
                                         ),
-                                    }
-
-                                    // Currently we respond to worker dataflow drops, of which
-                                    // there can be many. Don't panic if we can't find the name.
-                                    if let Some((primary, foreign)) = view_keys.remove(&id) {
-                                        for (key, index) in primary.into_iter() {
-                                            for k in key {
-                                                primary_session.give((
-                                                    row_packer.pack(&[
-                                                        Datum::String(&id.to_string()),
-                                                        Datum::Int64(k as i64),
-                                                        Datum::Int64(index as i64),
-                                                    ]),
-                                                    time_ms,
-                                                    -1,
-                                                ));
-                                            }
-                                        }
-                                        for (parent, key, number) in foreign.into_iter() {
-                                            for (c, p) in key {
-                                                foreign_session.give((
-                                                    row_packer.pack(&[
-                                                        Datum::String(&id.to_string()),
-                                                        Datum::Int64(c as i64),
-                                                        Datum::String(&parent.to_string()),
-                                                        Datum::Int64(p as i64),
-                                                        Datum::Int64(number as i64),
-                                                    ]),
-                                                    time_ms,
-                                                    -1,
-                                                ));
-                                            }
-                                        }
                                     }
                                 }
                             }
@@ -258,44 +176,6 @@ pub fn construct<A: Allocate>(
                                     time_ms,
                                     delta as isize,
                                 ));
-                            }
-                            MaterializedEvent::PrimaryKey(dataflow_id, key, index) => {
-                                for k in key.iter() {
-                                    primary_session.give((
-                                        row_packer.pack(&[
-                                            Datum::String(&dataflow_id.to_string()),
-                                            Datum::Int64(*k as i64),
-                                            Datum::Int64(index as i64),
-                                        ]),
-                                        time_ms,
-                                        1,
-                                    ));
-                                }
-                                view_keys
-                                    .entry(dataflow_id)
-                                    .or_insert((Vec::new(), Vec::new()))
-                                    .0
-                                    .push((key, index));
-                            }
-                            MaterializedEvent::ForeignKey(child_id, parent_id, keys, number) => {
-                                for (c, p) in keys.iter() {
-                                    foreign_session.give((
-                                        row_packer.pack(&[
-                                            Datum::String(&child_id.to_string()),
-                                            Datum::Int64(*c as i64),
-                                            Datum::String(&parent_id.to_string()),
-                                            Datum::Int64(*p as i64),
-                                            Datum::Int64(number as i64),
-                                        ]),
-                                        time_ms,
-                                        1,
-                                    ));
-                                }
-                                view_keys
-                                    .entry(child_id)
-                                    .or_insert((Vec::new(), Vec::new()))
-                                    .1
-                                    .push((parent_id, keys, number));
                             }
                         }
                     }
@@ -360,15 +240,6 @@ pub fn construct<A: Allocate>(
             });
 
         let frontier_current = frontier.as_collection();
-        let primary_key = primary.as_collection();
-        let foreign_key = foreign.as_collection();
-        let catalog = catalog.as_collection().map({
-            let mut row_packer = repr::RowPacker::new();
-            move |(id, name)| {
-                row_packer.pack(&[Datum::String(&format!("{}", id)), Datum::String(&name)])
-            }
-        });
-        let avro_ocf_sinks = avro_ocf_sinks.as_collection();
 
         // Duration statistics derive from the non-rounded event times.
         let peek_duration = peek
@@ -454,19 +325,6 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Materialized(MaterializedLog::PeekDuration),
                 peek_duration,
-            ),
-            (
-                LogVariant::Materialized(MaterializedLog::PrimaryKeys),
-                primary_key,
-            ),
-            (
-                LogVariant::Materialized(MaterializedLog::ForeignKeys),
-                foreign_key,
-            ),
-            (LogVariant::Materialized(MaterializedLog::Catalog), catalog),
-            (
-                LogVariant::Materialized(MaterializedLog::AvroOcfSinks),
-                avro_ocf_sinks,
             ),
         ];
 

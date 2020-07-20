@@ -85,10 +85,6 @@ pub enum MaterializedLog {
     FrontierCurrent,
     PeekCurrent,
     PeekDuration,
-    PrimaryKeys,
-    ForeignKeys,
-    Catalog,
-    AvroOcfSinks,
 }
 
 impl LogVariant {
@@ -107,10 +103,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::FrontierCurrent),
             LogVariant::Materialized(MaterializedLog::PeekCurrent),
             LogVariant::Materialized(MaterializedLog::PeekDuration),
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys),
-            LogVariant::Materialized(MaterializedLog::ForeignKeys),
-            LogVariant::Materialized(MaterializedLog::Catalog),
-            LogVariant::Materialized(MaterializedLog::AvroOcfSinks),
         ]
     }
 
@@ -134,10 +126,6 @@ impl LogVariant {
             }
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations",
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "mz_view_keys",
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "mz_view_foreign_keys",
-            LogVariant::Materialized(MaterializedLog::Catalog) => "mz_catalog_names",
-            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => "mz_avro_ocf_sinks",
         }
     }
 
@@ -157,10 +145,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => GlobalId::system(21),
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => GlobalId::system(23),
             LogVariant::Materialized(MaterializedLog::PeekDuration) => GlobalId::system(25),
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(27),
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(29),
-            LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(31),
-            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => GlobalId::system(57),
         }
     }
 
@@ -180,10 +164,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => GlobalId::system(22),
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => GlobalId::system(24),
             LogVariant::Materialized(MaterializedLog::PeekDuration) => GlobalId::system(26),
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(28),
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(30),
-            LogVariant::Materialized(MaterializedLog::Catalog) => GlobalId::system(32),
-            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => GlobalId::system(58),
         }
     }
 
@@ -283,29 +263,6 @@ impl LogVariant {
                 .with_nonnull_column("duration_ns", ScalarType::Int64)
                 .with_nonnull_column("count", ScalarType::Int64)
                 .with_key(vec![0, 1]),
-
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("column", ScalarType::Int64)
-                .with_nonnull_column("key_group", ScalarType::Int64),
-
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => RelationDesc::empty()
-                .with_nonnull_column("child_id", ScalarType::String)
-                .with_nonnull_column("child_column", ScalarType::Int64)
-                .with_nonnull_column("parent_id", ScalarType::String)
-                .with_nonnull_column("parent_column", ScalarType::Int64)
-                .with_nonnull_column("key_group", ScalarType::Int64)
-                .with_key(vec![0, 1, 4]),
-
-            LogVariant::Materialized(MaterializedLog::Catalog) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("name", ScalarType::String)
-                .with_key(vec![0]),
-
-            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("path", ScalarType::Bytes)
-                .with_key(vec![0]),
         }
     }
 
@@ -343,23 +300,6 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
-            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => vec![],
-            LogVariant::Materialized(MaterializedLog::ForeignKeys) => vec![
-                (
-                    LogVariant::Materialized(MaterializedLog::PrimaryKeys).id(),
-                    vec![(2, 0), (3, 1)],
-                ),
-                (
-                    LogVariant::Materialized(MaterializedLog::Catalog).id(),
-                    vec![(0, 0)],
-                ),
-                (
-                    LogVariant::Materialized(MaterializedLog::Catalog).id(),
-                    vec![(2, 0)],
-                ),
-            ],
-            LogVariant::Materialized(MaterializedLog::Catalog) => vec![],
-            LogVariant::Materialized(MaterializedLog::AvroOcfSinks) => vec![],
         }
     }
 }
