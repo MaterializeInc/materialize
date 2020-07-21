@@ -41,10 +41,10 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, Diff, IndexDesc, MzOffset, PeekResponse, Timestamp,
+    DataflowDesc, DataflowError, IndexDesc, MzOffset, PeekResponse, Timestamp,
     TimestampSourceUpdate, Update,
 };
-use expr::{GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{Diff, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 

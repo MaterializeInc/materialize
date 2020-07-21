@@ -17,13 +17,13 @@ use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::jsonb_stringify;
-
-type Diff = isize;
+use crate::Diff;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -684,12 +684,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
 }
 
 pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
-    let n = match a {
-        Datum::Int64(n) => n as Diff,
-        Datum::Int32(n) => n as Diff,
-        Datum::Null => 0,
-        _ => panic!("Expected integer"),
-    };
+    let n = Diff::cast_from(a.unwrap_int64());
     vec![(repr::RowPacker::new().finish(), n)]
 }
 

@@ -24,7 +24,8 @@ use timely::dataflow::{
 
 use ::avro::{types::Value, Schema};
 use dataflow_types::LinearOperator;
-use dataflow_types::{DataEncoding, Diff, Envelope, Timestamp};
+use dataflow_types::{DataEncoding, Envelope, Timestamp};
+use expr::Diff;
 use interchange::avro::{extract_row, DebeziumDecodeState, DiffPair};
 use log::error;
 use repr::Datum;

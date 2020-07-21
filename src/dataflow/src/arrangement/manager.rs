@@ -19,8 +19,8 @@ use differential_dataflow::trace::implementations::spine_fueled_neu::Spine;
 use differential_dataflow::trace::TraceReader;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use dataflow_types::{DataflowError, Diff, Timestamp};
-use expr::GlobalId;
+use dataflow_types::{DataflowError, Timestamp};
+use expr::{Diff, GlobalId};
 use repr::Row;
 
 pub type OrdKeySpine<K, T, R, O = usize> = Spine<K, (), T, R, Rc<OrdKeyBatch<K, T, R, O>>>;

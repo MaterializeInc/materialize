@@ -33,8 +33,8 @@ use timely::dataflow::operators::generic::FrontieredInputHandle;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
 
-use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
-use expr::GlobalId;
+use dataflow_types::{KafkaSinkConnector, Timestamp};
+use expr::{Diff, GlobalId};
 use interchange::avro::{self, DiffPair, Encoder};
 use repr::{RelationDesc, Row};
 

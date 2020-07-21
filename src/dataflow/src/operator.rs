@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use dataflow_types::Diff;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
+use expr::Diff;
 use std::ops::Mul;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
@@ -136,6 +136,12 @@ where
         E: Data,
         L: FnMut(&D1) -> Result<bool, E> + 'static;
 
+    /// Like [`Collection::flat_map`], but the first element
+    /// returned from `logic` is allowed to represent a failure. The first
+    /// returned collection will contain the successful applications of `logic`,
+    /// while the second returned collection will contain the failed
+    /// applications; in each case, with the multiplicities multiplied by the
+    /// second element returned from `logic`.
     fn explode_fallible<D2, E, R2, I, L>(
         &self,
         logic: L,

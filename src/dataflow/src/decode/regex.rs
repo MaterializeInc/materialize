@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use crate::source::SourceOutput;
-use dataflow_types::{Diff, Timestamp};
+use dataflow_types::Timestamp;
+use expr::Diff;
 
 use log::warn;
 use regex::Regex;
