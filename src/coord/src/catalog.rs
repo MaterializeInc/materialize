@@ -167,41 +167,95 @@ pub struct Index {
 /// Represents a catalog view. When adding a new one, ensure you add it to the all_views() vector.
 #[derive(Debug, Copy, Clone)]
 pub enum CatalogView {
+    MzAvroOcfSinks,
+    MzCatalogNames,
     MzKafkaSinks,
+    MzViewForeignKeys,
+    MzViewKeys,
 }
 
 // TODO(justin): lots of overlap here with the logging views, can/should
 // they be unified?
 impl CatalogView {
     pub fn all_views() -> Vec<CatalogView> {
-        vec![CatalogView::MzKafkaSinks]
+        vec![
+            CatalogView::MzAvroOcfSinks,
+            CatalogView::MzCatalogNames,
+            CatalogView::MzKafkaSinks,
+            CatalogView::MzViewForeignKeys,
+            CatalogView::MzViewKeys,
+        ]
     }
 
     pub fn name(&self) -> String {
         match self {
+            CatalogView::MzAvroOcfSinks => "mz_avro_ocf_sinks",
+            CatalogView::MzCatalogNames => "mz_catalog_names",
             CatalogView::MzKafkaSinks => "mz_kafka_sinks",
+            CatalogView::MzViewForeignKeys => "mz_view_foreign_keys",
+            CatalogView::MzViewKeys => "mz_view_keys",
         }
         .into()
     }
 
     pub fn id(&self) -> GlobalId {
         match self {
+            CatalogView::MzAvroOcfSinks => GlobalId::system(57),
+            CatalogView::MzCatalogNames => GlobalId::System(31),
             CatalogView::MzKafkaSinks => GlobalId::System(55),
+            CatalogView::MzViewForeignKeys => GlobalId::system(29),
+            CatalogView::MzViewKeys => GlobalId::system(27),
         }
     }
 
     pub fn index_id(&self) -> GlobalId {
         match self {
+            CatalogView::MzAvroOcfSinks => GlobalId::system(58),
+            CatalogView::MzCatalogNames => GlobalId::System(32),
             CatalogView::MzKafkaSinks => GlobalId::System(56),
+            CatalogView::MzViewForeignKeys => GlobalId::system(30),
+            CatalogView::MzViewKeys => GlobalId::system(28),
         }
     }
 
     pub fn desc(&self) -> RelationDesc {
         match self {
+            // Paths for Avro OCF sinks.
+            CatalogView::MzAvroOcfSinks => RelationDesc::empty()
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("path", ScalarType::Bytes)
+                .with_key(vec![0]),
+
+            // Name -> global ID mapping.
+            CatalogView::MzCatalogNames => RelationDesc::empty()
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("name", ScalarType::String)
+                .with_key(vec![0]),
+
+            // Topics for Kafka sinks.
             CatalogView::MzKafkaSinks => RelationDesc::empty()
                 .with_nonnull_column("global_id", ScalarType::String)
                 .with_nonnull_column("topic", ScalarType::String)
                 .with_key(vec![0]),
+
+            // Foreign key relationship: child, parent, then pairs of child and
+            // parent columns. The final integer is used to correlate
+            // relationships, as there could be several foreign key
+            // relationships from one child relation to the same parent
+            // relation.
+            CatalogView::MzViewForeignKeys => RelationDesc::empty()
+                .with_nonnull_column("child_id", ScalarType::String)
+                .with_nonnull_column("child_column", ScalarType::Int64)
+                .with_nonnull_column("parent_id", ScalarType::String)
+                .with_nonnull_column("parent_column", ScalarType::Int64)
+                .with_nonnull_column("key_group", ScalarType::Int64)
+                .with_key(vec![0, 1, 4]),
+
+            // Primary key relations.
+            CatalogView::MzViewKeys => RelationDesc::empty()
+                .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("column", ScalarType::Int64)
+                .with_nonnull_column("key_group", ScalarType::Int64),
         }
     }
 }

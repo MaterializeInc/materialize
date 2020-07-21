@@ -17,7 +17,7 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
@@ -113,6 +113,7 @@ where
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of view) -> (existing indexes)
     views: HashMap<GlobalId, ViewState>,
+    tables: HashSet<GlobalId>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
@@ -197,6 +198,10 @@ where
             catalog,
             symbiosis,
             views: HashMap::new(),
+            tables: CatalogView::all_views()
+                .iter()
+                .map(|v| v.index_id())
+                .collect(),
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
@@ -220,13 +225,8 @@ where
             .iter()
             .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
             .collect();
-        for (id, name, item) in catalog_entries {
-            // Mirror each recovered catalog entry.
-            broadcast(
-                &mut coord.broadcast_tx,
-                SequencedCommand::AppendLog(MaterializedEvent::Catalog(id, name.to_string(), true)),
-            );
 
+        for (id, name, item) in &catalog_entries {
             match item {
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
@@ -234,29 +234,31 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(_) => {
-                    coord.views.insert(id, ViewState::new(false, vec![]));
+                    coord.views.insert(*id, ViewState::new(false, vec![]));
                 }
                 CatalogItem::View(view) => {
-                    coord.insert_view(id, &view);
+                    coord.insert_view(*id, &view);
                 }
                 CatalogItem::Sink(sink) => {
-                    let builder = match sink.connector {
+                    let builder = match &sink.connector {
                         SinkConnectorState::Pending(builder) => builder,
                         SinkConnectorState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
                     let connector = block_on(sink_connector::build(
-                        builder,
+                        builder.clone(),
                         sink.with_snapshot,
                         coord.determine_frontier(sink.as_of, sink.from)?,
-                        id,
+                        *id,
                     ))
                     .with_context(|| format!("recreating sink {}", name))?;
-                    coord.handle_sink_connector_ready(id, connector);
+                    coord.handle_sink_connector_ready(*id, connector);
                 }
                 CatalogItem::Index(index) => match id {
-                    GlobalId::User(_) => coord.create_index_dataflow(name.to_string(), id, index),
+                    GlobalId::User(_) => {
+                        coord.create_index_dataflow(name.to_string(), *id, index.clone())
+                    }
                     GlobalId::System(_) => {
                         // TODO(benesch): a smarter way to determine whether this system index
                         // is on a logging source or a logging view. Probably logging sources
@@ -265,57 +267,79 @@ where
                             .unwrap()
                             .active_views()
                             .iter()
-                            .any(|v| v.index_id == id)
+                            .any(|v| v.index_id == *id)
                         {
-                            coord.create_index_dataflow(name.to_string(), id, index)
+                            coord.create_index_dataflow(name.to_string(), *id, index.clone())
                         } else {
                             if is_cat_index(&id) {
                                 let entry = coord.catalog.get_by_id(&index.on);
-                                coord.views.insert(id, ViewState::new(false, vec![]));
+                                coord.views.insert(*id, ViewState::new(false, vec![]));
                                 broadcast(
                                     &mut coord.broadcast_tx,
                                     SequencedCommand::CreateLocalInput {
                                         name: name.to_string(),
-                                        index_id: id,
+                                        index_id: *id,
                                         index: IndexDesc {
-                                            on_id: id,
+                                            on_id: *id,
                                             keys: index.keys.clone(),
                                         },
                                         on_type: entry.desc().unwrap().typ().clone(),
                                     },
                                 );
                             }
-                            coord.insert_index(id, &index, Some(1_000))
+                            coord.insert_index(*id, &index, Some(1_000))
                         }
                     }
                 },
             }
         }
 
+        for (id, name, _item) in catalog_entries {
+            // Mirror each recovered catalog entry.
+            coord.report_catalog_update(id, name.to_string(), 1);
+        }
+
         // Announce primary and foreign key relationships.
         if let Some(logging_config) = logging {
             for log in logging_config.active_logs().iter() {
-                for (index, key) in log.schema().typ().keys.iter().enumerate() {
-                    broadcast(
-                        &mut coord.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
-                            log.id(),
-                            key.clone(),
-                            index,
-                        )),
-                    );
-                }
-                for (index, (parent, pairs)) in log.foreign_keys().into_iter().enumerate() {
-                    broadcast(
-                        &mut coord.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
-                            log.id(),
-                            parent,
-                            pairs,
-                            index,
-                        )),
-                    );
-                }
+                let log_id = &log.id().to_string();
+                coord.update_catalog_view(
+                    CatalogView::MzViewKeys,
+                    log.schema()
+                        .typ()
+                        .keys
+                        .iter()
+                        .enumerate()
+                        .flat_map(move |(index, key)| {
+                            key.iter().map(move |k| {
+                                let row = Row::pack(&[
+                                    Datum::String(log_id),
+                                    Datum::Int64(*k as i64),
+                                    Datum::Int64(index as i64),
+                                ]);
+                                (row, 1)
+                            })
+                        }),
+                );
+
+                coord.update_catalog_view(
+                    CatalogView::MzViewForeignKeys,
+                    log.foreign_keys().into_iter().enumerate().flat_map(
+                        move |(index, (parent, pairs))| {
+                            let parent_id = parent.to_string();
+                            pairs.into_iter().map(move |(c, p)| {
+                                let row = Row::pack(&[
+                                    Datum::String(&log_id),
+                                    Datum::Int64(c as i64),
+                                    Datum::String(&parent_id),
+                                    Datum::Int64(p as i64),
+                                    Datum::Int64(index as i64),
+                                ]);
+                                (row, 1)
+                            })
+                        },
+                    ),
+                );
             }
         }
         Ok(coord)
@@ -928,6 +952,7 @@ where
                     },
                 );
                 self.insert_index(index_id, &index, self.logical_compaction_window_ms);
+                self.tables.insert(index_id);
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1596,10 +1621,10 @@ where
             match status {
                 catalog::OpStatus::CreatedItem(id) => {
                     let name = self.catalog.humanize_id(expr::Id::Global(*id)).unwrap();
-                    self.report_catalog_update(*id, name, true);
+                    self.report_catalog_update(*id, name, 1);
                 }
                 catalog::OpStatus::DroppedItem(entry) => {
-                    self.report_catalog_update(entry.id(), entry.name().to_string(), false);
+                    self.report_catalog_update(entry.id(), entry.name().to_string(), -1);
                     match entry.item() {
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
@@ -1613,25 +1638,23 @@ where
                             sinks_to_drop.push(entry.id());
                             match connector {
                                 SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                                    let row = Row::pack(&[
+                                        Datum::String(entry.id().to_string().as_str()),
+                                        Datum::String(topic.as_str()),
+                                    ]);
                                     self.update_catalog_view(
                                         CatalogView::MzKafkaSinks,
-                                        Row::pack(&[
-                                            Datum::String(entry.id().to_string().as_str()),
-                                            Datum::String(topic.as_str()),
-                                        ]),
-                                        -1,
+                                        iter::once((row, -1)),
                                     );
                                 }
                                 SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                                    broadcast(
-                                        &mut self.broadcast_tx,
-                                        SequencedCommand::AppendLog(
-                                            MaterializedEvent::AvroOcfSink {
-                                                id: entry.id(),
-                                                path: path.clone().into_os_string().into_vec(),
-                                                insert: false,
-                                            },
-                                        ),
+                                    let row = Row::pack(&[
+                                        Datum::String(entry.id().to_string().as_str()),
+                                        Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                                    ]);
+                                    self.update_catalog_view(
+                                        CatalogView::MzAvroOcfSinks,
+                                        iter::once((row, -1)),
                                     );
                                 }
                                 _ => (),
@@ -1669,6 +1692,11 @@ where
             );
         }
         if !indexes_to_drop.is_empty() {
+            // It might be a table; just blindly remove it from `self.tables`
+            // in case it is.
+            for (id, _) in &indexes_to_drop {
+                let _ = self.tables.remove(id);
+            }
             self.drop_indexes(indexes_to_drop);
         }
 
@@ -1899,18 +1927,24 @@ where
     }
 
     /// Insert a single row into a given catalog view.
-    /// TODO(justin): this should be extended to support multiple updates in a single call.
-    fn update_catalog_view(&mut self, v: CatalogView, row: Row, diff: isize) {
+    fn update_catalog_view<I>(&mut self, v: CatalogView, updates: I)
+    where
+        I: IntoIterator<Item = (Row, isize)>,
+    {
         let timestamp = self.get_write_ts();
+        let updates = updates
+            .into_iter()
+            .map(|(row, diff)| Update {
+                row,
+                diff,
+                timestamp,
+            })
+            .collect();
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::Insert {
                 id: v.index_id(),
-                updates: vec![Update {
-                    row,
-                    diff,
-                    timestamp,
-                }],
+                updates,
             },
         );
     }
@@ -1922,27 +1956,20 @@ where
         from: GlobalId,
         connector: SinkConnector,
     ) {
-        #[allow(clippy::single_match)]
         match &connector {
             SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                self.update_catalog_view(
-                    CatalogView::MzKafkaSinks,
-                    Row::pack(&[
-                        Datum::String(id.to_string().as_str()),
-                        Datum::String(topic.as_str()),
-                    ]),
-                    1,
-                );
+                let row = Row::pack(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(topic.as_str()),
+                ]);
+                self.update_catalog_view(CatalogView::MzKafkaSinks, iter::once((row, 1)));
             }
             SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::AvroOcfSink {
-                        id,
-                        path: path.clone().into_os_string().into_vec(),
-                        insert: true,
-                    }),
-                );
+                let row = Row::pack(&[
+                    Datum::String(&id.to_string()),
+                    Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                ]);
+                self.update_catalog_view(CatalogView::MzAvroOcfSinks, iter::once((row, 1)));
             }
             _ => (),
         }
@@ -2022,11 +2049,9 @@ where
         broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
     }
 
-    fn report_catalog_update(&mut self, id: GlobalId, name: String, insert: bool) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::AppendLog(MaterializedEvent::Catalog(id, name, insert)),
-        );
+    fn report_catalog_update(&mut self, id: GlobalId, name: String, diff: isize) {
+        let row = Row::pack(&[Datum::String(&id.to_string()), Datum::String(&name)]);
+        self.update_catalog_view(CatalogView::MzCatalogNames, iter::once((row, diff)));
     }
 
     /// Perform maintenance work associated with the coordinator.
@@ -2136,12 +2161,6 @@ where
         source: &RelationExpr,
         when: PeekWhen,
     ) -> Result<Timestamp, anyhow::Error> {
-        if self.symbiosis.is_some() {
-            // In symbiosis mode, we enforce serializability by forcing all
-            // PEEKs to peek at the latest input time.
-            return Ok(self.get_read_ts());
-        }
-
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -2186,34 +2205,40 @@ where
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
-                // We peek at the largest element not in advance of `upper`, which
-                // involves a subtraction. If `upper` contains a zero timestamp there
-                // is no "prior" answer, and we do not want to peek at it as it risks
-                // hanging awaiting the response to data that may never arrive.
-                if let Some(candidate) = upper.elements().get(0) {
-                    if *candidate > 0 {
-                        candidate.saturating_sub(1)
-                    } else {
-                        let unstarted = uses_ids
-                            .iter()
-                            .filter(|id| {
-                                self.indexes
-                                    .upper_of(id)
-                                    .expect("id not found")
-                                    .less_equal(&0)
-                            })
-                            .collect::<Vec<_>>();
-                        bail!(
-                            "At least one input has no complete timestamps yet: {:?}",
-                            unstarted
-                        );
-                    }
+                if uses_ids.iter().any(|id| self.tables.contains(id)) {
+                    // If the view depends on any tables, we enforce
+                    // linearizability by choosing the latest input time.
+                    self.get_read_ts()
                 } else {
-                    // A complete trace can be read in its final form with this time.
-                    //
-                    // This should only happen for literals that have no sources
-                    Timestamp::max_value()
+                    let upper = self.indexes.greatest_open_upper(uses_ids.iter().cloned());
+                    // We peek at the largest element not in advance of `upper`, which
+                    // involves a subtraction. If `upper` contains a zero timestamp there
+                    // is no "prior" answer, and we do not want to peek at it as it risks
+                    // hanging awaiting the response to data that may never arrive.
+                    if let Some(candidate) = upper.elements().get(0) {
+                        if *candidate > 0 {
+                            candidate.saturating_sub(1)
+                        } else {
+                            let unstarted = uses_ids
+                                .iter()
+                                .filter(|id| {
+                                    self.indexes
+                                        .upper_of(id)
+                                        .expect("id not found")
+                                        .less_equal(&0)
+                                })
+                                .collect::<Vec<_>>();
+                            bail!(
+                                "At least one input has no complete timestamps yet: {:?}",
+                                unstarted
+                            );
+                        }
+                    } else {
+                        // A complete trace can be read in its final form with this time.
+                        //
+                        // This should only happen for literals that have no sources
+                        Timestamp::max_value()
+                    }
                 }
             }
         };

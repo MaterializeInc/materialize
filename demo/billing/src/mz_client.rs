@@ -106,24 +106,6 @@ impl MzClient {
         sink_name: &str,
         schema_registry_url: &str,
     ) -> Result<String> {
-        let topic_name_query = format!(
-            "SELECT topic FROM mz_kafka_sinks NATURAL JOIN mz_catalog_names \
-             WHERE name = 'materialize.public.{}'",
-            sink_name
-        );
-
-        log::debug!("querying sinks=> {}", topic_name_query);
-        let rows = self.0.query(&*topic_name_query, &[]).await?;
-        if rows.len() > 1 {
-            return Err(format!("expected single row response, got {} rows", rows.len()).into());
-        }
-
-        let old_topic_name: Option<String> = if rows.len() == 1 {
-            Some(rows[0].get(0))
-        } else {
-            None
-        };
-
         let query = format!(
             "CREATE SINK {sink} FROM billing_monthly_statement INTO KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
              WITH (consistency = true) FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '{schema_registry}'",
@@ -136,21 +118,16 @@ impl MzClient {
         log::debug!("creating sink=> {}", query);
         self.0.execute(&*query, &[]).await?;
 
-        // Get the new global_id for the recently created sink
-        retry::retry_for(Duration::from_secs(10), |_| async {
-            log::debug!("getting sink topic => {}", topic_name_query);
-            let row = self.0.query_one(&*topic_name_query, &[]).await?;
-            let topic_name: String = row.get(0);
-            if let Some(old_topic_name) = old_topic_name.as_ref() {
-                if topic_name == *old_topic_name {
-                    return Err("topic name not updated yet".into());
-                }
-            }
-
-            log::debug!("received a topic name {:?}", topic_name);
-            Ok(topic_name)
-        })
-        .await
+        // Get the topic for the newly-created sink.
+        let row = self
+            .0
+            .query_one(
+                "SELECT topic FROM mz_kafka_sinks NATURAL JOIN mz_catalog_names \
+                 WHERE name = 'materialize.public.' || $1",
+                &[&sink_name],
+            )
+            .await?;
+        Ok(row.get("topic"))
     }
 
     pub async fn create_csv_source(

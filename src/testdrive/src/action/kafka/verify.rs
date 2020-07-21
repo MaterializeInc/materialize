@@ -16,8 +16,6 @@ use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use tokio::stream::StreamExt;
 
-use ore::retry;
-
 use crate::action::{Action, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
@@ -57,19 +55,15 @@ impl Action for VerifyAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let topic_prefix: String = retry::retry_for(Duration::from_secs(8), |_| async {
-            let row = state
-                .pgclient
-                .query_one(
-                    "SELECT topic FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks \
-                     WHERE name = $1",
-                    &[&self.sink],
-                )
-                .await
-                .map_err(|e| format!("retrieving topic name: {}", e))?;
-            Ok::<_, String>(row.get("topic"))
-        })
-        .await?;
+        let topic_prefix: String = state
+            .pgclient
+            .query_one(
+                "SELECT topic FROM mz_catalog_names NATURAL JOIN mz_kafka_sinks WHERE name = $1",
+                &[&self.sink],
+            )
+            .await
+            .map_err(|e| format!("retrieving topic name: {}", e))?
+            .get("topic");
 
         let topic = match self.consistency {
             Some(SinkConsistencyFormat::Debezium) => format!("{}-consistency", topic_prefix),
