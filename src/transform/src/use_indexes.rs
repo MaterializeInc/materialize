@@ -115,31 +115,6 @@ impl FilterEqualLiteral {
                             }
                         }
                     }
-                    if !expr_to_equivalent_literal.is_empty() {
-                        let key_set = &indexes[id];
-                        let mut equivalences = Vec::new();
-                        // find set of keys of the largest size that is a subset of columns
-                        let best_index = key_set
-                            .iter()
-                            .filter(|ks| {
-                                ks.iter()
-                                    .all(|k| expr_to_equivalent_literal.contains_key(k))
-                            })
-                            .max_by_key(|ks| ks.len());
-                        if let Some(keys) = best_index {
-                            for key in keys {
-                                equivalences.push(vec![
-                                    key.clone(),
-                                    expr_to_equivalent_literal.remove(&key).unwrap(),
-                                ]);
-                            }
-                            let converted_join = RelationExpr::join_scalars(
-                                vec![input.take_dangerous().arrange_by(&[keys.clone()])],
-                                equivalences,
-                            );
-                            *input = Box::new(converted_join);
-                        }
-                    }
                 }
             }
         }
