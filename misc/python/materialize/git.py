@@ -18,6 +18,7 @@ from typing import List, Optional, Set, Union, NamedTuple
 import semver
 
 from materialize import spawn
+from materialize import errors
 
 
 def rev_count(rev: str) -> int:
@@ -35,17 +36,25 @@ def rev_count(rev: str) -> int:
     )
 
 
-def rev_parse(rev: str) -> str:
+def rev_parse(rev: str, *, abbrev: bool = False) -> str:
     """Compute the hash for a revision.
 
     Args:
         rev: A Git revision in any format known to the Git CLI.
+        abbrev: Return a branch or tag name instead of a git sha
 
     Returns:
-        sha: A 40 character hex-encoded SHA-1 hash representing the ID of the
+        ref: A 40 character hex-encoded SHA-1 hash representing the ID of the
             named revision in Git's object database.
+
+            With "abbrev=True" this will return an abbreviated ref, or throw an
+            error if there is no abbrev.
     """
-    return spawn.capture(["git", "rev-parse", "--verify", rev], unicode=True).strip()
+    a = ["--abbrev-ref"] if abbrev else []
+    out = spawn.capture(["git", "rev-parse", *a, "--verify", rev], unicode=True).strip()
+    if not out:
+        raise errors.MzRuntimeError(f"No parsed rev for {rev}")
+    return out
 
 
 @lru_cache(maxsize=None)
@@ -93,3 +102,42 @@ def is_ancestor(earlier: str, later: str) -> bool:
     except subprocess.CalledProcessError:
         return False
     return True
+
+
+def is_dirty() -> bool:
+    """Check if the working directory has modifications to tracked files"""
+    proc = subprocess.run("git diff --no-ext-diff --quiet --exit-code".split())
+    idx = subprocess.run("git diff --cached --no-ext-diff --quiet --exit-code".split())
+    return proc.returncode != 0 or idx.returncode != 0
+
+
+def first_remote_matching(pattern: str) -> Optional[str]:
+    """Get the name of the remote that matches the pattern"""
+    remotes = spawn.capture(["git", "remote", "-v"], unicode=True)
+    for remote in remotes.splitlines():
+        if pattern in remote:
+            return remote.split()[0]
+
+    return None
+
+
+# Work tree mutation
+
+
+def create_branch(name: str) -> None:
+    spawn.runv(["git", "checkout", "-b", name])
+
+
+def checkout(rev: str, branch: Optional[str] = None) -> None:
+    """Git checkout the rev"""
+    spawn.runv(["git", "checkout", rev])
+
+
+def commit_all_changed(message: str) -> None:
+    """Commit all changed files with the given message"""
+    spawn.runv(["git", "commit", "-a", "-m", message])
+
+
+def tag_annotated(tag: str) -> None:
+    """Create an annotated tag on HEAD"""
+    spawn.runv(["git", "tag", "-a", "-m", tag, tag])
