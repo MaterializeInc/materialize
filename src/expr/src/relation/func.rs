@@ -687,7 +687,8 @@ pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
     let n = match a {
         Datum::Int64(n) => n as Diff,
         Datum::Int32(n) => n as Diff,
-        _ => panic!(),
+        Null => 0,
+        _ => panic!("Expected integer"),
     };
     vec![(repr::RowPacker::new().finish(), n)]
 }
