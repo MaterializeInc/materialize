@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::mem::{size_of, transmute};
 
-use byteorder::{BigEndian, ByteOrder, NetworkEndian, WriteBytesExt};
+use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -500,7 +500,8 @@ impl Row {
     /// Write a length-prefixed Row to a buffer
     pub fn encode(&self, buf: &mut Vec<u8>) {
         // TODO assert that the row is small enough for its length to fit in 4 bytes
-        buf.write_u32::<NetworkEndian>(self.data.len() as u32);
+        buf.write_u32::<NetworkEndian>(self.data.len() as u32)
+            .expect("writes to vec cannot fail");
         buf.extend_from_slice(&self.data);
     }
 }
