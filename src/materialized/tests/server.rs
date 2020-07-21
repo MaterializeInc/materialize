@@ -75,16 +75,16 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
         // Test that catalog recovery correctly populates `mz_catalog_names`.
         assert_eq!(
             client
-                .query("SELECT * FROM mz_catalog_names", &[])?
+                .query("SELECT global_id FROM mz_catalog_names ORDER BY 1", &[])?
                 .into_iter()
                 .map(|row| row.get(0))
                 .collect::<Vec<String>>(),
             vec![
-                "u6", "u1", "u4", "s27", "s23", "s55", "u2", "s31", "s25", "s35", "s57", "s3",
-                "s11", "s17", "s1", "s5", "s13", "s29", "s7", "u3", "u5", "s15", "s41", "s28",
-                "s24", "s56", "s47", "s49", "s21", "s32", "s45", "s9", "s26", "s33", "s51", "s58",
-                "s37", "s43", "s4", "s12", "s18", "s19", "s2", "s6", "s14", "s30", "s39", "s53",
-                "s8", "s16", "s22", "s10", "s20"
+                "s1", "s10", "s11", "s12", "s13", "s14", "s15", "s16", "s17", "s18", "s19", "s2",
+                "s20", "s21", "s22", "s23", "s24", "s25", "s26", "s27", "s28", "s29", "s3", "s30",
+                "s31", "s32", "s33", "s35", "s37", "s39", "s4", "s41", "s43", "s47", "s49", "s5",
+                "s51", "s53", "s54", "s55", "s56", "s57", "s58", "s59", "s6", "s7", "s8", "s9",
+                "u1", "u2", "u3", "u4", "u5", "u6",
             ]
         );
     }

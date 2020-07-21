@@ -33,7 +33,6 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 
-use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
@@ -126,7 +125,6 @@ where
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
-    log: bool,
     logging_granularity: Option<u64>,
     executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
@@ -205,7 +203,6 @@ where
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
-            log: config.logging.is_some(),
             logging_granularity: config
                 .logging_granularity
                 .and_then(|c| c.as_millis().try_into().ok()),
@@ -2020,19 +2017,7 @@ where
     fn drop_indexes(&mut self, indexes: Vec<(GlobalId, &catalog::Index)>) {
         let mut trace_keys = Vec::new();
         for (id, idx) in indexes {
-            if let Some(index_state) = self.indexes.remove(&id) {
-                if self.log {
-                    for time in index_state.upper.frontier().iter() {
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                id,
-                                time.clone(),
-                                -1,
-                            )),
-                        );
-                    }
-                }
+            if self.indexes.remove(&id).is_some() {
                 if let Some(view_state) = self.views.get_mut(&idx.on) {
                     view_state.drop_primary_idx(&idx.keys, id);
                     if view_state.default_idx.is_none() {
@@ -2333,17 +2318,6 @@ where
         if let Some(index_state) = self.indexes.get_mut(name) {
             let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
             if !changes.is_empty() {
-                if self.log {
-                    for (time, change) in changes {
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                *name, time, change,
-                            )),
-                        );
-                    }
-                }
-
                 // Advance the compaction frontier to trail the new frontier.
                 // If the compaction latency is `None` compaction messages are
                 // not emitted, and the trace should be broadly useable.
@@ -2410,14 +2384,6 @@ where
             }
         } // else the view is temporary
         let index_state = Frontiers::new(self.num_timely_workers, latency_ms);
-        if self.log {
-            for time in index_state.upper.frontier().iter() {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(id, time.clone(), 1)),
-                );
-            }
-        }
         self.indexes.insert(id, index_state);
     }
 

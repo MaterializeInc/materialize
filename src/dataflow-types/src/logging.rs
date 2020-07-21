@@ -41,6 +41,7 @@ impl LoggingConfig {
             VIEW_ADDRESSES_WITH_UNIT_LENGTH,
             VIEW_DATAFLOW_NAMES,
             VIEW_DATAFLOW_OPERATOR_DATAFLOWS,
+            VIEW_MATERIALIZATION_FRONTIERS,
             VIEW_RECORDS_PER_DATAFLOW_OPERATOR,
             VIEW_RECORDS_PER_DATAFLOW,
             VIEW_RECORDS_PER_DATAFLOW_GLOBAL,
@@ -122,7 +123,7 @@ impl LogVariant {
                 "mz_materialization_dependencies"
             }
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => {
-                "mz_materialization_frontiers"
+                "mz_worker_materialization_frontiers"
             }
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "mz_peek_active",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "mz_peek_durations",
@@ -249,6 +250,7 @@ impl LogVariant {
 
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
                 .with_nonnull_column("global_id", ScalarType::String)
+                .with_nonnull_column("worker", ScalarType::Int64)
                 .with_nonnull_column("time", ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
@@ -372,6 +374,16 @@ WHERE
     id: GlobalId::System(37),
 };
 
+/// Computes the minimum materialization frontiers across all workers.
+const VIEW_MATERIALIZATION_FRONTIERS: LogView = LogView {
+    name: "mz_materialization_frontiers",
+    sql: "CREATE VIEW mz_materialization_frontiers AS SELECT
+    global_id, min(time) AS time
+FROM mz_catalog.mz_worker_materialization_frontiers
+GROUP BY global_id",
+    id: GlobalId::System(54),
+};
+
 /// Maintains the number of records used by each operator in a dataflow (per
 /// worker). Operators not using any records are not shown.
 const VIEW_RECORDS_PER_DATAFLOW_OPERATOR: LogView = LogView {
@@ -439,7 +451,7 @@ JOIN mz_catalog.mz_materialization_frontiers frontier_source ON index_deps.sourc
 JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow = frontier_df.global_id
 LEFT JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 LEFT JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id",
-    id: GlobalId::System(45),
+    id: GlobalId::System(59),
 };
 
 const VIEW_PERF_ARRANGEMENT_RECORDS: LogView = LogView {
