@@ -50,7 +50,8 @@ Field | Value type | Description
 ### AS OF
 
 `AS OF` is the specific point in time to start emitting all events for a given `SINK`. If you don't
-use `AS OF`, Materialize will pick a timestamp itself.
+use `AS OF`, Materialize will pick a timestamp itself. `timestamp_expression` supports the same
+expressions from [`TAIL`](/sql/tail/#as-of) (such as `now()` and epoch times). 
 
 ### WITH SNAPSHOT or WITHOUT SNAPSHOT
 
@@ -98,7 +99,7 @@ CREATE SINK quotes_sink
 FROM quotes
 INTO KAFKA BROKER 'localhost' TOPIC 'quotes-sink'
 FORMAT AVRO USING
-    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+    CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' AS OF now();
 ```
 
 #### From materialized views
