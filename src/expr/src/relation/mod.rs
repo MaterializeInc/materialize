@@ -1152,6 +1152,14 @@ pub enum JoinImplementation {
     /// Each plan starts from the corresponding index, and then in sequence joins
     /// against collections identified by index and with the specified arrangement key.
     DeltaQuery(Vec<Vec<(usize, Vec<ScalarExpr>)>>),
+    /// Perform a semi join of a single input to a constant literal
+    ///
+    /// Technically, both differential and delta query implementations will
+    /// also perform semijoins if the semijoin would shrink the size of the
+    /// arranged inputs. A join is designated as having this implementation
+    /// in the single input case where neither `Differential` nor `DeltaQuery`
+    /// make sense.
+    Semijoin,
     /// No implementation yet selected.
     Unimplemented,
 }

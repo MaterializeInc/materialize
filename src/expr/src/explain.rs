@@ -451,6 +451,7 @@ impl JoinImplementation {
                         .collect()
                 )
             ),
+            Semijoin => "Semijoin".to_owned(),
             Unimplemented => "Unimplemented".to_owned(),
         }
     }

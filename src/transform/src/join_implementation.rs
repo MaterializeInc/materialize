@@ -75,6 +75,11 @@ impl JoinImplementation {
     /// Determines the join implementation for join operators.
     pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {
         if let RelationExpr::Join { inputs, .. } = relation {
+            if inputs.len() == 1 {
+                *relation = semijoin::plan(relation);
+                return;
+            }
+
             // Common information of broad utility.
             // TODO: Figure out how to package this up for everyone who uses it.
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -348,6 +353,76 @@ mod differential {
             Some(new_join)
         } else {
             panic!("differential::plan call on non-join expression.")
+        }
+    }
+}
+
+mod semijoin {
+
+    use expr::{JoinImplementation, RelationExpr, ScalarExpr};
+
+    /// Creates a semijoin plan and lifts any predicates that don't belong.
+    pub fn plan(join: &RelationExpr) -> RelationExpr {
+        let mut new_join = join.clone();
+
+        if let RelationExpr::Join {
+            inputs,
+            equivalences,
+            demand: _,
+            implementation,
+        } = &mut new_join
+        {
+            let mut input = &mut inputs[0];
+            while let RelationExpr::Filter {
+                input: inner,
+                predicates: _,
+            } = input
+            {
+                input = inner;
+            }
+            if let RelationExpr::ArrangeBy { input: _, keys } = input {
+                let available_arrangements = vec![keys.clone()];
+                let order = vec![(0, keys[0].clone())];
+                let mut lifted = Vec::new();
+                super::implement_arrangements(
+                    inputs,
+                    &available_arrangements,
+                    &[0],
+                    order.iter(),
+                    &mut lifted,
+                );
+                *implementation = JoinImplementation::Semijoin;
+                if !lifted.is_empty() {
+                    new_join = new_join.filter(lifted);
+                }
+                new_join
+            } else {
+                // Currently, this branch should never be traversed because
+                // we assume that join_elision has done its job of removing
+                // spurious single-input joins and has only left behind ones
+                // resulting from filters on indexed columns -> join transforms
+                // but if there is no index, the proper thing to do would be
+                // to convert the join back into a filter.
+                let filters = equivalences.iter_mut().flat_map(|equivalence| {
+                    let last = equivalence.pop();
+                    let mut filters = vec![];
+                    if let Some(last) = last {
+                        let mut expr = equivalence.pop();
+                        while let Some(e) = expr {
+                            filters.push(ScalarExpr::CallBinary {
+                                func: expr::BinaryFunc::Eq,
+                                expr1: Box::new(last.clone()),
+                                expr2: Box::new(e),
+                            });
+                            expr = equivalence.pop();
+                        }
+                    }
+                    filters
+                });
+                inputs[0].take_dangerous().filter(filters)
+            }
+        } else {
+            panic!("semijoin::plan call on non-join expression.")
         }
     }
 }

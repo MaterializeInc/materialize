@@ -109,7 +109,6 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
-use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
@@ -138,8 +137,10 @@ use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
 use crate::source::{FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
 
 mod arrange_by;
+mod constant;
 mod context;
 mod delta_join;
+mod filter;
 mod join;
 mod reduce;
 mod threshold;
@@ -738,23 +739,8 @@ where
             // a collection or an arrangement. In either case, we associate the result with
             // the `relation_expr` argument in the context.
             match relation_expr {
-                // The constant collection is instantiated only on worker zero.
-                RelationExpr::Constant { rows, .. } => {
-                    let rows = if worker_index == 0 {
-                        rows.clone()
-                    } else {
-                        vec![]
-                    };
-
-                    let collection = rows
-                        .to_stream(scope)
-                        .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
-                        .as_collection();
-
-                    let err_collection = Collection::empty(scope);
-
-                    self.collections
-                        .insert(relation_expr.clone(), (collection, err_collection));
+                RelationExpr::Constant { .. } => {
+                    self.render_constant(relation_expr, scope, worker_index);
                 }
 
                 // A get should have been loaded into the context, and it is surprising to
@@ -911,6 +897,10 @@ where
                                 .render_delta_join(input, predicates, scope, worker_index, |t| {
                                     t.saturating_sub(1)
                                 }),
+                            expr::JoinImplementation::Semijoin => {
+                                self.ensure_rendered(input, scope, worker_index);
+                                self.render_filter(input, predicates.clone())
+                            }
                             expr::JoinImplementation::Unimplemented => {
                                 panic!("Attempt to render unimplemented join");
                             }
@@ -918,21 +908,7 @@ where
                         (ok_collection, err_collection.map(Into::into))
                     } else {
                         self.ensure_rendered(input, scope, worker_index);
-                        let temp_storage = RowArena::new();
-                        let predicates = predicates.clone();
-                        let (ok_collection, err_collection) = self.collection(input).unwrap();
-                        let (ok_collection, new_err_collection) =
-                            ok_collection.filter_fallible(move |input_row| {
-                                let datums = input_row.unpack();
-                                for p in &predicates {
-                                    if p.eval(&datums, &temp_storage)? != Datum::True {
-                                        return Ok(false);
-                                    }
-                                }
-                                Ok::<_, DataflowError>(true)
-                            });
-                        let err_collection = err_collection.concat(&new_err_collection);
-                        (ok_collection, err_collection)
+                        self.render_filter(input, predicates.clone())
                     };
                     self.collections.insert(relation_expr.clone(), collections);
                 }
@@ -959,6 +935,11 @@ where
                                 |t| t.saturating_sub(1),
                             );
                             self.collections.insert(relation_expr.clone(), collection);
+                        }
+                        expr::JoinImplementation::Semijoin => {
+                            if let RelationExpr::ArrangeBy { keys, .. } = &inputs[0] {
+                                self.render_semi_join(relation_expr, &keys[0], scope, worker_index);
+                            }
                         }
                         expr::JoinImplementation::Unimplemented => {
                             panic!("Attempt to render unimplemented join");
