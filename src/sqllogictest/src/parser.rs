@@ -202,11 +202,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        let types = parse_types(
-            words
-                .next()
-                .ok_or_else(|| anyhow!("missing types in: {}", first_line))?,
-        )?;
+        let types = words.next().map_or(Ok(vec![]), parse_types)?;
         let mut sort = Sort::No;
         let mut check_column_names = false;
         let mut multiline = false;

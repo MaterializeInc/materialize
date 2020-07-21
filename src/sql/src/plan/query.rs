@@ -598,6 +598,9 @@ fn plan_view_select_intrusive(
         };
         let mut out = vec![];
         for si in projection {
+            if *si == SelectItem::Wildcard && from.is_empty() {
+                bail!("SELECT * with no tables specified is not valid");
+            }
             out.extend(expand_select_item(&ecx, si)?);
         }
         out
@@ -1147,9 +1150,6 @@ fn expand_select_item<'a>(
                     (ExpandedSelectItem::InputOrdinal(i), name)
                 })
                 .collect();
-            if items.is_empty() {
-                bail!("SELECT * with no tables specified is not valid");
-            }
             Ok(items)
         }
         SelectItem::Expr { expr, alias } => {
