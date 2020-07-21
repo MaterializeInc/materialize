@@ -15,3 +15,4 @@ mod util;
 pub use avro_ocf::avro_ocf;
 pub use kafka::kafka;
 pub use tail::tail;
+pub use util::sink_reschedule;
