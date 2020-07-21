@@ -28,7 +28,6 @@ use super::expr::{
 };
 use super::query::{self, ExprContext, QueryLifetime};
 use super::typeconv::{self, rescale_decimal, CastTo, CoerceTo};
-use crate::unsupported;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Mirrored from [PostgreSQL's `typcategory`][typcategory].

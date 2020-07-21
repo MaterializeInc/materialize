@@ -223,7 +223,7 @@ END $$;
                             if *if_exists {
                                 continue;
                             } else {
-                                return Err(err);
+                                return Err(err.into());
                             }
                         }
                     };

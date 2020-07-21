@@ -9,8 +9,6 @@
 
 use std::collections::HashMap;
 
-use anyhow::bail;
-
 use ore::collections::CollectionExt;
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
@@ -21,14 +19,14 @@ use sql_parser::ast::{
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
-use crate::unsupported;
 
 pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
 }
 
-pub fn function_name(name: ObjectName) -> Result<String, anyhow::Error> {
+pub fn function_name(name: ObjectName) -> Result<String, PlanError> {
     if name.0.len() != 1 {
         unsupported!("qualified function names");
     }
@@ -39,13 +37,9 @@ pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
 }
 
-pub fn object_name(mut name: ObjectName) -> Result<PartialName, anyhow::Error> {
+pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
-        bail!(
-            "qualified names must have between 1 and 3 components, got {}: {}",
-            name.0.len(),
-            name
-        );
+        return Err(PlanError::MisqualifiedName(name.to_string()));
     }
     let out = PartialName {
         item: ident(
@@ -84,27 +78,24 @@ pub fn unresolve(name: FullName) -> ObjectName {
 /// The goal is to construct a backwards-compatible description of the object.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
 /// objects that are persisted in the catalog.
-pub fn create_statement(
-    scx: &StatementContext,
-    mut stmt: Statement,
-) -> Result<String, anyhow::Error> {
-    let allocate_name = |name: &ObjectName| -> Result<_, anyhow::Error> {
+pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<String, PlanError> {
+    let allocate_name = |name: &ObjectName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
     };
 
-    let allocate_temporary_name = |name: &ObjectName| -> Result<_, anyhow::Error> {
+    let allocate_temporary_name = |name: &ObjectName| -> Result<_, PlanError> {
         Ok(unresolve(
             scx.allocate_temporary_name(object_name(name.clone())?),
         ))
     };
 
-    let resolve_item = |name: &ObjectName| -> Result<_, anyhow::Error> {
+    let resolve_item = |name: &ObjectName| -> Result<_, PlanError> {
         Ok(unresolve(scx.resolve_item(name.clone())?))
     };
 
     struct QueryNormalizer<'a> {
         scx: &'a StatementContext<'a>,
-        err: Option<anyhow::Error>,
+        err: Option<PlanError>,
     }
 
     impl<'a, 'ast> VisitMut<'ast> for QueryNormalizer<'a> {

@@ -26,15 +26,13 @@
 
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
-use std::error::Error;
-use std::fmt;
-
 use itertools::Itertools;
 
 use repr::ColumnName;
 
-use super::expr::ColumnRef;
 use crate::names::PartialName;
+use crate::plan::error::PlanError;
+use crate::plan::expr::ColumnRef;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScopeItemName {
@@ -188,7 +186,7 @@ impl Scope {
         &'a self,
         matches: Matches,
         name_in_error: &str,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), ScopeResolutionError>
+    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError>
     where
         Matches: Fn(&ScopeItemName) -> bool,
     {
@@ -203,7 +201,7 @@ impl Scope {
             .filter(|(_level, _column, item, name)| (matches)(name) && item.nameable)
             .sorted_by_key(|(level, _column, _item, name)| (*level, !name.priority));
         match results.next() {
-            None => Err(ScopeResolutionError::NotFound(name_in_error.to_owned())),
+            None => Err(PlanError::UnknownColumn(name_in_error.to_owned())),
             Some((level, column, _item, name)) => {
                 if results
                     .find(|(level2, column2, item, name2)| {
@@ -216,7 +214,7 @@ impl Scope {
                 {
                     Ok((ColumnRef { level, column }, name))
                 } else {
-                    Err(ScopeResolutionError::Ambiguous(name_in_error.to_owned()))
+                    Err(PlanError::AmbiguousColumn(name_in_error.to_owned()))
                 }
             }
         }
@@ -225,7 +223,7 @@ impl Scope {
     pub fn resolve_column<'a>(
         &'a self,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), ScopeResolutionError> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
         self.resolve(
             |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
             column_name.as_str(),
@@ -236,7 +234,7 @@ impl Scope {
         &'a self,
         table_name: &PartialName,
         column_name: &ColumnName,
-    ) -> Result<(ColumnRef, &'a ScopeItemName), ScopeResolutionError> {
+    ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
         self.resolve(
             |item: &ScopeItemName| {
                 item.table_name.as_ref() == Some(table_name)
@@ -291,20 +289,3 @@ impl Scope {
         self
     }
 }
-
-#[derive(Debug)]
-pub enum ScopeResolutionError {
-    NotFound(String),
-    Ambiguous(String),
-}
-
-impl fmt::Display for ScopeResolutionError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::NotFound(name) => write!(f, "column \"{}\" does not exist", name),
-            Self::Ambiguous(name) => write!(f, "column name \"{}\" is ambiguous", name),
-        }
-    }
-}
-
-impl Error for ScopeResolutionError {}

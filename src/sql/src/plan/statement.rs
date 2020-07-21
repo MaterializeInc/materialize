@@ -39,10 +39,11 @@ use sql_parser::ast::{
 use crate::catalog::{Catalog, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
+use crate::normalize;
+use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{query, Index, Params, Plan, PlanContext, Sink, Source, View};
 use crate::pure::Schema;
-use crate::{normalize, unsupported};
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
@@ -397,7 +398,7 @@ fn handle_alter_object_rename(
             // item does not exist.
             None
         }
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.into()),
     };
 
     Ok(Plan::AlterItemRename {
@@ -1574,7 +1575,7 @@ fn handle_drop_database(
             // indicate that we don't want to drop any database at all.
             String::new()
         }
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.into()),
     };
     Ok(Plan::DropDatabase { name })
 }
@@ -1635,7 +1636,7 @@ fn handle_drop_schema(
                 schema_name: "noexist".into(),
             })
         }
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -1658,7 +1659,7 @@ fn handle_drop_items(
                 // TODO(benesch): generate a notice indicating this
                 // item does not exist.
             }
-            Err(err) => return Err(err),
+            Err(err) => return Err(err.into()),
         }
     }
     Ok(Plan::DropItems {
@@ -1858,23 +1859,20 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn resolve_default_database(&self) -> Result<DatabaseSpecifier, anyhow::Error> {
+    pub fn resolve_default_database(&self) -> Result<DatabaseSpecifier, PlanError> {
         let name = self.catalog.default_database();
         self.catalog.resolve_database(name)?;
         Ok(DatabaseSpecifier::Name(name.into()))
     }
 
-    pub fn resolve_database(&self, name: ObjectName) -> Result<String, anyhow::Error> {
+    pub fn resolve_database(&self, name: ObjectName) -> Result<String, PlanError> {
         if name.0.len() != 1 {
-            bail!(
-                "database name '{}' does not have exactly one component",
-                name
-            );
+            return Err(PlanError::OverqualifiedDatabaseName(name.to_string()));
         }
         self.resolve_database_ident(name.0.into_element())
     }
 
-    pub fn resolve_database_ident(&self, name: Ident) -> Result<String, anyhow::Error> {
+    pub fn resolve_database_ident(&self, name: Ident) -> Result<String, PlanError> {
         let name = normalize::ident(name);
         self.catalog.resolve_database(&name)?;
         Ok(name)
@@ -1883,12 +1881,9 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_schema(
         &self,
         mut name: ObjectName,
-    ) -> Result<(DatabaseSpecifier, String), anyhow::Error> {
+    ) -> Result<(DatabaseSpecifier, String), PlanError> {
         if name.0.len() > 2 {
-            bail!(
-                "schema name '{}' cannot have more than two components",
-                name
-            );
+            return Err(PlanError::OverqualifiedSchemaName(name.to_string()));
         }
         let schema_name = normalize::ident(name.0.pop().unwrap());
         let database_spec = name.0.pop().map(normalize::ident);
@@ -1896,7 +1891,7 @@ impl<'a> StatementContext<'a> {
         Ok((database_spec, schema_name))
     }
 
-    pub fn resolve_item(&self, name: ObjectName) -> Result<FullName, anyhow::Error> {
+    pub fn resolve_item(&self, name: ObjectName) -> Result<FullName, PlanError> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }

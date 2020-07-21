@@ -25,6 +25,7 @@ use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{GlobalId, Id, IdHumanizer, OptimizedRelationExpr, ScalarExpr};
 use repr::{RelationDesc, Row, ScalarType};
 use sql::ast::display::AstDisplay;
+use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName, PartialName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
@@ -358,18 +359,16 @@ impl CatalogItem {
 
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
-    pub fn desc(&self) -> Result<&RelationDesc, anyhow::Error> {
+    pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
         match &self.item {
             CatalogItem::Source(src) => Ok(&src.desc),
-            CatalogItem::Sink(_) => bail!(
-                "catalog item '{}' is a sink and so cannot be depended upon",
-                self.name
-            ),
+            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(
+                self.name.to_string(),
+            )),
             CatalogItem::View(view) => Ok(&view.desc),
-            CatalogItem::Index(_) => bail!(
-                "catalog item '{}' is an index and so cannot be depended upon",
-                self.name
-            ),
+            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(
+                self.name.to_string(),
+            )),
         }
     }
 
@@ -526,7 +525,7 @@ impl Catalog {
         database: Option<String>,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<DatabaseSpecifier, Error> {
+    ) -> Result<DatabaseSpecifier, SqlCatalogError> {
         if let Some(database) = database {
             let database_spec = DatabaseSpecifier::Name(database);
             self.get_schema(&database_spec, schema_name, conn_id)
@@ -534,10 +533,7 @@ impl Catalog {
         } else {
             match self.get_schema(current_database, schema_name, conn_id) {
                 Ok(_) => Ok(current_database.clone()),
-                Err(Error {
-                    kind: ErrorKind::UnknownSchema(_),
-                    ..
-                }) => self
+                Err(SqlCatalogError::UnknownSchema(_)) => self
                     .get_schema(&DatabaseSpecifier::Ambient, schema_name, conn_id)
                     .map(|_| DatabaseSpecifier::Ambient),
                 Err(e) => Err(e),
@@ -557,7 +553,7 @@ impl Catalog {
         search_path: &[&str],
         name: &PartialName,
         conn_id: u32,
-    ) -> Result<FullName, Error> {
+    ) -> Result<FullName, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in every
         // schema in the search path.
@@ -582,10 +578,7 @@ impl Catalog {
             let res = self.resolve_schema(&current_database, database_name, schema_name, conn_id);
             let database_spec = match res {
                 Ok(database_spec) => database_spec,
-                Err(Error {
-                    kind: ErrorKind::UnknownSchema(_),
-                    ..
-                }) => continue,
+                Err(SqlCatalogError::UnknownSchema(_)) => continue,
                 Err(e) => return Err(e),
             };
             if let Ok(schema) = self.get_schema(&database_spec, schema_name, conn_id) {
@@ -598,7 +591,7 @@ impl Catalog {
                 }
             }
         }
-        Err(Error::new(ErrorKind::UnknownItem(name.to_string())))
+        Err(SqlCatalogError::UnknownItem(name.to_string()))
     }
 
     /// Returns the named catalog item, if it exists.
@@ -614,9 +607,9 @@ impl Catalog {
     /// Returns the named catalog item, or an error if it does not exist.
     ///
     /// See also [`Catalog::try_get`].
-    pub fn get(&self, name: &FullName, conn_id: u32) -> Result<&CatalogEntry, Error> {
+    pub fn get(&self, name: &FullName, conn_id: u32) -> Result<&CatalogEntry, SqlCatalogError> {
         self.try_get(name, conn_id)
-            .ok_or_else(|| Error::new(ErrorKind::UnknownItem(name.to_string())))
+            .ok_or_else(|| SqlCatalogError::UnknownItem(name.to_string()))
     }
 
     pub fn try_get_by_id(&self, id: GlobalId) -> Option<&CatalogEntry> {
@@ -672,7 +665,7 @@ impl Catalog {
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<&Schema, Error> {
+    ) -> Result<&Schema, SqlCatalogError> {
         // Keep in sync with `get_schemas_mut`.
         match database_spec {
             DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
@@ -680,14 +673,14 @@ impl Catalog {
             }
             DatabaseSpecifier::Ambient => match self.ambient_schemas.get(schema_name) {
                 Some(schema) => Ok(schema),
-                None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
+                None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
             },
             DatabaseSpecifier::Name(name) => match self.by_name.get(name) {
                 Some(db) => match db.schemas.get(schema_name) {
                     Some(schema) => Ok(schema),
-                    None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
+                    None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
                 },
-                None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
+                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
             },
         }
     }
@@ -698,7 +691,7 @@ impl Catalog {
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
         conn_id: u32,
-    ) -> Result<&mut Schema, Error> {
+    ) -> Result<&mut Schema, SqlCatalogError> {
         // Keep in sync with `get_schemas`.
         match database_spec {
             DatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
@@ -706,14 +699,14 @@ impl Catalog {
             }
             DatabaseSpecifier::Ambient => match self.ambient_schemas.get_mut(schema_name) {
                 Some(schema) => Ok(schema),
-                None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
+                None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
             },
             DatabaseSpecifier::Name(name) => match self.by_name.get_mut(name) {
                 Some(db) => match db.schemas.get_mut(schema_name) {
                     Some(schema) => Ok(schema),
-                    None => Err(Error::new(ErrorKind::UnknownSchema(schema_name.into()))),
+                    None => Err(SqlCatalogError::UnknownSchema(schema_name.into())),
                 },
-                None => Err(Error::new(ErrorKind::UnknownDatabase(name.to_owned()))),
+                None => Err(SqlCatalogError::UnknownDatabase(name.to_owned())),
             },
         }
     }
@@ -1342,10 +1335,10 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self.database
     }
 
-    fn resolve_database(&self, database_name: &str) -> Result<(), anyhow::Error> {
+    fn resolve_database(&self, database_name: &str) -> Result<(), SqlCatalogError> {
         match self.catalog.by_name.get(database_name) {
             Some(_) => Ok(()),
-            None => Err(Error::new(ErrorKind::UnknownDatabase(database_name.into())).into()),
+            None => Err(SqlCatalogError::UnknownDatabase(database_name.into())),
         }
     }
 
@@ -1353,7 +1346,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         &self,
         database: Option<String>,
         schema_name: &str,
-    ) -> Result<DatabaseSpecifier, anyhow::Error> {
+    ) -> Result<DatabaseSpecifier, SqlCatalogError> {
         Ok(self.catalog.resolve_schema(
             &self.database_spec(),
             database,
@@ -1362,7 +1355,7 @@ impl sql::catalog::Catalog for ConnCatalog<'_> {
         )?)
     }
 
-    fn resolve_item(&self, name: &PartialName) -> Result<FullName, anyhow::Error> {
+    fn resolve_item(&self, name: &PartialName) -> Result<FullName, SqlCatalogError> {
         Ok(self
             .catalog
             .resolve(self.database_spec(), self.search_path, name, self.conn_id)?)
@@ -1430,7 +1423,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         self.id()
     }
 
-    fn desc(&self) -> Result<&RelationDesc, anyhow::Error> {
+    fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
         Ok(self.desc()?)
     }
 
