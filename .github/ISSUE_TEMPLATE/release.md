@@ -21,58 +21,29 @@ production readiness.
 
 ### Create the release candidate
 
-- [ ] Choose the desired commit. Most often, this will be the latest commit to
-  main.
-
-  ```shell
-  git checkout <SHA>
-  ```
-
 - [ ] Choose the name for the release candidate following the format
   `v<VERSION>-rc<N>`, where _N_ starts at 1. For example, the first RC for
-  v0.2.3 would be called v0.2.3-rc1.
+  v0.2.3 would be called v0.2.3-rc1. Use that to run the `bin/mkrelease`
+  script:
 
   ```shell
   tag=v<VERSION>-rc<N>
+  bin/mkrelease $tag
+  git push origin $tag
   ```
 
-- [ ] Update the version field in [`src/materialized/Cargo.toml`].
-
-- [ ] Update the [`LICENSE`] file.
-
-  - [ ] Set the version field.
-  - [ ] Set the "Change Date" to four years beyond the expected release date.
-
-- [ ] Run `cargo check` to update `Cargo.lock` with the new version.
-
-- [ ] Commit those changes.
-
-   ```shell
-   git commit -m "release: $tag"
-   ```
-
-- [ ] Create the release tag on the current commit.
+- [ ] *After* you have pushed that tag, on **main**, do the same thing for the dev
+  version, without creating a tag:
 
   ```shell
-  git tag -a $tag -m $tag
-  git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
+  next=v<NEXT_VERSION>-dev
+  bin/mkrelease --no-tag -b prepare-$next $next
   ```
 
-- [ ] On **main**:
+  This must be done after the tag has been pushed, or git will delete the tag that isn't
+  on the server.
 
-  - [ ] Update the version field in
-    [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) to
-    `vNEXT-dev`. For example, if releasing v0.1.2, bump the version on main to
-    `v0.1.3-dev`.
-
-  - [ ] Update the [`LICENSE`](/LICENSE) file to use the `-dev` version, and
-    set the "Change Date" to four years beyond the tentative next release.
-    For example, if releasing `v0.1.2` set the change date to the tentative
-    release date of `v0.1.3` plus four years.
-
-  - [ ] Run `cargo check` to update `Cargo.lock` with the new version.
-
-  - [ ] Commit that change, open a PR, and land it.
+  - [ ] Open a PR, and land it.
 
 
 ### Test the release candidate
