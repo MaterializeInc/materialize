@@ -171,6 +171,7 @@ pub fn construct<A: Allocate>(
                                 frontier_session.give((
                                     row_packer.pack(&[
                                         Datum::String(&name.to_string()),
+                                        Datum::Int64(worker as i64),
                                         Datum::Int64(logical as i64),
                                     ]),
                                     time_ms,

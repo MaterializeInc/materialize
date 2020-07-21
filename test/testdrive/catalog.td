@@ -186,7 +186,6 @@ mz_dataflow_operator_addresses
 mz_dataflow_operators
 mz_kafka_sinks
 mz_materialization_dependencies
-mz_materialization_frontiers
 mz_materializations
 mz_peek_active
 mz_peek_durations
@@ -195,11 +194,13 @@ mz_scheduling_histogram
 mz_scheduling_parks
 mz_view_foreign_keys
 mz_view_keys
+mz_worker_materialization_frontiers
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
 mz_dataflow_names
 mz_dataflow_operator_dataflows
+mz_materialization_frontiers
 mz_perf_arrangement_records
 mz_perf_dependency_frontiers
 mz_perf_peek_durations_aggregates

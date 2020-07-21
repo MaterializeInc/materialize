@@ -199,26 +199,26 @@ VIEWS        TYPE  QUERYABLE
 names_view   USER  true
 
 > SHOW FULL SOURCES FROM mz_catalog
-VIEWS                             TYPE   MATERIALIZED
------------------------------------------------------
-mz_arrangement_sharing            SYSTEM true
-mz_arrangement_sizes              SYSTEM true
-mz_avro_ocf_sinks                 SYSTEM true
-mz_catalog_names                  SYSTEM true
-mz_dataflow_channels              SYSTEM true
-mz_dataflow_operator_addresses    SYSTEM true
-mz_dataflow_operators             SYSTEM true
-mz_kafka_sinks                    SYSTEM true
-mz_materialization_dependencies   SYSTEM true
-mz_materialization_frontiers      SYSTEM true
-mz_materializations               SYSTEM true
-mz_peek_active                    SYSTEM true
-mz_peek_durations                 SYSTEM true
-mz_scheduling_elapsed             SYSTEM true
-mz_scheduling_histogram           SYSTEM true
-mz_scheduling_parks               SYSTEM true
-mz_view_foreign_keys              SYSTEM true
-mz_view_keys                      SYSTEM true
+VIEWS                                TYPE   MATERIALIZED
+---------------------------------------------------------
+mz_arrangement_sharing               SYSTEM true
+mz_arrangement_sizes                 SYSTEM true
+mz_avro_ocf_sinks                    SYSTEM true
+mz_catalog_names                     SYSTEM true
+mz_dataflow_channels                 SYSTEM true
+mz_dataflow_operator_addresses       SYSTEM true
+mz_dataflow_operators                SYSTEM true
+mz_kafka_sinks                       SYSTEM true
+mz_materialization_dependencies      SYSTEM true
+mz_worker_materialization_frontiers  SYSTEM true
+mz_materializations                  SYSTEM true
+mz_peek_active                       SYSTEM true
+mz_peek_durations                    SYSTEM true
+mz_scheduling_elapsed                SYSTEM true
+mz_scheduling_histogram              SYSTEM true
+mz_scheduling_parks                  SYSTEM true
+mz_view_foreign_keys                 SYSTEM true
+mz_view_keys                         SYSTEM true
 
 > SHOW FULL VIEWS FROM mz_catalog
 VIEWS                             TYPE   QUERYABLE MATERIALIZED
@@ -226,6 +226,7 @@ VIEWS                             TYPE   QUERYABLE MATERIALIZED
 mz_addresses_with_unit_length     SYSTEM true      true
 mz_dataflow_names                 SYSTEM true      true
 mz_dataflow_operator_dataflows    SYSTEM true      true
+mz_materialization_frontiers      SYSTEM true      true
 mz_perf_arrangement_records       SYSTEM true      true
 mz_perf_dependency_frontiers      SYSTEM true      true
 mz_perf_peek_durations_aggregates SYSTEM true      true

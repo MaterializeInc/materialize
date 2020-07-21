@@ -165,7 +165,6 @@ impl CommandsProcessedMetrics {
             SequencedCommand::CreateLocalInput { .. } => self.create_local_input_int += 1,
             SequencedCommand::Insert { .. } => self.insert_int += 1,
             SequencedCommand::AllowCompaction(..) => self.allow_compaction_int += 1,
-            SequencedCommand::AppendLog(..) => self.append_log_int += 1,
             SequencedCommand::AdvanceSourceTimestamp { .. } => {
                 self.advance_source_timestamp_int += 1
             }
@@ -216,10 +215,6 @@ impl CommandsProcessedMetrics {
             self.allow_compaction
                 .inc_by(self.allow_compaction_int as i64);
             self.allow_compaction_int = 0;
-        }
-        if self.append_log_int > 0 {
-            self.append_log.inc_by(self.append_log_int as i64);
-            self.append_log_int = 0;
         }
         if self.advance_source_timestamp_int > 0 {
             self.advance_source_timestamp
