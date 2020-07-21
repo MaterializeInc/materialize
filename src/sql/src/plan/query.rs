@@ -619,16 +619,7 @@ fn plan_view_select_intrusive(
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in group_by {
-            let expr = match check_col_index(&ecx.name, group_expr, projection.len())? {
-                None => plan_expr(&ecx, group_expr)?.type_as_any(ecx)?,
-                Some(i) => match &projection[i].0 {
-                    ExpandedSelectItem::InputOrdinal(column) => ScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: *column,
-                    }),
-                    ExpandedSelectItem::Expr(expr) => plan_expr(&ecx, expr)?.type_as_any(ecx)?,
-                },
-            };
+            let expr = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();
             // Repeated expressions in GROUP BY confuse name resolution later,
             // and dropping them doesn't change the result.
@@ -818,6 +809,59 @@ fn plan_view_select_intrusive(
         order_by,
         project: project_key,
     })
+}
+
+/// Plans an expression in a `GROUP BY` clause.
+///
+/// For historical reasons, PostgreSQL allows `GROUP BY` expressions to refer to
+/// names/expressions defined in the `SELECT` clause. These special cases are
+/// handled by this function; see comments within the implementation for
+/// details.
+fn plan_group_by_expr(
+    ecx: &ExprContext,
+    group_expr: &Expr,
+    projection: &[(ExpandedSelectItem, Option<ColumnName>)],
+) -> Result<ScalarExpr, anyhow::Error> {
+    let plan_projection = |column: usize| match &projection[column].0 {
+        ExpandedSelectItem::InputOrdinal(column) => Ok(ScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: *column,
+        })),
+        ExpandedSelectItem::Expr(expr) => Ok(plan_expr(&ecx, expr)?.type_as_any(ecx)?),
+    };
+
+    // Check if the expression is a numeric literal, as in `GROUP BY 1`. This is
+    // a special case that means to use the ith item in the SELECT clause.
+    if let Some(column) = check_col_index(&ecx.name, group_expr, projection.len())? {
+        return plan_projection(column);
+    }
+
+    // Check if the expression is a simple identifier, as in `GROUP BY foo`.
+    // The `foo` can refer to *either* an input column or an output column. If
+    // both exist, the input column is preferred.
+    match group_expr {
+        Expr::Identifier(names) if names.len() == 1 => match plan_identifier(ecx, names) {
+            Err(e @ PlanError::UnknownColumn(_)) => {
+                // The expression was a simple identifier that did not match an
+                // input column. See if it matches an output column.
+                let name = Some(normalize::column_name(names[0].clone()));
+                let mut iter = projection.iter().map(|(_expr, name)| name);
+                if let Some(column) = iter.position(|n| *n == name) {
+                    if iter.any(|n| *n == name) {
+                        Err(PlanError::AmbiguousColumn(names[0].to_string()).into())
+                    } else {
+                        plan_projection(column)
+                    }
+                } else {
+                    // The name didn't match an output column either. Return the
+                    // "unknown column" error.
+                    Err(e.into())
+                }
+            }
+            res => Ok(res?),
+        },
+        _ => plan_expr(&ecx, group_expr)?.type_as_any(ecx),
+    }
 }
 
 fn plan_view_select(
