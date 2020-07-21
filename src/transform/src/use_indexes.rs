@@ -18,20 +18,16 @@
 
 use std::collections::HashMap;
 
-use repr::RelationType;
-
-use crate::{GlobalId, Id, RelationExpr, ScalarExpr, TransformArgs, TransformError};
-use expr::BinaryFunc;
+use crate::TransformArgs;
+use expr::{BinaryFunc, GlobalId, Id, RelationExpr, ScalarExpr};
 
 /// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
 /// which an index exists, with a
 /// Join{
-///   variables: [(0, i), (1,0)],
+///   equivalences: [(0, i), (1,0)],
 ///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
 ///   <constant>
 /// }
-/// TODO (wangandi): materialize#616 consider a general case when there exists in an index on an
-/// expression of column i
 #[derive(Debug)]
 pub struct FilterEqualLiteral;
 
@@ -47,13 +43,20 @@ impl crate::Transform for FilterEqualLiteral {
 }
 
 impl FilterEqualLiteral {
+    /// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
+    /// which an index exists, with a
+    /// Join{
+    ///   equivalences: [(0, i), (1,0)],
+    ///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
+    ///   <constant>
+    /// }
     pub fn transform(&self, relation: &mut RelationExpr, args: TransformArgs) {
         relation.visit_mut(&mut |e| {
             self.action(e, args.indexes);
         });
     }
 
-    pub fn action(
+    fn action(
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
@@ -63,75 +66,58 @@ impl FilterEqualLiteral {
                 id: Id::Global(id), ..
             } = &mut **input
             {
-                // gather predicates of the form CallBinary{Binaryfunc::Eq, Column, Literal}
-                let (columns, predinfo): (Vec<_>, Vec<_>) = predicates
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, p)| {
+                if indexes.contains_key(id) {
+                    let mut predicates_by_column: HashMap<ScalarExpr, (ScalarExpr, usize)> =
+                        HashMap::new();
+                    // gather predicates of the form CallBinary{Binaryfunc::Eq,
+                    // Column, Literal}
+                    // TODO (wangandi): materialize#616 relax the requirement
+                    // `Column` to be any arbitrary ScalarExpr
+                    for (predicate_num, predicate) in predicates.iter().enumerate() {
                         if let ScalarExpr::CallBinary {
                             func: BinaryFunc::Eq,
                             expr1,
                             expr2,
-                        } = p
+                        } = predicate
                         {
                             match (&**expr1, &**expr2) {
-                                (ScalarExpr::Literal(litrow, littyp), ScalarExpr::Column(c)) => {
-                                    Some((*c, (litrow.clone(), littyp.clone(), i)))
+                                (ScalarExpr::Literal(_, _), ScalarExpr::Column(_)) => {
+                                    predicates_by_column.insert(
+                                        (**expr2).clone(),
+                                        ((**expr1).clone(), predicate_num),
+                                    );
                                 }
-                                (ScalarExpr::Column(c), ScalarExpr::Literal(litrow, littyp)) => {
-                                    Some((*c, (litrow.clone(), littyp.clone(), i)))
+                                (ScalarExpr::Column(_), ScalarExpr::Literal(_, _)) => {
+                                    predicates_by_column.insert(
+                                        (**expr1).clone(),
+                                        ((**expr2).clone(), predicate_num),
+                                    );
                                 }
-                                _ => None,
+                                _ => {}
                             }
-                        } else {
-                            None
                         }
-                    })
-                    .unzip();
-                if !columns.is_empty() {
-                    let key_set = &indexes[id];
-                    // find set of keys of the largest size that is a subset of columns
-                    let best_index = key_set
-                        .iter()
-                        .filter(|ks| {
-                            ks.iter().all(|k| match k {
-                                ScalarExpr::Column(c) => columns.contains(c),
-                                _ => false,
-                            })
-                        })
-                        .max_by_key(|ks| ks.len());
-                    if let Some(keys) = best_index {
-                        let column_order = keys
+                    }
+                    if !predicates_by_column.is_empty() {
+                        let key_set = &indexes[id];
+                        // find set of keys of the largest size that is a subset of columns
+                        let best_index = key_set
                             .iter()
-                            .map(|k| match k {
-                                ScalarExpr::Column(c) => {
-                                    columns.iter().position(|d| c == d).unwrap()
-                                }
-                                _ => unreachable!(),
-                            })
-                            .collect::<Vec<_>>();
-                        let mut constant_row = Vec::new();
-                        let mut constant_col_types = Vec::new();
-                        let mut variables = Vec::new();
-                        for (new_idx, old_idx) in column_order.into_iter().enumerate() {
-                            variables.push(vec![(0, columns[old_idx]), (1, new_idx)]);
-                            constant_row.extend(predinfo[old_idx].0.unpack());
-                            constant_col_types.push(predinfo[old_idx].1.clone());
+                            .filter(|ks| ks.iter().all(|k| predicates_by_column.contains_key(k)))
+                            .max_by_key(|ks| ks.len());
+                        if let Some(keys) = best_index {
+                            let mut equivalences = Vec::new();
+                            for key in keys {
+                                equivalences.push(vec![
+                                    key.clone(),
+                                    predicates_by_column.remove(key).unwrap().0,
+                                ]);
+                            }
+                            let converted_join = RelationExpr::join_scalars(
+                                vec![input.take_dangerous().arrange_by(&[keys.clone()])],
+                                equivalences,
+                            );
+                            *input = Box::new(converted_join);
                         }
-                        let mut constant_type = RelationType::new(constant_col_types);
-                        for i in 0..keys.len() {
-                            constant_type = constant_type.add_keys(vec![i]);
-                        }
-                        let arity = input.arity();
-                        let converted_join = RelationExpr::join(
-                            vec![
-                                input.take_dangerous().arrange_by(&[keys.clone()]),
-                                RelationExpr::constant(vec![constant_row], constant_type),
-                            ],
-                            variables,
-                        )
-                        .project((0..arity).collect::<Vec<_>>());
-                        *input = Box::new(converted_join);
                     }
                 }
             }

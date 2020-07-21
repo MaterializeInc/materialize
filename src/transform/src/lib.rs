@@ -48,7 +48,7 @@ pub mod redundant_join;
 pub mod split_predicates;
 pub mod topk_elision;
 pub mod update_let;
-// pub mod use_indexes;
+pub mod use_indexes;
 
 pub mod dataflow;
 pub use dataflow::optimize_dataflow;
@@ -210,6 +210,7 @@ impl Default for Optimizer {
                     Box::new(crate::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::fusion::join::Join),
                     Box::new(crate::fusion::filter::Filter),
+                    Box::new(crate::use_indexes::FilterEqualLiteral),
                     Box::new(crate::fusion::project::Project),
                     Box::new(crate::fusion::map::Map),
                     Box::new(crate::empty_map::EmptyMap),

@@ -9,7 +9,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use differential_dataflow::operators::join::JoinCore;
+use differential_dataflow::operators::join::{Join, JoinCore};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
@@ -17,7 +17,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
 use expr::{RelationExpr, ScalarExpr};
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, RelationType, Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
@@ -275,6 +275,75 @@ where
             )
         } else {
             panic!("render_join called on invalid expression.")
+        }
+    }
+
+    pub fn render_semi_join(
+        &mut self,
+        input: &RelationExpr,
+        keys: &[ScalarExpr],
+        scope: &mut G,
+        worker_index: usize,
+    ) {
+        if let RelationExpr::Join {
+            inputs,
+            equivalences,
+            implementation: expr::JoinImplementation::Semijoin,
+            ..
+        } = input
+        {
+            // Extract the constant to semijoin against from the equivalence classes
+            let temp_storage = RowArena::new();
+            let constant_row = keys
+                .iter()
+                .map(|k| {
+                    let eval_result = equivalences.iter().find_map(|e| {
+                        if e.contains(k) {
+                            return e.iter().find_map(|s| match s {
+                                ScalarExpr::Literal(_, _) => Some(s.eval(&[], &temp_storage)),
+                                _ => None,
+                            });
+                        }
+                        None
+                    });
+                    match eval_result {
+                        Some(Ok(datum)) => datum,
+                        Some(Err(_)) => {
+                            unreachable!("Error occurred when evaluating semijoin constant")
+                        }
+                        None => unreachable!("No constant for semijoin key"),
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            // Create a RelationExpr representing the constant
+            // Having the RelationType is technically not an accurate
+            // representation of the expression, but relation type doesn't
+            // matter when it comes to rendering.
+            let mut row_packer = repr::RowPacker::new();
+            let constant_row_expr = RelationExpr::Constant {
+                rows: vec![(row_packer.pack(constant_row), 1)],
+                typ: RelationType::empty(),
+            };
+
+            self.render_constant(&constant_row_expr, scope, worker_index);
+
+            let (constant_collection, errs) = self.collection(&constant_row_expr).unwrap();
+            match self.arrangement(&inputs[0], keys) {
+                Some(ArrangementFlavor::Local(oks, es)) => {
+                    let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
+                    let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
+                    self.set_local(input, keys, (result, es));
+                }
+                Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                    let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
+                    let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
+                    self.set_local(input, keys, (result, es));
+                }
+                None => {
+                    panic!("Arrangement alarmingly absent!");
+                }
+            };
         }
     }
 }
