@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{Id, RelationExpr, ScalarExpr, TableFunc};
+use expr::{Id, RelationExpr, ScalarExpr};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -110,17 +110,9 @@ impl NonNullRequirements {
                 exprs,
                 demand: _,
             } => {
-                match func {
-                    // outputs zero rows if input is null
-                    TableFunc::JsonbEach { .. }
-                    | TableFunc::JsonbObjectKeys
-                    | TableFunc::JsonbArrayElements { .. }
-                    | TableFunc::GenerateSeries(_)
-                    | TableFunc::RegexpExtract(_)
-                    | TableFunc::CsvExtract(_) => {
-                        for expr in exprs {
-                            expr.non_null_requirements(&mut columns);
-                        }
+                if func.empty_on_null_input() {
+                    for expr in exprs {
+                        expr.non_null_requirements(&mut columns);
                     }
                 }
                 self.action(input, columns, gets);

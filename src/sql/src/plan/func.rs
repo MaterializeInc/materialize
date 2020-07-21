@@ -1324,8 +1324,20 @@ lazy_static! {
                 })
             },
             "generate_series" => {
-                params!(Int32, Int32) => plan_generate_series(Int32),
-                params!(Int64, Int64) => plan_generate_series(Int64)
+                params!(Int32, Int32) => binary_op(move |_ecx, start, stop| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesInt32,
+                        exprs: vec![start, stop],
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }),
+                params!(Int64, Int64) => binary_op(move |_ecx, start, stop| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesInt64,
+                        exprs: vec![start, stop],
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                })
             },
             "jsonb_array_elements" => {
                 params!(Jsonb) => unary_op(move |_ecx, jsonb| {
@@ -1394,16 +1406,6 @@ lazy_static! {
             }
         }
     };
-}
-
-fn plan_generate_series(ty: ScalarType) -> Operation<TableFuncPlan> {
-    variadic_op(move |_ecx, exprs| {
-        Ok(TableFuncPlan {
-            func: TableFunc::GenerateSeries(ty.clone()),
-            exprs,
-            column_names: vec![Some("generate_series".into())],
-        })
-    })
 }
 
 pub fn is_table_func(ident: &str) -> bool {
