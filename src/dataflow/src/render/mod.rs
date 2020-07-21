@@ -841,25 +841,25 @@ where
                         .collect::<Vec<_>>();
 
                     let (ok_collection, err_collection) = self.collection(input).unwrap();
-                    let (ok_collection, new_err_collection) =
-                        ok_collection.flat_map_fallible({
-                            let mut row_packer = repr::RowPacker::new();
-                            move |input_row| {
-                                let datums = input_row.unpack();
-                                let replace = replace.clone();
-                                let temp_storage = RowArena::new();
-                                let exprs = exprs
-                                    .iter()
-                                    .map(|e| e.eval(&datums, &temp_storage))
-                                    .collect::<Result<Vec<_>, _>>();
-                                let exprs = match exprs {
-                                    Ok(exprs) => exprs,
-                                    Err(e) => return vec![Err(e.into())],
-                                };
-                                let output_rows = func.eval(exprs, &temp_storage);
-                                output_rows
-                                    .into_iter()
-                                    .map(|output_row| {
+                    let (ok_collection, new_err_collection) = ok_collection.explode_fallible({
+                        let mut row_packer = repr::RowPacker::new();
+                        move |input_row| {
+                            let datums = input_row.unpack();
+                            let replace = replace.clone();
+                            let temp_storage = RowArena::new();
+                            let exprs = exprs
+                                .iter()
+                                .map(|e| e.eval(&datums, &temp_storage))
+                                .collect::<Result<Vec<_>, _>>();
+                            let exprs = match exprs {
+                                Ok(exprs) => exprs,
+                                Err(e) => return vec![(Err(e.into()), 1)],
+                            };
+                            let output_rows = func.eval(exprs, &temp_storage);
+                            output_rows
+                                .into_iter()
+                                .map(|(output_row, r)| {
+                                    (
                                         Ok::<_, DataflowError>(
                                             row_packer.pack(
                                                 datums
@@ -875,15 +875,17 @@ where
                                                         }
                                                     }),
                                             ),
-                                        )
-                                    })
-                                    // The collection avoids the lifetime issues of the `datums` borrow,
-                                    // which allows us to avoid multiple unpackings of `input_row`. We
-                                    // could avoid this allocation with a custom iterator that understands
-                                    // the borrowing, but it probably isn't the leading order issue here.
-                                    .collect::<Vec<_>>()
-                            }
-                        });
+                                        ),
+                                        r,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                            // The collection avoids the lifetime issues of the `datums` borrow,
+                            // which allows us to avoid multiple unpackings of `input_row`. We
+                            // could avoid this allocation with a custom iterator that understands
+                            // the borrowing, but it probably isn't the leading order issue here.
+                        }
+                    });
                     let err_collection = err_collection.concat(&new_err_collection);
 
                     self.collections
