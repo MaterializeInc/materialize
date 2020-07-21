@@ -51,7 +51,7 @@ Field | Value type | Description
 
 `AS OF` is the specific point in time to start emitting all events for a given `SINK`. If you don't
 use `AS OF`, Materialize will pick a timestamp itself. `timestamp_expression` supports the same
-expressions from [`TAIL`](/sql/tail/#as-of) (such as `now()` and epoch times). 
+expressions from [`TAIL`](/sql/tail/#as-of) (such as `now()` and epoch times).
 
 ### WITH SNAPSHOT or WITHOUT SNAPSHOT
 
