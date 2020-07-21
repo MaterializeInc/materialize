@@ -187,10 +187,7 @@ impl PredicatePushdown {
                         let mut pushed = false;
                         // Attempt to push down each predicate to each input.
                         for (index, push_down) in push_downs.iter_mut().enumerate() {
-                            if let RelationExpr::ArrangeBy { .. } = inputs[index] {
-                                // do nothing. We do not want to push down a filter and block
-                                // usage of an index
-                            } else if let Some(localized) = localize_predicate(
+                            if let Some(localized) = localize_predicate(
                                 &predicate,
                                 index,
                                 &input_relation[..],

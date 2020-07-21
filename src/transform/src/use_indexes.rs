@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use crate::TransformArgs;
 use expr::{BinaryFunc, GlobalId, Id, RelationExpr, ScalarExpr};
 
+<<<<<<< HEAD
 /// Suppose you have
 /// %0 =
 /// | Get <some input>
@@ -41,6 +42,15 @@ use expr::{BinaryFunc, GlobalId, Id, RelationExpr, ScalarExpr};
 /// Note that it is the responsibility of ColumnKnowledge (PredicateKnowledge
 /// in the future) to clean up the Filter after the Join. It is the responsibility
 /// of JoinImplementation to determine an implementation for the Join.
+=======
+/// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
+/// which an index exists, with a
+/// Join{
+///   equivalences: [(0, i), (1,0)],
+///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
+///   <constant>
+/// }
+>>>>>>> Do a semijoin when there is a filter on an index.
 #[derive(Debug)]
 pub struct FilterEqualLiteral;
 
@@ -61,11 +71,22 @@ impl crate::Transform for FilterEqualLiteral {
 }
 
 impl FilterEqualLiteral {
+<<<<<<< HEAD
     fn transform(
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) {
+=======
+    /// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
+    /// which an index exists, with a
+    /// Join{
+    ///   equivalences: [(0, i), (1,0)],
+    ///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
+    ///   <constant>
+    /// }
+    pub fn transform(&self, relation: &mut RelationExpr, args: TransformArgs) {
+>>>>>>> Do a semijoin when there is a filter on an index.
         relation.visit_mut(&mut |e| {
             self.action(e, indexes);
         });
