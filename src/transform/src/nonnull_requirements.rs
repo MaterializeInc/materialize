@@ -117,7 +117,8 @@ impl NonNullRequirements {
                     | TableFunc::JsonbArrayElements { .. }
                     | TableFunc::GenerateSeries(_)
                     | TableFunc::RegexpExtract(_)
-                    | TableFunc::CsvExtract(_) => {
+                    | TableFunc::CsvExtract(_)
+                    | TableFunc::Repeat => {
                         for expr in exprs {
                             expr.non_null_requirements(&mut columns);
                         }

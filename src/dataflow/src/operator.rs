@@ -11,6 +11,7 @@ use dataflow_types::Diff;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
+use std::ops::Mul;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -134,6 +135,21 @@ where
     where
         E: Data,
         L: FnMut(&D1) -> Result<bool, E> + 'static;
+
+    fn explode_fallible<D2, E, R2, I, L>(
+        &self,
+        logic: L,
+    ) -> (
+        Collection<G, D2, <R2 as Mul<R>>::Output>,
+        Collection<G, E, <R2 as Mul<R>>::Output>,
+    )
+    where
+        D2: Data,
+        E: Data,
+        R2: Semigroup + Mul<R>,
+        <R2 as Mul<R>>::Output: Data + Semigroup,
+        I: IntoIterator<Item = (Result<D2, E>, R2)>,
+        L: FnMut(D1) -> I + 'static;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -337,6 +353,29 @@ where
                     Ok(retain) => Ok(retain),
                     Err(e) => Err((e, t.clone(), r.clone())),
                 });
+        (ok_stream.as_collection(), err_stream.as_collection())
+    }
+    fn explode_fallible<D2, E, R2, I, L>(
+        &self,
+        mut logic: L,
+    ) -> (
+        Collection<G, D2, <R2 as Mul<R>>::Output>,
+        Collection<G, E, <R2 as Mul<R>>::Output>,
+    )
+    where
+        D2: Data,
+        E: Data,
+        R2: Semigroup + Mul<R>,
+        <R2 as Mul<R>>::Output: Data + Semigroup,
+        I: IntoIterator<Item = (Result<D2, E>, R2)>,
+        L: FnMut(D1) -> I + 'static,
+    {
+        let (ok_stream, err_stream) = self.inner.flat_map_fallible(move |(d1, t, r)| {
+            logic(d1).into_iter().map(move |res| match res {
+                (Ok(d2), r2) => Ok((d2, t.clone(), r2 * r.clone())),
+                (Err(e), r2) => Err((e, t.clone(), r2 * r.clone())),
+            })
+        });
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 }

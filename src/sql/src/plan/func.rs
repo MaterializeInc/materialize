@@ -1395,6 +1395,15 @@ lazy_static! {
                         column_names,
                     })
                 })
+            },
+            "repeat" => {
+                params!(Int64) => unary_op(move |_ecx, n| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::Repeat,
+                        exprs: vec![n],
+                        column_names: vec![]
+                    })
+                })
             }
         }
     };
