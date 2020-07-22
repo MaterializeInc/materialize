@@ -50,12 +50,12 @@ lazy_static! {
         RelationDesc::empty().with_nonnull_column("Database", ScalarType::String);
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::new(
         RelationType::new(vec![
-            ColumnType::new(ScalarType::String),
-            ColumnType::new(ScalarType::String),
-            ColumnType::new(ScalarType::String).nullable(true),
-            ColumnType::new(ScalarType::String).nullable(true),
-            ColumnType::new(ScalarType::Bool),
-            ColumnType::new(ScalarType::Int64),
+            ColumnType::new(ScalarType::String, false),
+            ColumnType::new(ScalarType::String, false),
+            ColumnType::new(ScalarType::String, true),
+            ColumnType::new(ScalarType::String, true),
+            ColumnType::new(ScalarType::Bool, false),
+            ColumnType::new(ScalarType::Int64, false),
         ]),
         vec![
             "Source_or_view",

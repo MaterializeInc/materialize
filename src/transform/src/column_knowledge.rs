@@ -350,10 +350,8 @@ pub fn optimize(
                 expr.reduce(input_type);
                 optimize(expr, input_type, column_knowledge)?
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
-                *expr = ScalarExpr::literal_ok(
-                    Datum::False,
-                    ColumnType::new(ScalarType::Bool).nullable(false),
-                );
+                *expr =
+                    ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool, false));
                 optimize(expr, input_type, column_knowledge)?
             } else {
                 DatumKnowledge::default()

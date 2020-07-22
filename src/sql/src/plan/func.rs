@@ -877,7 +877,7 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, a
     match ecx.qcx.lifetime {
         QueryLifetime::OneShot => Ok(ScalarExpr::literal(
             Datum::from(ecx.qcx.scx.pcx.wall_time),
-            ColumnType::new(ScalarType::TimestampTz),
+            ColumnType::new(ScalarType::TimestampTz, false),
         )),
         QueryLifetime::Static => bail!("{} cannot be used in static queries", name),
     }
