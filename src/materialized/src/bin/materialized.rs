@@ -266,6 +266,10 @@ fn run() -> Result<(), anyhow::Error> {
     let symbiosis_url = popts.opt_str("symbiosis");
     fs::create_dir_all(&data_directory).context("creating data directory")?;
 
+    // TODO for now I'm just going to hardcode a persistence path
+    let persistence_directory = PathBuf::from("mzdata/persistence-raw");
+    fs::create_dir_all(&persistence_directory).context("creating persistence directory")?;
+
     // Configure tracing.
     {
         let filter = EnvFilter::try_from_env("MZ_LOG")
