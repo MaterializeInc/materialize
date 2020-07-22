@@ -1,0 +1,139 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+x-port-mappings:
+  - &grafana 3000:3000
+  - &kafka ${KAFKA_PORT:-9092:9092}
+  - &materialized ${MZ_PORT:-6875:6875}
+
+version: '3.7'
+services:
+  materialized:
+    mzbuild: materialized
+    ports:
+     - *materialized
+    init: true
+    command: --workers ${MZ_THREADS:-1}
+    environment:
+      - MZ_LOG=dataflow=error,info
+      - DIFFERENTIAL_EAGER_MERGE=1000
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:5.3.0
+    ports:
+      - *kafka
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9991
+  perf-upsert:
+    mzbuild: perf-upsert
+    environment:
+      - RUST_LOG=info
+    command: >-
+      --message-count 16000
+      --materialized-host materialized
+      --kafka-host kafka
+      --create-topic
+      --partitions 5
+      --replication-factor 1
+    depends_on: [kafka, materialized]
+  dashboard:
+    mzbuild: dashboard
+    propagate-uid-gid: true
+    environment:
+      - 'MATERIALIZED_URL=materialized:6875'
+    ports:
+      - *grafana
+    volumes:
+      # ensure that data doesn't get lost across restarts
+      - ./data/prometheus:/prometheus
+      - ./data/grafana:/var/lib/grafana
+  prometheus_sql_exporter_mz:
+    mzbuild: ci-mz-sql-exporter
+    ports:
+      - ${MZ_SQL_EXPORTER_PORT:-9399}
+
+mzconduct:
+  workflows:
+    ci:
+      env:
+        MZ_PORT: 6875
+        KAFKA_PORT: 9092
+        SR_PORT: 8081
+      steps:
+      - step: workflow
+        workflow: start-everything
+      - step: run
+        service: perf-upsert
+        daemon: false
+        command: >-
+          --message-count 16000
+          --materialized-host materialized
+          --kafka-host kafka
+          --create-topic
+          --partitions 10
+          --replication-factor 1
+      - step: down
+        destroy_volumes: true
+
+    cloud-load-test:
+      env:
+        MZ_SQL_EXPORTER_PORT: "9400:9399"
+      steps:
+      - step: workflow
+        workflow: start-everything
+      - step: start-services
+        services: [prometheus_sql_exporter_mz]
+      - step: run
+        service: perf-upsert
+        daemon: true
+        command: >-
+          --message-count ${PERF_UPSERT_MESSAGE_COUNT:-10000000}
+          --materialized-host materialized
+          --kafka-host kafka
+          --create-topic
+          --partitions 10
+          --replication-factor 3
+
+    load-test:
+      steps:
+      - step: workflow
+        workflow: start-everything
+      - step: start-services
+        services: [dashboard]
+      - step: run
+        service: perf-upsert
+        daemon: true
+        command: >-
+          --message-count ${PERF_UPSERT_MESSAGE_COUNT:-80000}
+          --materialized-host materialized
+          --kafka-host kafka
+          --create-topic
+          --partitions 10
+          --replication-factor 1
+
+    # Helper workflows
+
+    start-everything:
+      steps:
+      - step: start-services
+        services: [materialized, kafka, dashboard]
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: wait-for-tcp
+        host: materialized
+        port: 6875
