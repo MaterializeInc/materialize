@@ -30,10 +30,11 @@ mod mz_client;
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        println!("ERROR: {}", e);
+        eprintln!("ERROR: {}", e);
+        // TODO(rkhaitan) could this be simpler
         let mut err = e.source();
         while let Some(e) = err {
-            println!("    caused by: {}", e);
+            eprintln!("    caused by: {}", e);
             err = e.source();
         }
         process::exit(1);
@@ -100,10 +101,16 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         log::info!("producing {} records", config.messages_per_second);
         let backoff = tokio::time::delay_for(Duration::from_secs(1));
         for i in 0..config.messages_per_second {
+            // Artificially create a skewed distribution of keys where 33% of
+            // inserts to the topic are from keys drawn uniformly from [0, 10_000)
+            // and the remaining 67% of the time inserts come from keys drawn
+            // uniformly from [0, 10_000_000). Effectively, 0.1% of possible keys
+            // are "hot" and present in the topic ~500 times more frequently
+            // than the "cold" keys.
             let key: i32 = if i % 3 != 0 {
-                rng.gen_range(0, 10000)
+                rng.gen_range(0, 10_000)
             } else {
-                rng.gen_range(0, 10000000)
+                rng.gen_range(0, 10_000_000)
             };
             let res = k_client.send_key_value(key.to_string().as_bytes(), val_a.as_slice());
             match res {

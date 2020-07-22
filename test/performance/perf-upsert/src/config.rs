@@ -40,13 +40,13 @@ pub struct Args {
     pub kafka_topic: String,
 
     /// Whether or not to delete the sources and views before starting
-    #[structopt(long, requires("create-topic"))]
+    #[structopt(long)]
     pub preserve_source: bool,
 
     /// Whether or not the perf test should create a new source topic.
     #[structopt(
         long,
-        requires_all(&["replication-factor", "preserve-source", "replication-factor"])
+        requires_all(&["replication-factor", "partitions"])
     )]
     pub create_topic: bool,
 
