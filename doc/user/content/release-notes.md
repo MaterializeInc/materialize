@@ -46,6 +46,12 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+<span id="v0.4.1"></span>
+## 0.4.1 (Unreleased)
+
+- Make casting from `numeric` and `float` to `int` consistent with PostgreSQL by
+  rounding before the conversion.
+
 <span id="v0.4.0"></span>
 ## 0.4.0 (Unreleased)
 

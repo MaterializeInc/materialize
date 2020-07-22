@@ -188,7 +188,7 @@ fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
-    Datum::from(a.unwrap_float32() as i64)
+    Datum::from(a.unwrap_float32().round() as i64)
 }
 
 fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -222,14 +222,14 @@ fn cast_float64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     if f > (i32::max_value() as f64) || f < (i32::min_value() as f64) {
         Datum::Null
     } else {
-        Datum::from(f as i32)
+        Datum::from(f.round() as i32)
     }
 }
 
 fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
-    Datum::from(a.unwrap_float64() as i64)
+    Datum::from(a.unwrap_float64().round() as i64)
 }
 
 fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -253,12 +253,16 @@ fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal().as_i128() as i32)
+fn cast_decimal_to_int32<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
+    let decimal = a.unwrap_decimal().with_scale(scale);
+    let factor = 10_i128.pow(u32::from(scale));
+    Datum::from((decimal.round(0).significand() / factor) as i32)
 }
 
-fn cast_decimal_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_decimal().as_i128() as i64)
+fn cast_decimal_to_int64<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
+    let decimal = a.unwrap_decimal().with_scale(scale);
+    let factor = 10_i128.pow(u32::from(scale));
+    Datum::from((decimal.round(0).significand() / factor) as i64)
 }
 
 fn cast_significand_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -2244,8 +2248,8 @@ pub enum UnaryFunc {
     CastFloat64ToInt32,
     CastFloat64ToInt64,
     CastFloat64ToString,
-    CastDecimalToInt32,
-    CastDecimalToInt64,
+    CastDecimalToInt32(u8),
+    CastDecimalToInt64(u8),
     CastDecimalToString(u8),
     CastSignificandToFloat32,
     CastSignificandToFloat64,
@@ -2359,8 +2363,8 @@ impl UnaryFunc {
             UnaryFunc::CastFloat64ToInt32 => Ok(cast_float64_to_int32(a)),
             UnaryFunc::CastFloat64ToInt64 => Ok(cast_float64_to_int64(a)),
             UnaryFunc::CastFloat64ToString => Ok(cast_float64_to_string(a, temp_storage)),
-            UnaryFunc::CastDecimalToInt32 => Ok(cast_decimal_to_int32(a)),
-            UnaryFunc::CastDecimalToInt64 => Ok(cast_decimal_to_int64(a)),
+            UnaryFunc::CastDecimalToInt32(scale) => Ok(cast_decimal_to_int32(a, *scale)),
+            UnaryFunc::CastDecimalToInt64(scale) => Ok(cast_decimal_to_int64(a, *scale)),
             UnaryFunc::CastSignificandToFloat32 => Ok(cast_significand_to_float32(a)),
             UnaryFunc::CastSignificandToFloat64 => Ok(cast_significand_to_float64(a)),
             UnaryFunc::CastStringToBool => cast_string_to_bool(a),
@@ -2499,13 +2503,13 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable)
             }
 
-            CastInt64ToInt32 | CastDecimalToInt32 => {
+            CastInt64ToInt32 | CastDecimalToInt32(_) => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable)
             }
 
             CastFloat64ToInt32 => ColumnType::new(ScalarType::Int32).nullable(true),
 
-            CastInt32ToInt64 | CastDecimalToInt64 | CastFloat32ToInt64 | CastFloat64ToInt64 => {
+            CastInt32ToInt64 | CastDecimalToInt64(_) | CastFloat32ToInt64 | CastFloat64ToInt64 => {
                 ColumnType::new(ScalarType::Int64).nullable(in_nullable)
             }
 
@@ -2654,8 +2658,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat64ToInt32 => f.write_str("f64toi32"),
             UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
-            UnaryFunc::CastDecimalToInt32 => f.write_str("dectoi32"),
-            UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
+            UnaryFunc::CastDecimalToInt32(_) => f.write_str("dectoi32"),
+            UnaryFunc::CastDecimalToInt64(_) => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToString(_) => f.write_str("dectostr"),
             UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastSignificandToFloat64 => f.write_str("dectof64"),
