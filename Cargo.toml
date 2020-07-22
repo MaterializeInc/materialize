@@ -30,6 +30,7 @@ members = [
     "test/correctness",
     "test/metabase/smoketest",
     "test/performance/perf-kinesis",
+    "test/performance/perf-upsert",
     "test/smith",
     "test/test-util",
 ]
