@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 x-port-mappings:
-  - &grafana 3000:3000
+  - &grafana ${GRAFANA_PORT:-3000:3000}
   - &kafka ${KAFKA_PORT:-9092:9092}
   - &materialized ${MZ_PORT:-6875:6875}
 
@@ -84,7 +84,7 @@ mzconduct:
           --materialized-host materialized
           --kafka-host kafka
           --create-topic
-          --partitions 10
+          --partitions 1
           --replication-factor 1
       - step: down
         destroy_volumes: true
@@ -130,7 +130,7 @@ mzconduct:
     start-everything:
       steps:
       - step: start-services
-        services: [materialized, kafka, dashboard]
+        services: [materialized, kafka]
       - step: wait-for-tcp
         host: kafka
         port: 9092
