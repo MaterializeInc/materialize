@@ -689,10 +689,11 @@ pub fn create_source<G, S: 'static, Out>(
     config: SourceConfig<G>,
     source_connector: ExternalSourceConnector,
 ) -> (
-    (
-        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Out>>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
+    // (
+        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Out>>
+        // timely::dataflow::Stream<G, SourceError>,
+    // )
+    ,
     Option<SourceToken>,
 )
 where
@@ -805,7 +806,7 @@ where
                                     return SourceStatus::Alive;
                                 }
                                 Some(ts) => {
-                                    // Note: empty and null payload/keys are currently
+                                    // // Note: empty and null payload/keys are currently
                                     // treated as the same thing.
                                     let key = message.key.unwrap_or_default();
                                     let out = message.payload.unwrap_or_default();
@@ -820,11 +821,12 @@ where
                                     bytes_read += key.len() as i64;
                                     bytes_read += out.len().unwrap_or(0) as i64;
                                     let ts_cap = cap.delayed(&ts);
-                                    output.session(&ts_cap).give(Ok(SourceOutput::new(
+                                    output.session(&ts_cap).give(SourceOutput::new(
+                                    // output.session(&ts_cap).give(Ok(SourceOutput::new(
                                         key,
                                         out,
                                         Some(offset.offset),
-                                    )));
+                                    ));
 
                                     // Update ingestion metrics
                                     // Entry is guaranteed to exist as it gets created when we initialise the partition
@@ -860,7 +862,7 @@ where
                             break;
                         }
                         Err(e) => {
-                            output.session(&cap).give(Err(e.to_string()));
+                            // output.session(&cap).give(Err(e.to_string()));
                             consistency_info.downgrade_capability(
                                 &id,
                                 cap,
@@ -890,12 +892,14 @@ where
         }
     });
 
-    let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
+    // let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
 
     if active {
-        ((ok_stream, err_stream), Some(capability))
+        (stream, Some(capability))
+        // ((ok_stream, err_stream), Some(capability))
     } else {
+        (stream, None)
         // Immediately drop the capability if worker is not an active reader for source
-        ((ok_stream, err_stream), None)
+        // ((ok_stream, err_stream), None)
     }
 }

@@ -323,7 +323,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                                 let (transformed, new_err_collection) =
                                     upsert::pre_arrange_from_upsert_transforms(
-                                        &source.0,
+                                        &source,
+                                        // &source.0,
                                         encoding,
                                         key_encoding,
                                         &dataflow.debug_name,
@@ -361,17 +362,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) =
                             connector.clone()
                         {
-                            let ((source, err_source), capability) =
+                            // let ((source, err_source), capability) =
+                            let (source,capability) =
                                 source::create_source::<_, FileSourceInfo<Value>, Value>(
                                     source_config,
                                     connector,
                                 );
-                            err_collection = err_collection.concat(
+                            /* err_collection = err_collection.concat(
                                 &err_source
                                     .map(DataflowError::SourceError)
                                     .pass_through("AvroOCF-errors")
                                     .as_collection(),
-                            );
+                            ); */
                             let reader_schema = match &encoding {
                                 DataEncoding::AvroOcf { reader_schema } => reader_schema,
                                 _ => unreachable!(
@@ -393,7 +395,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 capability,
                             )
                         } else {
-                            let ((ok_source, err_source), capability) = match connector.clone() {
+                            // let ((ok_source, err_source), capability) = match connector.clone() {
+                            let (source,capability)  = match connector.clone() {
                                 ExternalSourceConnector::Kafka(_) => {
                                     source::create_source::<_, KafkaSourceInfo, _>(
                                         source_config,
@@ -402,7 +405,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 }
                                 ExternalSourceConnector::Kinesis(kc) => {
                                     let (ok_source, cap) = source::kinesis(source_config, kc);
-                                    ((ok_source, operator::empty(region)), cap)
+                                    // ((ok_source, operator::empty(region)), cap)
+                                    (ok_source,cap)
                                 }
                                 ExternalSourceConnector::File(_) => {
                                     source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
@@ -412,17 +416,18 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 }
                                 ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                             };
-                            err_collection = err_collection.concat(
+                            /* err_collection = err_collection.concat(
                                 &err_source
                                     .map(DataflowError::SourceError)
                                     .pass_through("source-errors")
                                     .as_collection(),
-                            );
+                            ); */
 
                             // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
                             // a hypothetical future avro_extract, protobuf_extract, etc.
                             let stream = decode_values(
-                                &ok_source,
+                                &source,
+                                // &ok_source,
                                 encoding,
                                 &dataflow.debug_name,
                                 &envelope,
