@@ -40,19 +40,22 @@ pub struct Args {
     pub kafka_topic: String,
 
     /// Whether or not to delete the sources and views before starting
-    #[structopt(long)]
+    #[structopt(long, requires("create-topic"))]
     pub preserve_source: bool,
 
     /// Whether or not the perf test should create a new source topic.
-    #[structopt(long)]
+    #[structopt(
+        long,
+        requires_all(&["replication-factor", "preserve-source", "replication-factor"])
+    )]
     pub create_topic: bool,
 
     /// Number of partitions for the source topic. Has to be specified if --create-topic is true.
-    #[structopt(long)]
+    #[structopt(long, requires("create-topic"))]
     partitions: Option<i32>,
 
     /// Replication factor for the source topic. Has to be specified if --create-topic is true.
-    #[structopt(long)]
+    #[structopt(long, requires("create-topic"))]
     replication_factor: Option<i32>,
 }
 
