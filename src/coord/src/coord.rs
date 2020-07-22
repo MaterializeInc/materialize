@@ -38,7 +38,7 @@ use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
-    SinkConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    SinkConnector, SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -257,6 +257,28 @@ where
                 }
                 CatalogItem::Index(index) => match id {
                     GlobalId::User(_) => {
+                        // If index is on a local source, don't create a dataflow.
+                        if let CatalogItem::Source(source) =
+                            coord.catalog.get_by_id(&index.on).item()
+                        {
+                            if let SourceConnector::Local = source.connector {
+                                coord.views.insert(*id, ViewState::new(false, vec![]));
+                                broadcast(
+                                    &mut coord.broadcast_tx,
+                                    SequencedCommand::CreateLocalInput {
+                                        name: name.to_string(),
+                                        index_id: *id,
+                                        index: IndexDesc {
+                                            on_id: *id,
+                                            keys: index.keys.clone(),
+                                        },
+                                        on_type: source.desc.typ().clone(),
+                                    },
+                                );
+                                coord.insert_index(*id, &index, Some(1_000));
+                                continue;
+                            }
+                        }
                         coord.create_index_dataflow(name.to_string(), *id, index.clone())
                     }
                     GlobalId::System(_) => {
@@ -694,10 +716,10 @@ where
 
             Plan::CreateTable {
                 name,
-                desc,
+                source,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_table(pcx, name, desc, if_not_exists),
+                self.sequence_create_table(pcx, name, source, if_not_exists),
                 session,
             ),
 
@@ -906,15 +928,15 @@ where
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        desc: RelationDesc,
+        source: sql::plan::Source,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let source_id = self.catalog.allocate_id()?;
         let source = catalog::Source {
-            create_sql: "TODO (see #2755)".to_string(),
+            create_sql: source.create_sql,
             plan_cx: pcx,
             connector: dataflow_types::SourceConnector::Local,
-            desc,
+            desc: source.desc,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();

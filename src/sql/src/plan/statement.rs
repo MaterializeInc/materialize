@@ -31,9 +31,9 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format, Ident,
-    IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
-    SqlOption, Statement, Value,
+    AvroSchema, ColumnOption, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format,
+    Ident, IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
+    SqlOption, Statement, TableConstraint, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -42,7 +42,9 @@ use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
-use crate::plan::{query, Index, Params, Plan, PlanContext, Sink, Source, View};
+use crate::plan::{
+    query, scalar_type_from_sql, Index, Params, Plan, PlanContext, Sink, Source, View,
+};
 use crate::pure::Schema;
 
 lazy_static! {
@@ -107,6 +109,7 @@ pub fn describe_statement(
         | Statement::CreateSchema { .. }
         | Statement::CreateIndex { .. }
         | Statement::CreateSource { .. }
+        | Statement::CreateTable { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::DropDatabase { .. }
@@ -231,10 +234,6 @@ pub fn describe_statement(
                 query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             (Some(desc), param_types)
         }
-        Statement::CreateTable { .. } => bail!(
-            "CREATE TABLE statements are not supported. \
-             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
-        ),
         _ => unsupported!(format!("{:?}", stmt)),
     })
 }
@@ -270,6 +269,7 @@ pub fn handle_statement(
             if_not_exists,
         } => handle_create_schema(scx, name, if_not_exists),
         Statement::CreateSource { .. } => handle_create_source(scx, stmt),
+        Statement::CreateTable { .. } => handle_create_table(scx, stmt),
         Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
         Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
         Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
@@ -1530,6 +1530,95 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
     }
 }
 
+fn handle_create_table(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow::Error> {
+    match &stmt {
+        Statement::CreateTable {
+            name,
+            columns,
+            constraints,
+            with_options,
+            if_not_exists,
+        } => {
+            if !with_options.is_empty() {
+                unsupported!("WITH options");
+            }
+
+            let names: Vec<_> = columns
+                .iter()
+                .map(|c| Some(normalize::column_name(c.name.clone())))
+                .collect();
+
+            // Build initial relation type that handles declared data types
+            // and NOT NULL constraints.
+            let mut typ = RelationType::new(
+                columns
+                    .iter()
+                    .map(|c| {
+                        let ty = scalar_type_from_sql(&c.data_type)?;
+                        let nullable = !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
+                        Ok(ColumnType::new(ty).nullable(nullable))
+                    })
+                    .collect::<Result<Vec<_>, anyhow::Error>>()?,
+            );
+
+            // Handle column-level UNIQUE and PRIMARY KEY constraints.
+            // PRIMARY KEY implies UNIQUE and NOT NULL.
+            for (index, column) in columns.iter().enumerate() {
+                for option in column.options.iter() {
+                    if let ColumnOption::Unique { is_primary } = option.option {
+                        typ = typ.with_key(vec![index]);
+                        if is_primary {
+                            typ.column_types[index].nullable = false;
+                        }
+                    }
+                }
+            }
+
+            // Handle table-level UNIQUE and PRIMARY KEY constraints.
+            // PRIMARY KEY implies UNIQUE and NOT NULL.
+            for constraint in constraints {
+                if let TableConstraint::Unique {
+                    name: _,
+                    columns,
+                    is_primary,
+                } = constraint
+                {
+                    let mut key = vec![];
+                    for column in columns {
+                        let name = normalize::column_name(column.clone());
+                        match names.iter().position(|n| n.as_ref() == Some(&name)) {
+                            None => bail!("unknown column {} in unique constraint", name),
+                            Some(i) => key.push(i),
+                        }
+                    }
+                    if *is_primary {
+                        for i in key.iter() {
+                            typ.column_types[*i].nullable = false;
+                        }
+                    }
+                    typ = typ.with_key(key);
+                }
+            }
+
+            let name = scx.allocate_name(normalize::object_name(name.clone())?);
+            let desc = RelationDesc::new(typ, names);
+
+            let create_sql = normalize::create_statement(&scx, stmt.clone())?;
+            let source = Source {
+                create_sql,
+                connector: SourceConnector::Local,
+                desc,
+            };
+            Ok(Plan::CreateTable {
+                name,
+                source,
+                if_not_exists: *if_not_exists,
+            })
+        }
+        other => unsupported!(format!("{:?}", other)),
+    }
+}
+
 /// Renames the columns in `desc` with the names in `column_names` if
 /// `column_names` is non-empty.
 ///
@@ -1589,10 +1678,11 @@ fn handle_drop_objects(
 ) -> Result<Plan, anyhow::Error> {
     match object_type {
         ObjectType::Schema => handle_drop_schema(scx, if_exists, names, cascade),
-        ObjectType::Source | ObjectType::View | ObjectType::Index | ObjectType::Sink => {
-            handle_drop_items(scx, object_type, if_exists, names, cascade)
-        }
-        _ => unsupported!(format!("DROP {}", object_type)),
+        ObjectType::Source
+        | ObjectType::Table
+        | ObjectType::View
+        | ObjectType::Index
+        | ObjectType::Sink => handle_drop_items(scx, object_type, if_exists, names, cascade),
     }
 }
 

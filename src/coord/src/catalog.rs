@@ -1182,12 +1182,14 @@ impl Catalog {
         let stmt = sql::parse::parse(create_sql)?.into_element();
         let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &params)?;
         Ok(match plan {
-            Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                plan_cx: pcx,
-                connector: source.connector,
-                desc: source.desc,
-            }),
+            Plan::CreateSource { source, .. } | Plan::CreateTable { source, .. } => {
+                CatalogItem::Source(Source {
+                    create_sql: source.create_sql,
+                    plan_cx: pcx,
+                    connector: source.connector,
+                    desc: source.desc,
+                })
+            }
             Plan::CreateView { view, .. } => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;

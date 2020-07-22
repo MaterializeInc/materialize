@@ -183,6 +183,17 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             *materialized = false;
         }
 
+        Statement::CreateTable {
+            name,
+            columns: _,
+            constraints: _,
+            with_options: _,
+            if_not_exists,
+        } => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+
         Statement::CreateSink {
             name,
             from,
