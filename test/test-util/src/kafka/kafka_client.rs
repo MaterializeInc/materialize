@@ -53,21 +53,27 @@ impl KafkaClient {
     pub async fn create_topic(
         &self,
         partitions: i32,
+        replication: i32,
+        configs: &[(&str, &str)],
         timeout: Option<Duration>,
     ) -> Result<(), anyhow::Error> {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
+
+        let mut topic = NewTopic::new(
+            &self.topic,
+            partitions,
+            TopicReplication::Fixed(replication),
+        );
+
+        for (key, val) in configs {
+            topic = topic.set(key, val);
+        }
+
         let res = config
             .create::<AdminClient<_>>()
             .expect("creating admin kafka client failed")
-            .create_topics(
-                &[NewTopic::new(
-                    &self.topic,
-                    partitions,
-                    TopicReplication::Fixed(1),
-                )],
-                &AdminOptions::new().request_timeout(timeout),
-            )
+            .create_topics(&[topic], &AdminOptions::new().request_timeout(timeout))
             .await
             .context(format!("creating Kafka topic: {}", &self.topic))?;
 
@@ -101,5 +107,17 @@ impl KafkaClient {
         }
 
         Ok(())
+    }
+
+    pub fn send_key_value(
+        &self,
+        key: &[u8],
+        message: &[u8],
+    ) -> std::result::Result<rdkafka::producer::DeliveryFuture, rdkafka::error::KafkaError> {
+        let record: FutureRecord<_, _> = FutureRecord::to(&self.topic)
+            .key(key)
+            .payload(message)
+            .timestamp(chrono::Utc::now().timestamp_millis());
+        self.producer.send_result(record).map_err(|(e, _message)| e)
     }
 }

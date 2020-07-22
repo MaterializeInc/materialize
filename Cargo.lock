@@ -2214,6 +2214,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "perf-upsert"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "env_logger",
+ "futures",
+ "futures-channel",
+ "hex",
+ "log",
+ "postgres-types",
+ "rand",
+ "rand_distr",
+ "structopt",
+ "test-util",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "pgrepr"
 version = "0.1.0"
 dependencies = [

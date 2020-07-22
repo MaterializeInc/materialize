@@ -1,0 +1,23 @@
+[package]
+name = "perf-upsert"
+description = "Performance test using Materialize and upsert text sources"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0.31"
+bytes = "0.5.6"
+chrono = "0.4.13"
+env_logger = "0.7.1"
+futures = "0.3.4"
+futures-channel = "0.3.5"
+hex = "0.4.2"
+log = "0.4.11"
+postgres-types = "0.1.1"
+rand = "0.7.3"
+rand_distr = "0.2.2"
+structopt = "0.3.15"
+test-util = { path = "../../test-util" }
+tokio = { version = "0.2.21", features = ["full"] }
+tokio-postgres = "0.5.2"
