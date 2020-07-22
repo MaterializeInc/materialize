@@ -106,7 +106,7 @@ to include something akin to the following field:
 
 Note that:
 
-- You don't need to manually create this schema. Materialize will generate it for you.
+- You don't need to manually create this schema. Materialize generates it for you.
 - The following section depends on the column's names and types, and is unlikely
   to match our example:
     ```json

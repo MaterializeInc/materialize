@@ -164,7 +164,7 @@ the stream of changes to that view or source. In effect, Materialize sinks act a
 change data capture (CDC) producers for the given source or view.
 
 Currently, Materialize only supports sending sink data to Kafka or Avro OCFs,
-encoded in Avro with the Debezium diff envelope.
+encoded in Avro with the [Debezium diff envelope](/sql/create-sink#debezium-envelope-details).
 
 ## Related pages
 
