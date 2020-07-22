@@ -32,13 +32,15 @@ use anyhow::{anyhow, bail};
 use chrono::Utc;
 use tokio_postgres::types::FromSql;
 
+use dataflow_types::SourceConnector;
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
-use repr::{Datum, RelationDesc, Row, RowPacker, ScalarType};
-use sql::ast::{DataType, ObjectType, Statement};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use sql::ast::{ColumnOption, DataType, ObjectType, Statement, TableConstraint};
 use sql::catalog::Catalog;
 use sql::names::FullName;
-use sql::plan::{scalar_type_from_sql, MutationKind, Plan, PlanContext, StatementContext};
+use sql::normalize;
+use sql::plan::{scalar_type_from_sql, MutationKind, Plan, PlanContext, Source, StatementContext};
 
 pub struct Postgres {
     client: tokio_postgres::Client,
@@ -109,7 +111,8 @@ END $$;
 
     pub fn can_handle(&self, stmt: &Statement) -> bool {
         match stmt {
-            Statement::DropObjects { .. }
+            Statement::CreateTable { .. }
+            | Statement::DropObjects { .. }
             | Statement::Delete { .. }
             | Statement::Insert { .. }
             | Statement::Update { .. } => true,
@@ -125,6 +128,93 @@ END $$;
     ) -> Result<Plan, anyhow::Error> {
         let scx = StatementContext { pcx, catalog };
         Ok(match stmt {
+            Statement::CreateTable {
+                name,
+                columns,
+                constraints,
+                if_not_exists,
+                ..
+            } => {
+                let sql_types: Vec<_> = columns
+                    .iter()
+                    .map(|column| column.data_type.clone())
+                    .collect();
+
+                let names: Vec<_> = columns
+                    .iter()
+                    .map(|c| Some(sql::normalize::column_name(c.name.clone())))
+                    .collect();
+
+                // Build initial relation type that handles declared data types
+                // and NOT NULL constraints.
+                let mut typ = RelationType::new(
+                    columns
+                        .iter()
+                        .map(|c| {
+                            let ty = scalar_type_from_sql(&c.data_type)?;
+                            let nullable =
+                                !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
+                            Ok(ColumnType::new(ty).nullable(nullable))
+                        })
+                        .collect::<Result<Vec<_>, anyhow::Error>>()?,
+                );
+
+                // Handle column-level UNIQUE and PRIMARY KEY constraints.
+                // PRIMARY KEY implies UNIQUE and NOT NULL.
+                for (index, column) in columns.iter().enumerate() {
+                    for option in column.options.iter() {
+                        if let ColumnOption::Unique { is_primary } = option.option {
+                            typ = typ.with_key(vec![index]);
+                            if is_primary {
+                                typ.column_types[index].nullable = false;
+                            }
+                        }
+                    }
+                }
+
+                // Handle table-level UNIQUE and PRIMARY KEY constraints.
+                // PRIMARY KEY implies UNIQUE and NOT NULL.
+                for constraint in constraints {
+                    if let TableConstraint::Unique {
+                        name: _,
+                        columns,
+                        is_primary,
+                    } = constraint
+                    {
+                        let mut key = vec![];
+                        for column in columns {
+                            let name = normalize::column_name(column.clone());
+                            match names.iter().position(|n| n.as_ref() == Some(&name)) {
+                                None => bail!("unknown column {} in unique constraint", name),
+                                Some(i) => key.push(i),
+                            }
+                        }
+                        if *is_primary {
+                            for i in key.iter() {
+                                typ.column_types[*i].nullable = false;
+                            }
+                        }
+                        typ = typ.with_key(key);
+                    }
+                }
+
+                self.client.execute(&*stmt.to_string(), &[]).await?;
+                let name = scx.allocate_name(normalize::object_name(name.clone())?);
+                let desc = RelationDesc::new(typ, names);
+                self.table_types
+                    .insert(name.clone(), (sql_types, desc.clone()));
+
+                let source = Source {
+                    create_sql: stmt.to_string(),
+                    connector: SourceConnector::Local,
+                    desc,
+                };
+                Plan::CreateTable {
+                    name,
+                    source,
+                    if_not_exists: *if_not_exists,
+                }
+            }
             Statement::DropObjects {
                 names,
                 object_type: ObjectType::Table,
