@@ -46,6 +46,7 @@ The following options are valid within the `WITH` clause.
 Field | Value type | Description
 ------|------------|------------
 `replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
+`consistency` | `bool` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
 
 ### AS OF
 
@@ -63,7 +64,60 @@ Any further updates to these results are produced at the time when they occur. T
 - Materialize currently only supports Avro formatted sinks that write to either a single partition topic or a Avro object container file.
 - On each restart, Materialize creates new, distinct topics and files for each sink.
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
-- Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](/overview/api-components/#envelopes) to capture changes in the input view or source.
+- Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source.
+- Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction id information inline with the data, and adds a separate transaction metadata topic.
+
+### Debezium envelope details
+
+The Debezium envelope provides a "diff envelope", which describes the decoded
+records' old and new values; this is roughly equivalent to the notion of Change
+Data Capture, or CDC. Materialize can write the data in this diff envelope to
+represent inserts, updates, or deletes to the underlying source or view being
+written for the sink.
+
+#### Format implications
+
+Using the Debezium envelope changes the schema of your Avro-encoded data
+to include something akin to the following field:
+
+```json
+{
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+        {
+        "name": "before",
+        "type": [
+            {
+            "name": "row",
+            "type": "record",
+            "fields": [
+                {"name": "a", "type": "long"},
+                {"name": "b", "type": "long"}
+            ]
+            },
+            "null"
+        ]
+        },
+        { "name": "after", "type": ["row", "null"] }
+    ]
+}
+```
+
+Note that:
+
+- You don't need to manually create this schema. Materialize generates it for you.
+- The following section depends on the column's names and types, and is unlikely
+  to match our example:
+    ```json
+    ...
+    "fields": [
+            {"name": "a", "type": "long"},
+            {"name": "b", "type": "long"}
+        ]
+    ...
+    ```
+
 
 ### Kafka sinks
 
@@ -72,6 +126,75 @@ When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new 
 {topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
 ```
 You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
+
+#### Consistency metadata
+
+When requested, Materialize will send consistency metadata that describes timestamps (also called transaction IDs) and relates the change data stream to them.
+
+Materialize sends two main pieces of information:
+- A timestamp for each change. This is sent inline with the change itself.
+- A count of how many changes occurred for each timestamp. This is sent as part of a separate consistency topic.
+
+Materialize uses a simplified version of the Debezium [transaction metadata](https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata) protocol to send this information.
+The generated [diff envelope](#debezium-envelope-details) schema used for data messages is decorated with a `transaction` field which has the following schema.
+
+```
+{
+    "name": "transaction",
+    "type": {
+        "type": "record",
+        "name": "transaction_metadata",
+        "fields": [
+            {
+                "name": "id",
+                "type": "string"
+            }
+        ]
+    }
+}
+```
+Each message sent to Kafka has a `transaction` field, along with a `transaction_id`, in addition to it's regular `before` / `after` data fields. The `transaction_id` is equivalent to the Materialize timestamp for this record.
+
+In addition to the inline information, Materialize creates a new "consistency topic" that stores counts of how many changes were generated per `transaction_id`. This consistency topic is named using the format below.
+```nofmt
+{topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}-consistency
+```
+
+Each message in the consistency topic has the schema below.
+```
+{
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+        {
+            "name": "id",
+            "type": "string"
+        },
+        {
+            "name": "status",
+            "type": "string"
+        },
+        {
+            "name": "event_count",
+            "type": [
+                null,
+                "long"
+            ]
+        }
+    ]
+}
+```
+
+Field | Use
+------|-----
+_id_ | The transaction id this record refers to.
+_status_ | Either `BEGIN` or `END`. Materialize sends a record with `BEGIN` the first time it writes a data message for `id`, and it sends a `END` record after it has written all data messages for `id`.
+_event&lowbar;count_ | This field null for `BEGIN` records, and for `END` records it contains the number of messages Materialize wrote for that `id`.
+
+##### Consistency information details
+- Materialize writes consistency output to a different topic per sink.
+- There are no ordering guarantees on transaction IDs in the consistency topic.
+- Multiple transactions can be interleaved in the consistency topic. In other words, there can be multiple transaction IDs that have a `BEGIN` record but no corresponding `END` record simultaneously.
 
 ### Avro OCF sinks
 
