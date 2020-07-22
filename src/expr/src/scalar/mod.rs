@@ -203,7 +203,7 @@ impl ScalarExpr {
     pub fn take(&mut self) -> Self {
         mem::replace(
             self,
-            ScalarExpr::literal_null(ColumnType::new(ScalarType::String)),
+            ScalarExpr::literal_null(ColumnType::new(ScalarType::String, true)),
         )
     }
 
@@ -267,8 +267,8 @@ impl ScalarExpr {
     /// use repr::{ColumnType, Datum, RelationType, ScalarType};
     ///
     /// let expr_0 = ScalarExpr::Column(0);
-    /// let expr_t = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
-    /// let expr_f = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool));
+    /// let expr_t = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool, false));
+    /// let expr_f = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool, false));
     ///
     /// let mut test =
     /// expr_t
@@ -276,7 +276,7 @@ impl ScalarExpr {
     ///     .call_binary(expr_f.clone(), BinaryFunc::And)
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// let input_type = RelationType::new(vec![ColumnType::new(ScalarType::Int32)]);
+    /// let input_type = RelationType::new(vec![ColumnType::new(ScalarType::Int32, false)]);
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
@@ -606,9 +606,9 @@ mod tests {
     #[test]
     fn test_reduce() {
         let relation_type = RelationType::new(vec![
-            ColumnType::new(ScalarType::Int64).nullable(true),
-            ColumnType::new(ScalarType::Int64).nullable(true),
-            ColumnType::new(ScalarType::Int64).nullable(false),
+            ColumnType::new(ScalarType::Int64, true),
+            ColumnType::new(ScalarType::Int64, true),
+            ColumnType::new(ScalarType::Int64, false),
         ]);
         let col = |i| ScalarExpr::Column(i);
         let err = |e| ScalarExpr::literal(Err(e), ColumnType::new(ScalarType::Int64));

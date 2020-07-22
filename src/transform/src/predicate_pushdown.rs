@@ -330,7 +330,7 @@ impl PredicatePushdown {
                                 push_down.push(aggregates[0].expr.clone());
                                 aggregates[0].expr = ScalarExpr::literal_ok(
                                     Datum::True,
-                                    ColumnType::new(ScalarType::Bool),
+                                    ColumnType::new(ScalarType::Bool, false),
                                 );
                             } else {
                                 retain.push(predicate);

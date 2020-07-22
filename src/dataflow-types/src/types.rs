@@ -361,7 +361,7 @@ impl DataEncoding {
                         None => format!("column{}", i),
                         Some(name) => name.to_owned(),
                     };
-                    let ty = ColumnType::new(ScalarType::String).nullable(true);
+                    let ty = ColumnType::new(ScalarType::String, true);
                     desc.with_column(name, ty)
                 }),
             DataEncoding::Csv(CsvEncoding { n_cols, .. }) => (1..=*n_cols)
@@ -469,10 +469,19 @@ pub enum ExternalSourceConnector {
 impl ExternalSourceConnector {
     pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
         match self {
-            Self::Kafka(_) => vec![("mz_offset".into(), ColumnType::new(ScalarType::Int64))],
-            Self::File(_) => vec![("mz_line_no".into(), ColumnType::new(ScalarType::Int64))],
+            Self::Kafka(_) => vec![(
+                "mz_offset".into(),
+                ColumnType::new(ScalarType::Int64, false),
+            )],
+            Self::File(_) => vec![(
+                "mz_line_no".into(),
+                ColumnType::new(ScalarType::Int64, false),
+            )],
             Self::Kinesis(_) => vec![],
-            Self::AvroOcf(_) => vec![("mz_obj_no".into(), ColumnType::new(ScalarType::Int64))],
+            Self::AvroOcf(_) => vec![(
+                "mz_obj_no".into(),
+                ColumnType::new(ScalarType::Int64, false),
+            )],
         }
     }
 

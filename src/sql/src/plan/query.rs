@@ -1777,7 +1777,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
     };
     let nullable = datum == Datum::Null;
-    let typ = ColumnType::new(scalar_type).nullable(nullable);
+    let typ = ColumnType::new(scalar_type, nullable);
     let expr = ScalarExpr::literal(datum, typ);
     Ok(expr.into())
 }
