@@ -247,11 +247,11 @@ lazy_static! {
             // DECIMAL
             (Decimal(0, 0), Explicit(Int32)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                Ok(rescale_decimal(e, s, 0).call_unary(CastDecimalToInt32))
+                Ok(e.call_unary(CastDecimalToInt32(s)))
             }),
             (Decimal(0, 0), Explicit(Int64)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                Ok(rescale_decimal(e, s, 0).call_unary(CastDecimalToInt64))
+                Ok(e.call_unary(CastDecimalToInt64(s)))
             }),
             (Decimal(0, 0), Implicit(Float32)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
