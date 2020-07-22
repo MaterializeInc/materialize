@@ -224,20 +224,19 @@ SELECT * FROM c WHERE bill = ANY(SELECT ship FROM o) OR bill IS NULL;
 4  TX
 5  NULL
 
-# TODO(justin): #3099
-# # Test NULL IN case. Use IS NOT NULL to prevent normalize ANY into EXISTS.
-# query IT rowsort
-# SELECT * FROM c WHERE (NULL::text IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
-# ----
-# 3  MA
-# 5  NULL
-#
+# Test NULL IN case. Use IS NOT NULL to prevent normalize ANY into EXISTS.
+query IT rowsort
+SELECT * FROM c WHERE (NULL::text IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
+----
+3  MA
+5  NULL
+
 # Test NULL NOT IN case. Use IS NOT NULL to prevent normalize ANY into EXISTS.
-# query IT rowsort
-# SELECT * FROM c WHERE (NULL::text NOT IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
-# ----
-# 3  MA
-# 5  NULL
+query IT rowsort
+SELECT * FROM c WHERE (NULL::text NOT IN (SELECT ship FROM o WHERE o.c_id=c.c_id)) IS NOT NULL;
+----
+3  MA
+5  NULL
 
 # Customers where it is unknown whether a replaced bill state is one of the ship
 # states. This tests a more complex scalar expression as argument to IN.
