@@ -203,10 +203,10 @@ impl FoldConstants {
                                 .collect::<Result<Vec<_>, _>>()?,
                             &temp_storage,
                         );
-                        for output_row in output_rows {
+                        for (output_row, diff2) in output_rows {
                             let row = row_packer
                                 .pack(input_row.clone().into_iter().chain(output_row.into_iter()));
-                            new_rows.push((row, *diff))
+                            new_rows.push((row, diff2 * *diff))
                         }
                     }
                     *relation = RelationExpr::Constant {

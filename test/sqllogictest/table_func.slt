@@ -229,3 +229,19 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.
 | Filter (#1 = #3)
 
 EOF
+
+query I
+SELECT * FROM generate_series(0,3), repeat(generate_series);
+----
+1
+2
+2
+3
+3
+3
+
+query I
+SELECT abs(generate_series) FROM generate_series(-1, 2), repeat(generate_series);
+----
+2
+2

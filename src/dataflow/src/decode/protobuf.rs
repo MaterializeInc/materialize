@@ -10,7 +10,8 @@
 use async_trait::async_trait;
 use log::error;
 
-use dataflow_types::{Diff, Timestamp};
+use dataflow_types::Timestamp;
+use expr::Diff;
 use interchange::protobuf::{self, Decoder};
 use repr::Row;
 

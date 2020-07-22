@@ -16,7 +16,8 @@ use log::error;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use dataflow_types::{Diff, Timestamp};
+use dataflow_types::Timestamp;
+use expr::Diff;
 use repr::{Datum, Row};
 
 use crate::{metrics::EVENTS_COUNTER, source::SourceOutput};

@@ -28,29 +28,28 @@ pub trait CastFrom<T> {
     fn cast_from(from: T) -> Self;
 }
 
+macro_rules! cast_from {
+    ($from:ty, $to:ty) => {
+        impl CastFrom<$from> for $to {
+            fn cast_from(from: $from) -> $to {
+                from as $to
+            }
+        }
+    };
+}
+
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
-impl CastFrom<u32> for usize {
-    fn cast_from(from: u32) -> usize {
-        from as usize
-    }
-}
+cast_from!(u32, usize);
 
 #[cfg(target_pointer_width = "64")]
-impl CastFrom<i32> for usize {
-    fn cast_from(from: i32) -> usize {
-        from as usize
-    }
-}
+cast_from!(i32, usize);
 
 #[cfg(target_pointer_width = "64")]
-impl CastFrom<u64> for usize {
-    fn cast_from(from: u64) -> usize {
-        from as usize
-    }
-}
+cast_from!(u64, usize);
 
-impl CastFrom<usize> for u64 {
-    fn cast_from(from: usize) -> u64 {
-        from as u64
-    }
-}
+cast_from!(usize, u64);
+
+#[cfg(target_pointer_width = "64")]
+cast_from!(i64, isize);
+
+cast_from!(isize, i64);

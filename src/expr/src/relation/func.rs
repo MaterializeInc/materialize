@@ -17,11 +17,13 @@ use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
 use repr::adt::regex::Regex as ReprRegex;
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::jsonb_stringify;
+use crate::Diff;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -499,7 +501,7 @@ impl AggregateFunc {
     }
 }
 
-fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<Row> {
+fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
     let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::Dict(dict) => dict
@@ -508,25 +510,29 @@ fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> 
                 if stringify {
                     v = jsonb_stringify(v, temp_storage);
                 }
-                row_packer.pack(&[Datum::String(k), v])
+                (row_packer.pack(&[Datum::String(k), v]), 1)
             })
             .collect(),
         _ => vec![],
     }
 }
 
-fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<Row> {
+fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<(Row, Diff)> {
     let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::Dict(dict) => dict
             .iter()
-            .map(move |(k, _)| row_packer.pack(&[Datum::String(k)]))
+            .map(move |(k, _)| (row_packer.pack(&[Datum::String(k)]), 1))
             .collect(),
         _ => vec![],
     }
 }
 
-fn jsonb_array_elements<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<Row> {
+fn jsonb_array_elements<'a>(
+    a: Datum<'a>,
+    temp_storage: &'a RowArena,
+    stringify: bool,
+) -> Vec<(Row, Diff)> {
     let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::List(list) => list
@@ -535,14 +541,14 @@ fn jsonb_array_elements<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify:
                 if stringify {
                     e = jsonb_stringify(e, temp_storage);
                 }
-                row_packer.pack(&[e])
+                (row_packer.pack(&[e]), 1)
             })
             .collect(),
         _ => vec![],
     }
 }
 
-fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
+fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
     let mut row_packer = repr::RowPacker::new();
     match a {
         Datum::String(s) => {
@@ -552,20 +558,20 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<Row> {
                 .iter()
                 .skip(1)
                 .map(|m| Datum::from(m.map(|m| m.as_str())));
-            Some(row_packer.pack(datums_iter))
+            Some((row_packer.pack(datums_iter), 1))
         }
         _ => None,
     }
 }
 
-fn generate_series<'a>(typ: &ScalarType, start: Datum<'a>, stop: Datum<'a>) -> Vec<Row> {
+fn generate_series<'a>(typ: &ScalarType, start: Datum<'a>, stop: Datum<'a>) -> Vec<(Row, Diff)> {
     let mut row_packer = repr::RowPacker::new();
     match (typ, start, stop) {
         (ScalarType::Int64, Datum::Int64(start), Datum::Int64(stop)) => (start..stop + 1)
-            .map(move |i| row_packer.pack(&[Datum::Int64(i)]))
+            .map(move |i| (row_packer.pack(&[Datum::Int64(i)]), 1))
             .collect(),
         (ScalarType::Int32, Datum::Int32(start), Datum::Int32(stop)) => (start..stop + 1)
-            .map(|i| row_packer.pack(&[Datum::Int32(i)]))
+            .map(|i| (row_packer.pack(&[Datum::Int32(i)]), 1))
             .collect(),
         (_, Datum::Null, _) | (_, _, Datum::Null) => vec![],
         _ => panic!("expected int64"),
@@ -651,7 +657,7 @@ impl AnalyzedRegex {
         &(self.0).0
     }
 }
-pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
+pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
     let bytes = match a {
         Datum::Bytes(bytes) => bytes,
         Datum::String(str) => str.as_bytes(),
@@ -667,7 +673,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
             move |res| {
                 res.ok().and_then(|sr| {
                     if sr.len() == n_cols {
-                        Some(row_packer.pack(sr.iter().map(|s| Datum::String(s))))
+                        Some((row_packer.pack(sr.iter().map(|s| Datum::String(s))), 1))
                     } else {
                         None
                     }
@@ -675,6 +681,11 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<Row> {
             }
         })
         .collect()
+}
+
+pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
+    let n = Diff::cast_from(a.unwrap_int64());
+    vec![(repr::RowPacker::new().finish(), n)]
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -687,10 +698,15 @@ pub enum TableFunc {
     // ScalarType is either Int32 or Int64.
     // TODO(justin): should also possibly be Timestamp{,Tz}.
     GenerateSeries(ScalarType),
+    Repeat,
 }
 
 impl TableFunc {
-    pub fn eval<'a>(&'a self, datums: Vec<Datum<'a>>, temp_storage: &'a RowArena) -> Vec<Row> {
+    pub fn eval<'a>(
+        &'a self,
+        datums: Vec<Datum<'a>>,
+        temp_storage: &'a RowArena,
+    ) -> Vec<(Row, Diff)> {
         match self {
             TableFunc::JsonbEach { stringify } => jsonb_each(datums[0], temp_storage, *stringify),
             TableFunc::JsonbObjectKeys => jsonb_object_keys(datums[0]),
@@ -700,6 +716,7 @@ impl TableFunc {
             TableFunc::RegexpExtract(a) => regexp_extract(datums[0], a).into_iter().collect(),
             TableFunc::CsvExtract(n_cols) => csv_extract(datums[0], *n_cols).into_iter().collect(),
             TableFunc::GenerateSeries(typ) => generate_series(typ, datums[0], datums[1]),
+            TableFunc::Repeat => repeat(datums[0]),
         }
     }
 
@@ -728,6 +745,7 @@ impl TableFunc {
                 .take(*n_cols)
                 .collect(),
             TableFunc::GenerateSeries(typ) => vec![ColumnType::new(typ.clone())],
+            TableFunc::Repeat => vec![],
         })
     }
 
@@ -739,6 +757,7 @@ impl TableFunc {
             TableFunc::RegexpExtract(a) => a.capture_groups_len(),
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeries(_) => 1,
+            TableFunc::Repeat => 0,
         }
     }
 }
@@ -756,6 +775,7 @@ impl fmt::Display for TableFunc {
                 f.write_fmt(format_args!("csv_extract({}, _)", n_cols))
             }
             TableFunc::GenerateSeries(_) => f.write_str("generate_series"),
+            TableFunc::Repeat => f.write_str("repeat"),
         }
     }
 }

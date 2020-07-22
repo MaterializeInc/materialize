@@ -14,8 +14,8 @@ use timely::dataflow::{Scope, Stream};
 use futures::executor::block_on;
 use futures::sink::SinkExt;
 
-use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
-use expr::GlobalId;
+use dataflow_types::{TailSinkConnector, Timestamp, Update};
+use expr::{Diff, GlobalId};
 use repr::Row;
 
 pub fn tail<G>(

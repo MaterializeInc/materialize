@@ -10,7 +10,8 @@
 use log::error;
 
 use async_trait::async_trait;
-use dataflow_types::{Diff, Timestamp};
+use dataflow_types::Timestamp;
+use expr::Diff;
 use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
 use repr::Row;
 

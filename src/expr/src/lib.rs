@@ -34,6 +34,8 @@ pub use scalar::{like_pattern, EvalError, ScalarExpr};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct OptimizedRelationExpr(pub RelationExpr);
 
+pub type Diff = isize;
+
 impl OptimizedRelationExpr {
     /// Declare that the input `expr` is optimized, without actually running it
     /// through an optimizer. This can be useful to mark as optimized literal

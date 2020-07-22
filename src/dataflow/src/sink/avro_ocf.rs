@@ -15,8 +15,8 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use dataflow_types::{AvroOcfSinkConnector, Diff, Timestamp};
-use expr::GlobalId;
+use dataflow_types::{AvroOcfSinkConnector, Timestamp};
+use expr::{Diff, GlobalId};
 use interchange::avro::{DiffPair, Encoder};
 use repr::{RelationDesc, Row};
 

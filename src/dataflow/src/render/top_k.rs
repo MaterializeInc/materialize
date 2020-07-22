@@ -13,8 +13,7 @@ use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use dataflow_types::*;
-use expr::RelationExpr;
+use expr::{Diff, RelationExpr};
 use repr::Row;
 
 use crate::render::context::Context;
