@@ -611,9 +611,10 @@ mod tests {
             ColumnType::new(ScalarType::Int64, false),
         ]);
         let col = |i| ScalarExpr::Column(i);
-        let err = |e| ScalarExpr::literal(Err(e), ColumnType::new(ScalarType::Int64));
-        let lit = |i| ScalarExpr::literal_ok(Datum::Int64(i), ColumnType::new(ScalarType::Int64));
-        let null = || ScalarExpr::literal_null(ColumnType::new(ScalarType::Int64));
+        let err = |e| ScalarExpr::literal(Err(e), ColumnType::new(ScalarType::Int64, false));
+        let lit =
+            |i| ScalarExpr::literal_ok(Datum::Int64(i), ColumnType::new(ScalarType::Int64, false));
+        let null = || ScalarExpr::literal_null(ColumnType::new(ScalarType::Int64, true));
 
         struct TestCase {
             input: ScalarExpr,
