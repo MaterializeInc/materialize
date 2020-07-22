@@ -454,6 +454,7 @@ pub enum SourceConnector {
         consistency: Consistency,
         max_ts_batch: i64,
         ts_frequency: Duration,
+        persistence: Option<Persistence>,
     },
     Local,
 }
@@ -500,6 +501,13 @@ impl ExternalSourceConnector {
 pub enum Consistency {
     BringYourOwn(String),
     RealTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Persistence {
+    pub path: PathBuf,
+    pub startup_time: u64,
+    pub nonce: u64,
 }
 
 /// Universal language for describing message positions in Materialize, in a source independent

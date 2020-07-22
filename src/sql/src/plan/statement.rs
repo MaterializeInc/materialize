@@ -1516,6 +1516,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     consistency,
                     max_ts_batch,
                     ts_frequency,
+                    persistence: None,
                 },
                 desc,
             };

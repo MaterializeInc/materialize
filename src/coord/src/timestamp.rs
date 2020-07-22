@@ -781,6 +781,7 @@ impl Timestamper {
                         consistency,
                         max_ts_batch,
                         ts_frequency: _,
+                        persistence: _,
                     } = sc
                     {
                         (connector, encoding, envelope, consistency, max_ts_batch)

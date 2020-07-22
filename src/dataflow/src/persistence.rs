@@ -20,8 +20,8 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::FrontieredInputHandle;
 use timely::dataflow::{Scope, Stream};
 
-use dataflow_types::{Diff, Timestamp};
-use expr::GlobalId;
+use dataflow_types::Timestamp;
+use expr::{Diff, GlobalId};
 use repr::{Datum, Row};
 
 use crate::sink::sink_reschedule;

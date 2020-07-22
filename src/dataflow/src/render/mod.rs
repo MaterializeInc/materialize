@@ -127,6 +127,7 @@ use ore::iter::IteratorExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
 use self::context::{ArrangementFlavor, Context};
+use super::persistence;
 use super::sink;
 use super::source;
 use super::source::{SourceConfig, SourceToken};
@@ -264,6 +265,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     consistency,
                     max_ts_batch: _,
                     ts_frequency,
+                    persistence,
                 } = src.connector
                 {
                     let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
@@ -453,6 +455,17 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         };
 
                         // TODO do the source persistence here
+                        // TODO now I have a shutdown button that I have to figure
+                        // out where to stash
+                        if let Some(persistence) = persistence {
+                            persistence::persist_source(
+                                &collection.inner,
+                                src_id.sid,
+                                persistence.path,
+                                persistence.startup_time,
+                                persistence.nonce,
+                            );
+                        }
 
                         // Clear out the offset data
                         let mut collection = collection.map(|(row, _)| row);
