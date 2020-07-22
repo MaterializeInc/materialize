@@ -153,7 +153,7 @@ END $$;
                             let ty = scalar_type_from_sql(&c.data_type)?;
                             let nullable =
                                 !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
-                            Ok(ColumnType::new(ty).nullable(nullable))
+                            Ok(ColumnType::new(ty, nullable))
                         })
                         .collect::<Result<Vec<_>, anyhow::Error>>()?,
                 );

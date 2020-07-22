@@ -705,7 +705,7 @@ fn get_named_columns<'a>(
                 // column will be null whenever it is uninhabited.
                 let ty = validate_schema_2(seen_avro_nodes, node)?;
                 let nullable = vs.len() > 1;
-                columns.push((name.into(), ColumnType::new(ty).nullable(nullable)));
+                columns.push((name.into(), ColumnType::new(ty, nullable)));
                 if let Some(named_idx) = named_idx {
                     seen_avro_nodes.remove(&named_idx);
                 }
@@ -716,7 +716,7 @@ fn get_named_columns<'a>(
         let scalar_type = validate_schema_2(seen_avro_nodes, schema)?;
         Ok(vec![(
             base_name.into(),
-            ColumnType::new(scalar_type).nullable(false),
+            ColumnType::new(scalar_type, false),
         )])
     }
 }

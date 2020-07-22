@@ -556,7 +556,7 @@ pub mod undistribute_and {
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
-            let tru = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool));
+            let tru = ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool, false));
             if ands.contains(expr1) {
                 *expr = std::mem::replace(expr2, tru);
             } else if ands.contains(expr2) {
