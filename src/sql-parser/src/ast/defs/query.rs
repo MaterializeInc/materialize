@@ -462,14 +462,6 @@ impl AstDisplay for Join {
                 f.write_str(" CROSS JOIN ");
                 f.write_node(&self.relation);
             }
-            JoinOperator::CrossApply => {
-                f.write_str(" CROSS APPLY ");
-                f.write_node(&self.relation);
-            }
-            JoinOperator::OuterApply => {
-                f.write_str(" OUTER APPLY ");
-                f.write_node(&self.relation);
-            }
         }
     }
 }
@@ -482,10 +474,6 @@ pub enum JoinOperator {
     RightOuter(JoinConstraint),
     FullOuter(JoinConstraint),
     CrossJoin,
-    /// CROSS APPLY (non-standard)
-    CrossApply,
-    /// OUTER APPLY (non-standard)
-    OuterApply,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
