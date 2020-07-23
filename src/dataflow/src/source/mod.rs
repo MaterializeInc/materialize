@@ -775,11 +775,7 @@ where
                             consistency_info
                                 .partition_metrics
                                 .get_mut(&partition)
-                                .unwrap_or(&mut PartitionMetrics::new(
-                                    &name,
-                                    &id.to_string(),
-                                    &partition.to_string(),
-                                ))
+                                .unwrap()
                                 .offset_received
                                 .set(offset.offset);
 
