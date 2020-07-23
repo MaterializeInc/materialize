@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -79,9 +80,14 @@ where
                 file_number += 1;
                 records_sent_to_file = 0;
                 let path = output_path.with_file_name(file_name);
-                // TODO set the O_APPEND flag
                 // TODO handle file creation errors
-                file = Some(std::fs::File::open(&path).expect("opening file expected to succeed"));
+                file = Some(
+                    OpenOptions::new()
+                        .append(true)
+                        .create_new(true)
+                        .open(&path)
+                        .expect("creating persistence file must succeed"),
+                );
             }
 
             // Send a bounded number of records to the file from the queue. This

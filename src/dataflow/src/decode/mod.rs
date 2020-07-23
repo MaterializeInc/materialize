@@ -203,7 +203,10 @@ where
         time: Timestamp,
     ) {
         session.give((
-            (pack_with_line_no((self.datum_func)(bytes), line_no), None),
+            (
+                pack_with_line_no((self.datum_func)(bytes), line_no),
+                line_no,
+            ),
             time,
             1,
         ));
