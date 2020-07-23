@@ -2737,14 +2737,18 @@ impl Parser {
             Ok(TableFactor::NestedJoin(Box::new(table_and_joins)))
         } else {
             let name = self.parse_object_name()?;
-            // Postgres, MSSQL: table-valued functions:
-            let args = if self.consume_token(&Token::LParen) {
-                Some(self.parse_optional_args()?)
+            if self.consume_token(&Token::LParen) {
+                Ok(TableFactor::Function {
+                    name,
+                    args: self.parse_optional_args()?,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                })
             } else {
-                None
-            };
-            let alias = self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?;
-            Ok(TableFactor::Table { name, alias, args })
+                Ok(TableFactor::Table {
+                    name,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                })
+            }
         }
     }
 
