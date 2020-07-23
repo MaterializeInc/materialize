@@ -426,21 +426,6 @@ impl RelationExpr {
         }
     }
 
-    pub fn product(self, right: Self) -> Self {
-        if self.is_join_identity() {
-            right
-        } else if right.is_join_identity() {
-            self
-        } else {
-            RelationExpr::Join {
-                left: Box::new(self),
-                right: Box::new(right),
-                on: ScalarExpr::literal_true(),
-                kind: JoinKind::Inner,
-            }
-        }
-    }
-
     pub fn reduce(self, group_key: Vec<usize>, aggregates: Vec<AggregateExpr>) -> Self {
         RelationExpr::Reduce {
             input: Box::new(self),
