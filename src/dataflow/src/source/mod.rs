@@ -771,7 +771,9 @@ where
                             let partition = message.partition.clone();
                             let offset = message.offset;
 
-                            // Update ingestion metrics
+                            // Update ingestion metrics. Guaranteed to exist as the appropriate
+                            // entry gets created in SourceConstructor or when a new partition
+                            // is discovered
                             consistency_info
                                 .partition_metrics
                                 .get_mut(&partition)
