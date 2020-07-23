@@ -93,15 +93,13 @@ EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 
 EOF
 
-# TODO(justin): currently incorrect. Should return element directly, not
-# 1-tuple.
-query T colnames
+query I colnames
 SELECT x FROM generate_series(1, 3) x
 ----
 x
-(1)
-(2)
-(3)
+1
+2
+3
 
 # TODO(justin): Don't currently support the 3-argument version.
 statement error

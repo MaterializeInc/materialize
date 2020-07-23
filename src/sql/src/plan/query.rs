@@ -1014,7 +1014,28 @@ fn plan_table_function(
         tf.column_names,
         Some(ecx.qcx.outer_scope.clone()),
     );
-    let scope = plan_table_alias(scope, alias)?;
+    let mut scope = plan_table_alias(scope, alias)?;
+    if let Some(alias) = alias {
+        if let [item] = &mut *scope.items {
+            // Strange special case for table functions that ouput one column.
+            // If a table alias is provided but not a column alias, the column
+            // implicitly takes on the same alias in addition to its inherent
+            // name.
+            //
+            // Concretely, this means `SELECT x FROM generate_series(1, 5) AS x`
+            // returns a single column of type int, even though
+            //
+            //     CREATE TABLE t (a int)
+            //     SELECT x FROM t AS x
+            //
+            // would return a single column of type record(int).
+            item.names.push(ScopeItemName {
+                table_name: None,
+                column_name: Some(normalize::column_name(alias.name.clone())),
+                priority: false,
+            });
+        }
+    }
     Ok((call, scope))
 }
 
