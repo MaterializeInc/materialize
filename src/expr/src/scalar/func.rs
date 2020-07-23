@@ -1749,6 +1749,7 @@ pub enum BinaryFunc {
     TrimTrailing,
     EncodedBytesCharLength,
     ListIndex,
+    ListLengthMax,
 }
 
 impl BinaryFunc {
@@ -1858,6 +1859,7 @@ impl BinaryFunc {
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
             BinaryFunc::ListIndex => Ok(eager!(list_index)),
+            BinaryFunc::ListLengthMax => Ok(eager!(list_length_max)),
         }
     }
 
@@ -1987,6 +1989,8 @@ impl BinaryFunc {
                 input1_type.scalar_type.unwrap_list_element_type().clone(),
                 true,
             ),
+
+            ListLengthMax => ColumnType::new(ScalarType::Int64, true),
         }
     }
 
@@ -2133,7 +2137,8 @@ impl BinaryFunc {
             | Trim
             | TrimLeading
             | TrimTrailing
-            | EncodedBytesCharLength => false,
+            | EncodedBytesCharLength
+            | ListLengthMax => false,
         }
     }
 }
@@ -2214,6 +2219,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
             BinaryFunc::ListIndex => f.write_str("list_index"),
+            BinaryFunc::ListLengthMax => f.write_str("list_length_max"),
         }
     }
 }
@@ -2327,6 +2333,7 @@ pub enum UnaryFunc {
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
     RecordGet(usize),
+    ListLength,
 }
 
 impl UnaryFunc {
@@ -2455,6 +2462,7 @@ impl UnaryFunc {
             UnaryFunc::TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
             UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
             UnaryFunc::RecordGet(i) => Ok(record_get(a, *i)),
+            UnaryFunc::ListLength => Ok(list_length(a)),
         }
     }
 
@@ -2591,6 +2599,8 @@ impl UnaryFunc {
                 }
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
+
+            ListLength => ColumnType::new(ScalarType::Int64, true),
         }
     }
 
@@ -2738,6 +2748,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
             UnaryFunc::RecordGet(_) => f.write_str("record_get"),
+            UnaryFunc::ListLength => f.write_str("list_length"),
         }
     }
 }
@@ -2962,6 +2973,10 @@ fn record_get(a: Datum, i: usize) -> Datum {
     a.unwrap_list().iter().nth(i).unwrap()
 }
 
+fn list_length(a: Datum) -> Datum {
+    Datum::Int64(a.unwrap_list().iter().count() as i64)
+}
+
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
@@ -3039,6 +3054,36 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         .iter()
         .nth(i as usize - 1)
         .unwrap_or(Datum::Null)
+}
+
+fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    fn max_len_on_dim<'a>(d: Datum<'a>, on_dim: i64) -> Option<i64> {
+        match d {
+            Datum::List(i) if on_dim > 1 => {
+                let mut max_len = None;
+                let mut i = i.iter();
+                while let Some(Datum::List(j)) = i.next() {
+                    max_len = std::cmp::max(max_len_on_dim(Datum::List(j), on_dim - 1), max_len);
+                }
+                max_len
+            }
+            Datum::List(i) => Some(i.iter().count() as i64),
+            _ => None,
+        }
+    }
+
+    assert!(
+        match a {
+            Datum::List(_) => true,
+            _ => false,
+        },
+        "list_length_max's first argument must be Datum::List",
+    );
+
+    match max_len_on_dim(a, b.unwrap_int64()) {
+        Some(l) => Datum::from(l),
+        None => Datum::Null,
+    }
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

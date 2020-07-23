@@ -476,13 +476,13 @@ SELECT (LIST[NULL, [NULL]]::INT LIST LIST)[:, 1:1];
 ----
 {NULL,{NULL}}
 
-# Results can intermix values and empty-results-as-NULLs
+# Results can mix values and empty-results-as-NULLs
 query T
 SELECT (LIST [[1, NULL, 3], NULL, [4, 5, 6]]::INT LIST LIST)[2:3, 2:2];
 ----
 {NULL,{5}}
 
-# Results can intermix NULL values and empty-results-as-NULLs
+# Results can mix NULL values and empty-results-as-NULLs
 query T
 SELECT (LIST [[1, NULL, 3], NULL, [4, NULL, 6]]::INT LIST LIST)[2:3, 2:2];
 ----
@@ -529,7 +529,7 @@ SELECT (LIST[]::INT LIST LIST)[1:1, 1:1]
 ----
 NULL
 
-# 🔬 Other subcript values
+# 🔬 Other subscript values
 
 # 🔬🔬 end > start
 query T
@@ -654,3 +654,249 @@ SELECT LIST [[1, 2, 3], [4, 5]][1:DATE '2001-01-01']
 
 query error subscript \(slicing\) does not support casting from timestamp to i64
 SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']
+
+# 🔬 Built-in functions
+
+# 🔬🔬 list_length
+query R
+SELECT list_ndims(LIST [1, 2, 3])
+----
+1
+
+query R
+SELECT list_ndims(LIST []::INT LIST)
+----
+1
+
+query R
+SELECT list_ndims(LIST[[1],[1]])
+----
+2
+
+query R
+SELECT list_ndims(LIST [[[1], [1]], [[1]]])
+----
+3
+
+# 🔬🔬🔬 slices
+
+query R
+SELECT list_ndims(LIST[[1],[1]][1:1])
+----
+2
+
+query R
+SELECT list_ndims(LIST [[[1], [1]], [[1]]][1:2])
+----
+3
+
+# 🔬🔬🔬 interior lists
+query R
+SELECT list_ndims(LIST[[1],[1]][1])
+----
+1
+
+query R
+SELECT list_ndims(LIST [[[1], [1]], [[1]]][1])
+----
+2
+
+query R
+SELECT list_ndims(LIST [[[1], [1]], [[1]]][1][1])
+----
+1
+
+# 🔬🔬🔬 NULL elements
+
+query R
+SELECT list_ndims(LIST[NULL]::INT LIST)
+----
+1
+
+query R
+SELECT list_ndims(LIST[NULL]::INT LIST LIST)
+----
+2
+
+query R
+SELECT list_ndims(LIST[[1], NULL]::INT LIST LIST)
+----
+2
+
+query R
+SELECT list_ndims((LIST[[1],NULL]::INT LIST LIST)[2])
+----
+1
+
+# 🔬🔬 list_length
+
+query R
+SELECT list_length(LIST [1])
+----
+1
+
+query R
+SELECT list_length(LIST [1, 1])
+----
+2
+
+query R
+SELECT list_length(LIST[[1],[1]])
+----
+2
+
+query R
+SELECT list_length(LIST [[[1], [1]], [[1]]])
+----
+2
+
+query R
+SELECT list_length(LIST []::INT LIST)
+----
+0
+
+# 🔬🔬🔬 slices
+
+query R
+SELECT list_length(LIST[[1],[1]][1:1])
+----
+1
+
+query R
+SELECT list_length(LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2])
+----
+2
+
+# 🔬🔬🔬 indexing operations
+query R
+SELECT list_length(LIST [[[1], [1]], [[1]]][1])
+----
+2
+
+query R
+SELECT list_length(LIST [[[1], [1]], [[1]]][1][1])
+----
+1
+
+# 🔬🔬🔬 NULL elements
+
+query R
+SELECT list_length(LIST[1, NULL]::INT LIST)
+----
+2
+
+query R
+SELECT list_length(LIST[[1],NULL]::INT LIST LIST)
+----
+2
+
+query R
+SELECT list_length((LIST[[1],NULL]::INT LIST LIST)[2])
+----
+NULL
+
+# 🔬🔬 list_length_max
+query R
+SELECT list_length_max(LIST [1, 2, 3], 1)
+----
+3
+
+query R
+SELECT list_length_max(LIST [1, 2, 3, 4], 1)
+----
+4
+
+query R
+SELECT list_length_max(LIST[[1],[2,3]], 2)
+----
+2
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]], 2)
+----
+2
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]], 3)
+----
+3
+
+query R
+SELECT list_length_max(LIST []::INT LIST, 1)
+----
+0
+
+query R
+SELECT list_length_max(LIST [[]]::INT LIST LIST, 2)
+----
+0
+
+# 🔬🔬🔬 slices
+
+query R
+SELECT list_length_max(LIST[[1], [2]][1:1], 1)
+----
+1
+
+query R
+SELECT list_length_max(LIST[[1], [2, 3]][2:2], 2)
+----
+2
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1:2], 1)
+----
+2
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1:1], 2)
+----
+2
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1:1], 3)
+----
+3
+
+# 🔬🔬🔬 indexing operations
+query R
+SELECT list_length_max(LIST[[1], [2, 3]][2], 1)
+----
+2
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1], 1)
+----
+2
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1], 2)
+----
+3
+
+query R
+SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1][2], 1)
+----
+1
+
+# 🔬🔬🔬 NULL elements
+
+query R
+SELECT list_length_max(LIST[1, NULL, 3]::INT LIST, 1)
+----
+3
+
+query R
+SELECT list_length_max(LIST[[1],NULL]::INT LIST LIST, 1)
+----
+2
+
+query R
+SELECT list_length_max((LIST[[1],NULL]::INT LIST LIST), 2)
+----
+1
+
+query T
+SELECT list_length_max((LIST[NULL,NULL]::INT LIST LIST), 2)
+----
+NULL
