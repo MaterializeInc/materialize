@@ -305,8 +305,6 @@ pub enum TableFactor {
         /// and MSSQL.
         args: Option<FunctionArgs>,
         alias: Option<TableAlias>,
-        /// MSSQL-specific `WITH (...)` hints such as NOLOCK.
-        with_hints: Vec<Expr>,
     },
     Derived {
         lateral: bool,
@@ -323,12 +321,7 @@ pub enum TableFactor {
 impl AstDisplay for TableFactor {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            TableFactor::Table {
-                name,
-                alias,
-                args,
-                with_hints,
-            } => {
+            TableFactor::Table { name, alias, args } => {
                 f.write_node(name);
                 if let Some(args) = args {
                     f.write_str("(");
@@ -338,11 +331,6 @@ impl AstDisplay for TableFactor {
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
-                }
-                if !with_hints.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_hints));
-                    f.write_str(")");
                 }
             }
             TableFactor::Derived {

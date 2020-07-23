@@ -117,12 +117,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor) {
             match table_factor {
-                TableFactor::Table {
-                    name,
-                    args,
-                    alias,
-                    with_hints,
-                } => {
+                TableFactor::Table { name, args, alias } => {
                     // Only attempt to resolve the name if it is not a table
                     // function (i.e., there are no arguments).
                     if args.is_none() {
@@ -138,9 +133,6 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                     }
                     if let Some(alias) = alias {
                         self.visit_table_alias_mut(alias);
-                    }
-                    for expr in with_hints {
-                        self.visit_expr_mut(expr);
                     }
                 }
                 // We only need special behavior for `TableFactor::Table`. Just
