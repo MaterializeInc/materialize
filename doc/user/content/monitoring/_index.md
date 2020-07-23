@@ -110,7 +110,7 @@ get around using the `--network` flag. Using the host network means that ports w
 allocated from the host, so the `-p` flag is no longer necessary:
 
 ```
-docker run --network host -e MATERIALIZED_URL=local:6875 materialize/dashboard
+docker run --network host -e MATERIALIZED_URL=localhost:6875 materialize/dashboard
 ```
 
 [simplemon-hub]: https://hub.docker.com/repository/docker/materialize/dashboard
