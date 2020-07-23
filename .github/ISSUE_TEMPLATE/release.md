@@ -4,11 +4,18 @@ about: >
   A tracking issue for a new release of Materialize. Contributor use only.
 ---
 
+## Current Status: 🚢 Progressing 🚢
+
+<!--
+## Current Status: 🛑 Blocked 🛑
+## Current Status: 🚀 [Released](https://github.com/MaterializeInc/materialize/releases/tag/vX.Y.Z) 🚀
+-->
+
 ## Announce the imminent release internally
 
 - [x] create this release issue
 - [ ] Check for open issues with the [`M-milestone-blocker`][blocker-search] label,
-  include them in a list here, or state that there are none.
+  include them in a list here, or state that there are none. Update the current status.
   > unknown
 - [ ] Link to this issue in the `#release` slack channel
 
@@ -170,7 +177,7 @@ in the infrastructure repository. All of these tests can be run in parallel.
 ## Finish
 
 - [ ] Remove all load test machines.
-
+- [ ] Update the current status at the top of this issue.
 - [ ] Close this issue.
 
 [`doc/user/config.toml`]: https://github.com/MaterializeInc/materialize/blob/main/doc/user/config.toml
