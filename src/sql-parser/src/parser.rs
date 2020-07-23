@@ -2733,15 +2733,18 @@ impl Parser {
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
     fn parse_table_factor(&mut self) -> Result<TableFactor, ParserError> {
         if self.parse_keyword("LATERAL") {
-            // LATERAL must always be followed by a subquery.
-            if !self.consume_token(&Token::LParen) {
-                self.expected(
-                    self.peek_range(),
-                    "subquery after LATERAL",
-                    self.peek_token(),
-                )?;
+            // LATERAL must always be followed by a subquery or table function.
+            if self.consume_token(&Token::LParen) {
+                return self.parse_derived_table_factor(Lateral);
+            } else {
+                let name = self.parse_object_name()?;
+                self.expect_token(&Token::LParen)?;
+                return Ok(TableFactor::Function {
+                    name,
+                    args: self.parse_optional_args()?,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                });
             }
-            return self.parse_derived_table_factor(Lateral);
         }
 
         if self.consume_token(&Token::LParen) {
