@@ -489,18 +489,16 @@ f1  f1
 2147483647  NULL
 -2147483647  NULL
 
-# TODO(benesch): correlated table reference.
-#
-# query II colnames,rowsort
-# select * from int4_tbl i left join
-#   lateral (select coalesce(i) from int2_tbl j where i.f1 = j.f1) k on true;
-# ----
-# f1  coalesce
-# 0  (0)
-# 123456  NULL
-# -123456  NULL
-# 2147483647  NULL
-# -2147483647  NULL
+query IT colnames,rowsort
+select * from int4_tbl left join
+  lateral (select coalesce(int4_tbl) from int2_tbl j where int4_tbl.f1 = j.f1) k on true;
+----
+f1  coalesce
+0  (0)
+123456  NULL
+-123456  NULL
+2147483647  NULL
+-2147483647  NULL
 
 query IIII colnames,rowsort
 select * from int4_tbl a,

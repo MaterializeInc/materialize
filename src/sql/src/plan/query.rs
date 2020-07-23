@@ -1784,24 +1784,22 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, Pla
     // ask what table it came from. Stupid, but it works.
     let (exprs, field_names): (Vec<_>, Vec<_>) = ecx
         .scope
-        .items
+        .all_items()
         .iter()
-        .enumerate()
-        .filter(|(_i, item)| {
+        .filter(|(_level, _column, item)| {
             item.is_from_table(&PartialName {
                 database: None,
                 schema: None,
                 item: col_name.as_str().to_owned(),
             })
         })
-        .enumerate()
-        .map(|(i, (column, item))| {
-            let expr = ScalarExpr::Column(ColumnRef { level: 0, column });
+        .map(|(level, column, item)| {
+            let expr = ScalarExpr::Column(ColumnRef { level: *level, column: *column });
             let name = item
                 .names
                 .first()
                 .and_then(|n| n.column_name.clone())
-                .unwrap_or_else(|| ColumnName::from(format!("f{}", i + 1)));
+                .unwrap_or_else(|| ColumnName::from(format!("f{}", column + 1)));
             (expr, name)
         })
         .unzip();
