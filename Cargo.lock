@@ -1629,7 +1629,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
 name = "materialized"
-version = "0.4.0-rc2"
+version = "0.4.1-dev"
 dependencies = [
  "anyhow",
  "assert_cmd",
