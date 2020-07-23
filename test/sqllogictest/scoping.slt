@@ -84,3 +84,12 @@ SELECT *
 
 query error column name "k" is ambiguous
 SELECT k FROM (SELECT 1 AS k, 2 AS k)
+
+# Wildcards on a zero-arity table are ok, though.
+
+statement ok
+CREATE TABLE nullary ()
+
+query
+SELECT * FROM nullary
+----

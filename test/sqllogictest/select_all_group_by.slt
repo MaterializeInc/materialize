@@ -36,7 +36,7 @@ SELECT a FROM foo GROUP BY a, foo.a
 ----
 37
 
-statement error internal error: unable to resolve scope item
+statement error column "bar.b" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT *, count(*) FROM bar GROUP BY a
 
 query II

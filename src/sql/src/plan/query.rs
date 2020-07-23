@@ -19,6 +19,7 @@
 //! In `RelationExpr`, aggregates can only be applied immediately at the time of grouping.
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
@@ -570,9 +571,44 @@ fn plan_view_select_intrusive(
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
-    // Step 3. Handle GROUP BY clause.
+    // Step 3. Gather aggregates.
+    let aggregates = {
+        let mut aggregate_visitor = AggregateFuncVisitor::new();
+        for p in projection {
+            aggregate_visitor.visit_select_item(p);
+        }
+        for o in order_by_exprs {
+            aggregate_visitor.visit_order_by_expr(o);
+        }
+        if let Some(having) = having {
+            aggregate_visitor.visit_expr(having);
+        }
+        aggregate_visitor.into_result()?
+    };
+
+    // Step 4. Expand SELECT clause.
+    let projection = {
+        let ecx = &ExprContext {
+            qcx,
+            name: "SELECT clause",
+            scope: &from_scope,
+            relation_type: &qcx.relation_type(&relation_expr),
+            allow_aggregates: true,
+            allow_subqueries: true,
+        };
+        let mut out = vec![];
+        for si in projection {
+            if *si == SelectItem::Wildcard && from.is_empty() {
+                bail!("SELECT * with no tables specified is not valid");
+            }
+            out.extend(expand_select_item(&ecx, si)?);
+        }
+        out
+    };
+
+    // Step 5. Handle GROUP BY clause.
     let (group_scope, select_all_mapping) = {
-        // gather group columns
+        // Compute GROUP BY expressions.
         let ecx = &ExprContext {
             qcx,
             name: "GROUP BY clause",
@@ -586,9 +622,10 @@ fn plan_view_select_intrusive(
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in group_by {
-            let expr = plan_expr_or_col_index(ecx, group_expr)?;
+            let expr = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();
-            // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
+            // Repeated expressions in GROUP BY confuse name resolution later,
+            // and dropping them doesn't change the result.
             if group_exprs
                 .iter()
                 .find(|existing_expr| **existing_expr == expr)
@@ -599,8 +636,11 @@ fn plan_view_select_intrusive(
                     column: old_column,
                 }) = &expr
                 {
-                    // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
-                    // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
+                    // If we later have `SELECT foo.*` then we have to find all
+                    // the `foo` items in `from_scope` and figure out where they
+                    // ended up in `group_scope`. This is really hard to do
+                    // right using SQL name resolution, so instead we just track
+                    // the movement here.
                     select_all_mapping.insert(*old_column, new_column);
                     let mut scope_item = ecx.scope.items[*old_column].clone();
                     scope_item.expr = Some(group_expr.clone());
@@ -618,17 +658,8 @@ fn plan_view_select_intrusive(
                 group_scope.items.push(scope_item);
             }
         }
-        // gather aggregates
-        let mut aggregate_visitor = AggregateFuncVisitor::new();
-        for p in projection {
-            aggregate_visitor.visit_select_item(p);
-        }
-        for o in order_by_exprs {
-            aggregate_visitor.visit_order_by_expr(o);
-        }
-        if let Some(having) = having {
-            aggregate_visitor.visit_expr(having);
-        }
+
+        // Plan aggregates.
         let ecx = &ExprContext {
             qcx,
             name: "aggregate function",
@@ -637,9 +668,9 @@ fn plan_view_select_intrusive(
             allow_aggregates: false,
             allow_subqueries: true,
         };
-        let mut aggregates = vec![];
-        for sql_function in aggregate_visitor.into_result()? {
-            aggregates.push(plan_aggregate(ecx, sql_function)?);
+        let mut agg_exprs = vec![];
+        for sql_function in aggregates {
+            agg_exprs.push(plan_aggregate(ecx, sql_function)?);
             group_scope.items.push(ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: None,
@@ -650,9 +681,9 @@ fn plan_view_select_intrusive(
                 nameable: true,
             });
         }
-        if !aggregates.is_empty() || !group_key.is_empty() || having.is_some() {
+        if !agg_exprs.is_empty() || !group_key.is_empty() || having.is_some() {
             // apply GROUP BY / aggregates
-            relation_expr = relation_expr.map(group_exprs).reduce(group_key, aggregates);
+            relation_expr = relation_expr.map(group_exprs).reduce(group_key, agg_exprs);
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope
@@ -663,7 +694,7 @@ fn plan_view_select_intrusive(
         }
     };
 
-    // Step 4. Handle HAVING clause.
+    // Step 6. Handle HAVING clause.
     if let Some(having) = having {
         let ecx = &ExprContext {
             qcx,
@@ -677,40 +708,66 @@ fn plan_view_select_intrusive(
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
-    // Step 5. Handle SELECT clause.
+    // Step 7. Handle SELECT clause.
     let (project_key, map_scope) = {
         let mut new_exprs = vec![];
         let mut project_key = vec![];
         let mut map_scope = group_scope.clone();
-        for p in projection {
-            let ecx = &ExprContext {
-                qcx,
-                name: "SELECT clause",
-                scope: &group_scope,
-                relation_type: &qcx.relation_type(&relation_expr),
-                allow_aggregates: true,
-                allow_subqueries: true,
-            };
-            for (expr, scope_item) in plan_select_item(ecx, p, &from_scope, &select_all_mapping)? {
-                if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
-                    project_key.push(column);
-                    // Mark the output names as prioritized, so that they shadow
-                    // any input columns of the same name.
-                    map_scope.items[column]
-                        .names
-                        .splice(..0, scope_item.prioritized().names);
-                } else {
-                    project_key.push(group_scope.len() + new_exprs.len());
-                    new_exprs.push(expr);
-                    map_scope.items.push(scope_item.prioritized());
+        let ecx = &ExprContext {
+            qcx,
+            name: "SELECT clause",
+            scope: &group_scope,
+            relation_type: &qcx.relation_type(&relation_expr),
+            allow_aggregates: true,
+            allow_subqueries: true,
+        };
+        for (select_item, column_name) in projection {
+            let expr = match select_item {
+                ExpandedSelectItem::InputOrdinal(i) => {
+                    if let Some(column) = select_all_mapping.get(&i).copied() {
+                        ScalarExpr::Column(ColumnRef { level: 0, column })
+                    } else {
+                        bail!("column \"{}\" must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[i].short_display_name());
+                    }
                 }
+                ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)?.type_as_any(ecx)?,
+            };
+            if let ScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
+                project_key.push(column);
+                // Mark the output name as prioritized, so that they shadow any
+                // input columns of the same name.
+                if let Some(column_name) = column_name {
+                    map_scope.items[column].names.insert(
+                        0,
+                        ScopeItemName {
+                            table_name: None,
+                            column_name: Some(column_name),
+                            priority: true,
+                        },
+                    );
+                }
+            } else {
+                project_key.push(group_scope.len() + new_exprs.len());
+                new_exprs.push(expr);
+                map_scope.items.push(ScopeItem {
+                    names: column_name
+                        .into_iter()
+                        .map(|column_name| ScopeItemName {
+                            table_name: None,
+                            column_name: Some(column_name),
+                            priority: true,
+                        })
+                        .collect(),
+                    expr: None,
+                    nameable: true,
+                });
             }
         }
         relation_expr = relation_expr.map(new_exprs);
         (project_key, map_scope)
     };
 
-    // Step 6. Handle intrusive ORDER BY.
+    // Step 8. Handle intrusive ORDER BY.
     let order_by = {
         let mut order_by = vec![];
         let mut new_exprs = vec![];
@@ -755,6 +812,59 @@ fn plan_view_select_intrusive(
         order_by,
         project: project_key,
     })
+}
+
+/// Plans an expression in a `GROUP BY` clause.
+///
+/// For historical reasons, PostgreSQL allows `GROUP BY` expressions to refer to
+/// names/expressions defined in the `SELECT` clause. These special cases are
+/// handled by this function; see comments within the implementation for
+/// details.
+fn plan_group_by_expr(
+    ecx: &ExprContext,
+    group_expr: &Expr,
+    projection: &[(ExpandedSelectItem, Option<ColumnName>)],
+) -> Result<ScalarExpr, anyhow::Error> {
+    let plan_projection = |column: usize| match &projection[column].0 {
+        ExpandedSelectItem::InputOrdinal(column) => Ok(ScalarExpr::Column(ColumnRef {
+            level: 0,
+            column: *column,
+        })),
+        ExpandedSelectItem::Expr(expr) => Ok(plan_expr(&ecx, expr)?.type_as_any(ecx)?),
+    };
+
+    // Check if the expression is a numeric literal, as in `GROUP BY 1`. This is
+    // a special case that means to use the ith item in the SELECT clause.
+    if let Some(column) = check_col_index(&ecx.name, group_expr, projection.len())? {
+        return plan_projection(column);
+    }
+
+    // Check if the expression is a simple identifier, as in `GROUP BY foo`.
+    // The `foo` can refer to *either* an input column or an output column. If
+    // both exist, the input column is preferred.
+    match group_expr {
+        Expr::Identifier(names) if names.len() == 1 => match plan_identifier(ecx, names) {
+            Err(e @ PlanError::UnknownColumn(_)) => {
+                // The expression was a simple identifier that did not match an
+                // input column. See if it matches an output column.
+                let name = Some(normalize::column_name(names[0].clone()));
+                let mut iter = projection.iter().map(|(_expr, name)| name);
+                if let Some(column) = iter.position(|n| *n == name) {
+                    if iter.any(|n| *n == name) {
+                        Err(PlanError::AmbiguousColumn(names[0].to_string()).into())
+                    } else {
+                        plan_projection(column)
+                    }
+                } else {
+                    // The name didn't match an output column either. Return the
+                    // "unknown column" error.
+                    Err(e.into())
+                }
+            }
+            res => Ok(res?),
+        },
+        _ => plan_expr(&ecx, group_expr)?.type_as_any(ecx),
+    }
 }
 
 fn plan_view_select(
@@ -972,108 +1082,82 @@ fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
     })
 }
 
-fn plan_select_item<'a>(
+enum ExpandedSelectItem<'a> {
+    InputOrdinal(usize),
+    Expr(Cow<'a, Expr>),
+}
+
+fn expand_select_item<'a>(
     ecx: &ExprContext,
     s: &'a SelectItem,
-    select_all_scope: &Scope,
-    select_all_mapping: &BTreeMap<usize, usize>,
-) -> Result<Vec<(ScalarExpr, ScopeItem)>, anyhow::Error> {
+) -> Result<Vec<(ExpandedSelectItem<'a>, Option<ColumnName>)>, anyhow::Error> {
     match s {
         SelectItem::Expr {
             expr: Expr::QualifiedWildcard(table_name),
             alias: _,
         } => {
             let table_name = normalize::object_name(ObjectName(table_name.clone()))?;
-            let out = select_all_scope
+            let out: Vec<_> = ecx
+                .scope
                 .items
                 .iter()
                 .enumerate()
                 .filter(|(_i, item)| item.is_from_table(&table_name))
                 .map(|(i, item)| {
-                    let expr = ScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: *select_all_mapping.get(&i).ok_or_else(|| {
-                            anyhow!("internal error: unable to resolve scope item {:?}", item)
-                        })?,
-                    });
-                    let mut out_item = item.clone();
-                    out_item.expr = None;
-                    Ok((expr, out_item))
+                    let name = item.names.get(0).and_then(|n| n.column_name.clone());
+                    (ExpandedSelectItem::InputOrdinal(i), name)
                 })
-                .collect::<Result<Vec<_>, anyhow::Error>>()?;
+                .collect();
             if out.is_empty() {
                 bail!("no table named '{}' in scope", table_name);
             }
             Ok(out)
         }
         SelectItem::Expr {
-            expr: Expr::WildcardAccess(expr),
+            expr: Expr::WildcardAccess(sql_expr),
             alias: _,
         } => {
-            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+            // A bit silly to have to plan the expression here just to get its
+            // type, since we throw away the planned expression, but fixing this
+            // requires a separate semantic analysis phase. Luckily this is an
+            // uncommon operation and the PostgreSQL docs have a warning that
+            // this operation is slow in Postgres too.
+            let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
             let fields = match ecx.scalar_type(&expr) {
                 ScalarType::Record { fields, .. } => fields,
                 ty => bail!("type {} is not composite", ty),
             };
-            Ok(fields
+            let items = fields
                 .iter()
-                .enumerate()
-                .map(|(i, (name, _ty))| {
-                    let expr = expr.clone().call_unary(UnaryFunc::RecordGet(i));
-                    let scope_item = ScopeItem {
-                        names: vec![ScopeItemName {
-                            table_name: None,
-                            column_name: Some(name.clone()),
-                            priority: false,
-                        }],
-                        expr: None,
-                        nameable: true,
-                    };
-                    (expr, scope_item)
+                .map(|(name, _ty)| {
+                    let item = ExpandedSelectItem::Expr(Cow::Owned(Expr::FieldAccess {
+                        expr: sql_expr.clone(),
+                        field: Ident::new(name.as_str()),
+                    }));
+                    (item, Some(name.clone()))
                 })
-                .collect())
-        }
-        SelectItem::Expr {
-            expr: sql_expr,
-            alias,
-        } => {
-            let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
-            let names: Vec<_> = match alias {
-                None => invent_column_name(sql_expr).into_iter().collect(),
-                Some(alias) => vec![ScopeItemName {
-                    table_name: None,
-                    column_name: Some(normalize::column_name(alias.clone())),
-                    priority: false,
-                }],
-            };
-            let scope_item = ScopeItem {
-                names,
-                expr: Some(sql_expr.clone()),
-                nameable: true,
-            };
-            Ok(vec![(expr, scope_item)])
+                .collect();
+            Ok(items)
         }
         SelectItem::Wildcard => {
-            let out = select_all_scope
+            let items: Vec<_> = ecx
+                .scope
                 .items
                 .iter()
                 .enumerate()
                 .map(|(i, item)| {
-                    let expr = ScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: *select_all_mapping.get(&i).ok_or_else(|| {
-                            anyhow!("internal error: unable to resolve scope item {:?}", item)
-                        })?,
-                    });
-                    let mut out_item = item.clone();
-                    out_item.expr = None;
-                    Ok((expr, out_item))
+                    let name = item.names.get(0).and_then(|n| n.column_name.clone());
+                    (ExpandedSelectItem::InputOrdinal(i), name)
                 })
-                .collect::<Result<Vec<_>, anyhow::Error>>()?;
-            if out.is_empty() {
-                bail!("SELECT * with no tables specified is not valid");
-            }
-            Ok(out)
+                .collect();
+            Ok(items)
+        }
+        SelectItem::Expr { expr, alias } => {
+            let name = alias
+                .clone()
+                .map(normalize::column_name)
+                .or_else(|| invent_column_name(&expr).and_then(|n| n.column_name));
+            Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
 }
