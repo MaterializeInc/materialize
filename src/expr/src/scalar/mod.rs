@@ -549,6 +549,10 @@ pub enum EvalError {
     IntegerOutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    InvalidDimension {
+        max_dim: usize,
+        val: i64,
+    },
     InvalidEncodingName(String),
     InvalidByteSequence {
         byte_sequence: String,
@@ -569,6 +573,11 @@ impl std::fmt::Display for EvalError {
             EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::InvalidDimension { max_dim, val } => write!(
+                f,
+                "invalid dimension: {}; must use value within [1, {}]",
+                val, max_dim
+            ),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
             EvalError::InvalidByteSequence {
                 byte_sequence,
