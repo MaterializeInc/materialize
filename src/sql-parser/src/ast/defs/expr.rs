@@ -130,10 +130,14 @@ pub enum Expr {
     },
     /// `LIST[<expr>*]`
     List(Vec<Expr>),
-    /// `<expr>[<expr>?(:<expr>?(, <expr>?:<expr>?)*)?]`
-    Subscript {
+    /// `<expr>[<expr>]`
+    SubscriptIndex {
         expr: Box<Expr>,
-        is_slice: bool,
+        subscript: Box<Expr>,
+    },
+    /// `<expr>[<expr>:<expr>(, <expr>?:<expr>?)*]`
+    SubscriptSlice {
+        expr: Box<Expr>,
         positions: Vec<SubscriptPosition>,
     },
 }
@@ -337,18 +341,16 @@ impl AstDisplay for Expr {
                 }
                 f.write_str("]");
             }
-            Expr::Subscript {
-                expr,
-                is_slice,
-                positions,
-            } => {
+            Expr::SubscriptIndex { expr, subscript } => {
                 f.write_node(&expr);
                 f.write_str("[");
-                if *is_slice {
-                    itertools::join(positions, ",");
-                } else {
-                    f.write_node(positions[0].start.as_ref().unwrap());
-                }
+                f.write_node(subscript);
+                f.write_str("]");
+            }
+            Expr::SubscriptSlice { expr, positions } => {
+                f.write_node(&expr);
+                f.write_str("[");
+                display::comma_separated(positions);
                 f.write_str("]");
             }
         }

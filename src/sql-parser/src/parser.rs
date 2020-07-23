@@ -918,10 +918,19 @@ impl Parser {
 
         self.expect_token(&Token::RBracket)?;
 
-        Ok(Expr::Subscript {
-            expr: Box::new(expr),
-            is_slice,
-            positions,
+        Ok(if is_slice {
+            Expr::SubscriptSlice {
+                expr: Box::new(expr),
+                positions,
+            }
+        } else {
+            assert!(
+                positions.len() == 1 && positions[0].start.is_some() && positions[0].end.is_none(),
+            );
+            Expr::SubscriptIndex {
+                expr: Box::new(expr),
+                subscript: Box::new(positions.remove(0).start.unwrap()),
+            }
         })
     }
 

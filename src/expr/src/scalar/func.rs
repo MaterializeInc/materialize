@@ -15,6 +15,7 @@ use std::str;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
@@ -2885,36 +2886,45 @@ where
 }
 
 fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    fn slice_and_descend<'a>(
-        d: Datum<'a>,
-        ranges: &[(usize, usize)],
-        temp_storage: &'a RowArena,
-    ) -> Datum<'a> {
-        let datums: Vec<_> = d
+    struct PackerData<'a> {
+        // Adds the embedded data to `RowPacker`.
+        pub f: Box<dyn Fn(&mut RowPacker) + 'a>,
+        // Provides a side channel to evaluate if the data within `f` is simply NULL.
+        pub is_null: bool,
+    }
+    fn slice_and_descend<'a>(d: Datum<'a>, ranges: &[(usize, usize)]) -> PackerData<'a> {
+        let data: Vec<_> = d
             .unwrap_list()
             .iter()
             .skip(ranges[0].0)
             .take(ranges[0].1)
             .map(|e| match e {
                 Datum::List(i) if ranges.len() > 1 => {
-                    slice_and_descend(Datum::List(i), &ranges[1..], temp_storage)
+                    slice_and_descend(Datum::List(i), &ranges[1..])
                 }
-                typ => typ,
+                datum => PackerData {
+                    f: Box::new(move |packer: &mut RowPacker| packer.push(datum.clone())),
+                    is_null: datum == Datum::Null,
+                },
             })
             .collect();
 
-        if datums.len() == 0 || datums.iter().all(|d| Datum::Null == *d) {
-            // If there are no datums, or all datums are NULL, collapse this datum
-            // to NULL as a convenience for traversing result slices.
-            Datum::Null
+        if data.iter().all(|d| d.is_null) || data.is_empty() {
+            PackerData {
+                f: Box::new(|packer: &mut RowPacker| packer.push(Datum::Null)),
+                is_null: true,
+            }
         } else {
-            temp_storage.make_datum(|packer| {
-                packer.push_list_with(|packer| {
-                    for d in datums {
-                        packer.push(d);
-                    }
-                });
-            })
+            PackerData {
+                f: Box::new(move |packer: &mut RowPacker| {
+                    packer.push_list_with(|packer| {
+                        for d in &data {
+                            (d.f)(packer);
+                        }
+                    })
+                }),
+                is_null: false,
+            }
         }
     }
 
@@ -2924,17 +2934,16 @@ fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a>
         "expr::scalar::func::list_slice expects an odd number of arguments; 1 for list + 2 \
         for each start-end pair"
     );
-    assert_eq!(
+    assert!(
         datums.len() > 2,
-        true,
         "expr::scalar::func::list_slice expects at least 3 arguments; 1 for list + at least \
         one start-end pair"
     );
 
     let mut ranges = Vec::new();
-    for i in 0..(datums.len() - 1) / 2 {
-        let start = std::cmp::max(datums[i * 2 + 1].unwrap_int64(), 1);
-        let end = datums[i * 2 + 2].unwrap_int64();
+    for (start, end) in datums[1..].iter().tuples::<(_, _)>() {
+        let start = std::cmp::max(start.unwrap_int64(), 1);
+        let end = end.unwrap_int64();
 
         if start > end {
             return Datum::Null;
@@ -2943,7 +2952,7 @@ fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a>
         ranges.push((start as usize - 1, (end - start) as usize + 1));
     }
 
-    slice_and_descend(datums[0], &ranges, temp_storage)
+    temp_storage.make_datum(|packer| (slice_and_descend(datums[0], &ranges).f)(packer))
 }
 
 fn record_get(a: Datum, i: usize) -> Datum {

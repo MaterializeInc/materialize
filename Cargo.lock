@@ -932,6 +932,7 @@ dependencies = [
  "csv",
  "encoding",
  "enum-iterator",
+ "itertools",
  "num_enum",
  "ordered-float",
  "ore",
@@ -3280,7 +3281,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "datadriven",
- "itertools",
  "lazy_static",
  "log",
  "matches",

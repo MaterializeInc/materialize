@@ -97,7 +97,7 @@ SELECT LIST [1, 2, 3][100];
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript on type i32, which is not a vector type
+query error cannot subscript type i32
 SELECT LIST [1, 2, 3][1][1];
 
 # 🔬🔬 list slices
@@ -178,7 +178,7 @@ SELECT LIST [[1, 2, 3], [4, 5]][100][1]
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript on type i32, which is not a vector type
+query error cannot subscript type i32
 SELECT LIST [[1, 2, 3], [4, 5]][1][1][1]
 
 # 🔬🔬 list list slices
@@ -300,7 +300,7 @@ SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][100][2][3]
 NULL
 
 # exceeds maximum dimension
-query error cannot subscript on type i32, which is not a vector type
+query error cannot subscript type i32
 SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1][2][3][1]
 
 # 🔬🔬 list list list slices
@@ -607,17 +607,17 @@ select LIST[1,2,3][LIST[1][2.0 / 2]];
 query error invalid input syntax for int8: invalid digit found in string: "dog"
 SELECT LIST[1,2,3]['dog']
 
-query error vector index does not support casting from date to i64
+query error subscript \(indexing\) does not support casting from date to i64
 SELECT LIST [[1, 2, 3], [4, 5]][DATE '2001-01-01']
 
-query error vector index does not support casting from timestamp to i64
+query error subscript \(indexing\) does not support casting from timestamp to i64
 SELECT LIST [[1, 2, 3], [4, 5]][TIMESTAMP '2001-01-01']
 
 query error invalid input syntax for int8: invalid digit found in string: "dog"
 SELECT LIST[1,2,3][1:'dog']
 
-query error vector slice does not support casting from date to i64
+query error subscript \(slicing\) does not support casting from date to i64
 SELECT LIST [[1, 2, 3], [4, 5]][1:DATE '2001-01-01']
 
-query error vector slice does not support casting from timestamp to i64
+query error subscript \(slicing\) does not support casting from timestamp to i64
 SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']

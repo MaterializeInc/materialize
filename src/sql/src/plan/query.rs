@@ -1430,28 +1430,31 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             }
         }
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr)?,
-        Expr::Subscript {
-            expr,
-            is_slice,
-            positions,
-        } => {
+        Expr::SubscriptIndex { expr, subscript } => {
+            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+            let ty = ecx.scalar_type(&expr);
+            match &ty {
+                ScalarType::List(_) => {}
+                ty => bail!("cannot subscript type {}", ty),
+            };
+
+            expr.call_binary(
+                plan_expr(ecx, subscript)?.explicit_cast_to(
+                    "subscript (indexing)",
+                    ecx,
+                    ScalarType::Int64,
+                )?,
+                BinaryFunc::ListIndex,
+            )
+            .into()
+        }
+
+        Expr::SubscriptSlice { expr, positions } => {
             assert_ne!(
                 positions.len(),
                 0,
                 "subscript expression must contain at least one position"
             );
-            if !is_slice {
-                assert_eq!(
-                    positions.len(),
-                    1,
-                    "index expressions can only specify a single position"
-                );
-                assert_eq!(
-                    positions[0].start.is_some() && positions[0].end.is_none(),
-                    true,
-                    "index positions can only be specified as SubscriptPosition.start"
-                );
-            }
             if positions.len() > 1 && !ecx.qcx.scx.experimental_mode() {
                 bail!(
                     "multi-dimensional slicing requires experimental mode; see \
@@ -1473,18 +1476,11 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                         )
                     }
                 }
-                ty => bail!(
-                    "cannot subscript on type {}, which is not a vector type",
-                    ty
-                ),
+                ty => bail!("cannot subscript type {}", ty),
             };
 
-            let mut exprs = vec![expr.clone()];
-            let op_str = if *is_slice {
-                "vector slice"
-            } else {
-                "vector index"
-            };
+            let mut exprs = vec![expr];
+            let op_str = "subscript (slicing)";
 
             for p in positions {
                 let start = if let Some(start) = &p.start {
@@ -1492,10 +1488,6 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 } else {
                     ScalarExpr::literal(Datum::Int64(1), ColumnType::new(ScalarType::Int64, true))
                 };
-
-                if !is_slice {
-                    return Ok(expr.call_binary(start, BinaryFunc::ListIndex).into());
-                }
 
                 let end = if let Some(end) = &p.end {
                     plan_expr(ecx, end)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
