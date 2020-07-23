@@ -711,6 +711,22 @@ SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
 Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("bar")]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: Some(Value(Number("2"))), fetch: None }, as_of: None }
 
 parse-statement
+SELECT foo FROM LATERAL bar(1)
+----
+SELECT foo FROM bar(1)
+=>
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Function { name: ObjectName([Ident("bar")]), args: Args([Value(Number("1"))]), alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+
+parse-statement
+SELECT foo FROM LATERAL bar
+----
+error:
+Parse error:
+SELECT foo FROM LATERAL bar
+                           ^
+Expected (, found: EOF
+
+parse-statement
 SELECT 'foo' OFFSET 0 ROWS
 ----
 SELECT 'foo' OFFSET 0 ROWS
@@ -898,13 +914,11 @@ SELECT * FROM customer LEFT JOIN LATERAL (SELECT * FROM "order" WHERE "order".cu
 Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None }, joins: [Join { relation: Derived { lateral: true, subquery: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("order")]), alias: None }, joins: [] }], selection: Some(BinaryOp { left: Identifier([Ident("order"), Ident("customer")]), op: Eq, right: Identifier([Ident("customer"), Ident("id")]) }), group_by: [], having: None }), order_by: [], limit: Some(Value(Number("3"))), offset: None, fetch: None }, alias: Some(TableAlias { name: Ident("order"), columns: [], strict: false }) }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
 parse-statement
-SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id)
+SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id) ON true
 ----
-error:
-Parse error:
-SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id)
-                                         ^^^^^^^^^^^^^^^
-Expected subquery after LATERAL, found: generate_series
+SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) ON true
+=>
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("customer")]), alias: None }, joins: [Join { relation: Function { name: ObjectName([Ident("generate_series")]), args: Args([Value(Number("1")), Identifier([Ident("customer"), Ident("id")])]), alias: None }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
 parse-statement
 SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
