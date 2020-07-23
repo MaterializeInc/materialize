@@ -607,37 +607,56 @@ impl RelationExpr {
     where
         F: FnMut(usize, &mut ColumnRef),
     {
-        self.visit_mut(&mut |e| match e {
-            RelationExpr::Join { on, .. } => on.visit_columns(depth, f),
-            RelationExpr::Map { scalars, .. } => {
+        match self {
+            RelationExpr::Join {
+                kind: _,
+                on,
+                left,
+                right,
+            } => {
+                on.visit_columns(depth, f);
+                left.visit_columns(depth, f);
+                right.visit_columns(depth, f);
+            }
+            RelationExpr::Map { scalars, input } => {
                 for scalar in scalars {
                     scalar.visit_columns(depth, f);
                 }
+                input.visit_columns(depth, f);
             }
-            RelationExpr::FlatMap { exprs, .. } => {
+            RelationExpr::FlatMap { exprs, input, .. } => {
                 for expr in exprs {
                     expr.visit_columns(depth, f);
                 }
+                input.visit_columns(depth, f);
             }
-            RelationExpr::Filter { predicates, .. } => {
+            RelationExpr::Filter { predicates, input } => {
                 for predicate in predicates {
                     predicate.visit_columns(depth, f);
                 }
+                input.visit_columns(depth, f);
             }
-            RelationExpr::Reduce { aggregates, .. } => {
+            RelationExpr::Reduce {
+                aggregates, input, ..
+            } => {
                 for aggregate in aggregates {
                     aggregate.visit_columns(depth, f);
                 }
+                input.visit_columns(depth, f);
             }
-            RelationExpr::Constant { .. }
-            | RelationExpr::Get { .. }
-            | RelationExpr::Project { .. }
-            | RelationExpr::Distinct { .. }
-            | RelationExpr::TopK { .. }
-            | RelationExpr::Negate { .. }
-            | RelationExpr::Threshold { .. }
-            | RelationExpr::Union { .. } => (),
-        })
+            RelationExpr::Union { left, right } => {
+                left.visit_columns(depth, f);
+                right.visit_columns(depth, f);
+            }
+            RelationExpr::Project { input, .. }
+            | RelationExpr::Distinct { input }
+            | RelationExpr::TopK { input, .. }
+            | RelationExpr::Negate { input }
+            | RelationExpr::Threshold { input } => {
+                input.visit_columns(depth, f);
+            }
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+        }
     }
 
     /// Replaces any parameter references in the expression with the
