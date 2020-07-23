@@ -915,14 +915,25 @@ fn plan_table_with_joins<'a>(
     Ok((left, left_scope))
 }
 
-fn plan_table_factor<'a>(
+fn plan_table_factor(
     qcx: &QueryContext,
     left: RelationExpr,
     left_scope: Scope,
     join_operator: &JoinOperator,
-    table_factor: &'a TableFactor,
+    table_factor: &TableFactor,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
-    match table_factor {
+    let lateral = matches!(
+        table_factor,
+        TableFactor::Function { .. } | TableFactor::Derived { lateral: true, .. }
+    );
+
+    let qcx = if lateral {
+        Cow::Owned(qcx.derived_context(left_scope.clone(), &qcx.relation_type(&left)))
+    } else {
+        Cow::Borrowed(qcx)
+    };
+
+    let (expr, scope) = match table_factor {
         TableFactor::Table { name, alias } => {
             let name = qcx.scx.resolve_item(name.clone())?;
             let item = qcx.scx.catalog.get_item(&name);
@@ -931,51 +942,51 @@ fn plan_table_factor<'a>(
                 typ: item.desc()?.typ().clone(),
             };
             let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(qcx, alias.as_ref(), Some(name.into()), column_names)?;
-            plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
+            let scope = plan_table_alias(&qcx, alias.as_ref(), Some(name.into()), column_names)?;
+            (expr, scope)
         }
+
         TableFactor::Function { name, args, alias } => {
             let ecx = &ExprContext {
-                qcx,
+                qcx: &qcx,
                 name: "FROM table function",
-                scope: &left_scope,
-                relation_type: &qcx.relation_type(&left),
+                scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+                relation_type: &RelationType::empty(),
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
-            plan_table_function(ecx, left, &name, alias.as_ref(), args)
+            plan_table_function(ecx, &name, alias.as_ref(), args)?
         }
+
         TableFactor::Derived {
-            lateral,
+            lateral: _,
             subquery,
             alias,
         } => {
-            if *lateral {
-                unsupported!(3111, "LATERAL derived tables");
-            }
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
             let table_name = None;
             let column_names = scope.column_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(qcx, alias.as_ref(), table_name, column_names)?;
-            plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
+            let scope = plan_table_alias(&qcx, alias.as_ref(), table_name, column_names)?;
+            (expr, scope)
         }
+
         TableFactor::NestedJoin(table_with_joins) => {
-            let (identity, identity_scope) = plan_join_identity(qcx);
-            let (expr, scope) = plan_table_with_joins(
-                qcx,
+            let (identity, identity_scope) = plan_join_identity(&qcx);
+            plan_table_with_joins(
+                &qcx,
                 identity,
                 identity_scope,
                 &JoinOperator::CrossJoin,
                 table_with_joins,
-            )?;
-            plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
+            )?
         }
-    }
+    };
+
+    plan_join_operator(&qcx, &join_operator, left, left_scope, expr, scope, lateral)
 }
 
 fn plan_table_function(
     ecx: &ExprContext,
-    left: RelationExpr,
     name: &ObjectName,
     alias: Option<&TableAlias>,
     args: &FunctionArgs,
@@ -986,8 +997,7 @@ fn plan_table_function(
         FunctionArgs::Args(args) => args,
     };
     let tf = func::select_table_func(ecx, &*ident, args)?;
-    let call = RelationExpr::FlatMap {
-        input: Box::new(left),
+    let call = RelationExpr::CallTable {
         func: tf.func,
         exprs: tf.exprs,
     };
@@ -997,7 +1007,7 @@ fn plan_table_function(
         item: ident,
     };
     let scope = plan_table_alias(ecx.qcx, alias, Some(name), tf.column_names)?;
-    Ok((call, ecx.scope.clone().product(scope)))
+    Ok((call, scope))
 }
 
 fn plan_table_alias(
@@ -1160,6 +1170,7 @@ fn plan_join_operator(
     left_scope: Scope,
     right: RelationExpr,
     right_scope: Scope,
+    lateral: bool,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match operator {
         JoinOperator::Inner(constraint) => plan_join_constraint(
@@ -1169,7 +1180,7 @@ fn plan_join_operator(
             left_scope,
             right,
             right_scope,
-            JoinKind::Inner,
+            JoinKind::Inner { lateral },
         ),
         JoinOperator::LeftOuter(constraint) => plan_join_constraint(
             qcx,
@@ -1178,26 +1189,36 @@ fn plan_join_operator(
             left_scope,
             right,
             right_scope,
-            JoinKind::LeftOuter,
+            JoinKind::LeftOuter { lateral },
         ),
-        JoinOperator::RightOuter(constraint) => plan_join_constraint(
-            qcx,
-            &constraint,
-            left,
-            left_scope,
-            right,
-            right_scope,
-            JoinKind::RightOuter,
-        ),
-        JoinOperator::FullOuter(constraint) => plan_join_constraint(
-            qcx,
-            &constraint,
-            left,
-            left_scope,
-            right,
-            right_scope,
-            JoinKind::FullOuter,
-        ),
+        JoinOperator::RightOuter(constraint) => {
+            if lateral {
+                bail!("the combining JOIN type must be INNER or LEFT for a LATERAL reference");
+            }
+            plan_join_constraint(
+                qcx,
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                JoinKind::RightOuter,
+            )
+        }
+        JoinOperator::FullOuter(constraint) => {
+            if lateral {
+                bail!("the combining JOIN type must be INNER or LEFT for a LATERAL reference");
+            }
+            plan_join_constraint(
+                qcx,
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                JoinKind::FullOuter,
+            )
+        }
         JoinOperator::CrossJoin => {
             let join = if left.is_join_identity() {
                 right
@@ -1208,7 +1229,7 @@ fn plan_join_operator(
                     left: Box::new(left),
                     right: Box::new(right),
                     on: ScalarExpr::literal_true(),
-                    kind: JoinKind::Inner,
+                    kind: JoinKind::Inner { lateral },
                 }
             };
             Ok((join, left_scope.product(right_scope)))
@@ -1244,7 +1265,7 @@ fn plan_join_constraint<'a>(
                 allow_subqueries: true,
             };
             let on = plan_expr(ecx, expr)?.type_as(ecx, ScalarType::Bool)?;
-            if kind == JoinKind::Inner {
+            if let JoinKind::Inner { .. } = kind {
                 for (l, r) in find_trivial_column_equivalences(&on) {
                     // When we can statically prove that two columns are
                     // equivalent after a join, the right column becomes
@@ -2105,7 +2126,7 @@ pub enum QueryLifetime {
 }
 
 /// The state required when planning a `Query`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
     pub scx: &'a StatementContext<'a>,
@@ -2139,7 +2160,7 @@ impl<'a> QueryContext<'a> {
         expr.typ(&self.outer_relation_types, &self.param_types.borrow())
     }
 
-    fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext {
+    fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext<'a> {
         QueryContext {
             scx: self.scx,
             lifetime: self.lifetime,
