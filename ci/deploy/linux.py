@@ -72,7 +72,7 @@ def tag_docker(repo: mzbuild.Repository, tag: str) -> None:
 def tag_docker_latest_maybe(repo: mzbuild.Repository, tag: str) -> None:
     """If this tag is greater than all other tags, and is a release, tag it `latest`
     """
-    this_tag = semver.VersionInfo.parse(tag)
+    this_tag = semver.VersionInfo.parse(tag.lstrip("v"))
     if this_tag.prerelease is not None:
         return
 
