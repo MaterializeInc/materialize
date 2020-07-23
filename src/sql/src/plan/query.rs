@@ -923,15 +923,7 @@ fn plan_table_factor<'a>(
     table_factor: &'a TableFactor,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match table_factor {
-        TableFactor::Table {
-            name,
-            alias,
-            args,
-            with_hints,
-        } => {
-            if !with_hints.is_empty() {
-                unsupported!("WITH hints");
-            }
+        TableFactor::Table { name, alias, args } => {
             if let Some(args) = args {
                 let ecx = &ExprContext {
                     qcx,
