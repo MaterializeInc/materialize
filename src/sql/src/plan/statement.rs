@@ -31,8 +31,8 @@ use ore::collections::CollectionExt;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
-    AvroSchema, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format, Ident,
-    IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
+    AvroSchema, ColumnOption, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format,
+    Ident, IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
     SqlOption, Statement, Value,
 };
 
@@ -42,7 +42,9 @@ use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
-use crate::plan::{query, Index, Params, Plan, PlanContext, Sink, Source, View};
+use crate::plan::{
+    query, scalar_type_from_sql, Index, Params, Plan, PlanContext, Sink, Source, View,
+};
 use crate::pure::Schema;
 
 lazy_static! {
@@ -107,6 +109,7 @@ pub fn describe_statement(
         | Statement::CreateSchema { .. }
         | Statement::CreateIndex { .. }
         | Statement::CreateSource { .. }
+        | Statement::CreateTable { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::DropDatabase { .. }
@@ -236,10 +239,6 @@ pub fn describe_statement(
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
-        Statement::CreateTable { .. } => bail!(
-            "CREATE TABLE statements are not supported. \
-             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
-        ),
         Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     })
 }
@@ -275,6 +274,7 @@ pub fn handle_statement(
             if_not_exists,
         } => handle_create_schema(scx, name, if_not_exists),
         Statement::CreateSource { .. } => handle_create_source(scx, stmt),
+        Statement::CreateTable { .. } => handle_create_table(scx, stmt),
         Statement::CreateView { .. } => handle_create_view(scx, stmt, params),
         Statement::CreateSink { .. } => handle_create_sink(scx, stmt),
         Statement::CreateIndex { .. } => handle_create_index(scx, stmt),
@@ -326,10 +326,6 @@ pub fn handle_statement(
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
-        Statement::CreateTable { .. } => bail!(
-            "CREATE TABLE statements are not supported. \
-             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
-        ),
         Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     }
 }
@@ -1543,6 +1539,68 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
     }
 }
 
+fn handle_create_table(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow::Error> {
+    match &stmt {
+        Statement::CreateTable {
+            name,
+            columns,
+            constraints,
+            with_options,
+            if_not_exists,
+        } => {
+            if !with_options.is_empty() {
+                unsupported!("WITH options");
+            }
+            if !constraints.is_empty() {
+                unsupported!("CREATE TABLE with constraints")
+            }
+
+            let names: Vec<_> = columns
+                .iter()
+                .map(|c| Some(normalize::column_name(c.name.clone())))
+                .collect();
+
+            // Build initial relation type that handles declared data types
+            // and NOT NULL constraints.
+            let typ = RelationType::new(
+                columns
+                    .iter()
+                    .map(|c| {
+                        let ty = scalar_type_from_sql(&c.data_type)?;
+                        let mut nullable = true;
+                        for option in c.options.iter() {
+                            match &option.option {
+                                ColumnOption::NotNull => nullable = false,
+                                other => unsupported!(format!(
+                                    "CREATE TABLE with column constraint: {}",
+                                    other
+                                )),
+                            }
+                        }
+                        Ok(ColumnType::new(ty, nullable))
+                    })
+                    .collect::<Result<Vec<_>, anyhow::Error>>()?,
+            );
+
+            let name = scx.allocate_name(normalize::object_name(name.clone())?);
+            let desc = RelationDesc::new(typ, names);
+
+            let create_sql = normalize::create_statement(&scx, stmt.clone())?;
+            let source = Source {
+                create_sql,
+                connector: SourceConnector::Local,
+                desc,
+            };
+            Ok(Plan::CreateTable {
+                name,
+                source,
+                if_not_exists: *if_not_exists,
+            })
+        }
+        other => unreachable!(format!("{:?}", other)),
+    }
+}
+
 /// Renames the columns in `desc` with the names in `column_names` if
 /// `column_names` is non-empty.
 ///
@@ -1602,10 +1660,11 @@ fn handle_drop_objects(
 ) -> Result<Plan, anyhow::Error> {
     match object_type {
         ObjectType::Schema => handle_drop_schema(scx, if_exists, names, cascade),
-        ObjectType::Source | ObjectType::View | ObjectType::Index | ObjectType::Sink => {
-            handle_drop_items(scx, object_type, if_exists, names, cascade)
-        }
-        _ => unsupported!(format!("DROP {}", object_type)),
+        ObjectType::Source
+        | ObjectType::Table
+        | ObjectType::View
+        | ObjectType::Index
+        | ObjectType::Sink => handle_drop_items(scx, object_type, if_exists, names, cascade),
     }
 }
 

@@ -38,7 +38,7 @@ use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
-    SinkConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    SinkConnector, SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -54,7 +54,7 @@ use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, Plan, PlanContext};
 use transform::Optimizer;
 
-use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -257,7 +257,30 @@ where
                 }
                 CatalogItem::Index(index) => match id {
                     GlobalId::User(_) => {
-                        coord.create_index_dataflow(name.to_string(), *id, index.clone())
+                        // If index is on a local source, don't create a dataflow.
+                        if let CatalogItem::Source(Source {
+                            connector: SourceConnector::Local,
+                            desc,
+                            ..
+                        }) = coord.catalog.get_by_id(&index.on).item()
+                        {
+                            coord.views.insert(*id, ViewState::new(false, vec![]));
+                            broadcast(
+                                &mut coord.broadcast_tx,
+                                SequencedCommand::CreateLocalInput {
+                                    name: name.to_string(),
+                                    index_id: *id,
+                                    index: IndexDesc {
+                                        on_id: *id,
+                                        keys: index.keys.clone(),
+                                    },
+                                    on_type: desc.typ().clone(),
+                                },
+                            );
+                            coord.insert_index(*id, &index, Some(1_000));
+                        } else {
+                            coord.create_index_dataflow(name.to_string(), *id, index.clone())
+                        }
                     }
                     GlobalId::System(_) => {
                         // TODO(benesch): a smarter way to determine whether this system index
@@ -694,10 +717,10 @@ where
 
             Plan::CreateTable {
                 name,
-                desc,
+                source,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_table(pcx, name, desc, if_not_exists),
+                self.sequence_create_table(pcx, name, source, if_not_exists),
                 session,
             ),
 
@@ -906,15 +929,15 @@ where
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        desc: RelationDesc,
+        source: sql::plan::Source,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let source_id = self.catalog.allocate_id()?;
         let source = catalog::Source {
-            create_sql: "TODO (see #2755)".to_string(),
+            create_sql: source.create_sql,
             plan_cx: pcx,
             connector: dataflow_types::SourceConnector::Local,
-            desc,
+            desc: source.desc,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
@@ -2416,6 +2439,23 @@ where
         params: &sql::plan::Params,
     ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
+
+        // When symbiosis mode is enabled, default to the symbiosis planning of CREATE
+        // TABLE and DROP TABLE. Symbiosis stores table information locally, which is
+        // required for other statements to be executed correctly.
+        if let Statement::CreateTable { .. }
+        | Statement::DropObjects {
+            object_type: ObjectType::Table,
+            ..
+        } = &stmt
+        {
+            if let Some(ref mut postgres) = self.symbiosis {
+                let plan =
+                    block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
+                return Ok((pcx, plan));
+            }
+        }
+
         match sql::plan::plan(
             &pcx,
             &self.catalog.for_session(session),

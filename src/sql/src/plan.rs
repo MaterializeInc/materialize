@@ -82,7 +82,7 @@ pub enum Plan {
     },
     CreateTable {
         name: FullName,
-        desc: RelationDesc,
+        source: Source,
         if_not_exists: bool,
     },
     CreateView {
