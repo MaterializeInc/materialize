@@ -2455,8 +2455,11 @@ where
         if let Statement::DropObjects { object_type, .. } = &stmt {
             if object_type == &ObjectType::Table {
                 if let Some(ref mut postgres) = self.symbiosis {
-                    let plan =
-                        block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
+                    let plan = block_on(postgres.execute(
+                        &pcx,
+                        &self.catalog.for_session(session),
+                        &stmt,
+                    ))?;
                     return Ok((pcx, plan));
                 }
             }
