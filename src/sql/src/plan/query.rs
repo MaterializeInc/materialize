@@ -1208,11 +1208,6 @@ fn plan_join_operator(
             JoinKind::FullOuter,
         ),
         JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
-        // The remaining join types are MSSQL-specific. We are unlikely to
-        // ever support them. The standard SQL equivalent is LATERAL, which
-        // we are not capable of even parsing at the moment.
-        JoinOperator::CrossApply => unsupported!("CROSS APPLY"),
-        JoinOperator::OuterApply => unsupported!("OUTER APPLY"),
     }
 }
 
