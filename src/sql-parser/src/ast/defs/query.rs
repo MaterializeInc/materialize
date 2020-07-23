@@ -301,9 +301,11 @@ impl TableWithJoins {
 pub enum TableFactor {
     Table {
         name: ObjectName,
-        /// Arguments of a table-valued function, as supported by Postgres
-        /// and MSSQL.
-        args: Option<FunctionArgs>,
+        alias: Option<TableAlias>,
+    },
+    Function {
+        name: ObjectName,
+        args: FunctionArgs,
         alias: Option<TableAlias>,
     },
     Derived {
@@ -321,13 +323,18 @@ pub enum TableFactor {
 impl AstDisplay for TableFactor {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            TableFactor::Table { name, alias, args } => {
+            TableFactor::Table { name, alias } => {
                 f.write_node(name);
-                if let Some(args) = args {
-                    f.write_str("(");
-                    f.write_node(args);
-                    f.write_str(")");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
                 }
+            }
+            TableFactor::Function { name, args, alias } => {
+                f.write_node(name);
+                f.write_str("(");
+                f.write_node(args);
+                f.write_str(")");
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
