@@ -44,3 +44,6 @@ unknown catalog item 't'
 > SHOW TABLES;
 
 > SHOW SOURCES;
+
+! CREATE TABLE s (a int primary key);
+CREATE TABLE with column constraint: PRIMARY KEY

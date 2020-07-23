@@ -234,15 +234,11 @@ pub fn describe_statement(
                 query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             (Some(desc), param_types)
         }
-      
+
         Statement::Insert { .. } => bail!("INSERT statements are not supported"),
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
-        Statement::CreateTable { .. } => bail!(
-            "CREATE TABLE statements are not supported. \
-             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
-        ),
         Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     })
 }
@@ -330,10 +326,6 @@ pub fn handle_statement(
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
-        Statement::CreateTable { .. } => bail!(
-            "CREATE TABLE statements are not supported. \
-             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
-        ),
         Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     }
 }
@@ -1575,21 +1567,20 @@ fn handle_create_table(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
                     .iter()
                     .map(|c| {
                         let ty = scalar_type_from_sql(&c.data_type)?;
-                        let nullable = !c.options.iter().any(|o| o.option == ColumnOption::NotNull);
-                        Ok(ColumnType::new(ty).nullable(nullable))
+                        let mut nullable = true;
+                        for option in c.options.iter() {
+                            match &option.option {
+                                ColumnOption::NotNull => nullable = false,
+                                other => unsupported!(format!(
+                                    "CREATE TABLE with column constraint: {}",
+                                    other
+                                )),
+                            }
+                        }
+                        Ok(ColumnType::new(ty, nullable))
                     })
                     .collect::<Result<Vec<_>, anyhow::Error>>()?,
             );
-
-            for (_, column) in columns.iter().enumerate() {
-                for option in column.options.iter() {
-                    if let ColumnOption::Unique { is_primary } = option.option {
-                        if is_primary {
-                            unsupported!("CREATE TABLE with primary keys");
-                        }
-                    }
-                }
-            }
 
             let name = scx.allocate_name(normalize::object_name(name.clone())?);
             let desc = RelationDesc::new(typ, names);
@@ -1606,7 +1597,7 @@ fn handle_create_table(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
                 if_not_exists: *if_not_exists,
             })
         }
-        other => unsupported!(format!("{:?}", other)),
+        other => unreachable!(format!("{:?}", other)),
     }
 }
 
