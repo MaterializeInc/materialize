@@ -239,14 +239,12 @@ x f1 y
  2147483647  2147483647  2147483647
 -2147483647 -2147483647 -2147483647
 
-# TODO(benesch): parse failure.
-#
-# query III colnames
-# select * from ((select f1/2 as x from int4_tbl) ss1 join int4_tbl i4 on x = f1) j,
-#   lateral (select x) ss2(y);
-# ----
-# x f1 y
-# 0 0 0
+query III colnames
+select * from ((select f1/2 as x from int4_tbl) ss1 join int4_tbl i4 on x = f1) j,
+  lateral (select x) ss2(y);
+----
+x f1 y
+0 0 0
 
 # lateral references requiring pullup
 query II rowsort

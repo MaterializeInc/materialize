@@ -941,8 +941,12 @@ fn plan_table_factor(
                 id: Id::Global(item.id()),
                 typ: item.desc()?.typ().clone(),
             };
-            let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(&qcx, alias.as_ref(), Some(name.into()), column_names)?;
+            let scope = Scope::from_source(
+                Some(name.into()),
+                item.desc()?.iter_names().map(|n| n.cloned()),
+                Some(qcx.outer_scope.clone()),
+            );
+            let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
 
@@ -964,21 +968,21 @@ fn plan_table_factor(
             alias,
         } => {
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
-            let table_name = None;
-            let column_names = scope.column_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(&qcx, alias.as_ref(), table_name, column_names)?;
+            let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
 
-        TableFactor::NestedJoin(table_with_joins) => {
+        TableFactor::NestedJoin { join, alias } => {
             let (identity, identity_scope) = plan_join_identity(&qcx);
-            plan_table_with_joins(
+            let (expr, scope) = plan_table_with_joins(
                 &qcx,
                 identity,
                 identity_scope,
                 &JoinOperator::CrossJoin,
-                table_with_joins,
-            )?
+                join,
+            )?;
+            let scope = plan_table_alias(scope, alias.as_ref())?;
+            (expr, scope)
         }
     };
 
@@ -1001,65 +1005,53 @@ fn plan_table_function(
         func: tf.func,
         exprs: tf.exprs,
     };
-    let name = PartialName {
-        database: None,
-        schema: None,
-        item: ident,
-    };
-    let scope = plan_table_alias(ecx.qcx, alias, Some(name), tf.column_names)?;
+    let scope = Scope::from_source(
+        Some(PartialName {
+            database: None,
+            schema: None,
+            item: ident,
+        }),
+        tf.column_names,
+        Some(ecx.qcx.outer_scope.clone()),
+    );
+    let scope = plan_table_alias(scope, alias)?;
     Ok((call, scope))
 }
 
-fn plan_table_alias(
-    qcx: &QueryContext,
-    alias: Option<&TableAlias>,
-    inherent_table_name: Option<PartialName>,
-    inherent_column_names: Vec<Option<ColumnName>>,
-) -> Result<Scope, anyhow::Error> {
-    let table_name = match alias {
-        None => inherent_table_name,
-        Some(TableAlias { name, .. }) => Some(PartialName {
-            database: None,
-            schema: None,
-            item: normalize::ident(name.to_owned()),
-        }),
-    };
-    let column_names = match alias {
-        None => inherent_column_names,
-        Some(TableAlias {
-            columns,
-            strict: false,
-            ..
-        }) if columns.is_empty() => inherent_column_names,
-
-        Some(TableAlias {
-            columns, strict, ..
-        }) if (columns.len() > inherent_column_names.len())
-            || (*strict && columns.len() != inherent_column_names.len()) =>
-        {
+fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scope, anyhow::Error> {
+    if let Some(TableAlias {
+        name,
+        columns,
+        strict,
+    }) = alias
+    {
+        if (columns.len() > scope.items.len()) || (*strict && columns.len() != scope.items.len()) {
             bail!(
                 "{} has {} columns available but {} columns specified",
-                table_name
-                    .map(|n| n.to_string())
-                    .as_deref()
-                    .unwrap_or("subquery"),
-                inherent_column_names.len(),
+                name,
+                scope.items.len(),
                 columns.len()
             );
         }
 
-        Some(TableAlias { columns, .. }) => columns
-            .iter()
-            .cloned()
-            .map(|n| Some(normalize::column_name(n)))
-            .chain(inherent_column_names.into_iter().skip(columns.len()))
-            .collect(),
-    };
-    Ok(Scope::from_source(
-        table_name,
-        column_names,
-        Some(qcx.outer_scope.clone()),
-    ))
+        let table_name = normalize::ident(name.to_owned());
+        for (i, item) in scope.items.iter_mut().enumerate() {
+            let column_name = columns
+                .get(i)
+                .map(|a| normalize::column_name(a.clone()))
+                .or_else(|| item.names.get(0).and_then(|name| name.column_name.clone()));
+            item.names = vec![ScopeItemName {
+                table_name: Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: table_name.clone(),
+                }),
+                column_name,
+                priority: false,
+            }];
+        }
+    }
+    Ok(scope)
 }
 
 fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
@@ -1794,7 +1786,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, Pla
             })
         })
         .map(|(level, column, item)| {
-            let expr = ScalarExpr::Column(ColumnRef { level: *level, column: *column });
+            let expr = ScalarExpr::Column(ColumnRef {
+                level: *level,
+                column: *column,
+            });
             let name = item
                 .names
                 .first()
