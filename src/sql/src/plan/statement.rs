@@ -1278,7 +1278,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::Boolean(false)) => None,
                         Some(Value::Boolean(true)) => {
                             Some(Persistence {
-                                path: PathBuf::from("mzdata/persistence-raw"),
+                                path: PathBuf::from("mzdata/persistence-raw/"),
                                 // TODO clean this up
                                 startup_time: scx
                                     .catalog

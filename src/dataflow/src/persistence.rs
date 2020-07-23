@@ -79,7 +79,8 @@ where
                 let file_name = format!("{}-{}", file_name_base, file_number);
                 file_number += 1;
                 records_sent_to_file = 0;
-                let path = output_path.with_file_name(file_name);
+                let mut path = output_path.clone();
+                path.push(file_name);
                 // TODO handle file creation errors
                 file = Some(
                     OpenOptions::new()
