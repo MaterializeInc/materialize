@@ -54,7 +54,7 @@ use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, Plan, PlanContext};
 use transform::Optimizer;
 
-use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState};
+use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -258,28 +258,29 @@ where
                 CatalogItem::Index(index) => match id {
                     GlobalId::User(_) => {
                         // If index is on a local source, don't create a dataflow.
-                        if let CatalogItem::Source(source) =
-                            coord.catalog.get_by_id(&index.on).item()
+                        if let CatalogItem::Source(Source {
+                            connector: SourceConnector::Local,
+                            desc,
+                            ..
+                        }) = coord.catalog.get_by_id(&index.on).item()
                         {
-                            if let SourceConnector::Local = source.connector {
-                                coord.views.insert(*id, ViewState::new(false, vec![]));
-                                broadcast(
-                                    &mut coord.broadcast_tx,
-                                    SequencedCommand::CreateLocalInput {
-                                        name: name.to_string(),
-                                        index_id: *id,
-                                        index: IndexDesc {
-                                            on_id: *id,
-                                            keys: index.keys.clone(),
-                                        },
-                                        on_type: source.desc.typ().clone(),
+                            coord.views.insert(*id, ViewState::new(false, vec![]));
+                            broadcast(
+                                &mut coord.broadcast_tx,
+                                SequencedCommand::CreateLocalInput {
+                                    name: name.to_string(),
+                                    index_id: *id,
+                                    index: IndexDesc {
+                                        on_id: *id,
+                                        keys: index.keys.clone(),
                                     },
-                                );
-                                coord.insert_index(*id, &index, Some(1_000));
-                                continue;
-                            }
+                                    on_type: desc.typ().clone(),
+                                },
+                            );
+                            coord.insert_index(*id, &index, Some(1_000));
+                        } else {
+                            coord.create_index_dataflow(name.to_string(), *id, index.clone())
                         }
-                        coord.create_index_dataflow(name.to_string(), *id, index.clone())
                     }
                     GlobalId::System(_) => {
                         // TODO(benesch): a smarter way to determine whether this system index

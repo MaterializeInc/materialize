@@ -33,7 +33,7 @@ use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarT
 use sql_parser::ast::{
     AvroSchema, ColumnOption, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format,
     Ident, IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
-    SqlOption, Statement, TableConstraint, Value,
+    SqlOption, Statement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -1542,6 +1542,9 @@ fn handle_create_table(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
             if !with_options.is_empty() {
                 unsupported!("WITH options");
             }
+            if !constraints.is_empty() {
+                unsupported!("CREATE TABLE with constraints")
+            }
 
             let names: Vec<_> = columns
                 .iter()
@@ -1550,7 +1553,7 @@ fn handle_create_table(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
 
             // Build initial relation type that handles declared data types
             // and NOT NULL constraints.
-            let mut typ = RelationType::new(
+            let typ = RelationType::new(
                 columns
                     .iter()
                     .map(|c| {
@@ -1561,42 +1564,13 @@ fn handle_create_table(scx: &StatementContext, stmt: Statement) -> Result<Plan, 
                     .collect::<Result<Vec<_>, anyhow::Error>>()?,
             );
 
-            // Handle column-level UNIQUE and PRIMARY KEY constraints.
-            // PRIMARY KEY implies UNIQUE and NOT NULL.
-            for (index, column) in columns.iter().enumerate() {
+            for (_, column) in columns.iter().enumerate() {
                 for option in column.options.iter() {
                     if let ColumnOption::Unique { is_primary } = option.option {
-                        typ = typ.with_key(vec![index]);
                         if is_primary {
-                            typ.column_types[index].nullable = false;
+                            unsupported!("CREATE TABLE with primary keys");
                         }
                     }
-                }
-            }
-
-            // Handle table-level UNIQUE and PRIMARY KEY constraints.
-            // PRIMARY KEY implies UNIQUE and NOT NULL.
-            for constraint in constraints {
-                if let TableConstraint::Unique {
-                    name: _,
-                    columns,
-                    is_primary,
-                } = constraint
-                {
-                    let mut key = vec![];
-                    for column in columns {
-                        let name = normalize::column_name(column.clone());
-                        match names.iter().position(|n| n.as_ref() == Some(&name)) {
-                            None => bail!("unknown column {} in unique constraint", name),
-                            Some(i) => key.push(i),
-                        }
-                    }
-                    if *is_primary {
-                        for i in key.iter() {
-                            typ.column_types[*i].nullable = false;
-                        }
-                    }
-                    typ = typ.with_key(key);
                 }
             }
 
