@@ -165,13 +165,13 @@ impl RelationExpr {
                 }
                 input
             }
-            FlatMap { input, func, exprs } => {
+            CallTable { func, exprs } => {
                 // FlatMap expressions may contain correlated subqueries. Unlike Map they are not
                 // allowed to refer to the results of previous expressions, and we have a simpler
                 // implementation that appends all relevant columns first, then applies the flatmap
                 // operator to the result, then strips off any columns introduce by subqueries.
 
-                let mut input = input.applied_to(id_gen, get_outer, col_map);
+                let mut input = get_outer;
                 let old_arity = input.arity();
 
                 let exprs = exprs
@@ -208,6 +208,60 @@ impl RelationExpr {
                     }
                 }
                 input
+            }
+            Join {
+                left,
+                right,
+                on,
+                kind,
+            } if kind.is_lateral() => {
+                // A LATERAL join is a join in which the right expression has
+                // access to the columns in the left expression. It turns out
+                // this is *exactly* our branch operator, plus some additional
+                // null handling in the case of left joins. (Right and full
+                // lateral joins are not permitted.)
+                //
+                // As with normal joins, the `on` predicate may be correlated,
+                // and we treat it as a filter that follows the branch.
+
+                let left = left.applied_to(id_gen, get_outer, col_map);
+                left.let_in(id_gen, |id_gen, get_left| {
+                    let mut join = branch(
+                        id_gen,
+                        get_left.clone(),
+                        col_map,
+                        *right,
+                        |id_gen, right, get_left, col_map| {
+                            right.applied_to(id_gen, get_left, col_map)
+                        },
+                    );
+
+                    // Plan the `on` predicate.
+                    let old_arity = join.arity();
+                    let on = on.applied_to(id_gen, col_map, &mut join);
+                    join = join.filter(vec![on]);
+                    let new_arity = join.arity();
+                    if old_arity != new_arity {
+                        // This means we added some columns to handle
+                        // subqueries, and now we need to get rid of them.
+                        join = join.project((0..old_arity).collect());
+                    }
+
+                    // If a left join, reintroduce any rows from the left that
+                    // are missing, with nulls filled in for the right columns.
+                    if let JoinKind::LeftOuter { .. } = kind {
+                        let default = join
+                            .typ()
+                            .column_types
+                            .into_iter()
+                            .skip(get_left.arity())
+                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                            .collect();
+                        get_left.lookup(id_gen, join, default)
+                    } else {
+                        join
+                    }
+                })
             }
             Join {
                 left,
@@ -257,7 +311,7 @@ impl RelationExpr {
                         }
                         join.let_in(id_gen, |id_gen, get_join| {
                             let mut result = get_join.clone();
-                            if let JoinKind::LeftOuter | JoinKind::FullOuter = kind {
+                            if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } = kind {
                                 let left_outer = get_left.clone().anti_lookup(
                                     id_gen,
                                     get_join.clone(),

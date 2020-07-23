@@ -81,8 +81,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
 %0 =
-| Constant ()
-| FlatMap generate_series(-(2), 2)
+| CallTable generate_series(-(2), 2)
 
 EOF
 
@@ -167,7 +166,12 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 %0 =
 | Get materialize.public.x (u5)
-| FlatMap generate_series(1, #0)
+
+%1 =
+| CallTable generate_series(1, #^0)
+
+%2 =
+| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -176,7 +180,12 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 ----
 %0 =
 | Get materialize.public.x (u5)
-| FlatMap generate_series(i32toi64(100), i32toi64(#0))
+
+%1 =
+| CallTable generate_series(i32toi64(100), i32toi64(#^0))
+
+%2 =
+| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -185,28 +194,52 @@ EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 %0 =
 | Get materialize.public.x (u5)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.x (u5)
 | FlatMap generate_series(1, #0)
+| | demand = (#0, #2)
+
+%2 =
+| Join %0 %1 (= #0 #2)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0, #1, #4)
+| Project (#0, #1, #4)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+----
+%0 =
+| Get materialize.public.x (u5)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.x (u5)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+%3 =
+| Get %2
+| Filter (#1 = #3)
+| ArrangeBy (#0, #2)
+
+%4 =
+| Get %2
+| Distinct group=(#0, #2)
+| FlatMap generate_series(#0, #1)
 | | demand = (#0..#2)
 
-EOF
-
-query T multiline
-EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
-----
-%0 =
-| Get materialize.public.x (u5)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.x (u5)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
-| FlatMap generate_series(#0, #2)
-| | demand = (#0..#4)
-| Filter (#1 = #3)
+%5 =
+| Join %3 %4 (= #0 #4) (= #2 #5)
+| | implementation = Differential %4 %3.(#0, #2)
+| | demand = (#0..#3, #6)
+| Project (#0..#3, #6)
 
 EOF
 
@@ -224,9 +257,23 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.
 | Join %0 %1
 | | implementation = Differential %1 %0.()
 | | demand = (#0..#3)
-| FlatMap generate_series(#0, #2)
-| | demand = (#0..#4)
+
+%3 =
+| Get %2
 | Filter (#1 = #3)
+| ArrangeBy (#0, #2)
+
+%4 =
+| Get %2
+| Distinct group=(#0, #2)
+| FlatMap generate_series(#0, #1)
+| | demand = (#0..#2)
+
+%5 =
+| Join %3 %4 (= #0 #4) (= #2 #5)
+| | implementation = Differential %4 %3.(#0, #2)
+| | demand = (#0..#3, #6)
+| Project (#0..#3, #6)
 
 EOF
 
