@@ -1198,7 +1198,21 @@ fn plan_join_operator(
             right_scope,
             JoinKind::FullOuter,
         ),
-        JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
+        JoinOperator::CrossJoin => {
+            let join = if left.is_join_identity() {
+                right
+            } else if right.is_join_identity() {
+                left
+            } else {
+                RelationExpr::Join {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    on: ScalarExpr::literal_true(),
+                    kind: JoinKind::Inner,
+                }
+            };
+            Ok((join, left_scope.product(right_scope)))
+        }
     }
 }
 
