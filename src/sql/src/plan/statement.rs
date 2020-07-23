@@ -231,11 +231,16 @@ pub fn describe_statement(
                 query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             (Some(desc), param_types)
         }
+
+        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
+        Statement::Update { .. } => bail!("UPDATE statements are not supported"),
+        Statement::Delete { .. } => bail!("DELETE statements are not supported"),
+        Statement::Copy { .. } => bail!("COPY statements are not supported"),
         Statement::CreateTable { .. } => bail!(
             "CREATE TABLE statements are not supported. \
              Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
         ),
-        _ => unsupported!(format!("{:?}", stmt)),
+        Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     })
 }
 
@@ -317,7 +322,15 @@ pub fn handle_statement(
             options,
         } => handle_explain(scx, stage, explainee, options, params),
 
-        _ => bail!("unsupported SQL statement: {:?}", stmt),
+        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
+        Statement::Update { .. } => bail!("UPDATE statements are not supported"),
+        Statement::Delete { .. } => bail!("DELETE statements are not supported"),
+        Statement::Copy { .. } => bail!("COPY statements are not supported"),
+        Statement::CreateTable { .. } => bail!(
+            "CREATE TABLE statements are not supported. \
+             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
+        ),
+        Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     }
 }
 
