@@ -185,15 +185,15 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
                 AND EXTRACT(YEAR FROM a37)
                 AND (SELECT a38)
                 AND EXISTS (SELECT a39)
-            FROM a40(a41) AS a42 WITH (a43)
-            LEFT JOIN a44 ON false
-            RIGHT JOIN a45 ON false
-            FULL JOIN a46 ON false
-            JOIN a47 (a48) USING (a49)
-            NATURAL JOIN (a50 NATURAL JOIN a51)
+            FROM a40(a41) AS a42
+            LEFT JOIN a43 ON false
+            RIGHT JOIN a44 ON false
+            FULL JOIN a45 ON false
+            JOIN a46 (a47) USING (a48)
+            NATURAL JOIN (a49 NATURAL JOIN a50)
         EXCEPT
-            (SELECT a52(a53) OVER (PARTITION BY a54 ORDER BY a55 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING))
-        ORDER BY a56
+            (SELECT a51(a52) OVER (PARTITION BY a53 ORDER BY a54 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING))
+        ORDER BY a55
         LIMIT 1;
         UPDATE b01 SET b02 = b03 WHERE b04;
         INSERT INTO c01 (c02) VALUES (c03);
@@ -223,7 +223,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         "a25", "a26", "a27", "a28", "a29", "a30", "a31", "a32", "a33", "a34", "a35", "a36",
         "date_part",
         "a37", "a38", "a39", "a40", "a41", "a42", "a43", "a44", "a45", "a46", "a47", "a48",
-        "a49", "a50", "a51", "a52", "a53", "a54", "a55", "a56",
+        "a49", "a50", "a51", "a52", "a53", "a54", "a55",
         "b01", "b02", "b03", "b04",
         "c01", "c02", "c03", "c04", "c05",
         "d01", "d02",
