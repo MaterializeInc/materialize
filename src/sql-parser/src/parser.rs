@@ -2854,7 +2854,11 @@ impl Parser {
         self.expect_keyword("INTO")?;
         let table_name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let source = Box::new(self.parse_query()?);
+        let source = if self.parse_keywords(vec!["DEFAULT", "VALUES"]) {
+            InsertSource::DefaultValues
+        } else {
+            InsertSource::Query(Box::new(self.parse_query()?))
+        };
         Ok(Statement::Insert {
             table_name,
             columns,

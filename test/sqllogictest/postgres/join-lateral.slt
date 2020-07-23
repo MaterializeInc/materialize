@@ -68,11 +68,11 @@ INSERT INTO tenk1 VALUES
 # absolutely fall over since the plans for a lot of these lateral joins are
 # absolutely horrible.
 
-# statement ok
-# CREATE TABLE onerow ()
+statement ok
+CREATE TABLE onerow ()
 
-# statement ok
-# INSERT INTO onerow DEFAULT VALUES
+statement ok
+INSERT INTO onerow DEFAULT VALUES
 
 query II colnames
 select unique2, x.*
@@ -411,35 +411,33 @@ vx  vy
 4567890123456789  4567890123456789
 4567890123456789  -4567890123456789
 
-# TODO(benesch): cannot construct onerow table.
-#
-# query II
-# select v.* from
-#   (int8_tbl x left join (select q1,(select coalesce(q2,0)) q2 from int8_tbl) y on x.q2 = y.q1)
-#   left join int4_tbl z on z.f1 = x.q2,
-#   lateral (select x.q1,y.q1 from onerow union all select x.q2,y.q2 from onerow) v(vx,vy);
-# ----
-# vx  vy
-# 4567890123456789  123
-# 123  456
-# 4567890123456789  123
-# 123  4567890123456789
-# 4567890123456789  4567890123456789
-# 4567890123456789  123
-# 123  4567890123456789
-# 4567890123456789  123
-# 4567890123456789  4567890123456789
-# 4567890123456789  4567890123456789
-# 123  4567890123456789
-# 4567890123456789  4567890123456789
-# 4567890123456789  4567890123456789
-# 4567890123456789  -4567890123456789
-# 123  4567890123456789
-# 4567890123456789  -4567890123456789
-# 123  NULL
-# 456  NULL
-# 4567890123456789  NULL
-# -4567890123456789  NULL
+query II colnames,rowsort
+select v.* from
+  (int8_tbl x left join (select q1,(select coalesce(q2,0)) q2 from int8_tbl) y on x.q2 = y.q1)
+  left join int4_tbl z on z.f1 = x.q2,
+  lateral (select x.q1,y.q1 from onerow union all select x.q2,y.q2 from onerow) v(vx,vy);
+----
+vx  vy
+4567890123456789  123
+123  456
+4567890123456789  123
+123  4567890123456789
+4567890123456789  4567890123456789
+4567890123456789  123
+123  4567890123456789
+4567890123456789  123
+4567890123456789  4567890123456789
+4567890123456789  4567890123456789
+123  4567890123456789
+4567890123456789  4567890123456789
+4567890123456789  4567890123456789
+4567890123456789  -4567890123456789
+123  4567890123456789
+4567890123456789  -4567890123456789
+123  NULL
+456  NULL
+4567890123456789  NULL
+-4567890123456789  NULL
 
 query IIIII rowsort
 select * from
