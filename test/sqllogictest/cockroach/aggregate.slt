@@ -219,24 +219,22 @@ SELECT count(*), k FROM kv GROUP BY k
 1 7
 1 8
 
-# not in spec
 # GROUP BY specified using column index works.
-# query II rowsort
-# SELECT count(*), k FROM kv GROUP BY 2
-# ----
-# 1 1
-# 1 3
-# 1 5
-# 1 6
-# 1 7
-# 1 8
+query II rowsort
+SELECT count(*), k FROM kv GROUP BY 2
+----
+1 1
+1 3
+1 5
+1 6
+1 7
+1 8
 
 query error aggregate functions are not allowed in GROUP BY
 SELECT * FROM kv GROUP BY v, count(DISTINCT w)
 
-# not in spec
-# query error aggregate functions are not allowed in GROUP BY
-# SELECT count(DISTINCT w) FROM kv GROUP BY 1
+query error aggregate functions are not allowed in GROUP BY
+SELECT count(DISTINCT w) FROM kv GROUP BY 1
 
 query error aggregate functions are not allowed in RETURNING
 INSERT INTO kv (k, v) VALUES (99, 100) RETURNING sum(v)
@@ -250,13 +248,11 @@ SELECT sum(v) FROM kv GROUP BY k LIMIT 1 OFFSET sum(v)
 query error aggregate functions are not allowed in VALUES
 INSERT INTO kv (k, v) VALUES (99, count(1))
 
-# not in spec
-# query error pgcode 42P10 GROUP BY position 5 is not in select list
-# SELECT count(*), k FROM kv GROUP BY 5
+query error pgcode 42P10 column reference 5 in GROUP BY clause is out of range \(1 - 2\)
+SELECT count(*), k FROM kv GROUP BY 5
 
-# not in spec
-# query error pgcode 42P10 GROUP BY position 0 is not in select list
-# SELECT count(*), k FROM kv GROUP BY 0
+query error pgcode 42P10 column reference 0 in GROUP BY clause is out of range \(1 - 2\)
+SELECT count(*), k FROM kv GROUP BY 0
 
 # unsure about spec, but this is consistent with our stance of always treating GROUP BY as an expr
 # query error pgcode 42601 non-integer constant in GROUP BY
@@ -305,16 +301,15 @@ SELECT v, count(*), w FROM kv GROUP BY v, w
 4    1 5
 NULL 1 5
 
-# not in spec
 # Grouping by more than one column using column numbers works.
-# query III rowsort
-# SELECT v, count(*), w FROM kv GROUP BY 1, 3
-# ----
-# 2    1 2
-# 2    2 3
-# 4    1 2
-# 4    1 5
-# NULL 1 5
+query III rowsort
+SELECT v, count(*), w FROM kv GROUP BY 1, 3
+----
+2    1 2
+2    2 3
+4    1 2
+4    1 5
+NULL 1 5
 
 # Selecting and grouping on a function expression works.
 query IT rowsort
@@ -946,24 +941,24 @@ query error aggregate functions are not allowed in FILTER
 SELECT v, count(*) FILTER (WHERE count(*) > 5) FROM filter_test GROUP BY v
 
 # Tests with * inside GROUP BY.
-# query I
-# SELECT 1 FROM kv GROUP BY kv.*
-# ----
-# 1
-# 1
-# 1
-# 1
-# 1
-# 1
-#
-# query R rowsort
-# SELECT sum(abc.d) FROM kv JOIN abc ON kv.k >= abc.d GROUP BY kv.*
-# ----
-# 1.1
-# 6.1
-# 6.1
-# 6.1
-# 6.1
+query I
+SELECT 1 FROM kv GROUP BY kv.*
+----
+1
+1
+1
+1
+1
+1
+
+query R rowsort
+SELECT sum(abc.b) FROM kv JOIN abc ON kv.v > abc.b GROUP BY kv.*
+----
+1.5
+1.5
+1.5
+3.5
+3.5
 
 query BB
 SELECT max(true), min(true)

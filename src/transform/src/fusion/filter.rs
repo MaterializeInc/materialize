@@ -16,7 +16,7 @@
 //! use transform::fusion::filter::Filter;
 //!
 //! let input = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
+//!     ColumnType::new(ScalarType::Bool, false),
 //! ]));
 //!
 //! let predicate0 = ScalarExpr::Column(0);

@@ -112,7 +112,7 @@ fn to_jsonb_any_record_cast(
     for (i, (name, _ty)) in fields.iter().enumerate() {
         exprs.push(ScalarExpr::literal(
             Datum::String(name.as_str()),
-            ColumnType::new(ScalarType::String),
+            ColumnType::new(ScalarType::String, false),
         ));
         exprs.push(plan_cast(
             "to_jsonb_any_record",
@@ -225,7 +225,7 @@ lazy_static! {
             (Float32, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
                 let s = ScalarExpr::literal(
-                    Datum::from(i32::from(s)), ColumnType::new(to_type.scalar_type())
+                    Datum::from(i32::from(s)), ColumnType::new(to_type.scalar_type(), false)
                 );
                 Ok(e.call_binary(s, BinaryFunc::CastFloat32ToDecimal))
             }),
@@ -238,7 +238,7 @@ lazy_static! {
             (Float64, Explicit(Decimal(0, 0))) => CastOp::F(|_ecx, e, to_type| {
                 let (_, s) = to_type.scalar_type().unwrap_decimal_parts();
                 let s = ScalarExpr::literal(Datum::from(
-                    i32::from(s)), ColumnType::new(to_type.scalar_type()));
+                    i32::from(s)), ColumnType::new(to_type.scalar_type(), false));
                 Ok(e.call_binary(s, BinaryFunc::CastFloat64ToDecimal))
             }),
             (Float64, Explicit(String)) => CastFloat64ToString,
@@ -247,17 +247,17 @@ lazy_static! {
             // DECIMAL
             (Decimal(0, 0), Explicit(Int32)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                Ok(rescale_decimal(e, s, 0).call_unary(CastDecimalToInt32))
+                Ok(e.call_unary(CastDecimalToInt32(s)))
             }),
             (Decimal(0, 0), Explicit(Int64)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
-                Ok(rescale_decimal(e, s, 0).call_unary(CastDecimalToInt64))
+                Ok(e.call_unary(CastDecimalToInt64(s)))
             }),
             (Decimal(0, 0), Implicit(Float32)) => CastOp::F(|ecx, e, _to_type| {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 let factor = 10_f32.powi(i32::from(s));
                 let factor =
-                    ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float32));
+                    ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float32, false));
                 Ok(e.call_unary(CastSignificandToFloat32)
                     .call_binary(factor, BinaryFunc::DivFloat32))
             }),
@@ -265,7 +265,7 @@ lazy_static! {
                 let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                 let factor = 10_f64.powi(i32::from(s));
                 let factor =
-                    ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float32));
+                    ScalarExpr::literal(Datum::from(factor), ColumnType::new(Float32, false));
                 Ok(e.call_unary(CastSignificandToFloat64)
                     .call_binary(factor, BinaryFunc::DivFloat64))
             }),
@@ -380,14 +380,14 @@ pub fn get_cast<'a>(from: &ScalarType, cast_to: &CastTo) -> Option<&'a CastOp> {
 pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     match s1.cmp(&s2) {
         Ordering::Less => {
-            let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
+            let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1), false);
             let factor = 10_i128.pow(u32::from(s2 - s1));
             let factor = ScalarExpr::literal(Datum::from(factor), typ);
             expr.call_binary(factor, BinaryFunc::MulDecimal)
         }
         Ordering::Equal => expr,
         Ordering::Greater => {
-            let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
+            let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2), false);
             let factor = 10_i128.pow(u32::from(s1 - s2));
             let factor = ScalarExpr::literal(Datum::from(factor), typ);
             expr.call_binary(factor, BinaryFunc::DivDecimal)
@@ -501,15 +501,18 @@ pub fn plan_coerce<'a>(
 
         (LiteralNull, Plain(typ)) => ScalarExpr::literal_null(typ),
         (LiteralNull, JsonbAny) => {
-            ScalarExpr::literal(Datum::JsonNull, ColumnType::new(ScalarType::Jsonb))
+            ScalarExpr::literal(Datum::JsonNull, ColumnType::new(ScalarType::Jsonb, false))
         }
 
         (LiteralString(s), Plain(typ)) => {
-            let lit = ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::String));
+            let lit = ScalarExpr::literal(
+                Datum::String(&s),
+                ColumnType::new(ScalarType::String, false),
+            );
             plan_cast("string literal", ecx, lit, CastTo::Explicit(typ))?
         }
         (LiteralString(s), JsonbAny) => {
-            ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::Jsonb))
+            ScalarExpr::literal(Datum::String(&s), ColumnType::new(ScalarType::Jsonb, false))
         }
 
         (LiteralList(exprs), coerce_to) => {

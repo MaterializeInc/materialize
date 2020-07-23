@@ -458,10 +458,11 @@ impl ScalarExpr {
                             // optimizer.
                             .product(expr::RelationExpr::constant(
                                 vec![vec![Datum::True]],
-                                RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
+                                RelationType::new(vec![ColumnType::new(ScalarType::Bool, false)]),
                             ));
                         // append False to anything that didn't return any rows
-                        let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
+                        let default =
+                            vec![(Datum::False, ColumnType::new(ScalarType::Bool, false))];
                         get_inner.lookup(id_gen, exists, default)
                     },
                 );

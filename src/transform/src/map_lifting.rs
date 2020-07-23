@@ -379,7 +379,10 @@ impl LiteralLifting {
                         .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
                     result.push(ScalarExpr::literal_ok(
                         eval,
-                        repr::ColumnType::new(repr::ScalarType::Bool),
+                        // This type information should be available in the `a.expr` literal,
+                        // but extracting it with pattern matching seems awkward.
+                        aggr.func
+                            .output_type(aggr.expr.typ(&repr::RelationType::empty())),
                     ));
                 }
                 result.reverse();

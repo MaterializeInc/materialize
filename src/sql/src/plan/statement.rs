@@ -52,12 +52,12 @@ lazy_static! {
         RelationDesc::empty().with_nonnull_column("Database", ScalarType::String);
     static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::new(
         RelationType::new(vec![
-            ColumnType::new(ScalarType::String),
-            ColumnType::new(ScalarType::String),
-            ColumnType::new(ScalarType::String).nullable(true),
-            ColumnType::new(ScalarType::String).nullable(true),
-            ColumnType::new(ScalarType::Bool),
-            ColumnType::new(ScalarType::Int64),
+            ColumnType::new(ScalarType::String, false),
+            ColumnType::new(ScalarType::String, false),
+            ColumnType::new(ScalarType::String, true),
+            ColumnType::new(ScalarType::String, true),
+            ColumnType::new(ScalarType::Bool, false),
+            ColumnType::new(ScalarType::Int64, false),
         ]),
         vec![
             "Source_or_view",
@@ -234,7 +234,16 @@ pub fn describe_statement(
                 query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             (Some(desc), param_types)
         }
-        _ => unsupported!(format!("{:?}", stmt)),
+      
+        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
+        Statement::Update { .. } => bail!("UPDATE statements are not supported"),
+        Statement::Delete { .. } => bail!("DELETE statements are not supported"),
+        Statement::Copy { .. } => bail!("COPY statements are not supported"),
+        Statement::CreateTable { .. } => bail!(
+            "CREATE TABLE statements are not supported. \
+             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
+        ),
+        Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     })
 }
 
@@ -317,7 +326,15 @@ pub fn handle_statement(
             options,
         } => handle_explain(scx, stage, explainee, options, params),
 
-        _ => bail!("unsupported SQL statement: {:?}", stmt),
+        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
+        Statement::Update { .. } => bail!("UPDATE statements are not supported"),
+        Statement::Delete { .. } => bail!("DELETE statements are not supported"),
+        Statement::Copy { .. } => bail!("COPY statements are not supported"),
+        Statement::CreateTable { .. } => bail!(
+            "CREATE TABLE statements are not supported. \
+             Try CREATE SOURCE or CREATE [MATERIALIZED] VIEW instead."
+        ),
+        Statement::SetTransaction { .. } => bail!("SET TRANSACTION statements are not supported"),
     }
 }
 

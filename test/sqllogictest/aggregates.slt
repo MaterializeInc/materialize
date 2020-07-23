@@ -36,6 +36,27 @@ SELECT a + 1 FROM t GROUP BY a + 1 HAVING sum(b) = 3
 2
 3
 
+# Simple column names in GROUP BY can refer to columns from the output list...
+query TII rowsort
+SELECT 'dummy', a AS c, sum(b) FROM t GROUP BY c
+----
+dummy 1 3
+dummy 2 3
+dummy 3 1
+
+# ...unless they are ambiguous...
+query error column name "c" is ambiguous
+SELECT a AS c, sum(b) AS c FROM t GROUP BY c
+
+# ...although ambiguity between the input list and the output list is not an
+# error; the column in the input list is preferred.
+query II rowsort
+SELECT a, sum(b) AS a FROM t GROUP BY a
+----
+1 3
+2 3
+3 1
+
 query TTT colnames
 SHOW COLUMNS FROM t
 ----

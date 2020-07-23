@@ -128,6 +128,8 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
     retry::retry_for(Duration::from_secs(10), |_| {
         kafka_client.create_topic(
             args.kafka_partitions.unwrap_or(1),
+            1,
+            &[],
             Some(Duration::from_secs(10)),
         )
     })

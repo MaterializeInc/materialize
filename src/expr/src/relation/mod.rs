@@ -549,8 +549,8 @@ impl RelationExpr {
     ///
     /// // A common schema for each input.
     /// let schema = RelationType::new(vec![
-    ///     ColumnType::new(ScalarType::Int32),
-    ///     ColumnType::new(ScalarType::Int32),
+    ///     ColumnType::new(ScalarType::Int32, false),
+    ///     ColumnType::new(ScalarType::Int32, false),
     /// ]);
     ///
     /// // the specific data are not important here.

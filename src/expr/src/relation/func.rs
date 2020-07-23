@@ -497,7 +497,7 @@ impl AggregateFunc {
             // max/min/sum return null on empty sets
             _ => true,
         };
-        ColumnType::new(scalar_type).nullable(nullable)
+        ColumnType::new(scalar_type, nullable)
     }
 }
 
@@ -723,28 +723,30 @@ impl TableFunc {
     pub fn output_type(&self) -> RelationType {
         RelationType::new(match self {
             TableFunc::JsonbEach { stringify: true } => vec![
-                ColumnType::new(ScalarType::String),
-                ColumnType::new(ScalarType::String).nullable(true),
+                ColumnType::new(ScalarType::String, false),
+                ColumnType::new(ScalarType::String, true),
             ],
             TableFunc::JsonbEach { stringify: false } => vec![
-                ColumnType::new(ScalarType::String),
-                ColumnType::new(ScalarType::Jsonb),
+                ColumnType::new(ScalarType::String, false),
+                ColumnType::new(ScalarType::Jsonb, false),
             ],
-            TableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String)],
+            TableFunc::JsonbObjectKeys => vec![ColumnType::new(ScalarType::String, false)],
             TableFunc::JsonbArrayElements { stringify: true } => {
-                vec![ColumnType::new(ScalarType::String).nullable(true)]
+                vec![ColumnType::new(ScalarType::String, true)]
             }
             TableFunc::JsonbArrayElements { stringify: false } => {
-                vec![ColumnType::new(ScalarType::Jsonb)]
+                vec![ColumnType::new(ScalarType::Jsonb, false)]
             }
             TableFunc::RegexpExtract(a) => a
                 .capture_groups_iter()
-                .map(|cg| ColumnType::new(ScalarType::String).nullable(cg.nullable))
+                .map(|cg| ColumnType::new(ScalarType::String, cg.nullable))
                 .collect(),
-            TableFunc::CsvExtract(n_cols) => iter::repeat(ColumnType::new(ScalarType::String))
-                .take(*n_cols)
-                .collect(),
-            TableFunc::GenerateSeries(typ) => vec![ColumnType::new(typ.clone())],
+            TableFunc::CsvExtract(n_cols) => {
+                iter::repeat(ColumnType::new(ScalarType::String, false))
+                    .take(*n_cols)
+                    .collect()
+            }
+            TableFunc::GenerateSeries(typ) => vec![ColumnType::new(typ.clone(), false)],
             TableFunc::Repeat => vec![],
         })
     }
