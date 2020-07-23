@@ -117,15 +117,20 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor) {
             match table_factor {
-                TableFactor::Table { name, args, alias } => {
-                    // Only attempt to resolve the name if it is not a table
-                    // function (i.e., there are no arguments).
-                    if args.is_none() {
-                        self.visit_object_name_mut(name)
+                TableFactor::Table { name, alias } => {
+                    self.visit_object_name_mut(name);
+                    if let Some(alias) = alias {
+                        self.visit_table_alias_mut(alias);
                     }
+                }
+                TableFactor::Function {
+                    name: _,
+                    args,
+                    alias,
+                } => {
                     match args {
-                        None | Some(FunctionArgs::Star) => (),
-                        Some(FunctionArgs::Args(args)) => {
+                        FunctionArgs::Star => (),
+                        FunctionArgs::Args(args) => {
                             for expr in args {
                                 self.visit_expr_mut(expr);
                             }
@@ -135,8 +140,9 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                         self.visit_table_alias_mut(alias);
                     }
                 }
-                // We only need special behavior for `TableFactor::Table`. Just
-                // visit the other types of table factors like normal.
+                // We only need special behavior for `TableFactor::Table` and
+                // `TableFactor::Function`. Just visit the other types of table
+                // factors like normal.
                 _ => visit_mut::visit_table_factor_mut(self, table_factor),
             }
         }

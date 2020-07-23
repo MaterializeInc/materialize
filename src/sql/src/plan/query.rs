@@ -923,28 +923,27 @@ fn plan_table_factor<'a>(
     table_factor: &'a TableFactor,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match table_factor {
-        TableFactor::Table { name, alias, args } => {
-            if let Some(args) = args {
-                let ecx = &ExprContext {
-                    qcx,
-                    name: "FROM table function",
-                    scope: &left_scope,
-                    relation_type: &qcx.relation_type(&left),
-                    allow_aggregates: false,
-                    allow_subqueries: true,
-                };
-                plan_table_function(ecx, left, &name, alias.as_ref(), args)
-            } else {
-                let name = qcx.scx.resolve_item(name.clone())?;
-                let item = qcx.scx.catalog.get_item(&name);
-                let expr = RelationExpr::Get {
-                    id: Id::Global(item.id()),
-                    typ: item.desc()?.typ().clone(),
-                };
-                let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
-                let scope = plan_table_alias(qcx, alias.as_ref(), Some(name.into()), column_names)?;
-                plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
-            }
+        TableFactor::Table { name, alias } => {
+            let name = qcx.scx.resolve_item(name.clone())?;
+            let item = qcx.scx.catalog.get_item(&name);
+            let expr = RelationExpr::Get {
+                id: Id::Global(item.id()),
+                typ: item.desc()?.typ().clone(),
+            };
+            let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
+            let scope = plan_table_alias(qcx, alias.as_ref(), Some(name.into()), column_names)?;
+            plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
+        }
+        TableFactor::Function { name, args, alias } => {
+            let ecx = &ExprContext {
+                qcx,
+                name: "FROM table function",
+                scope: &left_scope,
+                relation_type: &qcx.relation_type(&left),
+                allow_aggregates: false,
+                allow_subqueries: true,
+            };
+            plan_table_function(ecx, left, &name, alias.as_ref(), args)
         }
         TableFactor::Derived {
             lateral,
