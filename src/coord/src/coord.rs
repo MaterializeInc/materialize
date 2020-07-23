@@ -2439,11 +2439,11 @@ where
     ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
 
-        // Default to the symbiosis mode implementation of CREATE TABLE when
+        // Default to the symbiosis mode implementation of CREATE TABLE and DROP TABLE when
         // symbiosis mode is enabled. The symbiosis code stores metadata of tables
         // created with CREATE TABLE that is required for other symbiosis statement
         // implementations to be executed correctly.
-        if let Statement::CreateTable { .. } = &stmt {
+        if let Statement::CreateTable { .. } | Statement::DropObjects { .. } = &stmt {
             if let Some(ref mut postgres) = self.symbiosis {
                 let plan =
                     block_on(postgres.execute(&pcx, &self.catalog.for_session(session), &stmt))?;
