@@ -58,7 +58,7 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
                     walk_scalar(scalar);
                 }
             }
-            RelationExpr::FlatMap { exprs, .. } => {
+            RelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
                     walk_scalar(expr);
                 }
@@ -155,12 +155,7 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
 pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
     fn walk_relation(expr: &mut RelationExpr, outers: &[RelationType]) {
         expr.visit_mut(&mut |expr| match expr {
-            RelationExpr::Map { scalars, input }
-            | RelationExpr::FlatMap {
-                exprs: scalars,
-                input,
-                ..
-            } => {
+            RelationExpr::Map { scalars, input } => {
                 let mut outers = outers.to_vec();
                 outers.push(input.typ(&outers, &NO_PARAMS));
                 for scalar in scalars {
@@ -172,6 +167,11 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                 outers.push(input.typ(&outers, &NO_PARAMS));
                 for pred in predicates {
                     walk_scalar(pred, &outers, true);
+                }
+            }
+            RelationExpr::CallTable { exprs, .. } => {
+                for scalar in exprs {
+                    walk_scalar(scalar, &outers, false);
                 }
             }
             _ => (),

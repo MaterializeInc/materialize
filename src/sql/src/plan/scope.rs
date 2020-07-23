@@ -266,7 +266,6 @@ impl Scope {
     }
 
     pub fn product(self, right: Self) -> Self {
-        assert!(self.outer_scope == right.outer_scope);
         Scope {
             items: self
                 .items

@@ -12,6 +12,7 @@
 //! similar to that file, with some differences which are noted below. It gets turned into that
 //! representation via a call to decorrelate().
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::mem;
 
@@ -54,8 +55,7 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
         scalars: Vec<ScalarExpr>,
     },
-    FlatMap {
-        input: Box<RelationExpr>,
+    CallTable {
         func: TableFunc,
         exprs: Vec<ScalarExpr>,
     },
@@ -255,10 +255,19 @@ pub struct ColumnRef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JoinKind {
-    Inner,
-    LeftOuter,
+    Inner { lateral: bool },
+    LeftOuter { lateral: bool },
     RightOuter,
     FullOuter,
+}
+
+impl JoinKind {
+    pub fn is_lateral(&self) -> bool {
+        match self {
+            JoinKind::Inner { lateral } | JoinKind::LeftOuter { lateral } => *lateral,
+            JoinKind::RightOuter | JoinKind::FullOuter => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,32 +302,35 @@ impl RelationExpr {
                 }
                 typ
             }
-            RelationExpr::FlatMap {
-                input,
-                func,
-                exprs: _,
-            } => {
-                let mut typ = input.typ(outers, params);
-                typ.column_types.extend(func.output_type().column_types);
-                // FlatMap can add duplicate rows, so input keys are no longer valid
-                RelationType::new(typ.column_types)
-            }
+            RelationExpr::CallTable { func, exprs: _ } => func.output_type(),
             RelationExpr::Filter { input, .. } | RelationExpr::TopK { input, .. } => {
                 input.typ(outers, params)
             }
             RelationExpr::Join {
                 left, right, kind, ..
             } => {
-                let left_nullable = *kind == JoinKind::RightOuter || *kind == JoinKind::FullOuter;
-                let right_nullable = *kind == JoinKind::LeftOuter || *kind == JoinKind::FullOuter;
+                let left_nullable = matches!(kind, JoinKind::RightOuter | JoinKind::FullOuter);
+                let right_nullable =
+                    matches!(kind, JoinKind::LeftOuter { .. } | JoinKind::FullOuter);
                 let lt = left.typ(outers, params).column_types.into_iter().map(|t| {
                     let nullable = t.nullable || left_nullable;
                     t.nullable(nullable)
                 });
-                let rt = right.typ(outers, params).column_types.into_iter().map(|t| {
-                    let nullable = t.nullable || right_nullable;
-                    t.nullable(nullable)
-                });
+                let outers = if kind.is_lateral() {
+                    let mut outers = outers.to_vec();
+                    outers.push(RelationType::new(lt.clone().collect()));
+                    Cow::Owned(outers)
+                } else {
+                    Cow::Borrowed(outers)
+                };
+                let rt = right
+                    .typ(&outers, params)
+                    .column_types
+                    .into_iter()
+                    .map(|t| {
+                        let nullable = t.nullable || right_nullable;
+                        t.nullable(nullable)
+                    });
                 RelationType::new(lt.chain(rt).collect())
             }
             RelationExpr::Reduce {
@@ -364,7 +376,7 @@ impl RelationExpr {
             RelationExpr::Get { typ, .. } => typ.column_types.len(),
             RelationExpr::Project { outputs, .. } => outputs.len(),
             RelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
-            RelationExpr::FlatMap { input, func, .. } => input.arity() + func.output_arity(),
+            RelationExpr::CallTable { func, .. } => func.output_arity(),
             RelationExpr::Filter { input, .. }
             | RelationExpr::TopK { input, .. }
             | RelationExpr::Distinct { input }
@@ -507,14 +519,13 @@ impl RelationExpr {
         F: FnMut(&'a Self),
     {
         match self {
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+            RelationExpr::Constant { .. }
+            | RelationExpr::Get { .. }
+            | RelationExpr::CallTable { .. } => (),
             RelationExpr::Project { input, .. } => {
                 f(input);
             }
             RelationExpr::Map { input, .. } => {
-                f(input);
-            }
-            RelationExpr::FlatMap { input, .. } => {
                 f(input);
             }
             RelationExpr::Filter { input, .. } => {
@@ -559,14 +570,13 @@ impl RelationExpr {
         F: FnMut(&'a mut Self),
     {
         match self {
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+            RelationExpr::Constant { .. }
+            | RelationExpr::Get { .. }
+            | RelationExpr::CallTable { .. } => (),
             RelationExpr::Project { input, .. } => {
                 f(input);
             }
             RelationExpr::Map { input, .. } => {
-                f(input);
-            }
-            RelationExpr::FlatMap { input, .. } => {
                 f(input);
             }
             RelationExpr::Filter { input, .. } => {
@@ -609,14 +619,15 @@ impl RelationExpr {
     {
         match self {
             RelationExpr::Join {
-                kind: _,
+                kind,
                 on,
                 left,
                 right,
             } => {
-                on.visit_columns(depth, f);
                 left.visit_columns(depth, f);
+                let depth = if kind.is_lateral() { depth + 1 } else { depth };
                 right.visit_columns(depth, f);
+                on.visit_columns(depth, f);
             }
             RelationExpr::Map { scalars, input } => {
                 for scalar in scalars {
@@ -624,11 +635,10 @@ impl RelationExpr {
                 }
                 input.visit_columns(depth, f);
             }
-            RelationExpr::FlatMap { exprs, input, .. } => {
+            RelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
                     expr.visit_columns(depth, f);
                 }
-                input.visit_columns(depth, f);
             }
             RelationExpr::Filter { predicates, input } => {
                 for predicate in predicates {
@@ -669,7 +679,7 @@ impl RelationExpr {
                     scalar.bind_parameters(parameters);
                 }
             }
-            RelationExpr::FlatMap { exprs, .. } => {
+            RelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
                     expr.bind_parameters(parameters);
                 }
