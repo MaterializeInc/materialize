@@ -2124,6 +2124,21 @@ impl<'a> QueryContext<'a> {
     fn relation_type(&self, expr: &RelationExpr) -> RelationType {
         expr.typ(&self.outer_relation_types, &self.param_types.borrow())
     }
+
+    fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext {
+        QueryContext {
+            scx: self.scx,
+            lifetime: self.lifetime,
+            outer_scope: scope,
+            outer_relation_types: self
+                .outer_relation_types
+                .iter()
+                .chain(std::iter::once(relation_type))
+                .cloned()
+                .collect(),
+            param_types: self.param_types.clone(),
+        }
+    }
 }
 
 /// A bundle of unrelated things that we need for planning `Expr`s.
@@ -2167,18 +2182,7 @@ impl<'a> ExprContext<'a> {
     }
 
     fn derived_query_context(&self) -> QueryContext {
-        QueryContext {
-            scx: self.qcx.scx,
-            lifetime: self.qcx.lifetime,
-            outer_scope: self.scope.clone(),
-            outer_relation_types: self
-                .qcx
-                .outer_relation_types
-                .iter()
-                .chain(std::iter::once(self.relation_type))
-                .cloned()
-                .collect(),
-            param_types: self.qcx.param_types.clone(),
-        }
+        self.qcx
+            .derived_context(self.scope.clone(), self.relation_type)
     }
 }
