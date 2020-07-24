@@ -650,3 +650,12 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Project (#3)
 
 EOF
+
+# Check that we correctly perform subqueries that do not preserve
+# multiplicity of the outer relation.
+query II rowsort
+select x.a, (select count(*) from y where y.b < x.a) from x
+----
+1  0
+2  0
+3  1
