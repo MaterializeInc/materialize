@@ -650,3 +650,26 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Project (#3)
 
 EOF
+
+
+
+statement ok
+CREATE TABLE xs (x int not null)
+
+statement ok
+CREATE TABLE ys (y int not null)
+
+statement ok
+INSERT INTO xs VALUES (1), (1), (2);
+
+statement ok
+INSERT INTO ys VALUES (0), (1), (2);
+
+# Check that we correctly perform subqueries that do not preserve
+# multiplicity of the outer relation.
+query II rowsort
+select x, (select count(*) from ys where y < x) from xs
+----
+1  1
+1  1
+2  2
