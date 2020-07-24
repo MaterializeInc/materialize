@@ -19,6 +19,7 @@ itertools = "0.9"
 lazy_static = "1.4.0"
 log = "0.4.11"
 ore = { path = "../ore" }
+ordered-float = { version = "2.0.0", features = ["serde"] }
 parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }

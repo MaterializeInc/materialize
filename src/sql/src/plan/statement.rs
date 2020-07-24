@@ -16,6 +16,7 @@ use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use ordered_float::OrderedFloat;
 use regex::Regex;
 use rusoto_core::Region;
 use url::Url;
@@ -28,12 +29,13 @@ use dataflow_types::{
 use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
+use repr::adt::decimal::Significand;
 use repr::strconv;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
     AvroSchema, ColumnOption, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format,
-    Ident, IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
-    SqlOption, Statement, Value,
+    Ident, IfExistsBehavior, ObjectName, ObjectType, Query, SetExpr, SetVariableValue,
+    ShowStatementFilter, SqlOption, Statement, Value,
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
@@ -43,7 +45,7 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, Index, Params, Plan, PlanContext, Sink, Source, View,
+    query, scalar_type_from_sql, Index, MutationKind, Params, Plan, PlanContext, Sink, Source, View,
 };
 use crate::pure::Schema;
 
@@ -118,7 +120,8 @@ pub fn describe_statement(
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
         | Statement::Commit { .. }
-        | Statement::AlterObjectRename { .. } => (None, vec![]),
+        | Statement::AlterObjectRename { .. }
+        | Statement::Insert { .. } => (None, vec![]),
 
         Statement::Explain {
             stage, explainee, ..
@@ -235,7 +238,6 @@ pub fn describe_statement(
             (Some(desc), param_types)
         }
 
-        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
@@ -285,6 +287,7 @@ pub fn handle_statement(
             names,
             cascade,
         } => handle_drop_objects(scx, object_type, if_exists, names, cascade),
+        Statement::Insert { .. } => handle_insert(scx, stmt),
         Statement::Select { query, as_of } => handle_select(scx, *query, as_of, params),
         Statement::SetVariable {
             local,
@@ -322,7 +325,6 @@ pub fn handle_statement(
             options,
         } => handle_explain(scx, stage, explainee, options, params),
 
-        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
@@ -1772,6 +1774,93 @@ fn handle_drop_item(
         }
     }
     Ok(Some(catalog_entry.id()))
+}
+
+fn generate_datum_from_value<'a>(
+    value: &'a Expr,
+    column_type: &ColumnType,
+) -> Result<Datum<'a>, anyhow::Error> {
+    let datum = if let Expr::Value(value) = value {
+        match (value, &column_type.scalar_type) {
+            (Value::Number(n), ScalarType::Int32) => Datum::Int32(strconv::parse_int32(n)?),
+            (Value::Number(n), ScalarType::Int64) => Datum::Int64(strconv::parse_int64(n)?),
+            (Value::Number(n), ScalarType::Float32) => {
+                Datum::Float32(OrderedFloat(strconv::parse_float32(n)?))
+            }
+            (Value::Number(n), ScalarType::Float64) => {
+                Datum::Float64(OrderedFloat(strconv::parse_float64(n)?))
+            }
+            (Value::Number(n), ScalarType::Decimal(_, _)) => {
+                Datum::Decimal(Significand::new(strconv::parse_decimal(n)?.significand()))
+            }
+            (Value::String(s), ScalarType::String) => Datum::String(s), // todo: support bytes?
+            (Value::HexString(s), ScalarType::String) => Datum::String(s),
+            (Value::Boolean(true), ScalarType::Bool) => Datum::True,
+            (Value::Boolean(false), ScalarType::Bool) => Datum::False,
+            (Value::Interval(i), ScalarType::Interval) => {
+                Datum::Interval(strconv::parse_interval(&i.value)?)
+            }
+            (Value::Null, _) => {
+                if column_type.nullable {
+                    Datum::Null
+                } else {
+                    bail!("trying to insert NULL value into non-nullable column");
+                }
+            }
+            (value, typ) => unsupported!(format!("value {:?} with type {:?}", value, typ)),
+        }
+    } else {
+        unsupported!(format!(
+            "expected to find value to insert, found {:?}",
+            value
+        ))
+    };
+
+    Ok(datum)
+}
+
+fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow::Error> {
+    match &stmt {
+        Statement::Insert {
+            table_name,
+            columns: _,
+            source,
+        } => {
+            let table = scx.catalog.get_item(&scx.resolve_item(table_name.clone())?);
+            let column_types: Vec<&ColumnType> = table.desc()?.iter_types().collect();
+
+            if let SetExpr::Values(values) = &source.body {
+                let mut updates = Vec::with_capacity(values.0.len());
+                for to_update in &values.0 {
+                    if to_update.len() != column_types.len() {
+                        bail!(
+                            "expected to insert {} values, found {}",
+                            column_types.len(),
+                            values.0.len()
+                        );
+                    }
+                    let datums: Vec<Datum> = to_update
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| generate_datum_from_value(value, column_types[index]))
+                        .collect::<Result<Vec<Datum>, anyhow::Error>>()?;
+                    updates.push((Row::pack(datums), 1));
+                }
+                Ok(Plan::SendDiffs {
+                    id: table.id(),
+                    updates,
+                    affected_rows: values.0.len(),
+                    kind: MutationKind::Insert,
+                })
+            } else {
+                unsupported!(format!(
+                    "expected to find values to insert, found: {}",
+                    source.body
+                ));
+            }
+        }
+        other => unreachable!(format!("{:?}", other)),
+    }
 }
 
 fn handle_select(

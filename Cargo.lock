@@ -3278,6 +3278,7 @@ dependencies = [
  "lazy_static",
  "log",
  "mz-avro",
+ "ordered-float",
  "ore",
  "parse_duration",
  "pgrepr",

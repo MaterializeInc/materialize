@@ -33,6 +33,38 @@ Field      Nullable  Type
 a          YES       int4
 b          NO        text
 
+> INSERT INTO t VALUES (1, 'a');
+
+> SELECT * FROM t;
+a    b
+---------
+1    "a"
+
+> INSERT INTO t VALUES (2, 'b'), (3, 'c');
+
+> SELECT * FROM t;
+a    b
+---------
+1    "a"
+2    "b"
+3    "c"
+
+! INSERT INTO t VALUES (1);
+expected to insert 2 values, found 1
+
+! INSERT INTO t VALUES (1, NULL);
+trying to insert NULL value into non-nullable column
+
+> INSERT INTO t VALUES (NULL, 'd');
+
+> SELECT * FROM t;
+a       b
+------------
+1       "a"
+2       "b"
+3       "c"
+<null>  "d"
+
 > DROP TABLE t;
 
 ! SELECT * from t;
@@ -44,6 +76,10 @@ unknown catalog item 't'
 > SHOW TABLES;
 
 > SHOW SOURCES;
+
+> CREATE TABLE t (a int, b text NOT NULL)
+
+> SELECT * FROM t;
 
 ! CREATE TABLE s (a int primary key);
 CREATE TABLE with column constraint: PRIMARY KEY
