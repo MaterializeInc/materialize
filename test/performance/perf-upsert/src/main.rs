@@ -30,13 +30,7 @@ mod mz_client;
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("ERROR: {}", e);
-        // TODO(rkhaitan) could this be simpler
-        let mut err = e.source();
-        while let Some(e) = err {
-            eprintln!("    caused by: {}", e);
-            err = e.source();
-        }
+        eprintln!("ERROR: {:#}", e);
         process::exit(1);
     }
 }
