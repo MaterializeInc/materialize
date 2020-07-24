@@ -17,6 +17,12 @@ mzconduct() {
 
 test_name="$BUILDKITE_PLUGIN_MZCONDUCT_TEST"
 workflow="$BUILDKITE_PLUGIN_MZCONDUCT_WORKFLOW"
+# Note that there is a \r that seems to be emitted by docker that we need to strip
+compose_file="$(bin/ci-builder run stable bin/mzconduct show dir "$test_name" | tr -d $'\r')/mzcompose.yml"
+
+mzcompose() {
+    bin/ci-builder run stable bin/mzcompose --mz-quiet -f "$compose_file" "$@"
+}
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
 # Docker Compose run, which can leave old containers or volumes around that will
@@ -31,7 +37,7 @@ echo "+++ :docker: mzconduct run $test_name --workflow $workflow" >&2
 
 if ! mzconduct run "$test_name" --workflow "$workflow" ; then
     echo "Command failed! Uploading logs for debugging." >&2
-    mzcompose --mz-quiet logs --no-color > services.log
+    mzcompose logs --no-color > services.log
     buildkite-agent artifact upload services.log
     exit 1
 fi
