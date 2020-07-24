@@ -37,6 +37,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::bail;
+use itertools::Itertools;
 
 use ore::collections::CollectionExt;
 use repr::RelationType;
@@ -79,6 +80,32 @@ impl ColumnMap {
 
     fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    /// Updates references in the `ColumnMap` for use in a nested scope. The
+    /// provided `arity` must specify the arity of the current scope.
+    fn enter_scope(&self, arity: usize) -> ColumnMap {
+        // From the perspective of the nested scope, all existing column
+        // references will be one level greater.
+        let existing = self
+            .inner
+            .clone()
+            .into_iter()
+            .update(|(col, _i)| col.level += 1);
+
+        // All columns in the current scope become explicit entries in the
+        // immediate parent scope.
+        let new = (0..arity).map(|i| {
+            (
+                ColumnRef {
+                    level: 1,
+                    column: i,
+                },
+                self.len() + i,
+            )
+        });
+
+        ColumnMap::new(existing.chain(new).collect())
     }
 }
 
@@ -427,6 +454,32 @@ impl RelationExpr {
             }
         }
     }
+
+    /// Computes whether this RelationExpr is safe to apply directly in a a
+    /// branch.
+    fn is_branch_safe(&self) -> bool {
+        let mut is_safe = true;
+        // Exhaustive match to prevent accidents when expression variants
+        // change.
+        self.visit(&mut |expr| match expr {
+            RelationExpr::Distinct { .. }
+            | RelationExpr::Reduce { .. }
+            | RelationExpr::Threshold { .. }
+            | RelationExpr::Negate { .. }
+            | RelationExpr::TopK { .. } => {
+                is_safe = false;
+            }
+            RelationExpr::Constant { .. }
+            | RelationExpr::Get { .. }
+            | RelationExpr::Project { .. }
+            | RelationExpr::Map { .. }
+            | RelationExpr::Filter { .. }
+            | RelationExpr::Union { .. }
+            | RelationExpr::Join { .. }
+            | RelationExpr::CallTable { .. } => (),
+        });
+        is_safe
+    }
 }
 
 impl ScalarExpr {
@@ -602,6 +655,13 @@ where
     // TODO: It would be nice to have a version of this code w/o optimizations,
     // at the least for purposes of understanding. It was difficult for one reader
     // to understand the required properties of `outer` and `col_map`.
+
+    if inner.is_branch_safe() {
+        let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
+        return outer.let_in(id_gen, |id_gen, get_outer| {
+            apply(id_gen, inner, get_outer, &new_col_map)
+        });
+    }
 
     // The key consists of the columns from the outer expression upon which the
     // inner relation depends. We discover these dependencies by walking the

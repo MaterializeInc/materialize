@@ -253,16 +253,16 @@ EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
 %0 =
 | Get materialize.public.t1 (u39)
+| ArrangeBy ()
 
 %1 =
 | Get materialize.public.t2 (u41)
-| Distinct group=()
-| ArrangeBy ()
 
 %2 =
 | Join %0 %1
-| | implementation = Differential %0 %1.()
+| | implementation = Differential %1 %0.()
 | | demand = (#0)
+| Distinct group=(#0)
 
 EOF
 
@@ -271,21 +271,20 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 ----
 %0 =
 | Get materialize.public.t1 (u39)
-| ArrangeBy (#0)
+| ArrangeBy ()
 
 %1 =
 | Get materialize.public.t3 (u43)
+| ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.t2 (u41)
-| Distinct group=()
-| ArrangeBy ()
 
 %3 =
 | Join %0 %1 %2 (= #0 #1)
-| | implementation = Differential %1 %2.() %0.(#0)
+| | implementation = Differential %2 %0.() %1.(#0)
 | | demand = (#0, #2)
-| Project (#0, #0, #2)
+| Distinct group=(#0, #0, #2)
 
 EOF
 
@@ -300,34 +299,14 @@ EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FR
 | Get materialize.public.t3 (u43)
 
 %2 =
-| Join %0 %1 (= #0 #1)
-| | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #2)
-
-%3 =
-| Get %2
-
-%4 =
-| Get %2
-| Distinct group=(#2)
-| ArrangeBy (#0)
-
-%5 =
 | Get materialize.public.t2 (u41)
 | ArrangeBy (#0)
 
-%6 =
-| Join %4 %5 (= #0 #1)
-| | implementation = DeltaQuery %4 %5.(#0) | %5 %4.(#0)
-| | demand = (#0)
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%7 =
-| Join %3 %6 (= #2 #3)
-| | implementation = Differential %3 %6.(#0)
+%3 =
+| Join %0 %1 %2 (= #0 #1) (= #2 #3)
+| | implementation = Differential %1 %0.(#0) %2.(#0)
 | | demand = (#0, #2)
-| Project (#0, #0, #2)
+| Distinct group=(#0, #0, #2)
 
 EOF
 
@@ -470,59 +449,47 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 ----
 %0 =
 | Get materialize.public.y (u59)
-| Distinct group=(#0)
-
-%1 =
-| Get %0
 | ArrangeBy (#0)
 
-%2 =
+%1 =
 | Get materialize.public.x (u57)
 | ArrangeBy (#0)
 
-%3 =
-| Join %1 %2 (= #0 #1)
-| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 
+%3 =
+| Get %2
+| Map true
+
 %4 =
+| Get %2
+| Negate
+
+%5 =
+| Get materialize.public.y (u59)
+| Distinct group=(#0)
+
+%6 =
+| Union %4 %5
+
+%7 =
 | Get materialize.public.y (u59)
 | ArrangeBy (#0)
 
-%5 =
-| Get %3
-| Map true
-
-%6 =
-| Get %3
-| Negate
-
-%7 =
-| Get %0
-
 %8 =
-| Union %6 %7
-
-%9 =
-| Get %0
-| ArrangeBy (#0)
-
-%10 =
-| Join %8 %9 (= #0 #1)
-| | implementation = Differential %8 %9.(#0)
-| | demand = (#0)
+| Join %6 %7 (= #0 #1)
+| | implementation = Differential %6 %7.(#0)
+| | demand = ()
 | Map false
 | Project (#0, #2)
 
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11 (= #0 #1)
-| | implementation = Differential %11 %4.(#0)
-| | demand = (#2)
-| Project (#2)
+%9 =
+| Union %3 %8
+| Project (#1)
 
 EOF
 
@@ -531,60 +498,48 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 ----
 %0 =
 | Get materialize.public.y (u59)
-| Distinct group=(#0)
-
-%1 =
-| Get %0
 | ArrangeBy (#0)
 
-%2 =
+%1 =
 | Get materialize.public.x (u57)
 | ArrangeBy (#0)
 
-%3 =
-| Join %1 %2 (= #0 #1)
-| | implementation = DeltaQuery %1 %2.(#0) | %2 %1.(#0)
+%2 =
+| Join %0 %1 (= #0 #1)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 
+%3 =
+| Get %2
+| Map true
+
 %4 =
+| Get %2
+| Negate
+
+%5 =
+| Get materialize.public.y (u59)
+| Distinct group=(#0)
+
+%6 =
+| Union %4 %5
+
+%7 =
 | Get materialize.public.y (u59)
 | ArrangeBy (#0)
 
-%5 =
-| Get %3
-| Map true
-
-%6 =
-| Get %3
-| Negate
-
-%7 =
-| Get %0
-
 %8 =
-| Union %6 %7
-
-%9 =
-| Get %0
-| ArrangeBy (#0)
-
-%10 =
-| Join %8 %9 (= #0 #1)
-| | implementation = Differential %8 %9.(#0)
-| | demand = (#0)
+| Join %6 %7 (= #0 #1)
+| | implementation = Differential %6 %7.(#0)
+| | demand = ()
 | Map false
 | Project (#0, #2)
 
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11 (= #0 #1)
-| | implementation = Differential %11 %4.(#0)
-| | demand = (#2)
-| Map !(#2)
-| Project (#3)
+%9 =
+| Union %3 %8
+| Map !(#1)
+| Project (#2)
 
 EOF
 
@@ -594,60 +549,48 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 ----
 %0 =
 | Get materialize.public.y (u59)
-| Distinct group=(#0)
-
-%1 =
-| Get %0
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.x (u57)
 
-%3 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0, #1)
 | Filter (#0 <= #1)
 | Distinct group=(#0)
 
+%3 =
+| Get %2
+| Map true
+
 %4 =
+| Get %2
+| Negate
+
+%5 =
+| Get materialize.public.y (u59)
+| Distinct group=(#0)
+
+%6 =
+| Union %4 %5
+
+%7 =
 | Get materialize.public.y (u59)
 | ArrangeBy (#0)
 
-%5 =
-| Get %3
-| Map true
-
-%6 =
-| Get %3
-| Negate
-
-%7 =
-| Get %0
-
 %8 =
-| Union %6 %7
-
-%9 =
-| Get %0
-| ArrangeBy (#0)
-
-%10 =
-| Join %8 %9 (= #0 #1)
-| | implementation = Differential %8 %9.(#0)
-| | demand = (#0)
+| Join %6 %7 (= #0 #1)
+| | implementation = Differential %6 %7.(#0)
+| | demand = ()
 | Map false
 | Project (#0, #2)
 
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11 (= #0 #1)
-| | implementation = Differential %11 %4.(#0)
-| | demand = (#2)
-| Map !(#2)
-| Project (#3)
+%9 =
+| Union %3 %8
+| Map !(#1)
+| Project (#2)
 
 EOF
 
