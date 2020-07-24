@@ -647,7 +647,7 @@ fn plan_view_select_intrusive(
                     scope_item
                 } else {
                     ScopeItem {
-                        names: invent_column_name(group_expr).into_iter().collect(),
+                        names: invent_column_name(ecx, group_expr).into_iter().collect(),
                         expr: Some(group_expr.clone()),
                         nameable: true,
                     }
@@ -1075,7 +1075,7 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
     Ok(scope)
 }
 
-fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
+fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
         Expr::Function(func) => func
@@ -1085,8 +1085,20 @@ fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
             .map(|n| normalize::column_name(n.clone())),
         Expr::Coalesce { .. } => Some("coalesce".into()),
         Expr::List { .. } => Some("list".into()),
-        Expr::Cast { expr, .. } => return invent_column_name(expr),
+        Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
+        Expr::Exists { .. } => Some("exists".into()),
+        Expr::Subquery(query) => {
+            // A bit silly to have to plan the query here just to get its column
+            // name, since we throw away the planned expression, but fixing this
+            // requires a separate semantic analysis phase.
+            let (_expr, scope) = plan_subquery(&ecx.derived_query_context(), query).ok()?;
+            scope
+                .items
+                .first()
+                .and_then(|item| item.names.first())
+                .and_then(|name| name.column_name.clone())
+        }
         _ => return None,
     };
     name.map(|n| ScopeItemName {
@@ -1170,7 +1182,7 @@ fn expand_select_item<'a>(
             let name = alias
                 .clone()
                 .map(normalize::column_name)
-                .or_else(|| invent_column_name(&expr).and_then(|n| n.column_name));
+                .or_else(|| invent_column_name(ecx, &expr).and_then(|n| n.column_name));
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }

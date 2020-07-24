@@ -101,22 +101,20 @@ NULL 2147483647
 
 # check scoping of lateral versus parent references
 # the first of these should return int8_tbl.q2, the second int8_tbl.q1
-# TODO(benesch): col name should be "r", not "?column?"
 query III colnames,rowsort
 select *, (select r from (select q1 as q2) x, (select q2 as r) y) from int8_tbl
 ----
-q1  q2  ?column?
+q1  q2  r
 123  456  456
 123  4567890123456789  4567890123456789
 4567890123456789  123  123
 4567890123456789  4567890123456789  4567890123456789
 4567890123456789  -4567890123456789  -4567890123456789
 
-# TODO(benesch): col name should be "r", not "?column?"
 query III colnames,rowsort
 select *, (select r from (select q1 as q2) x, lateral (select q2 as r) y) from int8_tbl;
 ----
-q1  q2  ?column?
+q1  q2  r
 123  456  123
 123  4567890123456789  123
 4567890123456789  123  4567890123456789

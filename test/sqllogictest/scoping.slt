@@ -93,3 +93,17 @@ CREATE TABLE nullary ()
 query
 SELECT * FROM nullary
 ----
+
+# Check that column names propagate through several layers of subqueries.
+query T colnames
+SELECT (SELECT * FROM (SELECT 1 AS a) _)
+----
+a
+1
+
+# Check that the EXISTS operator names its output column as such.
+query T colnames
+SELECT EXISTS (SELECT 1)
+----
+exists
+true
