@@ -200,6 +200,23 @@ where
                 let prev_keyed = prev_keyed
                     .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", input));
 
+                // Pre-test for the arrangement existence, so that we can populate it if the
+                // collection is present but the arrangement is not.
+                if self.arrangement(&inputs[*input], &next_keys[..]).is_none() {
+                    // The join may be faulty, and announce keys for an arrangement we have
+                    // not formed. This *shouldn't* happen, but we prefer to do something
+                    // sane rather than panic.
+                    if self.collection(&inputs[*input]).is_some() {
+                        let arrange_by = RelationExpr::ArrangeBy {
+                            input: Box::new(inputs[*input].clone()),
+                            keys: vec![next_keys[..].to_vec()],
+                        };
+                        self.render_arrangeby(&arrange_by, Some("MissingArrangement"));
+                    } else {
+                        panic!("Arrangement alarmingly absent!");
+                    }
+                }
+
                 match self.arrangement(&inputs[*input], &next_keys[..]) {
                     Some(ArrangementFlavor::Local(oks, es)) => {
                         let mut row_packer = repr::RowPacker::new();
@@ -236,7 +253,7 @@ where
                         errs = errs.concat(&es.as_collection(|k, _v| k.clone()));
                     }
                     None => {
-                        panic!("Arrangement alarmingly absent!");
+                        unreachable!("Arrangement absent despite explicit construction");
                     }
                 };
 

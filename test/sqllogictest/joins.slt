@@ -250,3 +250,16 @@ SELECT * FROM
 ----
 baz  foo  bar
 1    1    1
+
+# Test that join planning with constants does not panic due to missing arrangements.
+# This test could vanish if we conclude that this is just an anomalous defect is the
+# join planning, more than an interesting property to maintain.
+query ITI rowsort
+select * from
+    l2,
+    (values (1, 2), (2, 2), (3, 2)) as foo,
+    (values (1, 3), (2, 3), (3, 3)) as bar
+where
+    foo.column1 = bar.column1
+----
+1 l2 1
