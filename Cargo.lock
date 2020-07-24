@@ -2503,9 +2503,9 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.7.9"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c434e93ef69c216e68e4f417c927b4f31502c3560b72cfdb6827e2321c5c6b3e"
+checksum = "1d7e5e6454760047a63937e70a5143d3f7260b2fdad73fe7b30a83f499383012"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -2518,7 +2518,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.9.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6afa7738ee9fc7960d3a48755154fe09f5d72304"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#185d2639124263819d2e6a311ccf09d278a708d3"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -2533,7 +2533,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6afa7738ee9fc7960d3a48755154fe09f5d72304"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#185d2639124263819d2e6a311ccf09d278a708d3"
 dependencies = [
  "proc-macro-hack",
  "static-metric-proc-macros",
@@ -3359,7 +3359,7 @@ checksum = "47e4b8c631c998468961a9ea159f064c5c8499b95b5e4a34b77849d45949d540"
 [[package]]
 name = "static-metric-proc-macros"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/rust-prometheus.git#6afa7738ee9fc7960d3a48755154fe09f5d72304"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#185d2639124263819d2e6a311ccf09d278a708d3"
 dependencies = [
  "lazy_static",
  "proc-macro-hack",
