@@ -93,15 +93,17 @@ impl NonNullRequirements {
                     // the entire expression can be zerod out.
                     relation.take_safely();
                 } else {
-                    let mut new_columns = HashSet::new();
-                    for column in columns {
-                        if column < arity {
-                            new_columns.insert(column);
-                        } else {
-                            scalars[column - arity].non_null_requirements(&mut new_columns);
+                    // For each column, if it must be non-null, extract the expression's
+                    // non-null requirements and include them too. We go in reverse order
+                    // to ensure we squeegee down all requirements even for references to
+                    // other columns produced in this operator.
+                    for column in (arity..(arity + scalars.len())).rev() {
+                        if columns.contains(&column) {
+                            scalars[column - arity].non_null_requirements(&mut columns);
                         }
+                        columns.remove(&column);
                     }
-                    self.action(input, new_columns, gets);
+                    self.action(input, columns, gets);
                 }
             }
             RelationExpr::FlatMap {
