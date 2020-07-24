@@ -220,7 +220,7 @@ impl Default for Optimizer {
                     Box::new(crate::projection_extraction::ProjectionExtraction),
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::map_lifting::LiteralLifting),
-                    Box::new(crate::nonnull_requirements::NonNullRequirements),
+                    // Box::new(crate::nonnull_requirements::NonNullRequirements),
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin),
