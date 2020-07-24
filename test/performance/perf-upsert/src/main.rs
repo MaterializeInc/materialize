@@ -32,6 +32,7 @@ async fn main() {
     if let Err(e) = run().await {
         eprintln!("ERROR: {}", e);
         // TODO(rkhaitan) could this be simpler
+        // I doubt it
         let mut err = e.source();
         while let Some(e) = err {
             eprintln!("    caused by: {}", e);
