@@ -1776,6 +1776,23 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
             els: Box::new(ScalarExpr::literal_null(expr_typ)),
         };
     }
+
+    let mut seen_outer = false;
+    let mut seen_inner = false;
+    expr.visit_columns(0, &mut |depth, col| {
+        if col.level - depth == 0 {
+            seen_inner = true;
+        } else {
+            seen_outer = true;
+        }
+    });
+    if seen_outer && !seen_inner {
+        unsupported!(
+            3720,
+            "aggregate functions that refer exclusively to outer columns"
+        );
+    }
+
     Ok(AggregateExpr {
         func,
         expr: Box::new(expr),
