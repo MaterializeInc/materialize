@@ -14,8 +14,7 @@ set -euo pipefail
 echo "~~~ :docker: Cleaning up after mzconduct" >&2
 
 test_name="$BUILDKITE_PLUGIN_MZCONDUCT_TEST"
-# Note that there is a \r that seems to be emitted by docker that we need to strip
-compose_file="$(bin/ci-builder run stable bin/mzconduct show dir "$test_name" | tr -d $'\r')/mzcompose.yml"
+compose_file="$(bin/ci-builder run stable bin/mzconduct show dir "$test_name")/mzcompose.yml"
 
 run() {
     bin/ci-builder run stable bin/mzcompose --mz-quiet -f "$compose_file" "$@"
