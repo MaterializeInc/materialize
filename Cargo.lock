@@ -2209,7 +2209,6 @@ dependencies = [
  "rusoto_kinesis",
  "structopt",
  "test-util",
- "thiserror",
  "tokio",
  "tokio-postgres",
 ]
