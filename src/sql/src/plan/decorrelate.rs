@@ -472,7 +472,7 @@ impl ScalarExpr {
                             .project((0..inner_arity).chain(Some(then_arity)).collect());
 
                         // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
-                        let mut else_inner = get_inner.clone().filter(vec![SS::CallBinary {
+                        let mut else_inner = get_inner.filter(vec![SS::CallBinary {
                             func: expr::BinaryFunc::Or,
                             expr1: Box::new(SS::CallBinary {
                                 func: expr::BinaryFunc::Eq,
