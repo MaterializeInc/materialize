@@ -186,6 +186,7 @@ checksum = "3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"
 name = "billing-demo"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bytes",
  "chrono",
  "csv",
@@ -204,7 +205,6 @@ dependencies = [
  "rand_distr",
  "structopt",
  "test-util",
- "thiserror",
  "tokio",
  "tokio-postgres",
  "uuid",

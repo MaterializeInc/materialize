@@ -18,21 +18,19 @@
 
 #![deny(missing_debug_implementations, missing_docs)]
 
-use std::error::Error as _;
 use std::process;
 use std::time::Duration;
 
+use anyhow::Result;
 use protobuf::Message;
 use structopt::StructOpt;
 
 use test_util::kafka::kafka_client;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
-use crate::error::Result;
 use crate::mz_client::MzClient;
 
 mod config;
-mod error;
 mod gen;
 mod macros;
 mod mz_client;
@@ -42,12 +40,7 @@ mod randomizer;
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        println!("ERROR: {}", e);
-        let mut err = e.source();
-        while let Some(e) = err {
-            println!("    caused by: {}", e);
-            err = e.source();
-        }
+        eprintln!("ERROR: {:#}", e);
         process::exit(1);
     }
 }
@@ -101,14 +94,12 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     };
 
     let mut k_client =
-        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])
-            .map_err(|e| error::Error::from(e.to_string()))?;
+        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])?;
 
     if let Some(partitions) = config.partitions {
         k_client
             .create_topic(partitions, 1, &[], Some(Duration::from_secs(5)))
-            .await
-            .map_err(|e| error::Error::from(e.to_string()))?;
+            .await?
     }
 
     let mut buf = vec![];
@@ -121,10 +112,7 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         let m = randomizer::random_batch(rng, &mut recordstate);
         m.write_to_vec(&mut buf)?;
         log::trace!("sending: {:?}", m);
-        k_client
-            .send(&buf)
-            .await
-            .map_err(|e| error::Error::from(e.to_string()))?;
+        k_client.send(&buf).await?;
         total_size += buf.len();
         buf.clear();
         if i % (config.message_count / 100).max(5) == 0 {

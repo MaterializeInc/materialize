@@ -10,13 +10,12 @@
 use std::marker::Sync;
 use std::time::Duration;
 
+use anyhow::{bail, Error, Result};
 use csv::Writer;
 use ore::retry;
 use postgres_types::ToSql;
 use rand::Rng;
 use tokio_postgres::{Client, NoTls};
-
-use crate::error::{Error, Result};
 
 /// A materialized client with custom methods
 pub struct MzClient(Client);
@@ -219,11 +218,11 @@ impl MzClient {
                 .get(0);
 
             if count_check_sink != count_input_view {
-                return Err(format!(
+                bail!(
                     "Expected check_sink view to have {} rows, found {}",
-                    count_input_view, count_check_sink
-                )
-                .into());
+                    count_input_view,
+                    count_check_sink
+                );
             }
 
             Ok(())
@@ -235,11 +234,10 @@ impl MzClient {
         let rows = self.0.query(&*query, &[]).await?;
 
         if rows.len() != 0 {
-            return Err(format!(
+            bail!(
                 "Expected 0 invalid rows from check_sink, found {}",
                 rows.len()
-            )
-            .into());
+            );
         }
 
         Ok(())
