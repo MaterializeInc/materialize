@@ -674,26 +674,67 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     ))
                     .expect("Sink source collection not loaded");
 
-                // TODO(frank): consolidation is only required for a collection,
-                // not for arrangements. We can perform a more complicated match
-                // here to determine which case we are in to avoid this call.
-                use differential_dataflow::operators::consolidate::Consolidate;
-                let collection = collection.consolidate();
+                // TODO(frank): Consolidation can be avoided for arranged inputs.
+
+                // These steps perform consolidation, but do not devolve the stream
+                // from batches to individual updates. That can happen for sinks that
+                // require e.g. updates shuffled, but for sinks that do not require
+                // such it is much more efficient to work off of shared batches.
+                use differential_dataflow::trace::implementations::ord::{
+                    OrdKeyBatch, OrdKeySpine,
+                };
+                let batches: timely::dataflow::Stream<
+                    _,
+                    std::rc::Rc<OrdKeyBatch<Row, Timestamp, isize>>,
+                > = collection
+                    .map(|k| (k, ()))
+                    .arrange_named::<OrdKeySpine<_, _, _>>("SinkConsolidation")
+                    .stream;
 
                 // TODO(benesch): errors should stream out through the sink,
                 // if we figure out a protocol for that.
 
+                // Common imports for devolving streams of batches.
+                use differential_dataflow::trace::cursor::CursorDebug;
+                use differential_dataflow::trace::BatchReader;
+
                 let sink_shutdown = match sink.connector {
                     SinkConnector::Kafka(c) => {
-                        let button = sink::kafka(&collection.inner, sink_id, c, sink.from.1);
+                        // Devolution code; batches could provide better methods for iteration.
+                        let collection = batches.flat_map(|batch| {
+                            let mut cursor = batch.cursor();
+                            let output = cursor.to_vec(&batch);
+                            output.into_iter().flat_map(|((row, ()), list)| {
+                                list.into_iter().map(move |(t, d)| (row.clone(), t, d))
+                            })
+                        });
+                        let button = sink::kafka(&collection, sink_id, c, sink.from.1);
                         Some(button)
                     }
                     SinkConnector::Tail(c) => {
-                        sink::tail(&collection.inner, sink_id, c);
+                        // Devolution code; batches could provide better methods for iteration.
+                        let collection = batches.flat_map(|batch| {
+                            let mut cursor = batch.cursor();
+                            let output = cursor.to_vec(&batch);
+                            output.into_iter().flat_map(|((row, ()), list)| {
+                                list.into_iter().map(move |(t, d)| (row.clone(), t, d))
+                            })
+                        });
+                        // TODO(cirego): Avoid devolution, change `tail` to take a stream of
+                        // batches, which are more easily enumerated in order.
+                        sink::tail(&collection, sink_id, c);
                         None
                     }
                     SinkConnector::AvroOcf(c) => {
-                        sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1);
+                        // Devolution code; batches could provide better methods for iteration.
+                        let collection = batches.flat_map(|batch| {
+                            let mut cursor = batch.cursor();
+                            let output = cursor.to_vec(&batch);
+                            output.into_iter().flat_map(|((row, ()), list)| {
+                                list.into_iter().map(move |(t, d)| (row.clone(), t, d))
+                            })
+                        });
+                        sink::avro_ocf(&collection, sink_id, c, sink.from.1);
                         None
                     }
                 };
