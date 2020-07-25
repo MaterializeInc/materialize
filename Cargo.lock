@@ -3595,6 +3595,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "log",
+ "ore",
  "rand",
  "rdkafka",
  "tokio",
