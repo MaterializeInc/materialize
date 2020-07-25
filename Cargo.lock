@@ -932,6 +932,7 @@ dependencies = [
  "csv",
  "encoding",
  "enum-iterator",
+ "itertools",
  "num_enum",
  "ordered-float",
  "ore",

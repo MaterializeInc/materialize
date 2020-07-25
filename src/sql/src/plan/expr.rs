@@ -196,6 +196,20 @@ impl CoercibleScalarExpr {
     pub fn type_as_any(self, ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
         typeconv::plan_coerce(ecx, self, CoerceTo::Plain(ScalarType::String))
     }
+
+    pub fn explicit_cast_to(
+        self,
+        op: &str,
+        ecx: &ExprContext,
+        ty: ScalarType,
+    ) -> Result<ScalarExpr, anyhow::Error> {
+        let expr = typeconv::plan_coerce(ecx, self, CoerceTo::Plain(ty.clone()))?;
+        if ty != ecx.scalar_type(&expr) {
+            typeconv::plan_cast(op, ecx, expr, typeconv::CastTo::Explicit(ty))
+        } else {
+            Ok(expr)
+        }
+    }
 }
 
 pub trait ScalarTypeable {

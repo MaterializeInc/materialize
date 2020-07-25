@@ -275,6 +275,41 @@ LIST[LIST[1 + 1, 2], a || b]
 List([List([BinaryOp { left: Value(Number("1")), op: Plus, right: Value(Number("1")) }, Value(Number("2"))]), BinaryOp { left: Identifier([Ident("a")]), op: Concat, right: Identifier([Ident("b")]) }])
 
 parse-scalar
+LIST[1,2,3][1]
+----
+SubscriptIndex { expr: List([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), subscript: Value(Number("1")) }
+
+parse-scalar
+LIST[1,2,3][1:1]
+----
+SubscriptSlice { expr: List([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }
+
+parse-scalar
+LIST[1,2,3][:1]
+----
+SubscriptSlice { expr: List([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), positions: [SubscriptPosition { start: None, end: Some(Value(Number("1"))) }] }
+
+parse-scalar
+LIST[1,2,3][1:]
+----
+SubscriptSlice { expr: List([Value(Number("1")), Value(Number("2")), Value(Number("3"))]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: None }] }
+
+parse-scalar
+LIST[[1],[2],[3]][1:1, 1:1]
+----
+SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }
+
+parse-scalar
+LIST[[1],[2],[3]][1:1, 1:1][1]
+----
+SubscriptIndex { expr: SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }, subscript: Value(Number("1")) }
+
+parse-scalar
+LIST[[1],[2],[3]][1:1, 1:1, 1:1]
+----
+SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }
+
+parse-scalar
 a -> b
 ----
 BinaryOp { left: Identifier([Ident("a")]), op: JsonGet, right: Identifier([Ident("b")]) }
