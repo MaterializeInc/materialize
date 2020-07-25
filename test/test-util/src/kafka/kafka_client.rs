@@ -94,6 +94,49 @@ impl KafkaClient {
             ));
         }
 
+        // Topic creation is asynchronous, and if we don't wait for it to
+        // complete, we might produce a message (below) that causes it to
+        // get automatically created with multiple partitions. (Since
+        // multiple partitions have no ordering guarantees, this violates
+        // many assumptions that our tests make.)
+        ore::retry::retry_for(Duration::from_secs(8), |_| async {
+            let metadata = self
+                .producer
+                .client()
+                // N.B. It is extremely important not to ask specifically
+                // about the topic here, even though the API supports it!
+                // Asking about the topic will create it automatically...
+                // with the wrong number of partitions. Yes, this is
+                // unbelievably horrible.
+                .fetch_metadata(None, Some(Duration::from_secs(1)))?;
+            if metadata.topics().is_empty() {
+                return Err(anyhow::anyhow!("metadata fetch returned no topics"));
+            }
+            let topic = match metadata.topics().iter().find(|t| t.name() == self.topic) {
+                Some(topic) => topic,
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "metadata fetch did not return topic {}",
+                        self.topic,
+                    ))
+                }
+            };
+            if topic.partitions().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "metadata fetch returned a topic with no partitions"
+                ));
+            } else if topic.partitions().len() as i32 != partitions {
+                return Err(anyhow::anyhow!(
+                    "topic {} was created with {} partitions when exactly {} was expected",
+                    self.topic,
+                    topic.partitions().len(),
+                    partitions
+                ));
+            }
+            Ok(())
+        })
+        .await?;
+
         Ok(())
     }
 
