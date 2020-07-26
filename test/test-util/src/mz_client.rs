@@ -89,6 +89,7 @@ async fn delay_for(elapsed: Duration, delay: Duration) {
     }
 }
 
+/// Run Materialize's `SHOW SOURCES` command
 pub async fn show_sources(mz_client: &Client) -> Result<Vec<String>> {
     let mut res = Vec::new();
     for row in mz_client.query("SHOW SOURCES", &[]).await? {
@@ -98,9 +99,16 @@ pub async fn show_sources(mz_client: &Client) -> Result<Vec<String>> {
     Ok(res)
 }
 
+/// Delete a source and all dependent views, if the source exists
 pub async fn drop_source(mz_client: &Client, name: &str) -> Result<()> {
     let q = format!("DROP SOURCE IF EXISTS {} CASCADE", name);
     log::debug!("deleting source=> {}", q);
     mz_client.execute(&*q, &[]).await?;
     Ok(())
+}
+
+/// Run PostgreSQL's `execute` function
+pub async fn execute(mz_client: &Client, query: &str) -> Result<u64> {
+    log::debug!("exec=> {}", query);
+    Ok(mz_client.execute(query, &[]).await?)
 }
