@@ -6,6 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+anyhow = "1.0.31"
 bytes = "0.5.6"
 chrono = "0.4.13"
 csv = "1.1.3"
@@ -23,7 +24,6 @@ rand = "0.7.3"
 rand_distr = "0.2.2"
 structopt = "0.3.15"
 test-util = { path = "../../test/test-util" }
-thiserror = "1.0.20"
 tokio = { version = "0.2.21", features = ["full"] }
 tokio-postgres = "0.5.2"
 uuid = { version = "0.8", features = ["v4"] }
