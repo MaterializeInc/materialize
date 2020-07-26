@@ -112,3 +112,11 @@ pub async fn execute(mz_client: &Client, query: &str) -> Result<u64> {
     log::debug!("exec=> {}", query);
     Ok(mz_client.execute(query, &[]).await?)
 }
+
+/// Delete an index
+pub async fn drop_index(mz_client: &Client, name: &str) -> Result<()> {
+    let q = format!("DROP INDEX {}", name);
+    log::debug!("deleting index=> {}", q);
+    mz_client.execute(&*q, &[]).await?;
+    Ok(())
+}

@@ -26,14 +26,13 @@ use protobuf::Message;
 use structopt::StructOpt;
 
 use test_util::kafka::kafka_client;
+use test_util::mz_client;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
-use crate::mz_client::MzClient;
 
 mod config;
 mod gen;
-mod macros;
-mod mz_client;
+mod mz;
 mod proto;
 mod randomizer;
 
@@ -63,7 +62,7 @@ async fn run() -> Result<()> {
         k_config.seed,
     );
 
-    let mz_client = MzClient::new(&mz_config.host, mz_config.port).await?;
+    let mz_client = mz_client::client(&mz_config.host, mz_config.port).await?;
     let check_sink = mz_config.check_sink;
 
     let k = tokio::spawn(async move { create_kafka_messages(k_config).await });
@@ -74,13 +73,13 @@ async fn run() -> Result<()> {
     mz_res??;
 
     if check_sink {
-        mz_client
-            .validate_sink(
-                "check_sink",
-                "billing_monthly_statement",
-                "invalid_sink_rows",
-            )
-            .await?;
+        mz::validate_sink(
+            &mz_client,
+            "check_sink",
+            "billing_monthly_statement",
+            "invalid_sink_rows",
+        )
+        .await?;
     }
     Ok(())
 }
@@ -127,75 +126,60 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
 }
 
 async fn create_materialized_source(config: MzConfig) -> Result<()> {
-    let client = MzClient::new(&config.host, config.port).await?;
+    let client = mz_client::client(&config.host, config.port).await?;
 
     if !config.preserve_source {
-        let sources = client.show_sources().await?;
-        if any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-            client.drop_source(config::KAFKA_SOURCE_NAME).await?;
-            client.drop_source(config::CSV_SOURCE_NAME).await?;
-            client
-                .drop_source(config::REINGESTED_SINK_SOURCE_NAME)
-                .await?;
-        }
+        mz_client::drop_source(&client, config::KAFKA_SOURCE_NAME).await?;
+        mz_client::drop_source(&client, config::CSV_SOURCE_NAME).await?;
+        mz_client::drop_source(&client, config::REINGESTED_SINK_SOURCE_NAME).await?;
     }
 
-    let sources = client.show_sources().await?;
+    let sources = mz_client::show_sources(&client).await?;
     if !any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-        client
-            .create_csv_source(
-                &config.csv_file_name,
-                config::CSV_SOURCE_NAME,
-                randomizer::NUM_CLIENTS,
-                config.seed,
-                config.batch_size,
-            )
-            .await?;
+        mz::create_csv_source(
+            &client,
+            &config.csv_file_name,
+            config::CSV_SOURCE_NAME,
+            randomizer::NUM_CLIENTS,
+            config.seed,
+            config.batch_size,
+        )
+        .await?;
 
-        client
-            .create_proto_source(
-                proto::BILLING_DESCRIPTOR,
-                &config.kafka_url,
-                &config.kafka_topic,
-                config::KAFKA_SOURCE_NAME,
-                proto::BILLING_MESSAGE_NAME,
-                config.batch_size,
-            )
-            .await?;
+        mz::create_proto_source(
+            &client,
+            proto::BILLING_DESCRIPTOR,
+            &config.kafka_url,
+            &config.kafka_topic,
+            config::KAFKA_SOURCE_NAME,
+            proto::BILLING_MESSAGE_NAME,
+            config.batch_size,
+        )
+        .await?;
 
-        exec_query!(client, "billing_raw_data");
-        exec_query!(client, "billing_prices");
-        exec_query!(client, "billing_batches");
-        exec_query!(client, "billing_records");
-        exec_query!(client, "billing_agg_by_minute");
-        exec_query!(client, "billing_agg_by_hour");
-        exec_query!(client, "billing_agg_by_day");
-        exec_query!(client, "billing_agg_by_month");
-        exec_query!(client, "billing_monthly_statement");
+        mz::init_views(&client, config::KAFKA_SOURCE_NAME, config::CSV_SOURCE_NAME).await?;
+
         if config.low_memory {
-            exec_query!(client, "drop_index_billing_raw_data");
-            exec_query!(client, "drop_index_billing_records");
+            mz::drop_indexes(&client).await?;
         }
-
-        let sink_topic = client
-            .create_kafka_sink(
+        let sink_topic = mz::create_kafka_sink(
+            &client,
+            &config.kafka_url,
+            config::KAFKA_SINK_TOPIC_NAME,
+            config::KAFKA_SINK_NAME,
+            &config.schema_registry_url,
+        )
+        .await?;
+        if config.check_sink {
+            mz::reingest_sink(
+                &client,
                 &config.kafka_url,
-                config::KAFKA_SINK_TOPIC_NAME,
-                config::KAFKA_SINK_NAME,
                 &config.schema_registry_url,
+                config::REINGESTED_SINK_SOURCE_NAME,
+                &sink_topic,
             )
             .await?;
-        if config.check_sink {
-            client
-                .reingest_sink(
-                    &config.kafka_url,
-                    &config.schema_registry_url,
-                    config::REINGESTED_SINK_SOURCE_NAME,
-                    &sink_topic,
-                )
-                .await?;
-            exec_query!(client, "check_sink");
-            exec_query!(client, "invalid_sink_rows");
+            mz::init_sink_views(&client, config::REINGESTED_SINK_SOURCE_NAME).await?;
         }
     } else {
         log::info!(
