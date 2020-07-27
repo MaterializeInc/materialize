@@ -28,6 +28,7 @@ as a fast read replica for a MySQL database
 Materialize as a fast read replica for a PostgeSQL database
 * [style.md](style.md) is our style guide for Rust and SQL for the Materialize
 codebase
+* [profile.md](profile.md) contains some hints for memory usage profiling
 
 ## Additional Info
 
