@@ -274,7 +274,7 @@ impl AstDisplay for DataType {
             DataType::Int => f.write_str("int"),
             DataType::BigInt => f.write_str("bigint"),
             DataType::Real => f.write_str("real"),
-            DataType::Double => f.write_str("double"),
+            DataType::Double => f.write_str("double precision"),
             DataType::Boolean => f.write_str("boolean"),
             DataType::Date => f.write_str("date"),
             DataType::Time => f.write_str("time"),

@@ -27,7 +27,7 @@ CREATE TABLE uk_cities (
     ref INT REFERENCES othertable (a, b)
 )
 ----
-CREATE TABLE uk_cities (name character varying(100) NOT NULL, lat double NULL, lng double, constrained int NULL CONSTRAINT pkey PRIMARY KEY NOT NULL UNIQUE CHECK (constrained > 0), ref int REFERENCES othertable (a, b))
+CREATE TABLE uk_cities (name character varying(100) NOT NULL, lat double precision NULL, lng double precision, constrained int NULL CONSTRAINT pkey PRIMARY KEY NOT NULL UNIQUE CHECK (constrained > 0), ref int REFERENCES othertable (a, b))
 =>
 CreateTable { name: ObjectName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Varchar(Some(100)), collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Double, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Double, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(BinaryOp { left: Identifier([Ident("constrained")]), op: Gt, right: Value(Number("0")) }) }] }, ColumnDef { name: Ident("ref"), data_type: Int, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: ObjectName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], with_options: [], if_not_exists: false }
 

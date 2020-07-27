@@ -210,6 +210,8 @@ define_keywords!(
     FIRST,
     FIRST_VALUE,
     FLOAT,
+    FLOAT4,
+    FLOAT8,
     FLOOR,
     FOLLOWING,
     FOR,
