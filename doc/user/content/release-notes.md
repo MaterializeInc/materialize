@@ -53,7 +53,7 @@ Wrap your release notes at the 80 character mark.
   rounding before the conversion.
 
 <span id="v0.4.0"></span>
-## 0.4.0 (Unreleased)
+## 0.4.0
 
 - Introduce the ability to [rename indexes, sinks, sources, and views](/sql/alter-rename).
 - Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
