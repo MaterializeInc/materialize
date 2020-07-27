@@ -122,9 +122,9 @@ docker run --network host -e MATERIALIZED_URL=localhost:6875 materialize/dashboa
 
 Materialize stores the majority of its state in-memory, and works best when the streamed data
 can be reduced in some way. For example, if you know that only a subset of your rows and columns
-are relevant for your queries, it helps to avoid materializing sources or views until you've 
-expressed this to the system (we can avoid stashing that data,
-which can in some cases dramatically reduce the memory footprint).
+are relevant for your queries, it helps to avoid materializing sources or views until you've
+expressed this to the system (we can avoid stashing that data, which can in some cases dramatically
+reduce the memory footprint).
 
 To minimize the chances that Materialize runs out of memory in a production environment,
 we recommend you make additional memory available to Materialize via a SSD-backed
