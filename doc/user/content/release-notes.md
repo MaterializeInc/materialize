@@ -47,13 +47,13 @@ Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
 <span id="v0.4.1"></span>
-## 0.4.1 (Unreleased)
+## v0.4.1 (Unreleased)
 
 - Make casting from `numeric` and `float` to `int` consistent with PostgreSQL by
   rounding before the conversion.
 
 <span id="v0.4.0"></span>
-## 0.4.0
+## v0.4.0
 
 - Introduce the ability to [rename indexes, sinks, sources, and views](/sql/alter-rename).
 - Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
@@ -64,7 +64,7 @@ Wrap your release notes at the 80 character mark.
 - Allow Kafka sinks to optionally emit Debezium style [consistency metadata](/sql/create-sink/#consistency-metadata).
 
 <span id="v0.3.1"></span>
-## 0.3.0 &rarr; 0.3.1
+## v0.3.1
 
 - Introduce the [`AS OF`](/sql/create-sink/#as-of) and
   [`WITH SNAPSHOT`](/sql/create-sink/#with-snapshot-or-without-snapshot) options for `CREATE SINK` to provide
@@ -84,7 +84,7 @@ Wrap your release notes at the 80 character mark.
   the first argument when getting the length of encoded bytes.
 
 <span id="v0.3.0"></span>
-## 0.2.2 &rarr; 0.3.0
+## v0.3.0
 
 - Support [temporary views](/sql/create-view/#temporary-views).
 
@@ -133,7 +133,7 @@ Wrap your release notes at the 80 character mark.
   some build information in addition to the version.
 
 <span id="v0.2.2"></span>
-## 0.2.1 &rarr; 0.2.2
+## v0.2.2
 
 - Introduce an "upsert" envelope for sources that follow the Kafka key–value
   convention for representing inserts, upserts, and deletes. See the [Upsert
@@ -190,7 +190,7 @@ Wrap your release notes at the 80 character mark.
   the unknown column `"from"`. {{% gh 2893 %}}
 
 <span id="v0.2.1"></span>
-## 0.2.0 &rarr; 0.2.1
+## v0.2.1
 
 - Allow query parameters (`$1`, `$2`, etc) to appear in
   [`EXPLAIN`](/sql/explain) statements.
@@ -214,7 +214,7 @@ Wrap your release notes at the 80 character mark.
   Kinesis sources, see [CREATE SOURCE: JSON over Kinesis](/sql/create-source/json-kinesis).
 
 <span id="v0.2.0"></span>
-## 0.1.3 &rarr; v0.2.0
+## v0.2.0
 
 - Require the `-w` / `--threads` command-line option. Consult the [CLI
   documentation](/cli/#worker-threads) to determine the correct value for your
@@ -259,7 +259,7 @@ Wrap your release notes at the 80 character mark.
     stages of the planning process.
 
 <span id="v0.1.3"></span>
-## 0.1.2 &rarr; 0.1.3
+## v0.1.3
 
 - Support [Amazon Kinesis Data Stream sources](/sql/create-source/json-kinesis/).
 
@@ -274,7 +274,7 @@ Wrap your release notes at the 80 character mark.
   a file is enabled, as well as the standard error stream.
 
 <span id="v0.1.2"></span>
-## 0.1.1 &rarr; 0.1.2
+## v0.1.2
 
 - Change [`SHOW CREATE SOURCE`] to render the full SQL statement used to create
   the source, in the style of [`SHOW CREATE VIEW`], rather than displaying a URL
@@ -308,7 +308,7 @@ Wrap your release notes at the 80 character mark.
 [`interval`]: /sql/types/interval
 
 <span id="v0.1.1"></span>
-## 0.1.0 &rarr; 0.1.1
+## v0.1.1
 
 * Specifying the message name in a Protobuf-formatted source no longer requires
   a leading period.
@@ -319,7 +319,7 @@ Wrap your release notes at the 80 character mark.
   selected all of the source's content.
 
 <span id="v0.1.0"></span>
-## _NULL_ &rarr; 0.1.0
+## v0.1.0
 
 - [What is Materialize?](/overview/what-is-materialize/)
 - [Architecture overview](/overview/architecture/)
