@@ -1075,11 +1075,11 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
-        Expr::Function(func) => func
-            .name
-            .0
-            .last()
-            .map(|n| normalize::column_name(n.clone())),
+        Expr::Function(func) => match func.name.0.last() {
+            None => None,
+            Some(name) if name.as_str().starts_with("internal_") => None,
+            Some(name) => Some(normalize::column_name(name.clone())),
+        },
         Expr::Coalesce { .. } => Some("coalesce".into()),
         Expr::List { .. } => Some("list".into()),
         Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
@@ -1096,7 +1096,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
                 .and_then(|item| item.names.first())
                 .and_then(|name| name.column_name.clone())
         }
-        _ => return None,
+        _ => None,
     };
     name.map(|n| ScopeItemName {
         table_name: None,

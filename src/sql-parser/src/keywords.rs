@@ -247,6 +247,8 @@ define_keywords!(
     INSENSITIVE,
     INSERT,
     INT,
+    INT4,
+    INT8,
     INTEGER,
     INTERSECT,
     INTERSECTION,
