@@ -1,1 +1,0 @@
-DROP INDEX billing_records_primary_idx;

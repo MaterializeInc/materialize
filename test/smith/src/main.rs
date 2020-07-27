@@ -18,11 +18,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use structopt::StructOpt;
 
+use test_util::mz_client;
+
 use crate::config::{Args, FuzzerConfig};
 
 mod config;
-mod macros;
-mod mz_client;
+mod mz;
 
 #[derive(Debug, Serialize)]
 struct QueryRequest {
@@ -41,12 +42,7 @@ struct QueryResponse {
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        println!("ERROR: {}", e);
-        let mut err = e.source();
-        while let Some(e) = err {
-            println!("    caused by: {}", e);
-            err = e.source();
-        }
+        eprintln!("ERROR: {:#}", e);
         process::exit(1);
     }
 }
@@ -70,11 +66,10 @@ async fn run() -> Result<()> {
 }
 
 async fn send_queries(config: FuzzerConfig) -> Result<()> {
-    let client = mz_client::MzClient::new(&config.mz_config.host, config.mz_config.port).await?;
+    let client = mz_client::client(&config.mz_config.host, config.mz_config.port).await?;
 
     // Seed Materialize with some starting views
-    exec_query!(client, "view1");
-    exec_query!(client, "view2");
+    mz::seed_views(&client).await?;
 
     // Get fuzzer inputs from Smith
     let http_client = reqwest::Client::new();
@@ -89,7 +84,7 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
             .form(&QueryRequest {
                 database: "materialize",
                 count,
-                tables: serde_json::to_string(&client.show_views().await?)?,
+                tables: serde_json::to_string(&mz::show_views(&client).await?)?,
                 prev,
             })
             .build()?;
@@ -102,14 +97,14 @@ async fn send_queries(config: FuzzerConfig) -> Result<()> {
 
         prev = Some(response.next);
         for query in response.queries.iter() {
-            if let Err(e) = client.execute(query, &[]).await {
+            if let Err(e) = mz_client::execute(&client, query).await {
                 if !query.starts_with("INSERT INTO") {
                     log::error!("{} ({}) executing query {}", e, e.source().unwrap(), query);
                 }
             }
 
             // Perform a heartbeat via a simple request tp make sure Materialize is still up
-            client.execute("SELECT 1", &[]).await?;
+            mz_client::execute(&client, "SELECT 1").await?;
         }
 
         remaining -= count;

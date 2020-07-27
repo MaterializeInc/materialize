@@ -1,7 +1,0 @@
-CREATE MATERIALIZED VIEW billing_batches AS
-SELECT
-    billing_raw_data.id,
-    to_timestamp((billing_raw_data.interval_start->'seconds')::bigint) interval_start,
-    to_timestamp((billing_raw_data.interval_end->'seconds')::bigint) interval_end
-FROM
-    billing_raw_data;

@@ -1,1 +1,0 @@
-CREATE MATERIALIZED VIEW view1 (a, b) AS VALUES (1, 2), (3, 4);

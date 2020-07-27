@@ -17,8 +17,6 @@ demo installs several sources and materialized views over this input data includ
 * aggregations of resource utilization at various time scales (`billing_agg_by_*`)
 * final itemized monthly statements (`billing_monthly statement`)
 
-The views are all in [resources/views](resources/views).
-
 ## Running with Docker
 
 This should be as simple as possible.

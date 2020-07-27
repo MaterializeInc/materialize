@@ -3227,6 +3227,7 @@ dependencies = [
  "serde",
  "serde_json",
  "structopt",
+ "test-util",
  "tokio",
  "tokio-postgres",
  "url",
