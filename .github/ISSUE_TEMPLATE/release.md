@@ -139,6 +139,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] Add the version to the website's list of versions in
     [`doc/user/config.toml`].
 
+  - [ ] Ensure that the announcement blog post has been published and announced, by
+    pinging the PM in `#release`
+
 ## Finish
 
 - [ ] Remove all load test machines.
