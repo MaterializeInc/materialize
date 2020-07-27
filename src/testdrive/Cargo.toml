@@ -25,7 +25,7 @@ md-5 = "0.9"
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
-tokio-postgres = { version = "0.5.4", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4", "with-serde_json-1"] }
 protobuf = "2.8"
 protoc = "2.8.0"
 rand = "0.7.3"
