@@ -34,7 +34,7 @@ regex = "1"
 repr = { path = "../repr" }
 reqwest = { version = "0.10.6", features = ["native-tls-vendored"] }
 rusoto_core = "0.44.0"
-rusoto_credential = "0.44.0"
+rusoto_credential = "0.45.0"
 rusoto_kinesis = "0.44.0"
 rusoto_sts = "0.44.0"
 serde = "1.0.114"
