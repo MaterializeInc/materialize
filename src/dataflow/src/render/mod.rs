@@ -937,9 +937,7 @@ where
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::Semijoin => {
-                            if let RelationExpr::ArrangeBy { keys, .. } = &inputs[0] {
-                                self.render_semi_join(relation_expr, &keys[0], scope, worker_index);
-                            }
+                            self.render_semi_join(relation_expr, scope, worker_index);
                         }
                         expr::JoinImplementation::Unimplemented => {
                             panic!("Attempt to render unimplemented join");

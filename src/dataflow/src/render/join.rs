@@ -295,13 +295,10 @@ where
         }
     }
 
-    pub fn render_semi_join(
-        &mut self,
-        input: &RelationExpr,
-        keys: &[ScalarExpr],
-        scope: &mut G,
-        worker_index: usize,
-    ) {
+    /// Renders a join of an arrangement to a constant collection of size 1.
+    /// `input` should be of the form
+    /// `Join { inputs: [ArrangeBy{...}], implementation: Semijoin, ...}`
+    pub fn render_semi_join(&mut self, input: &RelationExpr, scope: &mut G, worker_index: usize) {
         if let RelationExpr::Join {
             inputs,
             equivalences,
@@ -309,58 +306,69 @@ where
             ..
         } = input
         {
-            // Extract the constant to semijoin against from the equivalence classes
-            let temp_storage = RowArena::new();
-            let constant_row = keys
-                .iter()
-                .map(|k| {
-                    let eval_result = equivalences.iter().find_map(|e| {
-                        if e.contains(k) {
-                            return e.iter().find_map(|s| match s {
-                                ScalarExpr::Literal(_, _) => Some(s.eval(&[], &temp_storage)),
-                                _ => None,
-                            });
-                        }
-                        None
-                    });
-                    match eval_result {
-                        Some(Ok(datum)) => datum,
-                        Some(Err(_)) => {
-                            unreachable!("Error occurred when evaluating semijoin constant")
-                        }
-                        None => unreachable!("No constant for semijoin key"),
+            if let RelationExpr::ArrangeBy {
+                input: inner_input,
+                keys,
+            } = &inputs[0]
+            {
+                let keys = &keys[0];
+                // For each key ...
+                let constant_row = keys
+                    .iter()
+                    .map(|k| {
+                        equivalences
+                            .iter()
+                            .find_map(|e| {
+                                // ... look for the equivalence class containing the key ...
+                                if e.contains(k) {
+                                    // ... and find the constant within that equivalence
+                                    // class.
+                                    return e.iter().find_map(|s| match s.as_literal() {
+                                        Some(Ok(datum)) => Some(datum),
+                                        Some(Err(_)) => unreachable!(
+                                            "Error occurred when evaluating semijoin constant"
+                                        ),
+                                        None => None,
+                                    });
+                                }
+                                None
+                            })
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+
+                // TODO: convert join to filter if the corresponding equivalent
+                // constant for each key cannot be found?
+
+                // Create a RelationExpr representing the constant
+                // Having the RelationType is technically not an accurate
+                // representation of the expression, but relation type doesn't
+                // matter when it comes to rendering.
+                let mut row_packer = repr::RowPacker::new();
+                let constant_row_expr = RelationExpr::Constant {
+                    rows: vec![(row_packer.pack(constant_row), 1)],
+                    typ: RelationType::empty(),
+                };
+
+                self.render_constant(&constant_row_expr, scope, worker_index);
+
+                let (constant_collection, errs) = self.collection(&constant_row_expr).unwrap();
+                match self.arrangement(&inner_input, keys) {
+                    Some(ArrangementFlavor::Local(oks, es)) => {
+                        let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
+                        let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
+                        self.set_local(input, keys, (result, es));
                     }
-                })
-                .collect::<Vec<_>>();
-
-            // Create a RelationExpr representing the constant
-            // Having the RelationType is technically not an accurate
-            // representation of the expression, but relation type doesn't
-            // matter when it comes to rendering.
-            let mut row_packer = repr::RowPacker::new();
-            let constant_row_expr = RelationExpr::Constant {
-                rows: vec![(row_packer.pack(constant_row), 1)],
-                typ: RelationType::empty(),
-            };
-
-            self.render_constant(&constant_row_expr, scope, worker_index);
-
-            let (constant_collection, errs) = self.collection(&constant_row_expr).unwrap();
-            match self.arrangement(&inputs[0], keys) {
-                Some(ArrangementFlavor::Local(oks, es)) => {
-                    let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
-                    let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
-                    self.set_local(input, keys, (result, es));
-                }
-                Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
-                    let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
-                    let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
-                    self.set_local(input, keys, (result, es));
-                }
-                None => {
-                    panic!("Arrangement alarmingly absent!");
-                }
-            };
+                    Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
+                        let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
+                        let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
+                        self.set_local(input, keys, (result, es));
+                    }
+                    None => {
+                        panic!("Arrangement alarmingly absent!");
+                    }
+                };
+            }
         }
     }
 }
