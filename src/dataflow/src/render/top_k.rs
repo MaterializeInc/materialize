@@ -118,6 +118,10 @@ where
                                         }
                                     }
                                 }
+                            } else {
+                                for (row, diff) in source.iter() {
+                                    target.push(((*row).clone(), diff.clone()));
+                                }
                             }
                         }
                     })
