@@ -12,7 +12,7 @@ git clone https://github.com/brendangregg/FlameGraph
 ```
 _RJEM_MALLOC_CONF=background_thread:true,prof:true,prof_prefix:jeprof.out,prof_final:true,lg_prof_sample:20,lg_prof_interval:35 cargo run --bin materialized --release -- -w30
 ```
-4. Run your workflow in `materialized`. This will cause a stack trace to be taken every 2^20 bytes of allocations, and 
+4. Run your workflow in `materialized`. This will cause a stack trace to be taken every 2^20 bytes of allocations, and
 a profile of the heap dumped every 2^35 allocations (32 GB). These will have names
 like `jeprof.out.2606918.16.i16.heap`. If you need dumps more or less frequently, tune the `lg_prof_interval` parameter.
 5. Convert to flamegraph.pl stack sample format.
