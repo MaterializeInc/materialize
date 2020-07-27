@@ -43,8 +43,32 @@ const graphs = [
             main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
-                .tag("v0.1.0-rc1")
-                .commit({hash: "C"});
+
+            const rel = main
+                .branch("release-0.1.0");
+            rel
+                .commit({hash: "D"})
+                .tag("v0.1.0-rc1");
+            main.commit({hash: "C"});
+        },
+    },
+    {
+        name: "02.1-merged",
+        build: () => {
+            const main = gitgraph.branch("main");
+            main
+                .commit({hash: "A"})
+                .commit({hash: "B"})
+
+            const rel = main
+                .branch("release-0.1.0");
+            rel
+                .commit({hash: "D"})
+                .tag("v0.1.0-rc1");
+            main.commit({hash: "C"});
+            const prep = rel.branch("prepare-v0.1.1");
+            prep.commit({hash: "E"})
+            main.merge(prep)
         },
     },
     {
@@ -54,9 +78,21 @@ const graphs = [
             main
                 .commit({hash: "A"})
                 .commit({hash: "B"})
+
+            const rel = main
+                .branch("release-0.1.0");
+            rel
+                .commit({hash: "D"})
                 .tag("v0.1.0-rc1")
-                .tag("v0.1.0")
-                .commit({hash: "C"});
+            main.commit({hash: "C"});
+            const prep = rel.branch("prepare-v0.1.1");
+
+            rel
+                .commit({hash: "F"})
+                .tag("v0.1.0");
+
+            prep.commit({hash: "E"});
+            main.merge(prep);
         }
     },
     {
