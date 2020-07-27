@@ -351,9 +351,9 @@ ORDER BY b DESC LIMIT 3 OFFSET 2 ROWS
 query RT rowsort
 SELECT * FROM fizzlimitoffsetview2
 ----
-12345.000000 one
-2079.000000  thirteen
-22733.000000 four
+12345 one
+2079  thirteen
+22733 four
 
 # delete and add an entry see how views update
 statement ok
@@ -394,9 +394,9 @@ three    12345
 query RT rowsort
 SELECT * FROM fizzlimitoffsetview2
 ----
-12345.000000 one
-22733.000000 four
-6745.000000  five
+12345 one
+22733 four
+6745  five
 
 statement ok
 DELETE FROM fizz WHERE b = 'five'
@@ -461,6 +461,6 @@ SELECT count(tot) FROM fizzlimitoffsetview
 query RT rowsort
 SELECT * FROM fizzlimitoffsetview2
 ----
-12345.000000 one
-21758.000000 fourteen
-12345.000000 three
+12345 one
+21758 fourteen
+12345 three

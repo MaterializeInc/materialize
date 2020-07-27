@@ -22,7 +22,7 @@ query IIIR colnames
 SELECT 1 AS literal, sum(a) as sum_a, sum(b), avg(a) FROM t
 ----
 literal  sum_a  sum  avg
-1        7      7    1.750000
+1        7      7    1.75
 
 query I rowsort
 SELECT a FROM t GROUP BY a HAVING sum(b) = 3
@@ -79,7 +79,7 @@ Field  Nullable  Type
 query R
 SELECT avg(a) FROM t
 ----
-1.750000
+1.75
 
 # But avg on a float column should return a float.
 
@@ -165,8 +165,8 @@ SELECT v, count(*) FILTER (WHERE count(*) > 5) FROM filter_test GROUP BY v
 query IR rowsort
 SELECT v, avg(k) FILTER (WHERE k > 5) FROM filter_test GROUP BY v
 ----
-2 6.500000
-4 8.000000
+2 6.5
+4 8
 NULL NULL
 
 # Similarly for variance and stddev.

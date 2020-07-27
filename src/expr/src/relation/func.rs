@@ -280,7 +280,7 @@ where
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: i32 = datums.map(|d| d.unwrap_int32()).sum();
+        let x: i64 = datums.map(|d| i64::from(d.unwrap_int32())).sum();
         Datum::from(x)
     }
 }
@@ -490,6 +490,7 @@ impl AggregateFunc {
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
+            AggregateFunc::SumInt32 => ScalarType::Int64,
             _ => input_type.scalar_type,
         };
         let nullable = match self {
