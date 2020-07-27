@@ -77,8 +77,11 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
         "Licensed Work:",
         f"Licensed Work:             Materialize Version {version}",
     )
-    future = four_years_hence()
-    change_line(LICENSE, "Change Date", f"Change Date:               {future}")
+    # Don't update the change date unless some code has changed
+    if "-rc" in version or "-dev" in version:
+        future = four_years_hence()
+        change_line(LICENSE, "Change Date", f"Change Date:               {future}")
+
     say("Updating Cargo.lock")
     spawn.runv(["cargo", "check", "-p", "materialized"])
     if tag:
