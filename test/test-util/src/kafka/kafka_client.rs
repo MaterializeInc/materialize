@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
@@ -78,21 +78,53 @@ impl KafkaClient {
             .context(format!("creating Kafka topic: {}", &self.topic))?;
 
         if res.len() != 1 {
-            return Err(anyhow::anyhow!(
+            bail!(
                 "error creating topic {}: \
              kafka topic creation returned {} results, but exactly one result was expected",
                 self.topic,
                 res.len()
-            ));
+            );
         }
 
         if let Err((_, e)) = res[0] {
-            return Err(anyhow::anyhow!(
-                "error creating topic {}: {}",
-                self.topic,
-                e
-            ));
+            bail!("error creating topic {}: {}", self.topic, e);
         }
+
+        // Topic creation is asynchronous, and if we don't wait for it to
+        // complete, we might produce a message (below) that causes it to
+        // get automatically created with multiple partitions. (Since
+        // multiple partitions have no ordering guarantees, this violates
+        // many assumptions that our tests make.)
+        ore::retry::retry_for(Duration::from_secs(8), |_| async {
+            let metadata = self
+                .producer
+                .client()
+                // N.B. It is extremely important not to ask specifically
+                // about the topic here, even though the API supports it!
+                // Asking about the topic will create it automatically...
+                // with the wrong number of partitions. Yes, this is
+                // unbelievably horrible.
+                .fetch_metadata(None, Some(Duration::from_secs(1)))?;
+            if metadata.topics().is_empty() {
+                bail!("metadata fetch returned no topics");
+            }
+            let topic = match metadata.topics().iter().find(|t| t.name() == self.topic) {
+                Some(topic) => topic,
+                None => bail!("metadata fetch did not return topic {}", self.topic,),
+            };
+            if topic.partitions().is_empty() {
+                bail!("metadata fetch returned a topic with no partitions");
+            } else if topic.partitions().len() as i32 != partitions {
+                bail!(
+                    "topic {} was created with {} partitions when exactly {} was expected",
+                    self.topic,
+                    topic.partitions().len(),
+                    partitions
+                );
+            }
+            Ok(())
+        })
+        .await?;
 
         Ok(())
     }

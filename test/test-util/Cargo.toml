@@ -9,6 +9,7 @@ publish = false
 anyhow = "1.0.32"
 chrono = "0.4.13"
 log = "0.4.11"
+ore = { path = "../../src/ore" }
 rand = "0.7.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 tokio = { version = "0.2.22", features = ["full"] }
