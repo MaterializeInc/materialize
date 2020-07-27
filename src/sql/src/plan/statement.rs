@@ -1286,6 +1286,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                                     .duration_since(UNIX_EPOCH)?
                                     .as_secs(),
                                 nonce: scx.catalog.nonce(),
+                                restart: None,
                             })
                         }
                         Some(_) => bail!("persistence must be a bool!"),

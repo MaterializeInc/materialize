@@ -11,6 +11,7 @@ async-trait = "0.1.36"
 avro = { path = "../avro", package = "mz-avro" }
 aws-util = { path = "../aws-util" }
 bincode = "1.3.1"
+byteorder = "1.3"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 csv-core = "0.1.10"

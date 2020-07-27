@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -16,9 +17,10 @@ use std::rc::Rc;
 
 //use differential_dataflow::hashable::Hashable;
 //use log::error;
+use byteorder::{ByteOrder, NetworkEndian};
 use differential_dataflow::operators::arrange::ShutdownButton;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::generic::FrontieredInputHandle;
+use timely::dataflow::operators::generic::{source, FrontieredInputHandle};
 use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::Timestamp;
@@ -139,5 +141,96 @@ where
         };
 
         (ret, shutdown_button)
+    })
+}
+
+// TODO reuse justin's code for this
+#[derive(Debug, Clone)]
+pub struct RecordIter {
+    data: Vec<u8>,
+    idx: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Record {
+    pub row: Row,
+    pub position: i64,
+    pub time: i64,
+    pub diff: i64,
+}
+
+impl RecordIter {
+    fn next_rec(&mut self) -> Row {
+        let (_, data) = self.data.split_at(self.idx);
+        let len = NetworkEndian::read_u32(data) as usize;
+        let (_, data) = data.split_at(4);
+        let (row, _) = data.split_at(len);
+        self.idx += 4 + len;
+        Row::decode(row.to_vec().clone())
+    }
+}
+
+impl Iterator for RecordIter {
+    type Item = Record;
+
+    fn next(&mut self) -> Option<Record> {
+        if self.data.len() <= self.idx {
+            return None;
+        }
+        let row = self.next_rec();
+        let meta_row = self.next_rec();
+        let meta = meta_row.unpack();
+        let position = meta[0].unwrap_int64();
+        let time = meta[1].unwrap_int64();
+        let diff = meta[2].unwrap_int64();
+        Some(Record {
+            row,
+            position,
+            time,
+            diff,
+        })
+    }
+}
+
+pub fn read_persisted_source<G>(
+    scope: &G,
+    id: GlobalId,
+    files: Vec<PathBuf>,
+) -> Stream<G, (Row, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let name = format!("source-persist-reread-{}", id);
+    source(scope, &name, |capability, info| {
+        let activator = scope.activator_for(&info.address[..]);
+
+        let mut cap = Some(capability);
+        move |output| {
+            let mut done = false;
+            if let Some(cap) = cap.as_mut() {
+                for f in files.iter() {
+                    // TODO handle file read errors
+                    // TODO this operator insists on reading everything in one shot
+                    // TODO this operator is not safe for multiple threads at the moment
+                    let data = fs::read(f).expect("reading from file cannot fail");
+
+                    let iter = RecordIter { data, idx: 0 };
+
+                    let records: Vec<Record> = iter.collect();
+                    for r in records.into_iter() {
+                        let ts = r.time as u64;
+                        let ts_cap = cap.delayed(&ts);
+                        output.session(&ts_cap).give((r.row, ts, r.diff as isize));
+                    }
+                }
+
+                done = true;
+            }
+            if done {
+                cap = None;
+            } else {
+                activator.activate();
+            }
+        }
     })
 }

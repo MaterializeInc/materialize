@@ -508,6 +508,13 @@ pub struct Persistence {
     pub path: PathBuf,
     pub startup_time: u64,
     pub nonce: u64,
+    pub restart: Option<PersistenceRestart>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PersistenceRestart {
+    pub offset: i64,
+    pub files: Vec<PathBuf>,
 }
 
 /// Universal language for describing message positions in Materialize, in a source independent

@@ -504,6 +504,11 @@ impl Row {
             .expect("writes to vec cannot fail");
         buf.extend_from_slice(&self.data);
     }
+
+    /// TODO copy justins stuff and also there is a better way here
+    pub fn decode(data: Vec<u8>) -> Self {
+        Row { data: data.into() }
+    }
 }
 
 impl<'a> IntoIterator for &'a Row {

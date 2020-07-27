@@ -642,6 +642,7 @@ dependencies = [
  "async-trait",
  "aws-util",
  "bincode",
+ "byteorder",
  "ccsr",
  "comm",
  "csv-core",

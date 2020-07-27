@@ -38,7 +38,7 @@ use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
-    SinkConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    SinkConnector, SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -233,7 +233,14 @@ where
                 //about how it was built. If we start building multiple sinks and/or indexes
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
+                    let connector = block_on(sink_connector::handle_persistence(
+                        source.connector.clone(),
+                        *id,
+                    ))
+                    .with_context(|| format!("recreating source {}", name))?;
+                    coord.handle_source_connector_persistence(*id, connector);
+
                     coord.views.insert(*id, ViewState::new(false, vec![]));
                 }
                 CatalogItem::View(view) => {
@@ -1900,6 +1907,28 @@ where
             .typ()
             .clone();
         self.build_arrangement(&id, index, on_type, dataflow);
+    }
+
+    fn handle_source_connector_persistence(&mut self, id: GlobalId, connector: SourceConnector) {
+        // Update catalog entry with sink connector.
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let mut source = match entry.item() {
+            CatalogItem::Source(source) => source.clone(),
+            _ => unreachable!(),
+        };
+        source.connector = connector;
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                name: name.clone(),
+                item: CatalogItem::Source(source.clone()),
+            },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a source cannot fail");
     }
 
     fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {

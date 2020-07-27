@@ -16,9 +16,9 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 
 use dataflow_types::{
-    AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, SinkConnector, SinkConnectorBuilder,
-    Timestamp,
+    AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, ExternalSourceConnector, KafkaSinkConnector,
+    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, Persistence, PersistenceRestart,
+    SinkConnector, SinkConnectorBuilder, SourceConnector, Timestamp,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -176,4 +176,101 @@ fn build_avro_ocf(
         frontier,
         strict: !with_snapshot,
     }))
+}
+
+pub async fn handle_persistence(
+    connector: SourceConnector,
+    id: GlobalId,
+) -> Result<SourceConnector, anyhow::Error> {
+    match connector {
+        SourceConnector::External {
+            connector,
+            encoding,
+            envelope,
+            consistency,
+            max_ts_batch,
+            ts_frequency,
+            persistence,
+        } => {
+            if persistence.is_none() {
+                // There's nothing to handle
+                Ok(SourceConnector::External {
+                    connector,
+                    encoding,
+                    envelope,
+                    consistency,
+                    max_ts_batch,
+                    ts_frequency,
+                    persistence,
+                })
+            } else {
+                let (connector, persistence) = handle_persistence_inner(
+                    connector,
+                    persistence.expect("persistence known to exist"),
+                    id,
+                )
+                .await?;
+                Ok(SourceConnector::External {
+                    connector,
+                    encoding,
+                    envelope,
+                    consistency,
+                    max_ts_batch,
+                    ts_frequency,
+                    persistence: Some(persistence),
+                })
+            }
+        }
+        SourceConnector::Local => Ok(connector),
+    }
+}
+
+async fn handle_persistence_inner(
+    mut connector: ExternalSourceConnector,
+    mut persistence: Persistence,
+    id: GlobalId,
+) -> Result<(ExternalSourceConnector, Persistence), anyhow::Error> {
+    match &mut connector {
+        ExternalSourceConnector::Kafka(k) => {
+            // First let's read the finalized files directory to figure out what persistence
+            // files we have, if any
+            let files = std::fs::read_dir("mzdata/persistence-processed")
+                .expect("reading directory cannot fail");
+            let file_prefix = format!("materialized-source-{}", id);
+            let mut read_offset: i64 = 0;
+            let mut paths = Vec::new();
+
+            for f in files {
+                // TODO there has to be a better way
+                let path = f.expect("file known to exist").path();
+                let filename = path.file_name().unwrap().to_str().unwrap().to_owned();
+                if filename.starts_with(&file_prefix) {
+                    let parts: Vec<_> = filename.split('-').collect();
+
+                    if parts.len() != 5 {
+                        eprintln!("Found unexpected file {}", filename);
+                        continue;
+                    }
+
+                    let end_offset = parts[4].parse::<i64>().unwrap();
+                    paths.push(path);
+                    // TODO this is lazy and incomplete
+                    if end_offset > read_offset {
+                        read_offset = end_offset;
+                    }
+                }
+            }
+
+            if paths.len() > 0 && read_offset > 0 {
+                persistence.restart = Some(PersistenceRestart {
+                    offset: read_offset,
+                    files: paths,
+                });
+                k.start_offset = read_offset;
+            }
+        }
+        _ => bail!("persistence only enabled for Kafka sources at this time"),
+    }
+
+    Ok((connector, persistence))
 }
