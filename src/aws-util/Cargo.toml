@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 log = "0.4"
 rusoto_core = "0.44.0"
 rusoto_credential = "0.44.0"

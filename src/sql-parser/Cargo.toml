@@ -18,5 +18,5 @@ datadriven = "0.1.0"
 matches = "0.1"
 
 [build-dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 walkabout = { path = "../walkabout" }

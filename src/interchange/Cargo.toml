@@ -11,7 +11,7 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 avro = { path = "../avro", package = "mz-avro" }
 byteorder = "1.3"
 ccsr = { path = "../ccsr" }
