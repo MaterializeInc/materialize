@@ -308,7 +308,6 @@ pub struct LogView {
     pub name: &'static str,
     pub sql: &'static str,
     pub id: GlobalId,
-    pub index_id: GlobalId,
 }
 
 // Stores all addresses that only have one slot (0) in
@@ -316,7 +315,7 @@ pub struct LogView {
 // or dataflows.
 const VIEW_ADDRESSES_WITH_UNIT_LENGTH: LogView = LogView {
     name: "mz_addresses_with_unit_length",
-    sql: "CREATE MATERIALIZED VIEW mz_addresses_with_unit_length AS SELECT
+    sql: "CREATE VIEW mz_addresses_with_unit_length AS SELECT
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker
 FROM
@@ -326,14 +325,13 @@ GROUP BY
     mz_dataflow_operator_addresses.worker
 HAVING count(*) = 1",
     id: GlobalId::System(33),
-    index_id: GlobalId::System(34),
 };
 
 /// Maintains a list of the current dataflow operator ids, and their
 /// corresponding operator names and local ids (per worker).
 const VIEW_DATAFLOW_NAMES: LogView = LogView {
     name: "mz_dataflow_names",
-    sql: "CREATE MATERIALIZED VIEW mz_dataflow_names AS SELECT
+    sql: "CREATE VIEW mz_dataflow_names AS SELECT
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker,
     mz_dataflow_operator_addresses.value as local_id,
@@ -349,14 +347,13 @@ WHERE
     mz_dataflow_operator_addresses.worker = mz_addresses_with_unit_length.worker AND
     mz_dataflow_operator_addresses.slot = 0",
     id: GlobalId::System(35),
-    index_id: GlobalId::System(36),
 };
 
 /// Maintains a list of all operators bound to a dataflow and their
 /// corresponding names and dataflow names and ids (per worker).
 const VIEW_DATAFLOW_OPERATOR_DATAFLOWS: LogView = LogView {
     name: "mz_dataflow_operator_dataflows",
-    sql: "CREATE MATERIALIZED VIEW mz_dataflow_operator_dataflows AS SELECT
+    sql: "CREATE VIEW mz_dataflow_operator_dataflows AS SELECT
     mz_dataflow_operators.id,
     mz_dataflow_operators.name,
     mz_dataflow_operators.worker,
@@ -373,14 +370,13 @@ WHERE
     mz_dataflow_names.local_id = mz_dataflow_operator_addresses.value AND
     mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
     id: GlobalId::System(37),
-    index_id: GlobalId::System(38),
 };
 
 /// Maintains the number of records used by each operator in a dataflow (per
 /// worker). Operators not using any records are not shown.
 const VIEW_RECORDS_PER_DATAFLOW_OPERATOR: LogView = LogView {
     name: "mz_records_per_dataflow_operator",
-    sql: "CREATE MATERIALIZED VIEW mz_records_per_dataflow_operator AS SELECT
+    sql: "CREATE VIEW mz_records_per_dataflow_operator AS SELECT
     mz_dataflow_operator_dataflows.id,
     mz_dataflow_operator_dataflows.name,
     mz_dataflow_operator_dataflows.worker,
@@ -393,13 +389,12 @@ WHERE
     mz_dataflow_operator_dataflows.id = mz_arrangement_sizes.operator AND
     mz_dataflow_operator_dataflows.worker = mz_arrangement_sizes.worker",
     id: GlobalId::System(39),
-    index_id: GlobalId::System(40),
 };
 
 /// Maintains the number of records used by each dataflow (per worker).
 const VIEW_RECORDS_PER_DATAFLOW: LogView = LogView {
     name: "mz_records_per_dataflow",
-    sql: "CREATE MATERIALIZED VIEW mz_records_per_dataflow AS SELECT
+    sql: "CREATE VIEW mz_records_per_dataflow AS SELECT
     mz_records_per_dataflow_operator.dataflow_id as id,
     mz_dataflow_names.name,
     mz_records_per_dataflow_operator.worker,
@@ -415,13 +410,12 @@ GROUP BY
     mz_dataflow_names.name,
     mz_records_per_dataflow_operator.worker",
     id: GlobalId::System(41),
-    index_id: GlobalId::System(42),
 };
 
 /// Maintains the number of records used by each dataflow (across all workers).
 const VIEW_RECORDS_PER_DATAFLOW_GLOBAL: LogView = LogView {
     name: "mz_records_per_dataflow_global",
-    sql: "CREATE MATERIALIZED VIEW mz_records_per_dataflow_global AS SELECT
+    sql: "CREATE VIEW mz_records_per_dataflow_global AS SELECT
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name,
     SUM(mz_records_per_dataflow.records) as records
@@ -431,12 +425,11 @@ GROUP BY
     mz_records_per_dataflow.id,
     mz_records_per_dataflow.name",
     id: GlobalId::System(43),
-    index_id: GlobalId::System(44),
 };
 
 const VIEW_PERF_DEPENDENCY_FRONTIERS: LogView = LogView {
     name: "mz_perf_dependency_frontiers",
-    sql: "CREATE MATERIALIZED VIEW mz_perf_dependency_frontiers AS SELECT DISTINCT
+    sql: "CREATE VIEW mz_perf_dependency_frontiers AS SELECT DISTINCT
         coalesce(mcn.name, index_deps.dataflow) as dataflow,
         coalesce(mcn_source.name, frontier_source.global_id) as source,
         frontier_source.time - frontier_df.time as lag_ms
@@ -447,21 +440,20 @@ JOIN mz_catalog.mz_materialization_frontiers frontier_df ON index_deps.dataflow 
 LEFT JOIN mz_catalog.mz_catalog_names mcn ON mcn.global_id = index_deps.dataflow
 LEFT JOIN mz_catalog.mz_catalog_names mcn_source ON mcn_source.global_id = frontier_source.global_id",
     id: GlobalId::System(45),
-    index_id: GlobalId::System(46),
 };
 
 const VIEW_PERF_ARRANGEMENT_RECORDS: LogView = LogView {
     name: "mz_perf_arrangement_records",
-    sql: "CREATE MATERIALIZED VIEW mz_perf_arrangement_records AS SELECT mas.worker, name, records, operator
+    sql:
+        "CREATE VIEW mz_perf_arrangement_records AS SELECT mas.worker, name, records, operator
 FROM mz_catalog.mz_arrangement_sizes mas
 LEFT JOIN mz_catalog.mz_dataflow_operators mdo ON mdo.id = mas.operator AND mdo.worker = mas.worker",
     id: GlobalId::System(47),
-    index_id: GlobalId::System(48),
 };
 
 const VIEW_PERF_PEEK_DURATIONS_CORE: LogView = LogView {
     name: "mz_perf_peek_durations_core",
-    sql: "CREATE MATERIALIZED VIEW mz_perf_peek_durations_core AS SELECT
+    sql: "CREATE VIEW mz_perf_peek_durations_core AS SELECT
     d_upper.worker,
     CAST(d_upper.duration_ns AS TEXT) AS le,
     sum(d_summed.count) AS count
@@ -473,12 +465,11 @@ WHERE
     d_upper.duration_ns >= d_summed.duration_ns
 GROUP BY d_upper.worker, d_upper.duration_ns",
     id: GlobalId::System(49),
-    index_id: GlobalId::System(50),
 };
 
 const VIEW_PERF_PEEK_DURATIONS_BUCKET: LogView = LogView {
     name: "mz_perf_peek_durations_bucket",
-    sql: "CREATE MATERIALIZED VIEW mz_perf_peek_durations_bucket AS
+    sql: "CREATE VIEW mz_perf_peek_durations_bucket AS
 (
     SELECT * FROM mz_catalog.mz_perf_peek_durations_core
 ) UNION (
@@ -486,14 +477,12 @@ const VIEW_PERF_PEEK_DURATIONS_BUCKET: LogView = LogView {
     GROUP BY worker
 )",
     id: GlobalId::System(51),
-    index_id: GlobalId::System(52),
 };
 
 const VIEW_PERF_PEEK_DURATIONS_AGGREGATES: LogView = LogView {
     name: "mz_perf_peek_durations_aggregates",
-    sql: "CREATE MATERIALIZED VIEW mz_perf_peek_durations_aggregates AS SELECT worker, sum(duration_ns * count) AS sum, sum(count) AS count
+    sql: "CREATE VIEW mz_perf_peek_durations_aggregates AS SELECT worker, sum(duration_ns * count) AS sum, sum(count) AS count
 FROM mz_catalog.mz_peek_durations lpd
 GROUP BY worker",
     id: GlobalId::System(53),
-    index_id: GlobalId::System(54),
 };
