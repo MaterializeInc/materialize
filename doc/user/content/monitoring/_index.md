@@ -127,5 +127,5 @@ expressed this to the system (we can avoid stashing that data,
 which can in some cases dramatically reduce the memory footprint).
 
 To minimize the chances that Materialize runs out of memory in a production environment,
-we commend you make additional memory available to Materialize via a SSD-backed
+we recommend you make additional memory available to Materialize via a SSD-backed
 swap file or swap partition.
