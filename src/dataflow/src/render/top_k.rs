@@ -33,6 +33,7 @@ where
             offset,
         } = relation_expr
         {
+            let arity = input.arity();
             use differential_dataflow::operators::reduce::Reduce;
 
             // self.ensure_rendered(input, scope, worker_index);
@@ -52,6 +53,7 @@ where
                 modulus: u64,
                 offset: usize,
                 limit: Option<usize>,
+                arity: usize,
             ) -> Collection<G, ((Row, u64), Row), Diff>
             where
                 G: Scope,
@@ -79,11 +81,11 @@ where
                                 let mut indexes = (0..source.len()).collect::<Vec<_>>();
                                 if !order_clone.is_empty() {
                                     // We decode the datums once, into a common buffer for efficiency.
-                                    // Each row should contain an identical number of columns; we should check that.
-                                    // The alternative is `Vec<Vec<Datum>>`, which involves substantially more allocations.
-                                    let mut buffer = Vec::new();
-                                    for row in source.iter() {
+                                    // Each row should contain `arity` columns; we should check that.
+                                    let mut buffer = Vec::with_capacity(arity * source.len());
+                                    for (index, row) in source.iter().enumerate() {
                                         buffer.extend(row.0.iter());
+                                        assert_eq!(buffer.len(), arity * index);
                                     }
                                     let width = buffer.len() / source.len();
 
@@ -158,6 +160,7 @@ where
                         1u64 << log_modulus,
                         0,
                         Some(*offset + *limit),
+                        arity,
                     );
                 }
             }
@@ -165,7 +168,7 @@ where
             // We do a final step, both to make sure that we complete the reduction, and to correctly
             // apply `offset` to the final group, as we have not yet been applying it to the partially
             // formed groups.
-            let result = build_topk_stage(collection, order_key, 1u64, *offset, *limit)
+            let result = build_topk_stage(collection, order_key, 1u64, *offset, *limit, arity)
                 .map(|((_key, _hash), row)| row);
             self.collections
                 .insert(relation_expr.clone(), (result, err_input));
