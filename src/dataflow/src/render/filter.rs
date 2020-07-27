@@ -26,6 +26,8 @@ where
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
+    /// Finds collection corresponding to input RelationExpr and then applies
+    /// predicates to the input collection.
     pub fn render_filter(
         &mut self,
         input: &RelationExpr,
@@ -38,6 +40,7 @@ where
     }
 }
 
+/// Applies predicates to the given collection.
 pub fn render_filter_inner<G>(
     collection: Collection<G, Row>,
     predicates: Vec<ScalarExpr>,
@@ -46,8 +49,8 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    let temp_storage = repr::RowArena::new();
     collection.filter_fallible(move |input_row| {
+        let temp_storage = repr::RowArena::new();
         let datums = input_row.unpack();
         for p in &predicates {
             if p.eval(&datums, &temp_storage)? != Datum::True {
