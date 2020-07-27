@@ -200,10 +200,10 @@ async fn generate_and_push_records(
     records.sort();
     let mut hasher = Md5::new();
     for r in records {
-        hasher.input(&r);
+        hasher.update(&r);
     }
 
-    Ok(format!("{:x}", hasher.result()))
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 async fn query_materialize(
@@ -283,10 +283,9 @@ async fn query_materialize(
 
                 let mut hasher = Md5::new();
                 for val in vals {
-                    hasher.input(&val);
+                    hasher.update(&val);
                 }
-
-                return Ok(format!("{:x}", hasher.result()));
+                return Ok(format!("{:x}", hasher.finalize()));
             }
             _ => unreachable!(),
         }

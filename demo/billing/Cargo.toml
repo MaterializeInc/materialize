@@ -6,12 +6,12 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 bytes = "0.5.6"
 chrono = "0.4.13"
 csv = "1.1.3"
 env_logger = "0.7.1"
-futures = "0.3.4"
+futures = "0.3.5"
 futures-channel = "0.3.5"
 hex = "0.4.2"
 log = "0.4.11"
@@ -24,8 +24,8 @@ rand = "0.7.3"
 rand_distr = "0.2.2"
 structopt = "0.3.15"
 test-util = { path = "../../test/test-util" }
-tokio = { version = "0.2.21", features = ["full"] }
-tokio-postgres = "0.5.2"
+tokio = { version = "0.2.22", features = ["full"] }
+tokio-postgres = "0.5.5"
 uuid = { version = "0.8", features = ["v4"] }
 
 [build-dependencies]

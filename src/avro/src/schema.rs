@@ -1234,9 +1234,9 @@ impl Schema {
     /// https://avro.apache.org/docs/current/spec.html#schema_fingerprints
     pub fn fingerprint<D: Digest>(&self) -> SchemaFingerprint {
         let mut d = D::new();
-        d.input(self.canonical_form());
+        d.update(self.canonical_form());
         SchemaFingerprint {
-            bytes: d.result().to_vec(),
+            bytes: d.finalize().to_vec(),
         }
     }
 

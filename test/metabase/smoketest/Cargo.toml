@@ -6,10 +6,10 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 metabase = { path = "../../../src/metabase"}
 itertools = "0.9"
 log = "0.4.11"
 ore = { path = "../../../src/ore" }
 tokio = "0.2"
-tokio-postgres = "0.5.4"
+tokio-postgres = "0.5.5"

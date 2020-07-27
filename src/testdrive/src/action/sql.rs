@@ -230,10 +230,10 @@ impl SqlAction {
                     let mut hasher = Md5::new();
                     for row in &actual {
                         for entry in row {
-                            hasher.input(entry);
+                            hasher.update(entry);
                         }
                     }
-                    let actual = format!("{:x}", hasher.result());
+                    let actual = format!("{:x}", hasher.finalize());
                     if &actual != md5 {
                         Err(format!(
                             "wrong hash value: expected:{:?} got:{:?}",
