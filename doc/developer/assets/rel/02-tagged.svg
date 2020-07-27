@@ -1,6 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="245.797" height="213.5">
-    <path d="M24 184v-80-80" fill="transparent" stroke="#979797" stroke-width="10"/>
-    <g transform="translate(10 170)">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="435.75" height="293.5">
+    <g fill="transparent" stroke-width="10">
+        <path d="M24 264V104 24" stroke="#979797"/>
+        <path d="M24 184c0-40 50-40 50-80" stroke="#008fb5"/>
+    </g>
+    <g transform="translate(10 250)">
         <defs>
             <clipPath id="b">
                 <use href="#a" xlink:href="#a"/>
@@ -9,10 +12,10 @@
         </defs>
         <use href="#a" xlink:href="#a" clip-path="url(#b)" stroke-width="0"/>
     </g>
-    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(60 184)">
+    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(110 264)">
         A - &lt;&gt;
     </text>
-    <g transform="translate(10 90)">
+    <g transform="translate(10 170)">
         <defs>
             <clipPath id="d">
                 <use href="#c" xlink:href="#c"/>
@@ -21,29 +24,49 @@
         </defs>
         <use href="#c" xlink:href="#c" clip-path="url(#d)" stroke-width="0"/>
     </g>
-    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(184.969 104)">
+    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(110 184)">
         B - &lt;&gt;
     </text>
-    <g data-offset="12">
-        <path d="M60 104l12 15.5h92.969q10 0 10-10v-11q0-10-10-10H72h0z" fill="#979797" stroke="#979797"/>
-        <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(60 104)">
-            v0.1.0-rc1
-        </text>
-    </g>
     <g>
-        <g transform="translate(10 10)">
+        <g transform="translate(60 90)">
             <defs>
                 <clipPath id="f">
                     <use href="#e" xlink:href="#e"/>
                 </clipPath>
-                <circle cx="14" cy="14" r="14" id="e" fill="#979797"/>
+                <circle cx="14" cy="14" r="14" id="e" fill="#008fb5"/>
             </defs>
             <use href="#e" xlink:href="#e" clip-path="url(#f)" stroke-width="0"/>
         </g>
-        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(130.453 24)">
+        <text alignment-baseline="central" dominant-baseline="central" fill="#008fb5" style="font:14pt Arial" transform="translate(373.89 104)">
+            D - &lt;&gt;
+        </text>
+        <g transform="translate(110 90)">
+            <rect width="128.922" height="31" rx="10" fill="#fff" stroke="#008fb5"/>
+            <text alignment-baseline="central" dominant-baseline="central" fill="#008fb5" style="font:14pt Arial" x="10" y="15.5">
+                release-0.1.0
+            </text>
+        </g>
+        <g data-offset="12">
+            <path d="M248.922 104l12 15.5h92.969q10 0 10-10v-11q0-10-10-10h-92.97 0z" fill="#008fb5" stroke="#008fb5"/>
+            <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(248.922 104)">
+                v0.1.0-rc1
+            </text>
+        </g>
+    </g>
+    <g>
+        <g transform="translate(10 10)">
+            <defs>
+                <clipPath id="h">
+                    <use href="#g" xlink:href="#g"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="g" fill="#979797"/>
+            </defs>
+            <use href="#g" xlink:href="#g" clip-path="url(#h)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(180.453 24)">
             C - &lt;&gt;
         </text>
-        <g transform="translate(60 10)">
+        <g transform="translate(110 10)">
             <rect width="60.453" height="31" rx="10" fill="#fff" stroke="#979797"/>
             <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" x="10" y="15.5">
                 main

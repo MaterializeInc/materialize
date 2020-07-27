@@ -70,13 +70,14 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] billing-demo
   - [ ] perf-kinesis
 
-- [ ] Let the tests run for 24 hours, with the following success criteria:
+- [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
   - [ ] Chbench should not have slower ingest than the previous release
   - [ ] The billing-demo container should run and finish without error
-  - [ ] Take a screenshot of the "Time behind external source" dashboard panel
-    in Grafana. (This metric should have remained at 0ms or similar for the entirety
-    of the run)
+  - [ ] The "Time behind external source" dashboard panel in Grafana should have remained
+    at 0ms or similar for the entirety of the run.
+
+- [ ] Remove all load test machines.
 
 ## Final release
 
@@ -139,9 +140,11 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] Add the version to the website's list of versions in
     [`doc/user/config.toml`].
 
+  - [ ] Ensure that the announcement blog post has been published and announced, by
+    pinging the PM in `#release`
+
 ## Finish
 
-- [ ] Remove all load test machines.
 - [ ] Update the current status at the top of this issue.
 - [ ] Close this issue.
 
