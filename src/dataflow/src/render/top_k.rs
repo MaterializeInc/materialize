@@ -75,6 +75,8 @@ where
                                 let mut offset = offset;
                                 let mut limit = limit;
 
+                                // The order in which we should produce rows.
+                                let mut indexes = (0..source.len()).collect::<Vec<_>>();
                                 if !order_clone.is_empty() {
                                     // We decode the datums once, into a common buffer for efficiency.
                                     // Each row should contain an identical number of columns; we should check that.
@@ -84,37 +86,36 @@ where
                                         buffer.extend(row.0.iter());
                                     }
                                     let width = buffer.len() / source.len();
-                                    let mut indexes = (0..source.len()).collect::<Vec<_>>();
 
                                     //todo: use arrangements or otherwise make the sort more performant?
                                     indexes.sort_by(|left, right| {
-                                        let left = &buffer[left * width..width];
-                                        let right = &buffer[right * width..width];
+                                        let left = &buffer[left * width..][..width];
+                                        let right = &buffer[right * width..][..width];
                                         expr::compare_columns(&order_clone, left, right, || {
                                             left.cmp(right)
                                         })
                                     });
+                                }
 
-                                    // We now need to lay out the data in order of `buffer`, but respecting
-                                    // the `offset` and `limit` constraints.
-                                    for index in indexes.into_iter() {
-                                        let (row, mut diff) = source[index];
+                                // We now need to lay out the data in order of `buffer`, but respecting
+                                // the `offset` and `limit` constraints.
+                                for index in indexes.into_iter() {
+                                    let (row, mut diff) = source[index];
+                                    if diff > 0 {
+                                        // If we are still skipping early records ...
+                                        if offset > 0 {
+                                            let to_skip = std::cmp::min(offset, diff as usize);
+                                            offset -= to_skip;
+                                            diff -= to_skip as isize;
+                                        }
+                                        // We should produce at most `limit` records.
+                                        if let Some(limit) = &mut limit {
+                                            diff = std::cmp::min(diff, *limit as isize);
+                                            *limit -= diff as usize;
+                                        }
+                                        // Output the indicated number of rows.
                                         if diff > 0 {
-                                            // If we are still skipping early records ...
-                                            if offset > 0 {
-                                                let to_skip = std::cmp::min(offset, diff as usize);
-                                                offset -= to_skip;
-                                                diff -= to_skip as isize;
-                                            }
-                                            // We should produce at most `limit` records.
-                                            if let Some(limit) = &mut limit {
-                                                diff = std::cmp::min(diff, *limit as isize);
-                                                *limit -= diff as usize;
-                                            }
-                                            // Output the indicated number of rows.
-                                            if diff > 0 {
-                                                target.push((row.clone(), diff));
-                                            }
+                                            target.push((row.clone(), diff));
                                         }
                                     }
                                 }
