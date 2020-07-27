@@ -457,18 +457,34 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         // TODO do the source persistence here
                         // TODO now I have a shutdown button that I have to figure
                         // out where to stash
-                        if let Some(persistence) = persistence {
+                        if let Some(persistence) = &persistence {
                             persistence::persist_source(
                                 &collection.inner,
                                 src_id.sid,
-                                persistence.path,
+                                persistence.path.clone(),
                                 persistence.startup_time,
                                 persistence.nonce,
                             );
                         }
 
                         // Clear out the offset data
-                        let mut collection = collection.map(|(row, _)| row);
+                        let collection = collection.map(|(row, _)| row);
+
+                        // Add in the parts we stashed away last time
+                        let mut collection = match persistence {
+                            Some(p) => match p.restart {
+                                Some(restart) => {
+                                    let stream = persistence::read_persisted_source(
+                                        &collection.scope(),
+                                        src_id.sid,
+                                        restart.files,
+                                    );
+                                    collection.concat(&stream.as_collection())
+                                }
+                                None => collection,
+                            },
+                            None => collection,
+                        };
 
                         // Implement source filtering and projection.
                         // At the moment this is strictly optional, but we perform it anyhow
