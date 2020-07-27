@@ -20,6 +20,6 @@ rusoto_core = "0.44.0"
 rusoto_credential = "0.44.0"
 rusoto_kinesis = "0.44.0"
 structopt = "0.3.15"
-tokio = { version = "0.2.21", features = ["full"] }
+tokio = { version = "0.2.22", features = ["full"] }
 tokio-postgres = "0.5.4"
 test-util = { path = "../../test-util" }
