@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 avro = { path = "../avro", package = "mz-avro" }
 aws-util = { path = "../aws-util" }
 backtrace = "0.3.50"

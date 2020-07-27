@@ -10,7 +10,7 @@ authors = ["Materialize, Inc."]
 license = "proprietary"
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 async-trait = "0.1.36"
 backtrace = { version = "0.3.50" }
 comm = { path = "../comm" }

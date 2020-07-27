@@ -14,7 +14,7 @@ name = "strconv"
 harness = false
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4.2"
 itertools = "0.9"
