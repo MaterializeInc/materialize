@@ -12,4 +12,4 @@ log = "0.4.11"
 rand = "0.7.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 tokio = { version = "0.2.22", features = ["full"] }
-tokio-postgres = "0.5.4"
+tokio-postgres = "0.5.5"
