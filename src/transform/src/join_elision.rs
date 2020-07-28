@@ -43,33 +43,16 @@ impl JoinElision {
             ..
         } = relation
         {
-            // We re-accumulate `inputs` into `new_inputs` in order to perform
-            // some clean-up logic as we go. Mainly, we need to update the key
-            // equivalence classes which contain relation indices which should
-            // be decremented appropriately.
+            inputs.retain(|input| {
+                if let RelationExpr::Constant { rows, typ } = &input {
+                    !(rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1)
+                } else {
+                    true
+                }
+            });
 
-            // For each input relation, is it trivial and should be removed?
-            let is_vacuous = inputs
-                .iter()
-                .map(|expression| {
-                    if let RelationExpr::Constant { rows, typ } = &expression {
-                        rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1
-                    } else {
-                        false
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            let new_inputs = inputs
-                .drain(..)
-                .enumerate()
-                .filter(|(index, _)| !is_vacuous[*index])
-                .map(|(_, expression)| expression)
-                .collect::<Vec<_>>();
-
-            // If `new_inputs` is empty or a singleton (without constraints) we can remove the join.
-            *inputs = new_inputs;
-
+            // If `inputs` is now empty or a singleton (without constraints),
+            // we can remove the join.
             match inputs.len() {
                 0 => {
                     // The identity for join is the collection containing a single 0-ary row.
