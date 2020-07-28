@@ -19,6 +19,7 @@
 #![deny(missing_debug_implementations, missing_docs)]
 
 use std::process;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -88,8 +89,15 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         last_time: config.start_time,
     };
 
-    let mut k_client =
-        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])?;
+    let k_client = Arc::new(kafka_client::KafkaClient::new(
+        &config.url,
+        &config.group_id,
+        &config.topic,
+        &[],
+    )?);
+
+    //let mut k_client =
+    //    kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])?;
 
     if let Some(partitions) = config.partitions {
         k_client
@@ -107,7 +115,16 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         let m = randomizer::random_batch(rng, &mut recordstate);
         m.write_to_vec(&mut buf)?;
         log::trace!("sending: {:?}", m);
-        k_client.send(&buf).await?;
+        let res = k_client.send(&buf);
+        match res {
+            Ok(fut) => {
+                tokio::spawn(fut);
+            }
+            Err(e) => {
+                log::error!("failed to produce message: {}", e);
+                tokio::time::delay_for(Duration::from_millis(100)).await;
+            }
+        };
         total_size += buf.len();
         buf.clear();
         if i % (config.message_count / 100).max(5) == 0 {
