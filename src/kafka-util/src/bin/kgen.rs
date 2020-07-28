@@ -124,5 +124,6 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    producer.flush(Timeout::Never);
     Ok(())
 }
