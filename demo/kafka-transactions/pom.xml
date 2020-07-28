@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--Copyright Materialize, Inc. All rights reserved.
+<!--
+Copyright Materialize, Inc. All rights reserved.
 
- Use of this software is governed by the Business Source License
- included in the LICENSE file.
+Use of this software is governed by the Business Source License
+included in the LICENSE file.
 
- As of the Change Date specified in that file, in accordance with
- the Business Source License, use of this software will be governed
+As of the Change Date specified in that file, in accordance with
+the Business Source License, use of this software will be governed
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
