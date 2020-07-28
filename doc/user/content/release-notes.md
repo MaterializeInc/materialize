@@ -55,13 +55,24 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.4.0"></span>
 ## v0.4.0
 
-- Introduce the ability to [rename indexes, sinks, sources, and views](/sql/alter-rename).
+- Support for SASL PLAIN Authentication to support Confluent Cloud {{% gh 3418 %}}
+- Update Change Data Capture format to allow Kafka sinks to optionally emit Debezium
+  style [consistency metadata](/sql/create-sink/#consistency-metadata).
+- Introduce the ability to [rename indexes, sinks, sources, and
+  views](/sql/alter-rename).
 - Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
   reflects timely workers and does not limit the number of threads that materialized may
   start.
 - Fix a bug that prevented dropping databases with cross-schema dependencies.
   {{% gh 3558 %}}
-- Allow Kafka sinks to optionally emit Debezium style [consistency metadata](/sql/create-sink/#consistency-metadata).
+- Expose [Prometheus metrics for sinks](https://materialize.io/docs/monitoring/).
+- Allow column names in SELECT clause to be used by GROUP BY {{% gh 1673 %}}
+- Make decimal / float to int casts behave similar to Postgres {{% gh 3700 %}}
+- Fix a bug that prevented ordering by columns that are not in the select clause {{% gh
+  696 %}}
+- Support SHOW TRANSACTION ISOLATION LEVEL {{% gh 800 %}}
+- Support to_jsonb(sql record) {{% gh 2414 %}}
+- Add timestamp to Sink CDC field {{% gh 3216 %}}
 
 <span id="v0.3.1"></span>
 ## v0.3.1
@@ -85,6 +96,9 @@ Wrap your release notes at the 80 character mark.
 
 <span id="v0.3.0"></span>
 ## v0.3.0
+
+Read the [Release Announcement](https://materialize.io/release-materialize-0-3/) for more
+details.
 
 - Support [temporary views](/sql/create-view/#temporary-views).
 
