@@ -878,23 +878,38 @@ SELECT (SELECT string_agg(DISTINCT ship, ', ')
   WHERE o_c_id=c.c_id)
 FROM c ORDER BY c_id
 
-# #3111
-statement error supported
+query ITI
 SELECT
     *
 FROM
-    (SELECT c_id AS c_c_id, bill FROM c),
-    LATERAL (SELECT row_number() OVER () AS rownum FROM o WHERE c_id = c_c_id)
-ORDER BY c_c_id, bill, rownum
+    (SELECT c_id AS c_c_id, bill FROM c) s1,
+    LATERAL (SELECT o_id FROM o WHERE c_id = c_c_id) s2
+ORDER BY c_c_id, bill, o_id
+----
+1 CA 10
+1 CA 20
+1 CA 30
+2 TX 40
+2 TX 50
+2 TX 60
+4 TX 70
+4 TX 80
+6 FL 90
 
-# #3111
-statement error supported
+query TI
 SELECT
     *
 FROM
-    (SELECT bill FROM c),
-    LATERAL (SELECT row_number() OVER (PARTITION BY bill) AS rownum FROM o WHERE ship = bill)
-ORDER BY bill, rownum
+    (SELECT bill FROM c) s1,
+    LATERAL (SELECT o_id FROM o WHERE ship = bill) s2
+ORDER BY bill, o_id
+----
+CA 10
+CA 20
+CA 30
+CA 40
+TX 50
+TX 50
 
 # ------------------------------------------------------------------------------
 # Subqueries in other interesting locations.

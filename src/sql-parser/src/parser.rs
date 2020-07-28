@@ -2733,15 +2733,18 @@ impl Parser {
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
     fn parse_table_factor(&mut self) -> Result<TableFactor, ParserError> {
         if self.parse_keyword("LATERAL") {
-            // LATERAL must always be followed by a subquery.
-            if !self.consume_token(&Token::LParen) {
-                self.expected(
-                    self.peek_range(),
-                    "subquery after LATERAL",
-                    self.peek_token(),
-                )?;
+            // LATERAL must always be followed by a subquery or table function.
+            if self.consume_token(&Token::LParen) {
+                return self.parse_derived_table_factor(Lateral);
+            } else {
+                let name = self.parse_object_name()?;
+                self.expect_token(&Token::LParen)?;
+                return Ok(TableFactor::Function {
+                    name,
+                    args: self.parse_optional_args()?,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                });
             }
-            return self.parse_derived_table_factor(Lateral);
         }
 
         if self.consume_token(&Token::LParen) {
@@ -2793,30 +2796,18 @@ impl Parser {
             Ok(TableFactor::NestedJoin(Box::new(table_and_joins)))
         } else {
             let name = self.parse_object_name()?;
-            // Postgres, MSSQL: table-valued functions:
-            let args = if self.consume_token(&Token::LParen) {
-                Some(self.parse_optional_args()?)
+            if self.consume_token(&Token::LParen) {
+                Ok(TableFactor::Function {
+                    name,
+                    args: self.parse_optional_args()?,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                })
             } else {
-                None
-            };
-            let alias = self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?;
-            // MSSQL-specific table hints:
-            let mut with_hints = vec![];
-            if self.parse_keyword("WITH") {
-                if self.consume_token(&Token::LParen) {
-                    with_hints = self.parse_comma_separated(Parser::parse_expr)?;
-                    self.expect_token(&Token::RParen)?;
-                } else {
-                    // rewind, as WITH may belong to the next statement's CTE
-                    self.prev_token();
-                }
-            };
-            Ok(TableFactor::Table {
-                name,
-                alias,
-                args,
-                with_hints,
-            })
+                Ok(TableFactor::Table {
+                    name,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                })
+            }
         }
     }
 

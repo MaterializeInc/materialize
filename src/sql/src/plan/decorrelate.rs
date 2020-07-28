@@ -37,6 +37,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::bail;
+use itertools::Itertools;
 
 use ore::collections::CollectionExt;
 use repr::RelationType;
@@ -79,6 +80,32 @@ impl ColumnMap {
 
     fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    /// Updates references in the `ColumnMap` for use in a nested scope. The
+    /// provided `arity` must specify the arity of the current scope.
+    fn enter_scope(&self, arity: usize) -> ColumnMap {
+        // From the perspective of the nested scope, all existing column
+        // references will be one level greater.
+        let existing = self
+            .inner
+            .clone()
+            .into_iter()
+            .update(|(col, _i)| col.level += 1);
+
+        // All columns in the current scope become explicit entries in the
+        // immediate parent scope.
+        let new = (0..arity).map(|i| {
+            (
+                ColumnRef {
+                    level: 1,
+                    column: i,
+                },
+                self.len() + i,
+            )
+        });
+
+        ColumnMap::new(existing.chain(new).collect())
     }
 }
 
@@ -165,13 +192,13 @@ impl RelationExpr {
                 }
                 input
             }
-            FlatMap { input, func, exprs } => {
+            CallTable { func, exprs } => {
                 // FlatMap expressions may contain correlated subqueries. Unlike Map they are not
                 // allowed to refer to the results of previous expressions, and we have a simpler
                 // implementation that appends all relevant columns first, then applies the flatmap
                 // operator to the result, then strips off any columns introduce by subqueries.
 
-                let mut input = input.applied_to(id_gen, get_outer, col_map);
+                let mut input = get_outer;
                 let old_arity = input.arity();
 
                 let exprs = exprs
@@ -208,6 +235,60 @@ impl RelationExpr {
                     }
                 }
                 input
+            }
+            Join {
+                left,
+                right,
+                on,
+                kind,
+            } if kind.is_lateral() => {
+                // A LATERAL join is a join in which the right expression has
+                // access to the columns in the left expression. It turns out
+                // this is *exactly* our branch operator, plus some additional
+                // null handling in the case of left joins. (Right and full
+                // lateral joins are not permitted.)
+                //
+                // As with normal joins, the `on` predicate may be correlated,
+                // and we treat it as a filter that follows the branch.
+
+                let left = left.applied_to(id_gen, get_outer, col_map);
+                left.let_in(id_gen, |id_gen, get_left| {
+                    let mut join = branch(
+                        id_gen,
+                        get_left.clone(),
+                        col_map,
+                        *right,
+                        |id_gen, right, get_left, col_map| {
+                            right.applied_to(id_gen, get_left, col_map)
+                        },
+                    );
+
+                    // Plan the `on` predicate.
+                    let old_arity = join.arity();
+                    let on = on.applied_to(id_gen, col_map, &mut join);
+                    join = join.filter(vec![on]);
+                    let new_arity = join.arity();
+                    if old_arity != new_arity {
+                        // This means we added some columns to handle
+                        // subqueries, and now we need to get rid of them.
+                        join = join.project((0..old_arity).collect());
+                    }
+
+                    // If a left join, reintroduce any rows from the left that
+                    // are missing, with nulls filled in for the right columns.
+                    if let JoinKind::LeftOuter { .. } = kind {
+                        let default = join
+                            .typ()
+                            .column_types
+                            .into_iter()
+                            .skip(get_left.arity())
+                            .map(|typ| (Datum::Null, typ.nullable(true)))
+                            .collect();
+                        get_left.lookup(id_gen, join, default)
+                    } else {
+                        join
+                    }
+                })
             }
             Join {
                 left,
@@ -257,7 +338,7 @@ impl RelationExpr {
                         }
                         join.let_in(id_gen, |id_gen, get_join| {
                             let mut result = get_join.clone();
-                            if let JoinKind::LeftOuter | JoinKind::FullOuter = kind {
+                            if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } = kind {
                                 let left_outer = get_left.clone().anti_lookup(
                                     id_gen,
                                     get_join.clone(),
@@ -548,6 +629,65 @@ where
     // TODO: It would be nice to have a version of this code w/o optimizations,
     // at the least for purposes of understanding. It was difficult for one reader
     // to understand the required properties of `outer` and `col_map`.
+
+    // If the inner expression is sufficiently simple, it is safe to apply it
+    // *directly* to outer, rather than applying it to the distinctified key
+    // (see below).
+    //
+    // As an example, consider the following two queries:
+    //
+    //     CREATE TABLE t (a int, b int);
+    //     SELECT a, series FROM t, generate_series(1, t.b) series;
+    //
+    // The "simple" path for the `SELECT` yields
+    //
+    //     %0 =
+    //     | Get t
+    //     | FlatMap generate_series(1, #1)
+    //
+    // while the non-simple path yields:
+    //
+    //    %0 =
+    //    | Get t
+    //
+    //    %1 =
+    //    | Get t
+    //    | Distinct group=(#1)
+    //    | FlatMap generate_series(1, #0)
+    //
+    //    %2 =
+    //    | LeftJoin %1 %2 (= #1 #2)
+    //
+    // There is a tradeoff here: the simple plan is stateless, but the non-
+    // simple plan may do (much) less computation if there are only a few
+    // distinct values of `t.b`.
+    //
+    // We apply a very simple heuristic here and take the simple path if `inner`
+    // contains only maps, filters, projections, and calls to table functions.
+    // The intuition is that straightforward usage of table functions should
+    // take the simple path, while everything else should not. (In theory we
+    // think this transformation is valid as long as `inner` does not contain a
+    // Reduce, Distinct, or TopK node, but it is not always an optimization in
+    // the general case.)
+    //
+    // TODO(benesch): this should all be handled by a proper optimizer, but
+    // detecting the moment of decorrelation in the optimizer right now is too
+    // hard.
+    let mut is_simple = true;
+    inner.visit(&mut |expr| match expr {
+        RelationExpr::Constant { .. }
+        | RelationExpr::Project { .. }
+        | RelationExpr::Map { .. }
+        | RelationExpr::Filter { .. }
+        | RelationExpr::CallTable { .. } => (),
+        _ => is_simple = false,
+    });
+    if is_simple {
+        let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
+        return outer.let_in(id_gen, |id_gen, get_outer| {
+            apply(id_gen, inner, get_outer, &new_col_map)
+        });
+    }
 
     // The key consists of the columns from the outer expression upon which the
     // inner relation depends. We discover these dependencies by walking the
