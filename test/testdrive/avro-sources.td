@@ -408,7 +408,7 @@ $ set pg-dbz-schema={
             },
             {
               "name": "lsn",
-              "type": "long"
+              "type": ["long", "null"]
             }
           ]
         }

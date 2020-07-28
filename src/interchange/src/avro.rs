@@ -246,6 +246,10 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                 "lsn" => {
                     let next = ValueDecoder;
                     let val = field.decode_field(next)?;
+                    let val = match val {
+                        Value::Union { inner, .. } => *inner,
+                        val => val,
+                    };
                     lsn = Some(
                         val.into_integral()
                             .ok_or_else(|| anyhow!("\"lsn\" is not an integer"))?,
