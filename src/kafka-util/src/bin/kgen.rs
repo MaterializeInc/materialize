@@ -107,7 +107,10 @@ fn main() -> anyhow::Result<()> {
         }
         gen_value(&mut buf, &ld, &dd, &mut rng);
         let key = i.to_le_bytes();
-        let mut rec = BaseRecord::to(topic).key(&key).payload(&buf);
+        let mut rec = BaseRecord::to(topic)
+            .key(&key)
+            .payload(&buf)
+            .partition((i % partitions) as i32);
         loop {
             match producer.send(rec) {
                 Ok(()) => break,
