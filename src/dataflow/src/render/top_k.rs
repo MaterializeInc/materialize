@@ -85,7 +85,7 @@ where
                                     let mut buffer = Vec::with_capacity(arity * source.len());
                                     for (index, row) in source.iter().enumerate() {
                                         buffer.extend(row.0.iter());
-                                        assert_eq!(buffer.len(), arity * index);
+                                        assert_eq!(buffer.len(), arity * (index + 1));
                                     }
                                     let width = buffer.len() / source.len();
 
