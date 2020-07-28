@@ -33,6 +33,7 @@ where
             offset,
         } = relation_expr
         {
+            let arity = input.arity();
             use differential_dataflow::operators::reduce::Reduce;
 
             // self.ensure_rendered(input, scope, worker_index);
@@ -52,6 +53,7 @@ where
                 modulus: u64,
                 offset: usize,
                 limit: Option<usize>,
+                arity: usize,
             ) -> Collection<G, ((Row, u64), Row), Diff>
             where
                 G: Scope,
@@ -62,62 +64,67 @@ where
                 collection
                     .map(move |((key, hash), row)| ((key, hash % modulus), row))
                     .reduce_named("TopK", {
-                        move |_key, source, target| {
-                            target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
+                        move |_key, source, target: &mut Vec<(Row, isize)>| {
+                            // Determine if we must actually shrink the result set.
                             let must_shrink = offset > 0
                                 || limit
                                     .map(|l| {
-                                        target.iter().map(|(_, d)| *d).sum::<isize>() as usize > l
+                                        source.iter().map(|(_, d)| *d).sum::<isize>() as usize > l
                                     })
                                     .unwrap_or(false);
                             if must_shrink {
+                                // local copies that may count down to zero.
+                                let mut offset = offset;
+                                let mut limit = limit;
+
+                                // The order in which we should produce rows.
+                                let mut indexes = (0..source.len()).collect::<Vec<_>>();
                                 if !order_clone.is_empty() {
+                                    // We decode the datums once, into a common buffer for efficiency.
+                                    // Each row should contain `arity` columns; we should check that.
+                                    let mut buffer = Vec::with_capacity(arity * source.len());
+                                    for (index, row) in source.iter().enumerate() {
+                                        buffer.extend(row.0.iter());
+                                        assert_eq!(buffer.len(), arity * (index + 1));
+                                    }
+                                    let width = buffer.len() / source.len();
+
                                     //todo: use arrangements or otherwise make the sort more performant?
-                                    let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
-                                        expr::compare_columns(
-                                            &order_clone,
-                                            &left.0.unpack(),
-                                            &right.0.unpack(),
-                                            || left.cmp(right),
-                                        )
-                                    };
-                                    target.sort_by(sort_by);
+                                    indexes.sort_by(|left, right| {
+                                        let left = &buffer[left * width..][..width];
+                                        let right = &buffer[right * width..][..width];
+                                        expr::compare_columns(&order_clone, left, right, || {
+                                            left.cmp(right)
+                                        })
+                                    });
                                 }
 
-                                let mut skipped = 0; // Number of records offset so far
-                                let mut output = 0; // Number of produced output records.
-                                let mut cursor = 0; // Position of current input record.
-
-                                //skip forward until an offset number of records is reached
-                                while cursor < target.len() {
-                                    if skipped + (target[cursor].1 as usize) > offset {
-                                        break;
-                                    }
-                                    skipped += target[cursor].1 as usize;
-                                    cursor += 1;
-                                }
-                                let skip_cursor = cursor;
-                                if cursor < target.len() {
-                                    if skipped < offset {
-                                        //if offset only skips some members of a group of identical
-                                        //records, return the rest
-                                        target[skip_cursor].1 -= (offset - skipped) as isize;
-                                    }
-                                    //apply limit
-                                    if let Some(limit) = limit {
-                                        while output < limit && cursor < target.len() {
-                                            let to_emit = std::cmp::min(
-                                                limit - output,
-                                                target[cursor].1 as usize,
-                                            );
-                                            target[cursor].1 = to_emit as isize;
-                                            output += to_emit;
-                                            cursor += 1;
+                                // We now need to lay out the data in order of `buffer`, but respecting
+                                // the `offset` and `limit` constraints.
+                                for index in indexes.into_iter() {
+                                    let (row, mut diff) = source[index];
+                                    if diff > 0 {
+                                        // If we are still skipping early records ...
+                                        if offset > 0 {
+                                            let to_skip = std::cmp::min(offset, diff as usize);
+                                            offset -= to_skip;
+                                            diff -= to_skip as isize;
                                         }
-                                        target.truncate(cursor);
+                                        // We should produce at most `limit` records.
+                                        if let Some(limit) = &mut limit {
+                                            diff = std::cmp::min(diff, *limit as isize);
+                                            *limit -= diff as usize;
+                                        }
+                                        // Output the indicated number of rows.
+                                        if diff > 0 {
+                                            target.push((row.clone(), diff));
+                                        }
                                     }
                                 }
-                                target.drain(..skip_cursor);
+                            } else {
+                                for (row, diff) in source.iter() {
+                                    target.push(((*row).clone(), diff.clone()));
+                                }
                             }
                         }
                     })
@@ -153,6 +160,7 @@ where
                         1u64 << log_modulus,
                         0,
                         Some(*offset + *limit),
+                        arity,
                     );
                 }
             }
@@ -160,7 +168,7 @@ where
             // We do a final step, both to make sure that we complete the reduction, and to correctly
             // apply `offset` to the final group, as we have not yet been applying it to the partially
             // formed groups.
-            let result = build_topk_stage(collection, order_key, 1u64, *offset, *limit)
+            let result = build_topk_stage(collection, order_key, 1u64, *offset, *limit, arity)
                 .map(|((_key, _hash), row)| row);
             self.collections
                 .insert(relation_expr.clone(), (result, err_input));
