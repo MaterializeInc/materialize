@@ -55,13 +55,27 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.4.0"></span>
 ## v0.4.0
 
-- Introduce the ability to [rename indexes, sinks, sources, and views](/sql/alter-rename).
+Read the [Release Announcement](https://materialize.io/release-materialize-0-4/) for more
+details.
+
+- Many stability improvements, including a chaos-testing framework
+- Support for Confluent Schema Registry
+- Change Data Capture format updates which allow Kafka sinks to optionally emit Debezium
+  style, with new documentation about our [consistency
+  metadata](/sql/create-sink/#consistency-metadata).
+- Time Travel via [AS OF](/docs/sql/create-sink/#as-of).
+- Introduce the ability to [rename indexes, sinks, sources, and
+  views](/sql/alter-rename).
+- Released [our Avro library as open source][mz-avro] (Apache 2.0).
+- Released a way to tail database binlogs and emit CDC data without Kafka, [tb][]
 - Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
   reflects timely workers and does not limit the number of threads that materialized may
   start.
 - Fix a bug that prevented dropping databases with cross-schema dependencies.
   {{% gh 3558 %}}
-- Allow Kafka sinks to optionally emit Debezium style [consistency metadata](/sql/create-sink/#consistency-metadata).
+
+[mz-avro]: https://github.com/MaterializeInc/materialize/tree/main/src/avro
+[tb]: https://github.com/MaterializeInc/tb/
 
 <span id="v0.3.1"></span>
 ## v0.3.1
@@ -85,6 +99,9 @@ Wrap your release notes at the 80 character mark.
 
 <span id="v0.3.0"></span>
 ## v0.3.0
+
+Read the [Release Announcement](https://materialize.io/release-materialize-0-3/) for more
+details.
 
 - Support [temporary views](/sql/create-view/#temporary-views).
 
