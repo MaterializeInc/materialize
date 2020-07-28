@@ -561,12 +561,76 @@ fn parse_byo(record: Vec<(String, Value)>) -> (String, i32, PartitionId, u64, Mz
     )
 }
 
+/// Extracts Materialize timestamp updates from a Debezium consistency record.
+fn generate_ts_updates_from_debezium(
+    id: &SourceInstanceId,
+    tx: &futures::channel::mpsc::UnboundedSender<coord::Message>,
+    byo_consumer: &mut ByoTimestampConsumer,
+    value: Value,
+) {
+    if let Value::Record(record) = value {
+        // All entries in the transaction should have the same timestamp
+        let results = parse_debezium(record);
+        if let Some(results) = results {
+            byo_consumer.last_ts += 1;
+            for (topic, count) in results {
+                // Debezium topics are formatted as "server_name.database.topic", but
+                // entries in data_collection do not contain server_name
+                // so we discard it before doing the comparison.
+                // We check for both here
+                let parsed_source_name = byo_consumer
+                    .source_name
+                    .split('.')
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>()[1..]
+                    .join(".");
+                if byo_consumer.source_name == topic.trim() || parsed_source_name == topic.trim() {
+                    byo_consumer.last_offset.offset += count;
+                    // Debezium consistency topic should only work for single-partition
+                    // topics
+                    println!(
+                        "Sending: {} {} {}",
+                        byo_consumer.source_name,
+                        byo_consumer.last_ts,
+                        byo_consumer.last_offset.offset
+                    );
+                    tx.unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                        id: *id,
+                        update: TimestampSourceUpdate::BringYourOwn(
+                            1,
+                            match byo_consumer.connector {
+                                ByoTimestampConnector::File(_) | ByoTimestampConnector::Ocf(_) => {
+                                    PartitionId::File
+                                }
+                                ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
+                                ByoTimestampConnector::Kinesis(_) => {
+                                    PartitionId::Kinesis(String::new())
+                                }
+                            },
+                            byo_consumer.last_ts,
+                            byo_consumer.last_offset,
+                        ),
+                    })
+                    .expect("Failed to send update to coordinator");
+                }
+            }
+        }
+    }
+}
+
 /// A debezium record contains a set of update counts for each topic that the transaction
-/// updated. This function extracts the set of (topic, update_count) as a vector.
-fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
+/// updated. This function extracts the set of (topic, update_count) as a vector if
+/// processing an END message. It returns NONE otherwise.
+fn parse_debezium(record: Vec<(String, Value)>) -> Option<Vec<(String, i64)>> {
     let mut result = vec![];
     for (key, value) in record {
-        if key == "data_collections" {
+        if key == "status" {
+            if let Value::String(status) = value {
+                if status == "BEGIN" {
+                    return None;
+                }
+            }
+        } else if key == "data_collections" {
             if let Value::Union { inner: value, .. } = value {
                 if let Value::Array(items) = *value {
                     for v in items {
@@ -604,7 +668,7 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Vec<(String, i64)> {
             }
         }
     }
-    result
+    Some(result)
 }
 
 /// This function determines the next maximum offset to timestamp.
@@ -904,110 +968,30 @@ impl Timestamper {
                         // The first 5 bytes are reserved for the schema id/schema registry information
                         let mut bytes = &msg[5..];
                         let res = avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
-                        let results = match res {
-                            Ok(record) => {
-                                if let Value::Record(record) = record {
-                                    parse_debezium(record)
-                                } else {
-                                    error!("Incorrect Avro format. Expected Record");
-                                    vec![]
-                                }
-                            }
+                        match res {
                             Err(_) => {
-                                // This message was a key message. We can safely ignore it
-                                vec![]
+                                // This was a key message, can safely ignore it
+                                continue;
                             }
-                        };
-                        // All entries in the transaction should have the same timestamp
-                        byo_consumer.last_ts += 1;
-                        for (topic, count) in results {
-                            // Debezium topics are formatted as "server_name.database.topic", but
-                            // entries in data_collection do not contain server_name
-                            // so we discard it before doing the comparison.
-                            // We check for both here
-                            let parsed_source_name = byo_consumer
-                                .source_name
-                                .split('.')
-                                .map(|x| x.to_string())
-                                .collect::<Vec<String>>()[1..]
-                                .join(".");
-                            if byo_consumer.source_name == topic.trim()
-                                || parsed_source_name == topic.trim()
-                            {
-                                byo_consumer.last_offset.offset += count;
-                                // Debezium consistency topic should only work for single-partition
-                                // topics
-                                self.tx
-                                    .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                        id: *id,
-                                        update: TimestampSourceUpdate::BringYourOwn(
-                                            1,
-                                            match byo_consumer.connector {
-                                                ByoTimestampConnector::File(_)
-                                                | ByoTimestampConnector::Ocf(_) => {
-                                                    PartitionId::File
-                                                }
-                                                ByoTimestampConnector::Kafka(_) => {
-                                                    PartitionId::Kafka(0)
-                                                }
-                                                ByoTimestampConnector::Kinesis(_) => {
-                                                    PartitionId::Kinesis(String::new())
-                                                }
-                                            },
-                                            byo_consumer.last_ts,
-                                            byo_consumer.last_offset,
-                                        ),
-                                    })
-                                    .expect("Failed to send update to coordinator");
+                            Ok(record) => {
+                                generate_ts_updates_from_debezium(
+                                    &id,
+                                    &self.tx,
+                                    byo_consumer,
+                                    record,
+                                );
                             }
                         }
                     }
                 }
                 ConsistencyFormatting::DebeziumOcf => {
                     for msg in messages {
-                        let msg = if let ValueEncoding::Avro(value) = msg {
+                        let value = if let ValueEncoding::Avro(value) = msg {
                             value
                         } else {
                             panic!("Debezium OCF consistency should only encode Value messages");
                         };
-                        let results = if let Value::Record(record) = msg {
-                            parse_debezium(record)
-                        } else {
-                            panic!("Incorrect Avro Format. This should never happen");
-                        };
-                        // All entries in the transaction should have the same timestamp
-                        byo_consumer.last_ts += 1;
-                        for (topic, count) in results {
-                            if byo_consumer.source_name == topic.trim() {
-                                // TODO(natacha): consistency topic for Debezium currently supports only one partition
-                                byo_consumer.last_offset.offset += count;
-                                byo_consumer.last_ts += 1;
-                                // Debezium consistency topic should only work for single-partition
-                                // topics
-                                self.tx
-                                    .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                        id: *id,
-                                        update: TimestampSourceUpdate::BringYourOwn(
-                                            1,
-                                            match byo_consumer.connector {
-                                                ByoTimestampConnector::File(_)
-                                                | ByoTimestampConnector::Ocf(_) => {
-                                                    PartitionId::File
-                                                }
-                                                ByoTimestampConnector::Kafka(_) => {
-                                                    PartitionId::Kafka(0)
-                                                }
-                                                ByoTimestampConnector::Kinesis(_) => {
-                                                    PartitionId::Kinesis(String::new())
-                                                }
-                                            },
-                                            byo_consumer.last_ts,
-                                            byo_consumer.last_offset,
-                                        ),
-                                    })
-                                    .expect("Failed to send update to coordinator");
-                            }
-                        }
+                        generate_ts_updates_from_debezium(&id, &self.tx, byo_consumer, value);
                     }
                 }
                 ConsistencyFormatting::ByoAvro => {
