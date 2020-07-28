@@ -417,16 +417,14 @@ impl ScalarExpr {
                     .collect::<Vec<_>>(),
             },
             If { cond, then, els } => {
-                // If is complicated by the fact that we do not want to determine
-                // the `then` or `else` branch for tuples that do not do not pass
-                // the `cond` test. Our strategy is to first determine cond, and
-                // then
-                let inner_arity = inner.arity();
-                let cond_expr = cond.applied_to(id_gen, col_map, inner);
-
-                // At this point, we may want to let-bind `inner` and filter each
-                // way before applying further decorrelation. Informally, we turn
-                // the `if` statement in to
+                // The `If` case is complicated by the fact that we do not want to
+                // apply the `then` or `else` logic to tuples that respectively do
+                // not or do pass the `cond` test. Our strategy is to independently
+                // decorrelate the `then` and `else` logic, and apply each to tuples
+                // that respectively pass and do not pass the `cond` logic (which is
+                // executed, and so decorrelated, for all tuples).
+                //
+                // Informally, we turn the `if` statement into:
                 //
                 //   let then_case = inner.filter(cond).map(then);
                 //   let else_case = inner.filter(!cond).map(else);
@@ -436,8 +434,11 @@ impl ScalarExpr {
                 // computation beyond the expr itself, which we will interpret as
                 // "introduces additional columns". In the absence of correlation,
                 // we should just retain a `ScalarExpr::If` expression; the inverse
-                // transformation as above is complicated to recover, and we would
-                // benefit from not introducing the complexity.
+                // transformation as above is complicated to recover after the fact,
+                // and we would benefit from not introducing the complexity.
+
+                let inner_arity = inner.arity();
+                let cond_expr = cond.applied_to(id_gen, col_map, inner);
 
                 // Defensive copies, in case we mangle these in decorrelation.
                 let inner_clone = inner.clone();
