@@ -12,6 +12,7 @@ members = [
     "src/dataflow",
     "src/expr",
     "src/interchange",
+    "src/kafka-util",
     "src/materialized",
     "src/metabase",
     "src/ore",
