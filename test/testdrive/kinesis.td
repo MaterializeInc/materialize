@@ -15,6 +15,13 @@ here's a test string
 $ kinesis-verify stream=test
 here's a test string
 
+$ kinesis-ingest format=bytes stream=test
+here's a second test string
+
+$ kinesis-verify stream=test
+here's a test string
+here's a second test string
+
 ! CREATE SOURCE custom_source
   FROM KINESIS ARN 'arn:aws:kinesis:custom-region::stream/fake-stream'
   WITH (access_key_id = 'fake_access_key_id',
@@ -35,3 +42,4 @@ If providing a custom region, an `endpoint` option must also be provided
 
 > SELECT * FROM f_view
 "here's a test string"
+"here's a second test string"

@@ -109,7 +109,6 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
-use timely::dataflow::operators::generic::operator;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
@@ -136,7 +135,7 @@ use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::server::LocalInput;
 use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
-use crate::source::{FileSourceInfo, KafkaSourceInfo};
+use crate::source::{FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
 
 mod arrange_by;
 mod context;
@@ -400,9 +399,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         connector,
                                     )
                                 }
-                                ExternalSourceConnector::Kinesis(kc) => {
-                                    let (ok_source, cap) = source::kinesis(source_config, kc);
-                                    ((ok_source, operator::empty(region)), cap)
+                                ExternalSourceConnector::Kinesis(_) => {
+                                    source::create_source::<_, KinesisSourceInfo, _>(
+                                        source_config,
+                                        connector,
+                                    )
                                 }
                                 ExternalSourceConnector::File(_) => {
                                     source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
