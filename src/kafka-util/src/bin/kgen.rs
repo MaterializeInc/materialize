@@ -14,6 +14,7 @@ use rdkafka::{
     error::KafkaError,
     producer::{BaseRecord, DefaultProducerContext, ThreadedProducer},
     types::RDKafkaError,
+    util::Timeout,
     ClientConfig,
 };
 use std::{thread::sleep, time::Duration};
