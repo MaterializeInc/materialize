@@ -134,14 +134,15 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] On **main**, update the various files that must be up to date:
 
-  - [ ] Ensure that the [Release Notes] are up
-    to date, including the current version.
+  - [ ] Ensure that the [Release Notes] are up to date, including the current version.
 
-  - [ ] Add the version to the website's list of versions in
-    [`doc/user/config.toml`].
+  - [ ] Add the version to the website's list of versions in [`doc/user/config.toml`].
+
+  - [ ] If this release includes a release announcement, ensure that everything in the
+    announcement (which should be unpublished in [our blog][]) is in the [Release Notes].
 
   - [ ] Ensure that the announcement blog post has been published and announced, by
-    pinging the PM in `#release`
+    pinging the PM in `#release`.
 
 ## Finish
 
@@ -155,3 +156,4 @@ in the infrastructure repository. All of these tests can be run in parallel.
 [Release Notes]: https://github.com/MaterializeInc/materialize/tree/main/doc/user/content/release-notes.md
 [releases]: https://github.com/MaterializeInc/materialize/releases
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2
+[our blog]: https://materialize.io/wp-admin/edit.php?post_type=post
