@@ -362,3 +362,75 @@ $ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key
 a
 ---
 "asdf"
+
+# Test that Postgres-style sources can be ingested.
+$ set pg-dbz-schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "whatever",
+          "fields": [
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "string",
+                  "connect.version": 1,
+                  "connect.parameters": {
+                    "allowed": "true,last,false"
+                  },
+                  "connect.default": "false",
+                  "connect.name": "io.debezium.data.Enum"
+                },
+                "null"
+              ],
+              "default": "false"
+            },
+            {
+              "name": "lsn",
+              "type": "long"
+            }
+          ]
+        }
+      }
+    ]
+  }
+
+$ kafka-create-topic topic=pg-dbz-data
+
+# The third record will be skipped, since `lsn` has gone backwards.
+$ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
+{"before": null, "after": {"a": 1, "b": 1}, "source": {"lsn": 1, "snapshot": "false"}}
+{"before": null, "after": {"a": 2, "b": 3}, "source": {"lsn": 2, "snapshot": "false"}}
+{"before": null, "after": {"a": -1, "b": 7}, "source": {"lsn": 0, "snapshot": "false"}}
+
+> CREATE MATERIALIZED SOURCE pg_dbz
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM pg_dbz
+a b
+---
+1 1
+2 3
