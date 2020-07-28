@@ -105,11 +105,16 @@ pub enum EnvelopeType {
     Upsert,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum RowCoordinates {
+    MySql { pos: usize, row: usize },
+    Postgres { lsn: usize },
+}
+
 #[derive(Debug)]
 pub struct DebeziumSourceCoordinates {
     snapshot: bool,
-    pos: usize,
-    row: usize,
+    row: RowCoordinates,
 }
 struct DebeziumSourceDecoder<'a> {
     file_buf: &'a mut Vec<u8>,
@@ -199,8 +204,11 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
     type Out = DebeziumSourceCoordinates;
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(self, a: &mut A) -> Result<Self::Out> {
         let mut snapshot = false;
+        // Binlog file "pos" and "row" - present in MySQL sources.
         let mut pos = None;
         let mut row = None;
+        // "log sequence number" - monotonically increasing log offset in Postgres
+        let mut lsn = None;
         let mut has_file = false;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
@@ -235,17 +243,36 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                     field.decode_field(d)?;
                     has_file = true;
                 }
+                "lsn" => {
+                    let next = ValueDecoder;
+                    let val = field.decode_field(next)?;
+                    lsn = Some(
+                        val.into_integral()
+                            .ok_or_else(|| anyhow!("\"lsn\" is not an integer"))?,
+                    );
+                }
                 _ => {
                     field.decode_field(TrivialDecoder)?;
                 }
             }
         }
-        let pos = pos.ok_or_else(|| anyhow!("no pos"))? as usize;
-        let row = row.ok_or_else(|| anyhow!("no row"))? as usize;
-        if !has_file {
-            bail!("no file");
-        }
-        Ok(DebeziumSourceCoordinates { snapshot, pos, row })
+        let mysql_any = pos.is_some() || row.is_some() || has_file;
+        let pg_any = lsn.is_some();
+        let row = if mysql_any {
+            if pg_any {
+                bail!("Found both MySQL (file/pos/row) and Postgres (LSN) source coordinates! We don't know how to interpret this.")
+            }
+            let pos = pos.ok_or_else(|| anyhow!("no pos"))? as usize;
+            let row = row.ok_or_else(|| anyhow!("no row"))? as usize;
+            if !has_file {
+                bail!("no file");
+            }
+            RowCoordinates::MySql { pos, row }
+        } else {
+            let lsn = lsn.ok_or_else(|| anyhow!("no LSN"))? as usize;
+            RowCoordinates::Postgres { lsn }
+        };
+        Ok(DebeziumSourceCoordinates { snapshot, row })
     }
 }
 struct OptionalRowDecoder<'a> {
@@ -970,6 +997,7 @@ pub enum DebeziumDeduplicationStrategy {
 pub enum DebeziumDeduplicationState {
     Ordered {
         /// Last recorded (pos, row, offset) for each MySQL binlog file.
+        /// (Or "", in the Postgres case)
         /// Messages that are not ahead of the last recorded pos/row will be skipped.
         binlog_offsets: HashMap<String, (usize, usize, Option<i64>)>,
     },
@@ -993,12 +1021,15 @@ impl DebeziumDeduplicationState {
     fn should_use_record(
         &mut self,
         file: &str,
-        pos: usize,
-        row: usize,
+        row: RowCoordinates,
         coord: Option<i64>,
         debug_name: &str,
         worker_idx: usize,
     ) -> bool {
+        let (pos, row) = match row {
+            RowCoordinates::MySql { pos, row } => (pos, row),
+            RowCoordinates::Postgres { lsn } => (lsn, 0),
+        };
         match self {
             DebeziumDeduplicationState::Ordered { binlog_offsets } => {
                 match binlog_offsets.entry(file.to_owned()) {
@@ -1182,10 +1213,11 @@ impl DebeziumDecodeState {
                         .ok_or_else(|| anyhow!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
+                        // TODO(btv) Add LSN handling here too (OCF code path).
+                        // Better yet, just delete this and make it go through the same code path as Kafka
                         if !self.dedup.should_use_record(
                             &file_val,
-                            pos,
-                            row,
+                            RowCoordinates::MySql { pos, row },
                             coord,
                             &self.debug_name,
                             self.worker_idx,
@@ -1325,12 +1357,17 @@ impl Decoder {
             let dedup = self.debezium_dedup.as_mut().unwrap();
             let (diff, coords) = dsr.deserialize(&mut bytes, dec)?;
             let should_use = if let Some(source) = coords {
-                // TODO - avoid the unnecessary utf8 check here.
-                let file = std::str::from_utf8(&self.buf2)?;
+                // This would have ideally been `Option<&str>`,
+                // but that can't be used to lookup in a `HashMap` of `Option<String>` without cloning.
+                // So, just use `""` to represent lack of a filename.
+                let file = match source.row {
+                    // TODO - avoid the unnecessary utf8 check here.
+                    RowCoordinates::MySql { .. } => std::str::from_utf8(&self.buf2)?,
+                    RowCoordinates::Postgres { .. } => "",
+                };
                 source.snapshot
                     || dedup.should_use_record(
                         file,
-                        source.pos,
                         source.row,
                         coord,
                         &self.debug_name,
