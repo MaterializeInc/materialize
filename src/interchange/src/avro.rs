@@ -1001,9 +1001,8 @@ impl DebeziumDeduplicationState {
     ) -> bool {
         match self {
             DebeziumDeduplicationState::Ordered { binlog_offsets } => {
-                match binlog_offsets.entry(file.to_owned()) {
-                    Entry::Occupied(mut oe) => {
-                        let (old_max_pos, old_max_row, old_offset) = *oe.get();
+                match binlog_offsets.get_mut(file) {
+                    Some((old_max_pos, old_max_row, old_offset)) => {
                         if (old_max_pos, old_max_row) >= (pos, row) {
                             let offset_string = if let Some(coord) = coord {
                                 format!(" at offset {}", coord)
@@ -1019,10 +1018,13 @@ impl DebeziumDeduplicationState {
                                     debug_name, worker_idx, file, old_max_pos, old_max_row, old_offset_string, pos, row, offset_string);
                             return false;
                         }
-                        oe.insert((pos, row, coord));
+                        *old_max_pos = pos;
+                        *old_max_row = row;
+                        *old_offset = coord;
                     }
-                    Entry::Vacant(ve) => {
-                        ve.insert((pos, row, coord));
+                    None => {
+                        // The extra lookup is fine - this is the cold path.
+                        binlog_offsets.insert(file.to_owned(), (pos, row, coord))
                     }
                 }
                 true
