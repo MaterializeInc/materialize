@@ -223,17 +223,17 @@ mz_view_keys                      SYSTEM true
 > SHOW FULL VIEWS FROM mz_catalog
 VIEWS                             TYPE   QUERYABLE MATERIALIZED
 ---------------------------------------------------------------
-mz_addresses_with_unit_length     SYSTEM true      true
-mz_dataflow_names                 SYSTEM true      true
-mz_dataflow_operator_dataflows    SYSTEM true      true
-mz_perf_arrangement_records       SYSTEM true      true
-mz_perf_dependency_frontiers      SYSTEM true      true
-mz_perf_peek_durations_aggregates SYSTEM true      true
-mz_perf_peek_durations_bucket     SYSTEM true      true
-mz_perf_peek_durations_core       SYSTEM true      true
-mz_records_per_dataflow           SYSTEM true      true
-mz_records_per_dataflow_global    SYSTEM true      true
-mz_records_per_dataflow_operator  SYSTEM true      true
+mz_addresses_with_unit_length     SYSTEM true      false
+mz_dataflow_names                 SYSTEM true      false
+mz_dataflow_operator_dataflows    SYSTEM true      false
+mz_perf_arrangement_records       SYSTEM true      false
+mz_perf_dependency_frontiers      SYSTEM true      false
+mz_perf_peek_durations_aggregates SYSTEM true      false
+mz_perf_peek_durations_bucket     SYSTEM true      false
+mz_perf_peek_durations_core       SYSTEM true      false
+mz_records_per_dataflow           SYSTEM true      false
+mz_records_per_dataflow_global    SYSTEM true      false
+mz_records_per_dataflow_operator  SYSTEM true      false
 
 # test that information in shows correctly responds to materialization and unmaterialization of views
 
