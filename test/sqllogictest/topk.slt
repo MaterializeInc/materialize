@@ -54,29 +54,7 @@ EXPLAIN PLAN FOR SELECT state, name FROM
 ----
 %0 =
 | Get materialize.public.cities (u1)
-| Distinct group=(#1)
-
-%1 =
-| Get %0
-| ArrangeBy (#0)
-
-%2 =
-| Get %0
-| ArrangeBy (#0)
-
-%3 =
-| Get materialize.public.cities (u1)
-
-%4 =
-| Join %2 %3 (= #0 #2)
-| | implementation = Differential %3 %2.(#0)
-| | demand = (#0, #1, #3)
-| TopK group=(#0) order=(#3 desc) limit=3 offset=0
-
-%5 =
-| Join %1 %4 (= #0 #1)
-| | implementation = Differential %4 %1.(#0)
-| | demand = (#0, #2)
-| Project (#0, #2)
+| TopK group=(#1) order=(#2 desc) limit=3 offset=0
+| Project (#1, #0)
 
 EOF

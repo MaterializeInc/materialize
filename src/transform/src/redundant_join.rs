@@ -13,6 +13,10 @@
 // that replace simple and common alternatives frustrate developers.
 #![allow(clippy::comparison_chain, clippy::filter_next)]
 
+use std::collections::HashMap;
+
+use expr::{GlobalId, Id, LocalId};
+
 use crate::{RelationExpr, ScalarExpr, TransformArgs};
 
 /// Remove redundant collections of distinct elements from joins.
@@ -25,16 +29,27 @@ impl crate::Transform for RedundantJoin {
         relation: &mut RelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut(&mut |e| {
-            self.action(e);
-        });
+        self.action(relation, &mut HashMap::new());
         Ok(())
     }
 }
 
 impl RedundantJoin {
     /// Remove redundant collections of distinct elements from joins.
-    pub fn action(&self, relation: &mut RelationExpr) {
+    pub fn action(&self, relation: &mut RelationExpr, lets: &mut HashMap<LocalId, RelationExpr>) {
+        if let RelationExpr::Let { id, value, body } = relation {
+            self.action(value, lets);
+            let old = lets.insert(*id, (**value).clone());
+            self.action(body, lets);
+            if let Some(old) = old {
+                lets.insert(*id, old);
+            } else {
+                lets.remove(id);
+            }
+        } else {
+            relation.visit1_mut(|relation| self.action(relation, lets))
+        }
+
         if let RelationExpr::Join {
             inputs,
             equivalences,
@@ -55,35 +70,84 @@ impl RedundantJoin {
                 offset += input_arities[input];
             }
 
+            let provenance: Vec<_> = inputs
+                .iter()
+                .map(|inp| compute_provenance(inp, lets))
+                .collect();
+
+            let are_cols_equiv = |(rel1, col1), (rel2, col2)| {
+                let expr1 = ScalarExpr::Column(prior_arities[rel1] + col1);
+                let expr2 = ScalarExpr::Column(prior_arities[rel2] + col2);
+                equivalences
+                    .iter()
+                    .any(|equiv| equiv.contains(&expr1) && equiv.contains(&expr2))
+            };
+
+            let can_elide_self = |index: usize, prior: usize| {
+                let keys = inputs[index].typ().keys;
+                inputs[index] == inputs[prior]
+                    && keys
+                        .iter()
+                        .any(|key| key.iter().all(|k| are_cols_equiv((index, *k), (prior, *k))))
+            };
+
+            // Check whether we've already joined a distinct copy of the same
+            // collection, in which case the join is a no-op and the prior
+            // collection can be elided.
+            let can_elide_prior = |index: usize, prior: usize| {
+                let prov_me = provenance[index].as_ref()?;
+                let prov_prior = provenance[prior].as_ref()?;
+                if !prov_prior.known_distinct {
+                    return None;
+                }
+                let mut permutation = vec![];
+                for (pos_prior, prov) in prov_prior.columns.iter().enumerate() {
+                    let pos_me = prov_me.columns.iter().position(|p| p == prov)?;
+                    if !are_cols_equiv((index, pos_me), (prior, pos_prior)) {
+                        return None;
+                    }
+                    permutation.push(pos_me);
+                }
+                Some((prior, permutation))
+            };
+
             // It is possible that two inputs are the same, and joined on columns that form a key for them.
             // If so, we can remove one of them, and replace references to it with corresponding references
             // to the other.
             let mut columns = 0;
             let mut projection = Vec::new();
             let mut to_remove = Vec::new();
-            for (index, input) in inputs.iter().enumerate() {
-                let keys = input.typ().keys;
-                if let Some(prior) = (0..index)
-                    .filter(|prior| {
-                        &inputs[*prior] == input
-                            && keys.iter().any(|key| {
-                                key.iter().all(|k| {
-                                    equivalences.iter().any(|e| {
-                                        e.contains(&ScalarExpr::Column(prior_arities[index] + *k))
-                                            && e.contains(&ScalarExpr::Column(
-                                                prior_arities[*prior] + *k,
-                                            ))
-                                    })
-                                })
-                            })
-                    })
-                    .next()
-                {
+            for index in 0..inputs.len() {
+                let priors = (0..index).filter(|i| !to_remove.contains(i));
+                if let Some(prior) = priors.clone().find(|prior| can_elide_self(index, *prior)) {
                     projection.extend(
                         prior_arities[prior]..(prior_arities[prior] + input_arities[prior]),
                     );
                     to_remove.push(index);
                 // TODO: check for relation repetition in any variable.
+                } else if let Some((prior, permutation)) = priors
+                    .clone()
+                    .find_map(|prior| can_elide_prior(index, prior))
+                {
+                    // NOTE(benesch): this logic is maximally sketchy and is
+                    // probably wrong. Using physical column indices makes this
+                    // adjustment really hard to do.
+                    let shift_point = projection
+                        .splice(
+                            prior_arities[prior]..(prior_arities[prior] + input_arities[prior]),
+                            permutation.iter().map(|p| columns + p),
+                        )
+                        .max();
+                    projection.extend(columns..(columns + input_arities[index]));
+                    if let Some(shift_point) = shift_point {
+                        for p in &mut projection {
+                            if *p > shift_point {
+                                *p -= input_arities[prior];
+                            }
+                        }
+                    }
+                    columns = columns - input_arities[prior] + input_arities[index];
+                    to_remove.push(prior);
                 } else {
                     projection.extend(columns..(columns + input_arities[index]));
                     columns += input_arities[index];
@@ -116,4 +180,71 @@ impl RedundantJoin {
             }
         }
     }
+}
+
+/// For each column in a relation, tracks the upstream relation from which it
+/// came.
+///
+/// This presently only works for columns that come directly from a global
+/// collection. With functioning unbind/deduplicate transformations, we'd
+/// probably want to track this at the level of LocalIds, but at the moment
+/// plans often have several let bindings for identical collections.
+#[derive(Debug)]
+struct Provenance {
+    columns: Vec<(GlobalId, usize)>,
+    known_distinct: bool,
+}
+
+impl Provenance {
+    fn permute(mut self, permutation: &[usize]) -> Self {
+        self.columns = permutation.iter().map(|i| self.columns[*i]).collect();
+        self
+    }
+
+    fn distinct(mut self) -> Self {
+        self.known_distinct = true;
+        self
+    }
+}
+
+fn compute_provenance(
+    relation: &RelationExpr,
+    lets: &HashMap<LocalId, RelationExpr>,
+) -> Option<Provenance> {
+    match relation {
+        RelationExpr::Get { id, typ } => match id {
+            Id::Global(id) => Some(Provenance {
+                columns: (0..typ.arity()).map(|i| (*id, i)).collect(),
+                known_distinct: false,
+            }),
+            Id::Local(id) => compute_provenance(&lets[id], lets),
+        },
+
+        RelationExpr::Reduce {
+            input,
+            aggregates,
+            group_key,
+        } if aggregates.is_empty() => {
+            let group_key = extract_simple_group_key(group_key)?;
+            let prov = compute_provenance(input, lets)?;
+            Some(prov.permute(&group_key).distinct())
+        }
+
+        RelationExpr::TopK { input, .. } => compute_provenance(input, lets),
+
+        RelationExpr::ArrangeBy { input, .. } => compute_provenance(input, lets),
+
+        _ => None,
+    }
+}
+
+fn extract_simple_group_key(key: &[ScalarExpr]) -> Option<Vec<usize>> {
+    let mut out = vec![];
+    for expr in key {
+        match expr {
+            ScalarExpr::Column(i) => out.push(*i),
+            _ => return None,
+        }
+    }
+    Some(out)
 }
