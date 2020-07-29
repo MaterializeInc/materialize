@@ -283,35 +283,23 @@ where
                         }
                     }
                     GlobalId::System(_) => {
-                        // TODO(benesch): a smarter way to determine whether this system index
-                        // is on a logging source or a logging view. Probably logging sources
-                        // should not be catalog views.
-                        if logging
-                            .unwrap()
-                            .active_views()
-                            .iter()
-                            .any(|v| v.index_id == *id)
-                        {
-                            coord.create_index_dataflow(name.to_string(), *id, index.clone())
-                        } else {
-                            if is_cat_index(&id) {
-                                let entry = coord.catalog.get_by_id(&index.on);
-                                coord.views.insert(*id, ViewState::new(false, vec![]));
-                                broadcast(
-                                    &mut coord.broadcast_tx,
-                                    SequencedCommand::CreateLocalInput {
-                                        name: name.to_string(),
-                                        index_id: *id,
-                                        index: IndexDesc {
-                                            on_id: *id,
-                                            keys: index.keys.clone(),
-                                        },
-                                        on_type: entry.desc().unwrap().typ().clone(),
+                        if is_cat_index(&id) {
+                            let entry = coord.catalog.get_by_id(&index.on);
+                            coord.views.insert(*id, ViewState::new(false, vec![]));
+                            broadcast(
+                                &mut coord.broadcast_tx,
+                                SequencedCommand::CreateLocalInput {
+                                    name: name.to_string(),
+                                    index_id: *id,
+                                    index: IndexDesc {
+                                        on_id: *id,
+                                        keys: index.keys.clone(),
                                     },
-                                );
-                            }
-                            coord.insert_index(*id, &index, Some(1_000))
+                                    on_type: entry.desc().unwrap().typ().clone(),
+                                },
+                            );
                         }
+                        coord.insert_index(*id, &index, Some(1_000))
                     }
                 },
             }
@@ -2733,7 +2721,7 @@ fn open_catalog(
                     }) => {
                         assert!(replace.is_none());
                         assert!(!if_not_exists);
-                        assert!(materialize);
+                        assert!(!materialize);
                         // Optimize the expression so that we can form an accurately typed description.
                         let optimized_expr = optimizer
                             .optimize(view.expr, catalog.indexes())
@@ -2752,23 +2740,7 @@ fn open_catalog(
                             schema: "mz_catalog".into(),
                             item: log_view.name.into(),
                         };
-                        let index_name = format!("{}_primary_idx", log_view.name);
-                        let index = auto_generate_primary_idx(
-                            index_name.clone(),
-                            view_name.clone(),
-                            log_view.id,
-                            &view.desc,
-                        );
                         catalog.insert_item(log_view.id, view_name, CatalogItem::View(view));
-                        catalog.insert_item(
-                            log_view.index_id,
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: "mz_catalog".into(),
-                                item: index_name,
-                            },
-                            CatalogItem::Index(index),
-                        );
                     }
                     err => panic!(
                         "internal error: failed to load bootstrap view:\n{}\nerror:\n{:?}",
