@@ -420,6 +420,12 @@ impl ConsistencyInfo {
             }
         }
         assert!(new_ts > self.last_closed_ts);
+        // Round new_ts to the next greatest self.downgrade_capability_frequency increment.
+        // This is to guarantee that different workers downgrade (without coordination) to the
+        // "same" next time
+        new_ts = new_ts
+            + (self.downgrade_capability_frequency
+                - (new_ts % self.downgrade_capability_frequency));
         self.last_closed_ts = new_ts;
         Some(self.last_closed_ts)
     }
