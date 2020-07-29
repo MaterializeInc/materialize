@@ -49,56 +49,173 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.4.1"></span>
 ## v0.4.1 (Unreleased)
 
-- Make casting from `numeric` and `float` to `int` consistent with PostgreSQL by
-  rounding before the conversion.
+No release notes yet.
 
 <span id="v0.4.0"></span>
 ## v0.4.0
 
-- Support for SASL PLAIN Authentication to support Confluent Cloud {{% gh 3418 %}}
-- Update Change Data Capture format to allow Kafka sinks to optionally emit Debezium
-  style [consistency metadata](/sql/create-sink/#consistency-metadata).
-- Introduce the ability to [rename indexes, sinks, sources, and
-  views](/sql/alter-rename).
-- Rename the `-w`/`--threads` command line argument to `-w`/`--workers`, since it
-  reflects timely workers and does not limit the number of threads that materialized may
-  start.
-- Fix a bug that prevented dropping databases with cross-schema dependencies.
-  {{% gh 3558 %}}
-- Expose [Prometheus metrics for sinks](https://materialize.io/docs/monitoring/).
-- Allow column names in SELECT clause to be used by GROUP BY {{% gh 1673 %}}
-- Make decimal / float to int casts behave similar to Postgres {{% gh 3700 %}}
-- Fix a bug that prevented ordering by columns that are not in the select clause {{% gh
-  696 %}}
-- Support SHOW TRANSACTION ISOLATION LEVEL {{% gh 800 %}}
-- Support to_jsonb(sql record) {{% gh 2414 %}}
-- Add timestamp to Sink CDC field {{% gh 3216 %}}
+- Rename the `--threads` command-line option to [`--workers`](/cli/#worker-threads),
+  since it controls only the number of dataflow workers that Materialize will
+  start, not the total number of threads that Materialize may use. The short
+  form of this option, `-w`, remains unchanged.
+  **Backwards-incompatible change.**
+
+- Add the `--experimental` command-line option to enable a new [experimental
+  mode](/cli/#experimental-mode), which grants access to experimental features
+  at the risk of compromising stability and backwards compatibility. Forthcoming
+  features that require experimental mode will be marked as such in their
+  documentation.
+
+- Support [SASL PLAIN authentication for Kafka sources](/sql/create-source/avro-kafka/#connecting-to-a-kafka-broker-using-sasl-plain-authentication).
+  Notably, this allows Materialize to connect to Kafka clusters hosted by
+  Confluent Cloud.
+
+- Do not require [Kafka Avro sources](sql/create-source/avro-kafka) that use
+  `ENVELOPE NONE` or `ENVELOPE DEBEZIUM` to have key schemas whose fields are a
+  subset of the value schema {{% gh 3677 %}}.
+
+- Teach Kafka sinks to emit Debezium style [consistency
+  metadata](/sql/create-sink/#consistency-metadata) if the new `consistency`
+  option is enabled.
+
+- Introduce the [`AS OF`](/sql/create-sink/#as-of) and
+  [`WITH SNAPSHOT`](/sql/create-sink/#with-snapshot-or-without-snapshot) options
+  for `CREATE SINK` to provide more control over what data the sink will
+  produce.
+
+- Change the default [`TAIL` snapshot behavior](/sql/tail/#with-snapshot-or-without-snapshot)
+  from `WITHOUT SNAPSHOT` to `WITH SNAPSHOT`. **Backwards-incompatible change.**
+
+- Actively shut down [Kafka sinks](https://materialize.io/docs/sql/create-sink/#kafka-sinks)
+  that encounter an unrecoverable error, rather than attempting to produce data
+  until the sink is dropped {{% gh 3419 %}}.
+
+- Improve the performance, stability, and standards compliance of Avro encoding
+  and decoding {{% gh 3397 3557 3568 3579 3583 3584 3585 %}}.
+
+- Support [record types](/sql/types/record), which permit the representation of
+  nested data in SQL. Avro sources also gain support for decoding nested
+  records, which were previously disallowed, into this new SQL record type.
+
+- Introduce several new SQL statements:
+
+  - [`ALTER RENAME`](/sql/alter-rename) renames an index, sink, source, or view.
+
+  - [`SHOW CREATE INDEX`](/sql/show-create-index/) displays information about
+    an index.
+
+  - [`EXPLAIN <statement>`](/sql/explain) is shorthand for
+    `EXPLAIN OPTIMIZED PLAN FOR <statement>`.
+
+  - `SHOW TRANSACTION ISOLATION LEVEL` displays a dummy transaction isolation
+    level, `serializable`, in order to satisfy various PostgreSQL tools that
+    depend upon this statement {{% gh 800 %}}.
+
+- Adjust the semantics of several SQL expressions to match PostgreSQL's
+  semantics:
+
+  - Consider `NULL < ANY(...)` to be false and `NULL < ALL (...)` to be true
+    when the right-hand side is the empty set {{% gh 3319 %}}.
+    **Backwards-incompatible change.**
+
+  - Change the meaning of ordinal references in a `GROUP BY` clause, as in
+    `SELECT ... GROUP BY 1`, to refer to columns in the target list, rather than
+    columns in the input set of tables {{% gh 3686 %}}.
+    **Backwards-incompatible change.**
+
+  - When casting from `numeric` or `float` to `int`, round to the nearest
+    integer rather than discarding the fractional component {{% gh 3700 %}}.
+    **Backwards-incompatible change.**
+
+  - Allow expressions in `GROUP BY` to refer to output columns, not just input
+    columns, to match PostgreSQL. In the case of ambiguity, the input column
+    takes precedence {{% gh 1673 %}}.
+
+  - Permit expressions in `ORDER BY` to refer to input columns that are not
+    selected for output, as in `SELECT rel.a FROM rel ORDER BY rel.b`
+    {{% gh 3645 %}}.
+
+- Allow dropping databases with cross-schema dependencies {{% gh 3558 %}}.
+
+- Avoid crashing if [`date_trunc('week', ...)`](/sql/functions/#time) is called
+  on a date that is in the first week of a month {{% gh 3651 %}}.
+
+- Ensure the built-in `mz_avro_ocf_sinks`, `mz_catalog_names`, and
+  `mz_kafka_sinks` views always reflect the latest state of the system
+  {{% gh 3682 %}}. Previously these views could contain stale data that did not
+  reflect the results of recent `CREATE` or `DROP` statements.
 
 <span id="v0.3.1"></span>
 ## v0.3.1
 
-- Introduce the [`AS OF`](/sql/create-sink/#as-of) and
-  [`WITH SNAPSHOT`](/sql/create-sink/#with-snapshot-or-without-snapshot) options for `CREATE SINK` to provide
-  more control over what data the `SINK` will produce.
-- Update the [`SNAPSHOT`](/sql/tail/#with-snapshot-or-without-snapshot) options for `TAIL`
-  to allow more control over what data `TAIL` will produce.
+- Improve the ingestion speed of Kafka sources with multiple partitions by
+  sharding responsibility for each partition across the available worker
+  threads {{% gh 3190 %}}.
+
+- Improve JSON decoding performance when casting a `text` column to `json`, as
+  in `SELECT text_col::json` {{% gh 3195 %}}.
+
 - Simplify converting non-materialized views into materialized views with
   [`CREATE DEFAULT INDEX ON foo`](/sql/create-index). This creates the same
   [index](/overview/api-components/#indexes) on a view that would have been
-  created if you had used [`CREATE MATERIALIZED
-  VIEW`](/sql/create-materialized-view).
-- Produce runtime errors when casting from string to any other data type, rather
-  than producing `NULL` if the cast failed.
-- Add support for PostgreSQL functions `char_length`, `octet_length`, and
-  `bit_length`.
-- Improve `length` function's PostgreSQL compatibility by accepting `bytea` as
-  the first argument when getting the length of encoded bytes.
+  created if you had used [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view).
+
+- Permit control over the timestamp selection logic on a per-Kafka-source basis
+  via three new [`WITH` options](https://materialize.io/docs/sql/create-source/avro-kafka/#with-options):
+    - `timestamp_frequency_ms`
+    - `max_timestamp_batch_size`
+    - `topic_metadata_refresh_interval_ms`
+
+- Support assigning aliases for column names when referecing a relation
+  in a `SELECT` query, as in:
+
+  ```sql
+  SELECT col1_alias, col2_alias FROM rel AS rel_alias (col1_alias, col2_alias)
+  ```
+
+- Add the [`abs`](/sql/functions/#numbers-1) function for the
+  [`numeric`](/sql/types/numeric/) type.
+
+- Improve the [string function](/sql/functions/#string-1) suite:
+  - Add the trim family of functions to trim characters from the start and/or
+    end of strings. The new functions are `btrim`, `ltrim`, `rtrim`, and `trim`.
+  - Add the SQL standard length functions `char_length`, `octet_length`, and
+    `bit_length`.
+  - Improve the `length` function's PostgreSQL compatibility by accepting
+    `bytea` as the first argument, rather than `text`, when getting the length
+    of encoded bytes.
+
+- Enhance compatibility with PostgreSQL string literals:
+  - Allow the [`TYPE 'string'` syntax](/sql/functions/cast#signatures) to
+    explicitly specify the type of a string literal. This syntax is equivalent
+    to `CAST('string' AS TYPE)` and `'string'::TYPE`.
+  - Support [escape string literals](/sql/types/text/#escape) of the form
+    `E'hello\nworld'`, which permit C-style escapes for several special
+    characters.
+  - Automatically coerce string literals to the appropriate type, as required
+    by their usage in calls to functions and operators {{% gh 481 %}}.
+
+- Produce runtime errors in several new situations:
+  - When multiplication operations overflow {{% gh 3354 %}}. Previously
+    multiplication overflow would result in silent wraparound.
+  - When casting from string to any other data type {{% gh 3156 %}}. Previously
+    failed casts would return `NULL`.
+
+- Fix several misplanned queries:
+  - Ensure `CASE` statements do not trigger errors from unselected
+    branches {{% gh 3395 %}}.
+  - Prevent the optimizer from crashing on some queries involving the
+    the `date_trunc` function {{% gh 3403 %}}.
+  - Handle joins nested with non-default associativity correctly
+    {{% gh 3427 %}}.
+
+- Fix several bugs related to negative intervals:
+  - Ensure the `EXTRACT` function-like operator returns a negative result when
+    its input is negative {{% gh 2800 %}}.
+  - Do not distinguish negative and positive zero {{% gh 2812 %}}.
 
 <span id="v0.3.0"></span>
 ## v0.3.0
-
-Read the [Release Announcement](https://materialize.io/release-materialize-0-3/) for more
-details.
 
 - Support [temporary views](/sql/create-view/#temporary-views).
 
