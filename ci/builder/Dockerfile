@@ -86,7 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.2.0/autouseradd-1.2.0-amd64.tar.gz \
     | tar xz -C / --strip-components 1 \
-    && curl -fsSL https://shellcheck.storage.googleapis.com/shellcheck-v0.7.0.linux.x86_64.tar.xz > shellcheck.tar.xz \
+    && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.7.0/shellcheck-v0.7.0.linux.x86_64.tar.xz > shellcheck.tar.xz \
     && echo '39c501aaca6aae3f3c7fc125b3c3af779ddbe4e67e4ebdc44c2ae5cba76c847f  shellcheck.tar.xz' | sha256sum --check \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.7.0/shellcheck \
     && rm shellcheck.tar.xz \
