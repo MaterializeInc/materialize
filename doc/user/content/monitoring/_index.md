@@ -1,6 +1,6 @@
 ---
-title: "Monitoring"
-description: "Find details about monitoring your Materialize instances"
+title: "Monitoring and Operations"
+description: "Find details about running your Materialize instances"
 menu: "main"
 weight: 80
 ---
@@ -117,3 +117,15 @@ docker run --network host -e MATERIALIZED_URL=localhost:6875 materialize/dashboa
 [dashboard-json]: https://github.com/MaterializeInc/materialize/blob/main/misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
 [graf-import]: https://grafana.com/docs/grafana/latest/reference/export_import/#importing-a-dashboard
 [dc-example]: https://github.com/MaterializeInc/materialize/blob/d793b112758c840c1240eefdd56ca6f7e4f484cf/demo/billing/mzcompose.yml#L60-L70
+
+## Memory
+
+Materialize stores the majority of its state in-memory, and works best when the streamed data
+can be reduced in some way. For example, if you know that only a subset of your rows and columns
+are relevant for your queries, it helps to avoid materializing sources or views until you've
+expressed this to the system (we can avoid stashing that data, which can in some cases dramatically
+reduce the memory footprint).
+
+To minimize the chances that Materialize runs out of memory in a production environment,
+we recommend you make additional memory available to Materialize via a SSD-backed
+swap file or swap partition.
