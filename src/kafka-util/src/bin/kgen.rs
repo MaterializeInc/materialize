@@ -78,7 +78,30 @@ fn main() -> anyhow::Result<()> {
             Arg::with_name("bootstrap")
                 .short("b")
                 .long("bootstrap-server")
-                .takes_value(true),
+                .takes_value(true)
+                .default_value("localhost:9092"),
+        )
+        .arg(
+            Arg::with_name("keys")
+                .long("keys")
+                .short("k")
+                .takes_value(true)
+                .possible_values(&["sequential", "random"])
+                .default_value("sequential"),
+        )
+        .arg(
+            Arg::with_name("key-min")
+                .short("km")
+                .long("key-min")
+                .takes_value(true)
+                .required_if("keys", "random"),
+        )
+        .arg(
+            Arg::with_name("key-max")
+                .short("kM")
+                .long("key-max")
+                .takes_value(true)
+                .required_if("keys", "random"),
         )
         .get_matches();
     let topic = matches.value_of("topic").unwrap();
@@ -91,7 +114,7 @@ fn main() -> anyhow::Result<()> {
     if partitions == 0 {
         bail!("Partitions must a positive number.");
     }
-    let bootstrap = matches.value_of("bootstrap").unwrap_or("localhost:9092");
+    let bootstrap = matches.value_of("bootstrap").unwrap();
     let min: usize = matches.value_of("min").unwrap().parse()?;
     let max: usize = matches.value_of("max").unwrap().parse()?;
 
@@ -102,12 +125,26 @@ fn main() -> anyhow::Result<()> {
     let dd = Uniform::new_inclusive(0, 255);
     let mut buf = vec![];
     let mut rng = thread_rng();
+
+    let keys_random = matches.value_of("keys").unwrap() == "random";
+    let key_dist = if keys_random {
+        let key_min: u64 = matches.value_of("key-min").unwrap().parse()?;
+        let key_max: u64 = matches.value_of("key-max").unwrap().parse()?;
+        Some(Uniform::new_inclusive(key_min, key_max))
+    } else {
+        None
+    };
     for i in 0..n {
         if i % 10000 == 0 {
             eprintln!("Generating message {}", i);
         }
         gen_value(&mut buf, &ld, &dd, &mut rng);
-        let key = i.to_le_bytes();
+        let key_i = if let Some(key_dist) = key_dist.as_ref() {
+            key_dist.sample(&mut rng)
+        } else {
+            i as u64
+        };
+        let key = key_i.to_be_bytes();
         let mut rec = BaseRecord::to(topic)
             .key(&key)
             .payload(&buf)
