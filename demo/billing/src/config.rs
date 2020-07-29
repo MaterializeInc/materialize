@@ -41,7 +41,7 @@ pub struct Args {
     pub materialized_port: u16,
 
     /// The total number of messages to create
-    #[structopt(long, default_value = "100000000")]
+    #[structopt(long, default_value = "1000000")]
     pub message_count: usize,
 
     /// Amount of time to sleep between messages, e.g. 2ms
@@ -59,7 +59,7 @@ pub struct Args {
     #[structopt(long, default_value = "billing")]
     pub kafka_topic: String,
 
-    #[structopt(long)]
+    #[structopt(long, default_value = "prices.csv")]
     pub csv_file_name: String,
 
     /// The schema-registry URL

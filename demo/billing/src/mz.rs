@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Error, Result};
+use anyhow::{bail, Context, Error, Result};
 use csv::Writer;
 use ore::retry;
 use rand::Rng;
@@ -96,32 +97,45 @@ pub async fn create_csv_source(
     seed: u64,
     batch_size: Option<u64>,
 ) -> Result<()> {
-    let mut writer = Writer::from_path(file_name)?;
+    let path = PathBuf::from(file_name);
+    let mut writer = Writer::from_path(path.clone())
+        .with_context(|| format!("failed to initialize csv writer for {}", path.display()))?;
     use rand::SeedableRng;
     let rng = &mut rand::rngs::StdRng::seed_from_u64(seed);
 
     for i in 1..num_clients {
-        writer.write_record(&[
-            i.to_string(),
-            rng.gen_range(1, 10).to_string(),
-            rng.gen_range(1, 10).to_string(),
-        ])?;
+        writer
+            .write_record(&[
+                i.to_string(),
+                rng.gen_range(1, 10).to_string(),
+                rng.gen_range(1, 10).to_string(),
+            ])
+            .with_context(|| format!("failed to write data to {}", path.display()))?;
     }
 
-    writer.flush()?;
+    writer
+        .flush()
+        .with_context(|| format!("failed to flush data to {}", path.display()))?;
+
+    let absolute_path = if path.is_absolute() {
+        path
+    } else {
+        path.canonicalize()
+            .with_context(|| format!("failed to convert {} to an absolute path", path.display()))?
+    };
     let query = if let Some(batch_size) = batch_size {
         format!(
                 "CREATE SOURCE {source} FROM FILE '{file}'  WITH (max_timestamp_batch_size={batch_size}) FORMAT CSV WITH 3 COLUMNS \
                ",
                 source = source_name,
-                file = file_name,
+                file = absolute_path.display(),
                 batch_size = batch_size
             )
     } else {
         format!(
             "CREATE SOURCE {source} FROM FILE '{file}' FORMAT CSV WITH 3 COLUMNS",
             source = source_name,
-            file = file_name
+            file = absolute_path.display(),
         )
     };
 
