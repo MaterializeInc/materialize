@@ -1560,12 +1560,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 0,
                 "subscript expression must contain at least one position"
             );
-            if positions.len() > 1 && !ecx.qcx.scx.experimental_mode() {
-                bail!(
-                    "multi-dimensional slicing requires experimental mode; see \
-                https://materialize.io/docs/cli/#experimental-mode"
-                )
-            };
+            ecx.require_experimental_mode_if(positions.len() > 1, "multi-dimensional slicing")?;
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
             let ty = ecx.scalar_type(&expr);
             match &ty {
@@ -2219,5 +2214,25 @@ impl<'a> ExprContext<'a> {
     fn derived_query_context(&self) -> QueryContext {
         self.qcx
             .derived_context(self.scope.clone(), self.relation_type)
+    }
+
+    pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+        self.require_experimental_mode_if(true, feature_name)
+    }
+
+    pub fn require_experimental_mode_if(
+        &self,
+        predicate: bool,
+        feature_name: &str,
+    ) -> Result<(), anyhow::Error> {
+        if predicate && !self.qcx.scx.experimental_mode() {
+            bail!(
+                "{} requires experimental mode; see \
+            https://materialize.io/docs/cli/#experimental-mode",
+                feature_name
+            )
+        } else {
+            Ok(())
+        }
     }
 }

@@ -167,10 +167,10 @@ If you want to use experimental mode, you should **really** read the section bel
 
 {{< /warning >}}
 
-Materialize offers access to experimental features through the
-`--experimental` flag. However, as experimental features shift, there is no
-guarantee that future versions of Materialize will be interoperable with the
-experimental features.
+Materialize offers access to experimental features through the `--experimental`
+flag. Unlike most features in Materialize, experimental features' syntax and/or
+semantics can shift at any time, and **there is no guarantee that future
+versions of Materialize will be interoperable with the experimental features**.
 
 Using experimental mode means that **you are likely to lose access to all of
 your sources and views within Materialize** and will have to recreate them and
