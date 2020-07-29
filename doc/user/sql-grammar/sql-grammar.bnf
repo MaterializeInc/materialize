@@ -182,6 +182,8 @@ kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
     'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url
+lit_cast ::=
+  type val
 op_cast ::=
   val '::' type
 schema_spec ::=
@@ -239,8 +241,12 @@ type_numeric_dec ::=
   'numeric' ( '(' precision ',' scale ')' )?
 type_numeric_val ::=
   int ( '.' frac )? ( ( 'e' | 'E' ) '-'? exp )?
+type_record ::=
+  'ROW' '(' expr? (',' expr)* ')'
 type_text ::=
   "'" text "'"
+type_escape_text ::=
+  ('e' | 'E') "'" escapable_text "'"
 type_time ::=
   'TIME' "'" time_str "'"
 type_timestamp ::=

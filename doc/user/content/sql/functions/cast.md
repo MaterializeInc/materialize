@@ -19,6 +19,10 @@ Parameter | Type | Description
 _val_ | [Any](../../types) | The value you want to convert.
 _type_ | [Typename](../../types) | The return value's type.
 
+The following special syntax is permitted if _val_ is a string literal:
+
+{{< diagram "lit-cast.svg" >}}
+
 ### Return value
 
 `cast` returns the value with the type specified by the _type_ parameter.
@@ -52,6 +56,17 @@ Source type | Return type
 ## Examples
 
 ```sql
+SELECT INT '4';
+```
+```nofmt
+ ?column?
+----------
+         4
+```
+
+<hr>
+
+```sql
 SELECT CAST (CAST (100.21 AS decimal(10, 2)) AS float) AS dec_to_float;
 ```
 ```nofmt
@@ -59,6 +74,7 @@ SELECT CAST (CAST (100.21 AS decimal(10, 2)) AS float) AS dec_to_float;
 --------------
        100.21
 ```
+
 <hr/>
 
 ```sql
