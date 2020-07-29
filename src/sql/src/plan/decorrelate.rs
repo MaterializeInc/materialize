@@ -498,14 +498,88 @@ impl ScalarExpr {
                     .collect::<Vec<_>>(),
             },
             If { cond, then, els } => {
-                // TODO(jamii) would be nice to only run subqueries in `then` when `cond` is true
-                // (if subqueries later gain the ability to throw errors, this impacts correctness too)
-                // NOTE: This also affects performance *now* if either branch is expensive to produce
-                // and/or maintain but is not the returned result.
-                SS::If {
-                    cond: Box::new(cond.applied_to(id_gen, col_map, inner)),
-                    then: Box::new(then.applied_to(id_gen, col_map, inner)),
-                    els: Box::new(els.applied_to(id_gen, col_map, inner)),
+                // The `If` case is complicated by the fact that we do not want to
+                // apply the `then` or `else` logic to tuples that respectively do
+                // not or do pass the `cond` test. Our strategy is to independently
+                // decorrelate the `then` and `else` logic, and apply each to tuples
+                // that respectively pass and do not pass the `cond` logic (which is
+                // executed, and so decorrelated, for all tuples).
+                //
+                // Informally, we turn the `if` statement into:
+                //
+                //   let then_case = inner.filter(cond).map(then);
+                //   let else_case = inner.filter(!cond).map(else);
+                //   return then_case.concat(else_case);
+                //
+                // We only require this if either expression would result in any
+                // computation beyond the expr itself, which we will interpret as
+                // "introduces additional columns". In the absence of correlation,
+                // we should just retain a `ScalarExpr::If` expression; the inverse
+                // transformation as above is complicated to recover after the fact,
+                // and we would benefit from not introducing the complexity.
+
+                let inner_arity = inner.arity();
+                let cond_expr = cond.applied_to(id_gen, col_map, inner);
+
+                // Defensive copies, in case we mangle these in decorrelation.
+                let inner_clone = inner.clone();
+                let then_clone = then.clone();
+                let else_clone = els.clone();
+
+                let cond_arity = inner.arity();
+                let then_expr = then.applied_to(id_gen, col_map, inner);
+                let else_expr = els.applied_to(id_gen, col_map, inner);
+
+                if cond_arity == inner.arity() {
+                    // If no additional columns were added, we simply return the
+                    // `If` variant with the updated expressions.
+                    SS::If {
+                        cond: Box::new(cond_expr),
+                        then: Box::new(then_expr),
+                        els: Box::new(else_expr),
+                    }
+                } else {
+                    // If columns were added, we need a more careful approch, as
+                    // described above. First, we need to de-correlate each of
+                    // the two expressions independently, and apply their cases
+                    // as `RelationExpr::Map` operations.
+
+                    *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
+                        // Restrict to records satisfying `cond_expr` and apply `then` as a map.
+                        let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
+                        let then_expr = then_clone.applied_to(id_gen, col_map, &mut then_inner);
+                        let then_arity = then_inner.arity();
+                        then_inner = then_inner
+                            .map(vec![then_expr])
+                            .project((0..inner_arity).chain(Some(then_arity)).collect());
+
+                        // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
+                        let mut else_inner = get_inner.filter(vec![SS::CallBinary {
+                            func: expr::BinaryFunc::Or,
+                            expr1: Box::new(SS::CallBinary {
+                                func: expr::BinaryFunc::Eq,
+                                expr1: Box::new(cond_expr.clone()),
+                                expr2: Box::new(SS::literal_ok(
+                                    Datum::False,
+                                    ColumnType::new(ScalarType::Bool, false),
+                                )),
+                            }),
+                            expr2: Box::new(SS::CallUnary {
+                                func: expr::UnaryFunc::IsNull,
+                                expr: Box::new(cond_expr.clone()),
+                            }),
+                        }]);
+                        let else_expr = else_clone.applied_to(id_gen, col_map, &mut else_inner);
+                        let else_arity = else_inner.arity();
+                        else_inner = else_inner
+                            .map(vec![else_expr])
+                            .project((0..inner_arity).chain(Some(else_arity)).collect());
+
+                        // concatenate the two results.
+                        then_inner.union(else_inner)
+                    });
+
+                    SS::Column(inner_arity)
                 }
             }
 

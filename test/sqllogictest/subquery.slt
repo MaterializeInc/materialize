@@ -673,3 +673,17 @@ select x, (select count(*) from ys where y < x) from xs
 1  1
 1  1
 2  2
+
+# Tests that conditional subqueries should not error.
+query II rowsort
+select y, (
+    case when (select count(*) from xs where x < y) != 0
+         then (select 1.0 / count(*) from xs where x < y)
+         else (select 1.0 / (count(*) - 1) from xs where x < y)
+         end
+  )
+from ys
+----
+0  -1
+1  -1
+2  1
