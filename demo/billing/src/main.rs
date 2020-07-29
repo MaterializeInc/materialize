@@ -65,12 +65,8 @@ async fn run() -> Result<()> {
     let mz_client = mz_client::client(&mz_config.host, mz_config.port).await?;
     let check_sink = mz_config.check_sink;
 
-    let k = tokio::spawn(async move { create_kafka_messages(k_config).await });
-
-    let mz = tokio::spawn(async move { create_materialized_source(mz_config).await });
-    let (k_res, mz_res) = futures::join!(k, mz);
-    k_res??;
-    mz_res??;
+    create_materialized_source(mz_config).await?;
+    create_kafka_messages(k_config).await?;
 
     if check_sink {
         mz::validate_sink(
