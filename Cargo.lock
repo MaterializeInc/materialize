@@ -1608,11 +1608,18 @@ name = "kafka-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ccsr",
+ "chrono",
  "clap",
+ "futures",
+ "mz-avro",
  "ore",
  "rand",
  "rdkafka",
  "serde",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]
