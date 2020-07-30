@@ -37,6 +37,7 @@ use crate::adt::decimal::Decimal;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 
+/// Yes should be provided for types that will *never* return true for [`ElementEscaper::needs_escaping`]
 #[derive(Debug)]
 pub enum Nestable {
     Yes,
@@ -236,9 +237,7 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", d);
-    // NOTE(benesch): this may be overly conservative. Perhaps dates never
-    // have special characters.
-    Nestable::MayNeedEscaping
+    Nestable::Yes
 }
 
 /// Parses a `NaiveTime` from `s`, using the following grammar.
@@ -261,9 +260,7 @@ where
 {
     write!(buf, "{}", t.format("%H:%M:%S"));
     format_nanos_to_micros(buf, t.nanosecond());
-    // NOTE(benesch): this may be overly conservative. Perhaps times never
-    // have special characters.
-    Nestable::MayNeedEscaping
+    Nestable::Yes
 }
 
 /// Parses a `NaiveDateTime` from `s`.
@@ -281,8 +278,7 @@ where
 {
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
     format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
-    // NOTE(benesch): this may be overly conservative. Perhaps timestamps never
-    // have special characters.
+    // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }
 
@@ -307,8 +303,7 @@ where
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
     format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
     write!(buf, "+00");
-    // NOTE(benesch): this may be overly conservative. Perhaps timestamptzs
-    // never have special characters.
+    // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }
 
