@@ -1,5 +1,5 @@
 ---
-title: "Get started"
+title: "Get Started"
 description: "Get started with Materialize"
 menu: "main"
 weight: 3
