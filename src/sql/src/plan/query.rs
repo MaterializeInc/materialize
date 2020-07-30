@@ -647,7 +647,7 @@ fn plan_view_select_intrusive(
                     scope_item
                 } else {
                     ScopeItem {
-                        names: invent_column_name(group_expr).into_iter().collect(),
+                        names: invent_column_name(ecx, group_expr).into_iter().collect(),
                         expr: Some(group_expr.clone()),
                         nameable: true,
                     }
@@ -941,8 +941,12 @@ fn plan_table_factor(
                 id: Id::Global(item.id()),
                 typ: item.desc()?.typ().clone(),
             };
-            let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(&qcx, alias.as_ref(), Some(name.into()), column_names)?;
+            let scope = Scope::from_source(
+                Some(name.into()),
+                item.desc()?.iter_names().map(|n| n.cloned()),
+                Some(qcx.outer_scope.clone()),
+            );
+            let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
 
@@ -964,21 +968,21 @@ fn plan_table_factor(
             alias,
         } => {
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
-            let table_name = None;
-            let column_names = scope.column_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(&qcx, alias.as_ref(), table_name, column_names)?;
+            let scope = plan_table_alias(scope, alias.as_ref())?;
             (expr, scope)
         }
 
-        TableFactor::NestedJoin(table_with_joins) => {
+        TableFactor::NestedJoin { join, alias } => {
             let (identity, identity_scope) = plan_join_identity(&qcx);
-            plan_table_with_joins(
+            let (expr, scope) = plan_table_with_joins(
                 &qcx,
                 identity,
                 identity_scope,
                 &JoinOperator::CrossJoin,
-                table_with_joins,
-            )?
+                join,
+            )?;
+            let scope = plan_table_alias(scope, alias.as_ref())?;
+            (expr, scope)
         }
     };
 
@@ -1001,68 +1005,77 @@ fn plan_table_function(
         func: tf.func,
         exprs: tf.exprs,
     };
-    let name = PartialName {
-        database: None,
-        schema: None,
-        item: ident,
-    };
-    let scope = plan_table_alias(ecx.qcx, alias, Some(name), tf.column_names)?;
+    let scope = Scope::from_source(
+        Some(PartialName {
+            database: None,
+            schema: None,
+            item: ident,
+        }),
+        tf.column_names,
+        Some(ecx.qcx.outer_scope.clone()),
+    );
+    let mut scope = plan_table_alias(scope, alias)?;
+    if let Some(alias) = alias {
+        if let [item] = &mut *scope.items {
+            // Strange special case for table functions that ouput one column.
+            // If a table alias is provided but not a column alias, the column
+            // implicitly takes on the same alias in addition to its inherent
+            // name.
+            //
+            // Concretely, this means `SELECT x FROM generate_series(1, 5) AS x`
+            // returns a single column of type int, even though
+            //
+            //     CREATE TABLE t (a int)
+            //     SELECT x FROM t AS x
+            //
+            // would return a single column of type record(int).
+            item.names.push(ScopeItemName {
+                table_name: None,
+                column_name: Some(normalize::column_name(alias.name.clone())),
+                priority: false,
+            });
+        }
+    }
     Ok((call, scope))
 }
 
-fn plan_table_alias(
-    qcx: &QueryContext,
-    alias: Option<&TableAlias>,
-    inherent_table_name: Option<PartialName>,
-    inherent_column_names: Vec<Option<ColumnName>>,
-) -> Result<Scope, anyhow::Error> {
-    let table_name = match alias {
-        None => inherent_table_name,
-        Some(TableAlias { name, .. }) => Some(PartialName {
-            database: None,
-            schema: None,
-            item: normalize::ident(name.to_owned()),
-        }),
-    };
-    let column_names = match alias {
-        None => inherent_column_names,
-        Some(TableAlias {
-            columns,
-            strict: false,
-            ..
-        }) if columns.is_empty() => inherent_column_names,
-
-        Some(TableAlias {
-            columns, strict, ..
-        }) if (columns.len() > inherent_column_names.len())
-            || (*strict && columns.len() != inherent_column_names.len()) =>
-        {
+fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scope, anyhow::Error> {
+    if let Some(TableAlias {
+        name,
+        columns,
+        strict,
+    }) = alias
+    {
+        if (columns.len() > scope.items.len()) || (*strict && columns.len() != scope.items.len()) {
             bail!(
                 "{} has {} columns available but {} columns specified",
-                table_name
-                    .map(|n| n.to_string())
-                    .as_deref()
-                    .unwrap_or("subquery"),
-                inherent_column_names.len(),
+                name,
+                scope.items.len(),
                 columns.len()
             );
         }
 
-        Some(TableAlias { columns, .. }) => columns
-            .iter()
-            .cloned()
-            .map(|n| Some(normalize::column_name(n)))
-            .chain(inherent_column_names.into_iter().skip(columns.len()))
-            .collect(),
-    };
-    Ok(Scope::from_source(
-        table_name,
-        column_names,
-        Some(qcx.outer_scope.clone()),
-    ))
+        let table_name = normalize::ident(name.to_owned());
+        for (i, item) in scope.items.iter_mut().enumerate() {
+            let column_name = columns
+                .get(i)
+                .map(|a| normalize::column_name(a.clone()))
+                .or_else(|| item.names.get(0).and_then(|name| name.column_name.clone()));
+            item.names = vec![ScopeItemName {
+                table_name: Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: table_name.clone(),
+                }),
+                column_name,
+                priority: false,
+            }];
+        }
+    }
+    Ok(scope)
 }
 
-fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
+fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
         Expr::Function(func) => func
@@ -1072,8 +1085,20 @@ fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
             .map(|n| normalize::column_name(n.clone())),
         Expr::Coalesce { .. } => Some("coalesce".into()),
         Expr::List { .. } => Some("list".into()),
-        Expr::Cast { expr, .. } => return invent_column_name(expr),
+        Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
+        Expr::Exists { .. } => Some("exists".into()),
+        Expr::Subquery(query) => {
+            // A bit silly to have to plan the query here just to get its column
+            // name, since we throw away the planned expression, but fixing this
+            // requires a separate semantic analysis phase.
+            let (_expr, scope) = plan_subquery(&ecx.derived_query_context(), query).ok()?;
+            scope
+                .items
+                .first()
+                .and_then(|item| item.names.first())
+                .and_then(|name| name.column_name.clone())
+        }
         _ => return None,
     };
     name.map(|n| ScopeItemName {
@@ -1157,7 +1182,7 @@ fn expand_select_item<'a>(
             let name = alias
                 .clone()
                 .map(normalize::column_name)
-                .or_else(|| invent_column_name(&expr).and_then(|n| n.column_name));
+                .or_else(|| invent_column_name(ecx, &expr).and_then(|n| n.column_name));
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
@@ -1751,6 +1776,23 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
             els: Box::new(ScalarExpr::literal_null(expr_typ)),
         };
     }
+
+    let mut seen_outer = false;
+    let mut seen_inner = false;
+    expr.visit_columns(0, &mut |depth, col| {
+        if col.level - depth == 0 {
+            seen_inner = true;
+        } else {
+            seen_outer = true;
+        }
+    });
+    if seen_outer && !seen_inner {
+        unsupported!(
+            3720,
+            "aggregate functions that refer exclusively to outer columns"
+        );
+    }
+
     Ok(AggregateExpr {
         func,
         expr: Box::new(expr),
@@ -1784,24 +1826,25 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, Pla
     // ask what table it came from. Stupid, but it works.
     let (exprs, field_names): (Vec<_>, Vec<_>) = ecx
         .scope
-        .items
+        .all_items()
         .iter()
-        .enumerate()
-        .filter(|(_i, item)| {
+        .filter(|(_level, _column, item)| {
             item.is_from_table(&PartialName {
                 database: None,
                 schema: None,
                 item: col_name.as_str().to_owned(),
             })
         })
-        .enumerate()
-        .map(|(i, (column, item))| {
-            let expr = ScalarExpr::Column(ColumnRef { level: 0, column });
+        .map(|(level, column, item)| {
+            let expr = ScalarExpr::Column(ColumnRef {
+                level: *level,
+                column: *column,
+            });
             let name = item
                 .names
                 .first()
                 .and_then(|n| n.column_name.clone())
-                .unwrap_or_else(|| ColumnName::from(format!("f{}", i + 1)));
+                .unwrap_or_else(|| ColumnName::from(format!("f{}", column + 1)));
             (expr, name)
         })
         .unzip();

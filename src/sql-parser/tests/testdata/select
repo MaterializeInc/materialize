@@ -511,28 +511,35 @@ SELECT * FROM a NATURAL JOIN (b NATURAL JOIN (c NATURAL JOIN d NATURAL JOIN e)) 
 ----
 SELECT * FROM a NATURAL JOIN (b NATURAL JOIN (c NATURAL JOIN d NATURAL JOIN e)) NATURAL JOIN (f NATURAL JOIN (g NATURAL JOIN h))
 =>
-Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("c")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("d")]), alias: None }, join_operator: Inner(Natural) }, Join { relation: Table { name: ObjectName([Ident("e")]), alias: None }, join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }, Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("f")]), alias: None }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("g")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("h")]), alias: None }, join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }), join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("c")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("d")]), alias: None }, join_operator: Inner(Natural) }, Join { relation: Table { name: ObjectName([Ident("e")]), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }, Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("f")]), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("g")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("h")]), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }, alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
 parse-statement
 SELECT * FROM (a NATURAL JOIN b) NATURAL JOIN c
 ----
 SELECT * FROM (a NATURAL JOIN b) NATURAL JOIN c
 =>
-Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), alias: None }, join_operator: Inner(Natural) }] }), joins: [Join { relation: Table { name: ObjectName([Ident("c")]), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("c")]), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+
+parse-statement
+SELECT * FROM (a NATURAL JOIN b) c NATURAL JOIN d
+----
+SELECT * FROM (a NATURAL JOIN b) AS c NATURAL JOIN d
+=>
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), alias: None }, join_operator: Inner(Natural) }] }, alias: Some(TableAlias { name: Ident("c"), columns: [], strict: false }) }, joins: [Join { relation: Table { name: ObjectName([Ident("d")]), alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
 parse-statement
 SELECT * FROM (((a NATURAL JOIN b)))
 ----
 SELECT * FROM (((a NATURAL JOIN b)))
 =>
-Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), alias: None }, join_operator: Inner(Natural) }] }), joins: [] }), joins: [] }), joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("b")]), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [] }, alias: None }, joins: [] }, alias: None }, joins: [] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
 parse-statement
 SELECT * FROM a NATURAL JOIN (((b NATURAL JOIN c)))
 ----
 SELECT * FROM a NATURAL JOIN (((b NATURAL JOIN c)))
 =>
-Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: NestedJoin(TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("c")]), alias: None }, join_operator: Inner(Natural) }] }), joins: [] }), joins: [] }), join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
+Select { query: Query { ctes: [], body: Select(Select { distinct: false, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: ObjectName([Ident("a")]), alias: None }, joins: [Join { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: NestedJoin { join: TableWithJoins { relation: Table { name: ObjectName([Ident("b")]), alias: None }, joins: [Join { relation: Table { name: ObjectName([Ident("c")]), alias: None }, join_operator: Inner(Natural) }] }, alias: None }, joins: [] }, alias: None }, joins: [] }, alias: None }, join_operator: Inner(Natural) }] }], selection: None, group_by: [], having: None }), order_by: [], limit: None, offset: None, fetch: None }, as_of: None }
 
 parse-statement
 SELECT * FROM (a NATURAL JOIN (b))

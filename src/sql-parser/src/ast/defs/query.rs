@@ -317,7 +317,10 @@ pub enum TableFactor {
     /// `(foo <JOIN> bar [ <JOIN> baz ... ])`.
     /// The inner `TableWithJoins` can have no joins only if its
     /// `relation` is itself a `TableFactor::NestedJoin`.
-    NestedJoin(Box<TableWithJoins>),
+    NestedJoin {
+        join: Box<TableWithJoins>,
+        alias: Option<TableAlias>,
+    },
 }
 
 impl AstDisplay for TableFactor {
@@ -356,10 +359,14 @@ impl AstDisplay for TableFactor {
                     f.write_node(alias);
                 }
             }
-            TableFactor::NestedJoin(table_reference) => {
+            TableFactor::NestedJoin { join, alias } => {
                 f.write_str("(");
-                f.write_node(table_reference);
+                f.write_node(join);
                 f.write_str(")");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
             }
         }
     }

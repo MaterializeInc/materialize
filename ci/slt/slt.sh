@@ -37,6 +37,7 @@ sqllogictest \
 sqllogictest \
     -v \
     test/sqllogictest/*.slt \
-    test/sqllogictest/transform/*.slt \
+    test/sqllogictest/postgres/*.slt \
     test/sqllogictest/sqlite/test \
+    test/sqllogictest/transform/*.slt \
     | tee -a target/slt.log

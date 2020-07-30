@@ -68,11 +68,11 @@ INSERT INTO tenk1 VALUES
 # absolutely fall over since the plans for a lot of these lateral joins are
 # absolutely horrible.
 
-# statement ok
-# CREATE TABLE onerow ()
+statement ok
+CREATE TABLE onerow ()
 
-# statement ok
-# INSERT INTO onerow DEFAULT VALUES
+statement ok
+INSERT INTO onerow DEFAULT VALUES
 
 query II colnames
 select unique2, x.*
@@ -101,22 +101,20 @@ NULL 2147483647
 
 # check scoping of lateral versus parent references
 # the first of these should return int8_tbl.q2, the second int8_tbl.q1
-# TODO(benesch): col name should be "r", not "?column?"
 query III colnames,rowsort
 select *, (select r from (select q1 as q2) x, (select q2 as r) y) from int8_tbl
 ----
-q1  q2  ?column?
+q1  q2  r
 123  456  456
 123  4567890123456789  4567890123456789
 4567890123456789  123  123
 4567890123456789  4567890123456789  4567890123456789
 4567890123456789  -4567890123456789  -4567890123456789
 
-# TODO(benesch): col name should be "r", not "?column?"
 query III colnames,rowsort
 select *, (select r from (select q1 as q2) x, lateral (select q2 as r) y) from int8_tbl;
 ----
-q1  q2  ?column?
+q1  q2  r
 123  456  123
 123  4567890123456789  123
 4567890123456789  123  4567890123456789
@@ -239,14 +237,12 @@ x f1 y
  2147483647  2147483647  2147483647
 -2147483647 -2147483647 -2147483647
 
-# TODO(benesch): parse failure.
-#
-# query III colnames
-# select * from ((select f1/2 as x from int4_tbl) ss1 join int4_tbl i4 on x = f1) j,
-#   lateral (select x) ss2(y);
-# ----
-# x f1 y
-# 0 0 0
+query III colnames
+select * from ((select f1/2 as x from int4_tbl) ss1 join int4_tbl i4 on x = f1) j,
+  lateral (select x) ss2(y);
+----
+x f1 y
+0 0 0
 
 # lateral references requiring pullup
 query II rowsort
@@ -413,35 +409,33 @@ vx  vy
 4567890123456789  4567890123456789
 4567890123456789  -4567890123456789
 
-# TODO(benesch): cannot construct onerow table.
-#
-# query II
-# select v.* from
-#   (int8_tbl x left join (select q1,(select coalesce(q2,0)) q2 from int8_tbl) y on x.q2 = y.q1)
-#   left join int4_tbl z on z.f1 = x.q2,
-#   lateral (select x.q1,y.q1 from onerow union all select x.q2,y.q2 from onerow) v(vx,vy);
-# ----
-# vx  vy
-# 4567890123456789  123
-# 123  456
-# 4567890123456789  123
-# 123  4567890123456789
-# 4567890123456789  4567890123456789
-# 4567890123456789  123
-# 123  4567890123456789
-# 4567890123456789  123
-# 4567890123456789  4567890123456789
-# 4567890123456789  4567890123456789
-# 123  4567890123456789
-# 4567890123456789  4567890123456789
-# 4567890123456789  4567890123456789
-# 4567890123456789  -4567890123456789
-# 123  4567890123456789
-# 4567890123456789  -4567890123456789
-# 123  NULL
-# 456  NULL
-# 4567890123456789  NULL
-# -4567890123456789  NULL
+query II colnames,rowsort
+select v.* from
+  (int8_tbl x left join (select q1,(select coalesce(q2,0)) q2 from int8_tbl) y on x.q2 = y.q1)
+  left join int4_tbl z on z.f1 = x.q2,
+  lateral (select x.q1,y.q1 from onerow union all select x.q2,y.q2 from onerow) v(vx,vy);
+----
+vx  vy
+4567890123456789  123
+123  456
+4567890123456789  123
+123  4567890123456789
+4567890123456789  4567890123456789
+4567890123456789  123
+123  4567890123456789
+4567890123456789  123
+4567890123456789  4567890123456789
+4567890123456789  4567890123456789
+123  4567890123456789
+4567890123456789  4567890123456789
+4567890123456789  4567890123456789
+4567890123456789  -4567890123456789
+123  4567890123456789
+4567890123456789  -4567890123456789
+123  NULL
+456  NULL
+4567890123456789  NULL
+-4567890123456789  NULL
 
 query IIIII rowsort
 select * from
@@ -489,18 +483,16 @@ f1  f1
 2147483647  NULL
 -2147483647  NULL
 
-# TODO(benesch): correlated table reference.
-#
-# query II colnames,rowsort
-# select * from int4_tbl i left join
-#   lateral (select coalesce(i) from int2_tbl j where i.f1 = j.f1) k on true;
-# ----
-# f1  coalesce
-# 0  (0)
-# 123456  NULL
-# -123456  NULL
-# 2147483647  NULL
-# -2147483647  NULL
+query IT colnames,rowsort
+select * from int4_tbl left join
+  lateral (select coalesce(int4_tbl) from int2_tbl j where int4_tbl.f1 = j.f1) k on true;
+----
+f1  coalesce
+0  (0)
+123456  NULL
+-123456  NULL
+2147483647  NULL
+-2147483647  NULL
 
 query IIII colnames,rowsort
 select * from int4_tbl a,
@@ -644,5 +636,13 @@ select f1,g from int4_tbl a full join lateral generate_series(0, a.f1) g on true
 #    int8_tbl x cross join (int4_tbl x cross join lateral (select x.f1) ss);
 
 # LATERAL can be used to put an aggregate into the FROM clause of its query
-# query error aggregate functions are not allowed in FROM clause of their own query level
-# select 1 from tenk1 a, lateral (select max(a.unique1) from int4_tbl b) ss;
+#
+# TODO(benesch): when we support aggregates that refer exclusively to outer
+# columns, this case should still be disallowed, but with the following error
+# message instead:
+#
+#     aggregate functions are not allowed in FROM clause of their own query level
+#
+# See: https://www.postgresql.org/message-id/1375925710.17807.13.camel%40vanquo.pezone.net
+query error aggregate functions that refer exclusively to outer columns not yet supported
+select 1 from tenk1 a, lateral (select max(a.unique1) from int4_tbl b) ss;

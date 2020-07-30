@@ -651,8 +651,6 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 
 EOF
 
-
-
 statement ok
 CREATE TABLE xs (x int not null)
 
@@ -687,3 +685,6 @@ from ys
 0  -1
 1  -1
 2  1
+
+query error aggregate functions that refer exclusively to outer columns not yet supported
+SELECT (SELECT count(likes.likee)) FROM likes

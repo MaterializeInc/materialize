@@ -155,6 +155,7 @@ tests=(
     test/sqllogictest/cockroach/window.slt
     test/sqllogictest/cockroach/with.slt
     # test/sqllogictest/cockroach/zero.slt
+    test/sqllogictest/postgres/join-lateral.slt
 )
 
 if [[ "${BUILDKITE-}" ]]; then
