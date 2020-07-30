@@ -304,8 +304,9 @@ pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S+00"));
+    write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
     format_nanos(buf, ts.timestamp_subsec_nanos());
+    write!(buf, "+00");
     // NOTE(benesch): this may be overly conservative. Perhaps timestamptzs
     // never have special characters.
     Nestable::MayNeedEscaping
