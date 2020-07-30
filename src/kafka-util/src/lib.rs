@@ -9,4 +9,6 @@
 
 mod addr;
 
+pub mod admin;
+
 pub use addr::{KafkaAddr, KafkaAddrParseError};

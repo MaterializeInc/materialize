@@ -1,13 +1,13 @@
 [package]
 name = "kafka-util"
 version = "0.1.0"
-authors = ["Brennan Vincent <brennan@materialize.io>"]
 edition = "2018"
 publish = false
 
 [dependencies]
 anyhow = "1.0"
 clap = "2.33"
+ore = { path = "../../src/ore" }
 rand = "0.7"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 serde = { version = "1.0", features = ["derive"] }

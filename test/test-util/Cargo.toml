@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.32"
 chrono = "0.4.13"
+kafka-util = { path = "../../src/kafka-util" }
 log = "0.4.11"
 ore = { path = "../../src/ore" }
 rand = "0.7.3"
