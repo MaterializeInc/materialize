@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Helpers for working with Kafka's admin API.
+
 use std::error::Error;
 use std::fmt;
 use std::iter;
@@ -19,6 +21,21 @@ use rdkafka::error::{KafkaError, RDKafkaError};
 use ore::collections::CollectionExt;
 use ore::retry;
 
+/// Creates a Kafka topic and waits for it to be reported in the broker
+/// metadata.
+///
+/// This function is a wrapper around [`AdminClient::create_topics`] that
+/// attempts to ensure the topic creation has propagated throughout the Kafka
+/// cluster before returning. Kafka topic creation is asynchronous, so
+/// attempting to consume from or produce to a topic immediately after its
+/// creation can result in "unknown topic" errors.
+///
+/// This function does not return successfully unless it can find the metadata
+/// for the newly-created topic in a call to [`Client::fetch_metadata`] and
+/// verify that the metadata reports the topic has the number of partitions
+/// requested in `new_topic`. Empirically, this seems to be the condition that
+/// guarantees that future attempts to consume from or produce to the topic will
+/// succeed.
 pub async fn create_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
@@ -67,12 +84,23 @@ where
     .await
 }
 
+/// An error while creating a Kafka topic.
 #[derive(Debug)]
 pub enum CreateTopicError {
+    /// An error from the underlying Kafka library.
     Kafka(KafkaError),
+    /// Topic creation returned the wrong number of results.
     TopicCountMismatch(usize),
+    /// The topic metadata could not be fetched after the topic was created.
     MissingMetadata,
-    PartitionCountMismatch { expected: i32, actual: i32 },
+    /// The topic metadata reported a number of partitions that did not match
+    /// the number of partitions in the topic creation request.
+    PartitionCountMismatch {
+        /// The requested number of partitions.
+        expected: i32,
+        /// The reported number of partitions.
+        actual: i32,
+    },
 }
 
 impl fmt::Display for CreateTopicError {
