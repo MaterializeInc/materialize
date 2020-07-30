@@ -105,3 +105,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 
 > SELECT TIMESTAMPTZ '1989-06-01 9:10:10.410+700'
 "1989-06-01 02:10:10.410 UTC"
+
+> SELECT '1989-06-01 10:10:10.410+04:00'::timestamptz::text
+"1989-06-01 06:10:10.41+00"
+
+> SELECT '1989-06-01 10:10:10.413+04:00'::timestamptz::text
+"1989-06-01 06:10:10.413+00"
