@@ -39,7 +39,7 @@ pub struct BuiltinCommand {
 }
 
 #[derive(Debug, Clone)]
-pub enum SqlExpectedResult {
+pub enum SqlOutput {
     Full {
         column_names: Vec<String>,
         expected_rows: Vec<Vec<String>>,
@@ -52,7 +52,7 @@ pub enum SqlExpectedResult {
 #[derive(Debug, Clone)]
 pub struct SqlCommand {
     pub query: String,
-    pub expected_result: SqlExpectedResult,
+    pub expected_output: SqlOutput,
 }
 
 #[derive(Debug, Clone)]
@@ -155,7 +155,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
                 Ok(num_values) => {
                     return Ok(SqlCommand {
                         query,
-                        expected_result: SqlExpectedResult::Hashed {
+                        expected_output: SqlOutput::Hashed {
                             num_values,
                             md5: captures[2].to_owned(),
                         },
@@ -177,7 +177,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     }
     Ok(SqlCommand {
         query,
-        expected_result: SqlExpectedResult::Full {
+        expected_output: SqlOutput::Full {
             column_names,
             expected_rows,
         },

@@ -28,7 +28,7 @@ use url::Url;
 use repr::strconv;
 
 use crate::error::{Error, InputError, ResultExt};
-use crate::parser::{Command, PosCommand, SqlExpectedResult};
+use crate::parser::{Command, PosCommand, SqlOutput};
 use crate::util;
 
 mod avro_ocf;
@@ -320,7 +320,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             }
             Command::Sql(mut sql) => {
                 sql.query = subst(&sql.query)?;
-                if let SqlExpectedResult::Full { expected_rows, .. } = &mut sql.expected_result {
+                if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
                         for col in row {
                             *col = subst(col)?;
