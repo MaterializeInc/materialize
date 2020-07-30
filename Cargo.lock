@@ -641,6 +641,7 @@ dependencies = [
  "futures",
  "interchange",
  "itertools",
+ "kafka-util",
  "lazy_static",
  "log",
  "mz-avro",
@@ -682,6 +683,7 @@ dependencies = [
  "comm",
  "expr",
  "interchange",
+ "kafka-util",
  "log",
  "regex",
  "repr",
@@ -1486,6 +1488,7 @@ dependencies = [
  "clap",
  "rand",
  "rdkafka",
+ "serde",
 ]
 
 [[package]]
