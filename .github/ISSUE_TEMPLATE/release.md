@@ -52,6 +52,10 @@ production readiness.
 
   - [ ] Open a PR, and land it.
 
+- [ ] Create an issue and assign it to the @MaterializeInc/relnotes team to review the
+  Release Notes and (if applicable) the Release Announcement. All members of the team
+  should leave a comment stating that the release looks good.
+
 
 ### Test the release candidate
 
@@ -138,12 +142,10 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
   - [ ] Add the version to the website's list of versions in [`doc/user/config.toml`].
 
-  - [ ] If this release includes a release announcement, check that everything (if it
-    [makes sense]) in the announcement (which should be unpublished in [our
-    blog][]) is in the [Release Notes].
+  - [ ] Ensure that the issue for checking the release notes has been closed.
 
-  - [ ] Ensure that the announcement blog post has been published and announced, by
-    pinging the PM in `#release`.
+  - [ ] (If applicable) Ensure that the announcement blog post has been published and
+    announced, by pinging the PM in `#release`.
 
 ## Finish
 
