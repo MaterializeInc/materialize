@@ -260,7 +260,7 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", t.format("%H:%M:%S"));
-    format_nanos(buf, t.nanosecond());
+    format_nanos_to_micros(buf, t.nanosecond());
     // NOTE(benesch): this may be overly conservative. Perhaps times never
     // have special characters.
     Nestable::MayNeedEscaping
@@ -280,7 +280,7 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
-    format_nanos(buf, ts.timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
     // NOTE(benesch): this may be overly conservative. Perhaps timestamps never
     // have special characters.
     Nestable::MayNeedEscaping
@@ -305,7 +305,7 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
-    format_nanos(buf, ts.timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
     write!(buf, "+00");
     // NOTE(benesch): this may be overly conservative. Perhaps timestamptzs
     // never have special characters.
@@ -445,17 +445,23 @@ where
     write!(buf, "{:#}", jsonb)
 }
 
-fn format_nanos<F>(buf: &mut F, mut nanos: u32)
+fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
 where
     F: FormatBuffer,
 {
     if nanos > 0 {
-        let mut width = 9;
-        while nanos % 10 == 0 {
-            width -= 1;
-            nanos /= 10;
+        let mut micros = nanos / 1000;
+        let rem = nanos % 1000;
+        if rem >= 500 {
+            micros += 1;
         }
-        write!(buf, ".{:0width$}", nanos, width = width);
+        // strip trailing zeros
+        let mut width = 6;
+        while micros % 10 == 0 {
+            width -= 1;
+            micros /= 10;
+        }
+        write!(buf, ".{:0width$}", micros, width = width);
     }
 }
 
