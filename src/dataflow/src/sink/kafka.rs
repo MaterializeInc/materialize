@@ -212,7 +212,7 @@ where
     let sink_hash = id.hashed();
 
     let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &connector.url.to_string());
+    config.set("bootstrap.servers", &connector.addr.to_string());
 
     // Increase limits for the Kafka producer's internal buffering of messages
     // Currently we don't have a great backpressure mechanism to tell indexes or

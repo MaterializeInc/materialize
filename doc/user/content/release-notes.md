@@ -49,7 +49,8 @@ Wrap your release notes at the 80 character mark.
 <span id="v0.4.1"></span>
 ## v0.4.1 (Unreleased)
 
-No release notes yet.
+- Permit broker addresses in [Kafka sources](/sql/create-source/avro-kafka/) and
+  [Kafka sinks](/sql/create-sink/) to use IP addresses in addition to hostnames.
 
 <span id="v0.4.0"></span>
 ## v0.4.0

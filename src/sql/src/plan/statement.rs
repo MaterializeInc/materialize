@@ -714,7 +714,7 @@ fn handle_show_create_index(
 fn kafka_sink_builder(
     format: Option<Format>,
     with_options: Vec<SqlOption>,
-    mut broker: String,
+    broker: String,
     topic_prefix: String,
     desc: RelationDesc,
     topic_suffix: String,
@@ -736,10 +736,7 @@ fn kafka_sink_builder(
         _ => unsupported!("non-confluent schema registry avro sinks"),
     };
 
-    if !broker.contains(':') {
-        broker += ":9092";
-    }
-    let broker_url = broker.parse()?;
+    let broker_addr = broker.parse()?;
 
     let mut with_options = normalize::with_options(&with_options);
     let include_consistency = match with_options.remove("consistency") {
@@ -769,7 +766,7 @@ fn kafka_sink_builder(
     };
 
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
-        broker_url,
+        broker_addr,
         schema_registry_url,
         value_schema,
         topic_prefix,
@@ -1281,7 +1278,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     }
 
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                        url: broker.parse()?,
+                        addr: broker.parse()?,
                         topic: topic.clone(),
                         config_options,
                         start_offset,

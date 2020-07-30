@@ -10,3 +10,4 @@ anyhow = "1.0"
 clap = "2.33"
 rand = "0.7"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+serde = { version = "1.0", features = ["derive"] }

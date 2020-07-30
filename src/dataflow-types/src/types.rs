@@ -31,6 +31,7 @@ use expr::{
 };
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
+use kafka_util::KafkaAddr;
 use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
 
 /// System-wide timestamp type.
@@ -560,7 +561,7 @@ impl Into<KafkaOffset> for MzOffset {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnector {
-    pub url: Url,
+    pub addr: KafkaAddr,
     pub topic: String,
     // Represents options specified by user when creating the source, e.g.
     // security settings.
@@ -601,7 +602,7 @@ pub struct KafkaSinkConsistencyConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnector {
-    pub url: Url,
+    pub addr: KafkaAddr,
     pub topic: String,
     pub schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
@@ -650,7 +651,7 @@ pub struct AvroOcfSinkConnectorBuilder {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectorBuilder {
-    pub broker_url: Url,
+    pub broker_addr: KafkaAddr,
     pub schema_registry_url: Url,
     pub value_schema: String,
     pub topic_prefix: String,
