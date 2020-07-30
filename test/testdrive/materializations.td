@@ -37,8 +37,8 @@ Unable to automatically determine a timestamp for your query; this can happen if
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW FULL VIEWS
-name        type     queryable   materialized
-------------------------------------------------
+VIEWS       TYPE     QUERYABLE   MATERIALIZED
+---------------------------------------------
 data_view   USER     false       false
 test1       USER     true        true
 
@@ -71,7 +71,7 @@ sum   YES      int8
 data_view
 
 > SHOW CREATE VIEW test1
-View                      Create View
+View                      "Create View"
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT \"b\", \"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
@@ -149,8 +149,8 @@ b  c
 2  1
 
 > SELECT c+b from test5
-c+b
-------
+?column?
+--------
 4
 3
 
@@ -173,8 +173,8 @@ b  c
 2  1
 
 > SELECT c-b from test5
-c-b
-------
+?column?
+--------
 2
 -1
 
@@ -308,8 +308,8 @@ a  b
 > DROP INDEX mat_data_primary_idx
 
 > SELECT a+b from mat_data
-a+b
-----
+?column?
+--------
 -1
 0
 7
@@ -375,7 +375,7 @@ count
 8
 
 > SELECT * from test8
-a    b
+c    d
 ------
 0    1
 -1   1

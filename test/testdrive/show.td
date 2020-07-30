@@ -199,7 +199,7 @@ VIEWS        TYPE  QUERYABLE
 names_view   USER  true
 
 > SHOW FULL SOURCES FROM mz_catalog
-VIEWS                             TYPE   MATERIALIZED
+SOURCES                           TYPE   MATERIALIZED
 -----------------------------------------------------
 mz_arrangement_sharing            SYSTEM true
 mz_arrangement_sizes              SYSTEM true

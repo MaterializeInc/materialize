@@ -146,8 +146,8 @@ b  sum
 1  10
 
 > SELECT * FROM join;
-a  a  b
-------
+b sum sum
+---------
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
@@ -173,8 +173,8 @@ b  sum
 3  30
 
 > SELECT * FROM join;
-a  a  b
-------
+b sum sum
+---------
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
@@ -189,7 +189,7 @@ b  sum
 4  4
 
 > SELECT * FROM join;
-a  a  b
-------
+b sum sum
+---------
 1  1  10
 3  3  30

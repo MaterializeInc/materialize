@@ -133,7 +133,7 @@ b  sum
 1  10
 
 > SELECT * FROM join;
-a  a  b
+b sum sum
 ------
 1  1  10
 
@@ -160,7 +160,7 @@ b  sum
 3  30
 
 > SELECT * FROM join;
-a  a  b
+b sum sum
 ------
 1  1  10
 
@@ -176,7 +176,7 @@ b  sum
 4  4
 
 > SELECT * FROM join;
-a  a  b
+b sum sum
 ------
 1  1  10
 3  3  30

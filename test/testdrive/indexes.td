@@ -186,6 +186,6 @@ materialize.public.data_view  materialize.public.data_view_primary_idx   <null> 
 materialize.public.data_view  materialize.public.data_view_primary_idx   a            <null>      false             2
 
 > SHOW CREATE INDEX materialize.public.data_view_primary_idx
-Index                                    Create Index
+Index                                    "Create Index"
 --------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\" ON \"materialize\".\"public\".\"data_view\" (\"b\" - \"a\", \"a\")"

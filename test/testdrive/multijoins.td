@@ -123,8 +123,8 @@ $ kafka-ingest format=avro topic=plurals schema=${plurals-schema} timestamp=2
   SELECT * FROM names, mods, plurals WHERE names.num = mods.num AND names.name = plurals.num;
 
 > SELECT * FROM test1;
-num name num mod num plurals
-----------------------------
+num name num mod num noun
+-------------------------
 1 one 1 odd one sheep
 1 one 1 odd one mouse
 2 two 2 even two sheep
@@ -135,8 +135,8 @@ num name num mod num plurals
   WHERE names.num = mods.num AND names.name = plurals.num AND plurals.num = 'one';
 
 > SELECT * FROM test2;
-num name num mod num plurals
-----------------------------
+num name num mod num noun
+-------------------------
 1 one 1 odd one sheep
 1 one 1 odd one mouse
 
@@ -146,8 +146,8 @@ num name num mod num plurals
   LEFT JOIN plurals ON names.name = plurals.num;
 
 > SELECT * FROM test3;
-num name num mod num plurals
-----------------------------
+num name num mod num noun
+-------------------------
 <null> <null> 0 even <null> <null>
 1 one 1 odd one sheep
 1 one 1 odd one mouse
@@ -159,7 +159,7 @@ num name num mod num plurals
   WHERE names.num = mods.num AND names.name = foo.num AND foo.num = 'one';
 
 > SELECT * FROM test4;
-num name num mod num plurals
-----------------------------
+num name num mod num noun
+-------------------------
 1 one 1 odd one sheep
 1 one 1 odd one mouse

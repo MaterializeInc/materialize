@@ -11,8 +11,8 @@
 > SHOW SCHEMAS
 public
 > SHOW EXTENDED SCHEMAS
-Schema
-----
+SCHEMAS
+-------
 public
 mz_temp
 mz_catalog
@@ -21,8 +21,8 @@ pg_catalog
 # Creating a schema should be reflected in the output of SHOW SCHEMAS.
 > CREATE SCHEMA s
 > SHOW SCHEMAS
-Schema
-----
+SCHEMAS
+-------
 public
 s
 
@@ -62,23 +62,23 @@ database 'd' already exists
 
 # The new database should have a default public schema.
 > SHOW SCHEMAS FROM d
-Schema
-----
+SCHEMAS
+-------
 public
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
 > CREATE SCHEMA d.s
 > SHOW SCHEMAS FROM d
-Schema
-----
+SCHEMAS
+-------
 public
 s
 
 # New views in the database should work.
 > CREATE MATERIALIZED VIEW d.public.v1 AS SELECT 1
 > SHOW VIEWS FROM d.public
-View
-----
+VIEWS
+-----
 v1
 
 # Setting the session database should update name resolution appropriately.
