@@ -19,7 +19,50 @@ Detail | Info
 
 ## Syntax
 
+### Standard
+
 {{< diagram "type-text.svg" >}}
+
+To escape a single quote character (`'`) in a standard string literal, write
+two adjacent single quotes:
+
+```sql
+SELECT 'single''quote' AS output
+```
+```nofmt
+   output
+------------
+single'quote
+```
+
+All other characters are taken literally.
+
+### Escape
+
+A string literal that is preceded by an `e` or `E` is an "escape" string
+literal:
+
+{{< diagram "type-escape-text.svg" >}}
+
+Escape string literals follow the same rules as standard string literals, except
+that backslash character (`\`) starts an escape sequence. The following escape
+sequences are recognized:
+
+Escape sequence | Meaning
+----------------|--------
+`\b`  | Backspace
+`\f`  | Form feed
+`\n`  | Newline
+`\r`  | Carriage return
+`\t`  | Tab
+`\uXXXX`, `\UXXXXXXXX`  | Unicode codepoint, where `X` is a hexadecimal digit
+
+Any other character following a backslash is taken literally, so `\\` specifies
+a literal backslash, and `\'` is an alternate means of escaping the single quote
+character.
+
+Unlike in PostgreSQL, there are no escapes that produce arbitrary byte values,
+in order to ensure that escape string literals are always valid UTF-8.
 
 ## Details
 
@@ -43,4 +86,16 @@ SELECT 'hello' AS text_val;
  text_val
 ---------
  hello
+```
+
+<hr>
+
+```sql
+SELECT E'behold\nescape strings\U0001F632' AS escape_val;
+```
+```nofmt
+   escape_val
+-----------------
+ behold         +
+ escape strings😲
 ```
