@@ -1,5 +1,5 @@
 ---
-title: "What is Materialize?"
+title: "What Is Materialize?"
 description: "Learn more about Materialize"
 menu:
   main:
