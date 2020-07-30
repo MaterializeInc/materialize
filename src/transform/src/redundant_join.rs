@@ -29,7 +29,9 @@ impl crate::Transform for RedundantJoin {
         relation: &mut RelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
+        // println!("PRE: {}", relation.pretty());
         self.action(relation, &mut HashMap::new());
+        // println!("PST: {}", relation.pretty());
         Ok(())
     }
 }
@@ -292,6 +294,7 @@ fn find_redundancy(
     equivalences: &[Vec<ScalarExpr>],
     input_prov: &[Vec<ProvInfo>],
 ) -> Option<Vec<usize>> {
+
     // println!();
     // println!("Input: {}", input);
     // println!("Arities: {:?}", input_arities);
@@ -335,6 +338,9 @@ fn find_redundancy(
                             let binding = (0..input_arities[input])
                                 .map(|c| bindings[&c])
                                 .collect::<Vec<_>>();
+                            // println!("Found redundancy for {:?}", input);
+                            // println!("\tother: {:?}", other);
+                            // println!("\tbinding: {:?}", binding);
                             return Some(binding);
                         }
                     }
