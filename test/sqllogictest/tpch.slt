@@ -237,32 +237,32 @@ ORDER BY
 | Get %5
 
 %7 =
-| Get %5
-| Distinct group=(#0)
-| ArrangeBy (#0)
-
-%8 =
 | Get materialize.public.partsupp (u11)
 | ArrangeBy (#0) (#1)
 
-%9 =
+%8 =
 | Get materialize.public.supplier (u8)
 | ArrangeBy (#0) (#3)
 
-%10 =
+%9 =
 | Get materialize.public.nation (u1)
 | ArrangeBy (#0) (#2)
+
+%10 =
+| Get %5
+| Distinct group=(#0)
+| ArrangeBy (#0)
 
 %11 =
 | Get materialize.public.region (u4)
 | ArrangeBy (#0)
 
 %12 =
-| Join %7 %8 %9 %10 %11 (= #0 #1) (= #2 #6) (= #9 #13) (= #15 #17)
-| | implementation = DeltaQuery %7 %8.(#0) %9.(#0) %10.(#0) %11.(#0) | %8 %7.(#0) %9.(#0) %10.(#0) %11.(#0) | %9 %10.(#0) %11.(#0) %8.(#1) %7.(#0) | %10 %11.(#0) %9.(#3) %8.(#1) %7.(#0) | %11 %10.(#2) %9.(#3) %8.(#1) %7.(#0)
-| | demand = (#0, #4, #18)
+| Join %7 %8 %9 %10 %11 (= #0 #16) (= #1 #5) (= #8 #12) (= #14 #17)
+| | implementation = DeltaQuery %7 %8.(#0) %9.(#0) %10.(#0) %11.(#0) | %8 %9.(#0) %11.(#0) %7.(#1) %10.(#0) | %9 %11.(#0) %8.(#3) %7.(#1) %10.(#0) | %10 %7.(#0) %8.(#0) %9.(#0) %11.(#0) | %11 %9.(#2) %8.(#3) %7.(#1) %10.(#0)
+| | demand = (#0, #3, #18)
 | Filter (#18 = "EUROPE")
-| Reduce group=(#0) min(#4)
+| Reduce group=(#0) min(#3)
 | ArrangeBy (#0, #1)
 
 %13 =
@@ -1183,12 +1183,8 @@ ORDER BY
 | Union %7 %8
 
 %10 =
-| Get %3
-| ArrangeBy (#0)
-
-%11 =
-| Join %4 %9 %10 (= #1 #14 #15)
-| | implementation = Differential %9 %10.(#0) %4.(#1)
+| Join %4 %9 (= #1 #14)
+| | implementation = Differential %9 %4.(#1)
 | | demand = (#1, #8..#10)
 | Reduce group=(#8, #9, #10) count(distinct #1)
 
@@ -1501,64 +1497,51 @@ ORDER BY
 | Get materialize.public.partsupp (u11)
 
 %5 =
-| Join %3 %4
-| | implementation = Differential %4 %3.()
-| | demand = (#0, #11..#13)
-
-%6 =
-| Get %5
-
-%7 =
-| Get %5
-| Distinct group=(#11)
-| ArrangeBy (#0)
-
-%8 =
 | Get materialize.public.part (u6)
 | ArrangeBy (#0)
 
-%9 =
-| Join %6 %7 %8 (= #11 #16 #17)
-| | implementation = Differential %6 %7.(#0) %8.(#0)
-| | demand = (#0, #11..#13, #18)
-| Filter "^forest.*$" ~(#18)
+%6 =
+| Join %3 %4 %5 (= #11 #16)
+| | implementation = Differential %4 %5.(#0) %3.()
+| | demand = (#0, #11..#13, #17)
+| Filter "^forest.*$" ~(#17)
 
-%10 =
+%7 =
 | Get %2
 
-%11 =
-| Get %9
+%8 =
+| Get %6
 | Filter (#0 = #12)
 
-%12 =
-| Get %9
+%9 =
+| Get %6
 | Distinct group=(#11, #12)
 | ArrangeBy (#0, #1)
 
-%13 =
+%10 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#1, #2)
 
-%14 =
-| Join %12 %13 (= #1 #4) (= #0 #3)
-| | implementation = DeltaQuery %12 %13.(#1, #2) | %13 %12.(#0, #1)
+%11 =
+| Join %9 %10 (= #1 #4) (= #0 #3)
+| | implementation = DeltaQuery %9 %10.(#1, #2) | %10 %9.(#0, #1)
 | | demand = (#0, #1, #6, #12)
 | Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
 | Reduce group=(#0, #1) sum(#6)
 | Map (5dec * #2)
 | ArrangeBy (#0, #1)
 
-%15 =
-| Join %11 %14 (= #11 #26) (= #12 #27)
-| | implementation = Differential %11 %14.(#0, #1)
-| | demand = (#0, #13, #29)
-| Filter ((i32todec(#13) * 1000dec) > #29)
+%12 =
+| Join %8 %11 (= #11 #25) (= #12 #26)
+| | implementation = Differential %8 %11.(#0, #1)
+| | demand = (#0, #13, #28)
+| Filter ((i32todec(#13) * 1000dec) > #28)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%16 =
-| Join %10 %15 (= #0 #11)
-| | implementation = Differential %10 %15.(#0)
+%13 =
+| Join %7 %12 (= #0 #11)
+| | implementation = Differential %7 %12.(#0)
 | | demand = (#1, #2)
 | Project (#1, #2)
 
@@ -1685,12 +1668,8 @@ ORDER BY
 | Union %14 %15
 
 %17 =
-| Get %10
-| ArrangeBy (#0, #1)
-
-%18 =
-| Join %11 %16 %17 (= #0 #39 #41) (= #7 #38 #40)
-| | implementation = Differential %16 %17.(#0, #1) %11.(#0, #7)
+| Join %11 %16 (= #0 #39) (= #7 #38)
+| | implementation = Differential %16 %11.(#0, #7)
 | | demand = (#1)
 | Reduce group=(#1) countall(true)
 
@@ -1793,8 +1772,12 @@ ORDER BY
 | Union %6 %7
 
 %9 =
-| Join %3 %8 (= #0 #11)
-| | implementation = Differential %8 %3.(#0)
+| Get %2
+| ArrangeBy (#0)
+
+%10 =
+| Join %3 %8 %9 (= #0 #11 #12)
+| | implementation = Differential %8 %3.(#0) %9.(#0)
 | | demand = (#4, #5)
 | Reduce group=(substr(#4, 1, 2)) countall(true) sum(#5)
 
