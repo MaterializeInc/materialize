@@ -22,4 +22,4 @@ rusoto_kinesis = "0.45.0"
 structopt = "0.3.15"
 tokio = { version = "0.2.22", features = ["full"] }
 tokio-postgres = "0.5.5"
-test-util = { path = "../../test-util" }
+test-util = { path = "../../../src/test-util" }
