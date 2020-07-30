@@ -88,7 +88,7 @@ async fn build_kafka(
 
     // Create Kafka topic with single partition.
     let mut config = ClientConfig::new();
-    config.set("bootstrap.servers", &builder.broker_url.to_string());
+    config.set("bootstrap.servers", &builder.broker_addr.to_string());
     let client = config
         .create::<AdminClient<_>>()
         .expect("creating admin client failed");
@@ -127,7 +127,7 @@ async fn build_kafka(
     Ok(SinkConnector::Kafka(KafkaSinkConnector {
         schema_id,
         topic,
-        url: builder.broker_url,
+        addr: builder.broker_addr,
         consistency,
         fuel: builder.fuel,
         frontier,

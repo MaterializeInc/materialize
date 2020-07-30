@@ -22,6 +22,7 @@ failure = "0.1"
 futures = "0.3"
 interchange = { path = "../interchange" }
 itertools = "0.9"
+kafka-util = { path = "../kafka-util" }
 lazy_static = "1.4"
 log = "0.4"
 notify = "4.0"
