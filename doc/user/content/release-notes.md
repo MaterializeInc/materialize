@@ -52,6 +52,15 @@ Wrap your release notes at the 80 character mark.
 - Permit broker addresses in [Kafka sources](/sql/create-source/avro-kafka/) and
   [Kafka sinks](/sql/create-sink/) to use IP addresses in addition to hostnames.
 
+- Expose [monitoring metrics](/ops/monitoring) for per-thread CPU usage {{% gh 3733 %}}.
+
+- Ensure correlated subqueries in CASE statement branches that are not taken
+  do not trigger errors {{% gh 3736 %}}.
+
+- Reduce memory overhead of the built-in logging views {{% gh 3752 %}}.
+
+- Improve performance of `TopK` operator {{% gh 3758 %}}.
+
 <span id="v0.4.0"></span>
 ## v0.4.0
 
