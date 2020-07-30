@@ -35,6 +35,11 @@ name = "SQL"
 weight = 60
 
 [[menu.main]]
+identifier = "operations"
+name = "Operations"
+weight = 80
+
+[[menu.main]]
 identifier = "demos"
 name = "Demos"
 weight = 100
