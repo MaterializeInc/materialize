@@ -237,32 +237,32 @@ ORDER BY
 | Get %5
 
 %7 =
-| Get materialize.public.partsupp (u11)
-| ArrangeBy (#0) (#1)
-
-%8 =
-| Get materialize.public.supplier (u8)
-| ArrangeBy (#0) (#3)
-
-%9 =
-| Get materialize.public.nation (u1)
-| ArrangeBy (#0) (#2)
-
-%10 =
 | Get %5
 | Distinct group=(#0)
 | ArrangeBy (#0)
+
+%8 =
+| Get materialize.public.partsupp (u11)
+| ArrangeBy (#0) (#1)
+
+%9 =
+| Get materialize.public.supplier (u8)
+| ArrangeBy (#0) (#3)
+
+%10 =
+| Get materialize.public.nation (u1)
+| ArrangeBy (#0) (#2)
 
 %11 =
 | Get materialize.public.region (u4)
 | ArrangeBy (#0)
 
 %12 =
-| Join %7 %8 %9 %10 %11 (= #0 #16) (= #1 #5) (= #8 #12) (= #14 #17)
-| | implementation = DeltaQuery %7 %8.(#0) %9.(#0) %10.(#0) %11.(#0) | %8 %9.(#0) %11.(#0) %7.(#1) %10.(#0) | %9 %11.(#0) %8.(#3) %7.(#1) %10.(#0) | %10 %7.(#0) %8.(#0) %9.(#0) %11.(#0) | %11 %9.(#2) %8.(#3) %7.(#1) %10.(#0)
-| | demand = (#0, #3, #18)
+| Join %7 %8 %9 %10 %11 (= #0 #1) (= #2 #6) (= #9 #13) (= #15 #17)
+| | implementation = DeltaQuery %7 %8.(#0) %9.(#0) %10.(#0) %11.(#0) | %8 %7.(#0) %9.(#0) %10.(#0) %11.(#0) | %9 %10.(#0) %11.(#0) %8.(#1) %7.(#0) | %10 %11.(#0) %9.(#3) %8.(#1) %7.(#0) | %11 %10.(#2) %9.(#3) %8.(#1) %7.(#0)
+| | demand = (#0, #4, #18)
 | Filter (#18 = "EUROPE")
-| Reduce group=(#0) min(#3)
+| Reduce group=(#0) min(#4)
 | ArrangeBy (#0, #1)
 
 %13 =
@@ -1750,32 +1750,32 @@ ORDER BY
 | ArrangeBy (#0)
 
 %4 =
+| Get %2
+| ArrangeBy (#0)
+
+%5 =
 | Get materialize.public.orders (u18)
 | ArrangeBy (#1)
 
-%5 =
-| Join %3 %4 (= #0 #12)
-| | implementation = DeltaQuery %3 %4.(#1) | %4 %3.(#0)
+%6 =
+| Join %4 %5 (= #0 #12)
+| | implementation = DeltaQuery %4 %5.(#1) | %5 %4.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 | Negate
 
-%6 =
+%7 =
 | Get %2
 | Project (#0)
 
-%7 =
-| Union %5 %6
-
 %8 =
-| Get %2
-| ArrangeBy (#0)
+| Union %6 %7
 
 %9 =
-| Join %7 %8 (= #0 #1)
-| | implementation = Differential %7 %8.(#0)
-| | demand = (#5, #6)
-| Reduce group=(substr(#5, 1, 2)) countall(true) sum(#6)
+| Join %3 %8 (= #0 #11)
+| | implementation = Differential %8 %3.(#0)
+| | demand = (#4, #5)
+| Reduce group=(substr(#4, 1, 2)) countall(true) sum(#5)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
 
