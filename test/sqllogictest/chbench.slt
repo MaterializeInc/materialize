@@ -912,20 +912,10 @@ ORDER BY custdist DESC, c_count DESC
 
 %6 =
 | Union %4 %5
+| Map null, null, null, null, null, null, null, null
 
 %7 =
-| Get materialize.public.customer (u6)
-| ArrangeBy (#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21)
-
-%8 =
-| Join %6 %7 (= #0 #22) (= #1 #23) (= #2 #24) (= #3 #25) (= #4 #26) (= #5 #27) (= #6 #28) (= #7 #29) (= #8 #30) (= #9 #31) (= #10 #32) (= #11 #33) (= #12 #34) (= #13 #35) (= #14 #36) (= #15 #37) (= #16 #38) (= #17 #39) (= #18 #40) (= #19 #41) (= #20 #42) (= #21 #43)
-| | implementation = Differential %6 %7.(#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21)
-| | demand = (#0)
-| Map null, null, null, null, null, null, null, null
-| Project (#0..#21, #44..#51)
-
-%9 =
-| Union %3 %8
+| Union %3 %6
 | Reduce group=(#0) count(#22)
 | Reduce group=(#1) countall(true)
 

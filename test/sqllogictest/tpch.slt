@@ -966,20 +966,10 @@ ORDER BY
 
 %6 =
 | Union %4 %5
+| Map null, null, null, null, null, null, null, null, null
 
 %7 =
-| Get materialize.public.customer (u15)
-| ArrangeBy (#0, #1, #2, #3, #4, #5, #6, #7)
-
-%8 =
-| Join %6 %7 (= #0 #8) (= #1 #9) (= #2 #10) (= #3 #11) (= #4 #12) (= #5 #13) (= #6 #14) (= #7 #15)
-| | implementation = Differential %6 %7.(#0, #1, #2, #3, #4, #5, #6, #7)
-| | demand = (#0)
-| Map null, null, null, null, null, null, null, null, null
-| Project (#0..#7, #16..#24)
-
-%9 =
-| Union %3 %8
+| Union %3 %6
 | Reduce group=(#0) count(#8)
 | Reduce group=(#1) countall(true)
 
