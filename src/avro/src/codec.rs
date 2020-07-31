@@ -75,9 +75,9 @@ impl Codec {
             Codec::Snappy => {
                 use byteorder::ByteOrder;
 
-                let mut encoded: Vec<u8> = vec![0; snap::max_compress_len(stream.len())];
+                let mut encoded: Vec<u8> = vec![0; snap::raw::max_compress_len(stream.len())];
                 let compressed_size =
-                    snap::Encoder::new().compress(&stream[..], &mut encoded[..])?;
+                    snap::raw::Encoder::new().compress(&stream[..], &mut encoded[..])?;
 
                 let crc = crc::crc32::checksum_ieee(&stream[..]);
                 byteorder::BigEndian::write_u32(&mut encoded[compressed_size..], crc);
@@ -107,9 +107,10 @@ impl Codec {
             Codec::Snappy => {
                 use byteorder::ByteOrder;
 
-                let decompressed_size = snap::decompress_len(&stream[..stream.len() - 4])?;
+                let decompressed_size = snap::raw::decompress_len(&stream[..stream.len() - 4])?;
                 let mut decoded = vec![0; decompressed_size];
-                snap::Decoder::new().decompress(&stream[..stream.len() - 4], &mut decoded[..])?;
+                snap::raw::Decoder::new()
+                    .decompress(&stream[..stream.len() - 4], &mut decoded[..])?;
 
                 let expected_crc = byteorder::BigEndian::read_u32(&stream[stream.len() - 4..]);
                 let actual_crc = crc::crc32::checksum_ieee(&decoded);
