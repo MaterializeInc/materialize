@@ -100,7 +100,7 @@ impl RedundantJoin {
                 // unable to find a rendundant join it produces meaningful provenance information.
 
                 // Recursively apply transformation, and determine the provenance of inputs.
-                let mut input_prov = inputs
+                let input_prov = inputs
                     .iter_mut()
                     .map(|i| self.action(i, lets))
                     .collect::<Vec<_>>();
@@ -257,7 +257,9 @@ impl RedundantJoin {
                 }
                 result.retain(|p| !p.binding.is_empty());
                 // TODO: For min, max aggregates, we could preserve provenance
-                // if the expression references a column.
+                // if the expression references a column. We would need to un-set
+                // the `exact` bit in that case, and so we would want to keep both
+                // sets of provenance information.
                 result
             }
 
@@ -279,11 +281,25 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::Project { input, .. } => {
-                self.action(input, lets);
-                // Projections generally get hoisted, and we can
-                // wait until that happens to implement this analysis.
-                Vec::new()
+            RelationExpr::Project { input, outputs } => {
+                // Projections re-order, drop, and duplicate columns,
+                // but they neither drop rows nor invent values.
+                let mut result = self.action(input, lets);
+                for provenance in result.iter_mut() {
+                    let new_binding = (0..outputs.len())
+                        .enumerate()
+                        .flat_map(|(i, c)| {
+                            provenance
+                                .binding
+                                .iter()
+                                .find(|(_, l)| l == &c)
+                                .map(|(s, _)| (*s, i))
+                        })
+                        .collect::<Vec<_>>();
+
+                    provenance.binding = new_binding;
+                }
+                result
             }
 
             RelationExpr::FlatMap { input, .. } => {
@@ -381,7 +397,7 @@ fn find_redundancy(
         // We can only elide if the input contains all records, and binds all columns.
         if provenance.exact && provenance.binding.len() == input_arities[input] {
             // examine all *other* inputs that have not been removed...
-            for other in (0..input_arities.len()).filter(|other| other != input) {
+            for other in (0..input_arities.len()).filter(|other| other != &input) {
                 for other_prov in input_prov[other].iter().filter(|p| p.id == provenance.id) {
                     // We need to find each column of `input` bound in `other` with this provenance.
                     let mut bindings = HashMap::new();
