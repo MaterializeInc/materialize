@@ -8,6 +8,15 @@
 // by the Apache License, Version 2.0.
 
 //! Remove redundant collections of distinct elements from joins.
+//!
+//! This analysis looks for joins in which one collection contains distinct
+//! elements, and it can be determined that the join would only restrict the
+//! results, and that the restriction is redundant (the other results would
+//! not be reduced by the join).
+//!
+//! This type of optimization shows up often in subqueries, where distinct
+//! collections are used in decorrelation, and afterwards often distinct
+//! collections are then joined against the results.
 
 // If statements seem a bit clearer in this case. Specialized methods
 // that replace simple and common alternatives frustrate developers.
@@ -29,9 +38,7 @@ impl crate::Transform for RedundantJoin {
         relation: &mut RelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        // println!("PRE: {}", relation.pretty());
         self.action(relation, &mut HashMap::new());
-        // println!("PST: {}", relation.pretty());
         Ok(())
     }
 }
@@ -39,10 +46,17 @@ impl crate::Transform for RedundantJoin {
 impl RedundantJoin {
     /// Remove redundant collections of distinct elements from joins.
     ///
-    /// This method recursively determines "provenance" information for the relation, that being a set of
-    /// pairs of `Id` and column correspondences, indicating that some columns in this relation correspond
-    /// to columns in the bound `Id`; specifically, that projected on to these columns, the distinct rows
-    /// of this relation would be contained in the distinct rows of the identified relation.
+    /// This method tracks "provenance" information for each collections,
+    /// those being column-wise relationships to identified collections
+    /// (either imported collections, or let-bound collections). These
+    /// relationships state that when projected on to these columns, the
+    /// records of the one collection are contained in the records of the
+    /// identified collection.
+    ///
+    /// This provenance information is then used for the `RelationExpr::Join`
+    /// variant to remove "redundant" joins, those that can be determined to
+    /// neither restrict nor augment one of the input relations. Consult the
+    /// `find_redundancy` method and its documentation for more detail.
     pub fn action(
         &self,
         relation: &mut RelationExpr,
@@ -62,7 +76,8 @@ impl RedundantJoin {
                 result
             }
             RelationExpr::Get { id, typ } => {
-                let mut val_info = lets.get(id).map(|x| x.clone()).unwrap_or(Vec::new());
+                // Extract the value provenance, or an empty list if unavailable.
+                let mut val_info = lets.get(id).cloned().unwrap_or_default();
                 // Add information about being exactly this let binding too.
                 val_info.push(ProvInfo {
                     id: *id,
@@ -78,7 +93,13 @@ impl RedundantJoin {
                 demand,
                 implementation,
             } => {
-                // Recursively apply transformation, and determine input provenance.
+                // This logic first applies what it has learned about its input provenance,
+                // and if it finds a redundant join input it removes it. In that case, it
+                // also fails to produce exciting provenance information, partly out of
+                // laziness and the challenge of ensuring it is correct. Instead, if it is
+                // unable to find a rendundant join it produces meaningful provenance information.
+
+                // Recursively apply transformation, and determine the provenance of inputs.
                 let mut input_prov = inputs
                     .iter_mut()
                     .map(|i| self.action(i, lets))
@@ -99,7 +120,9 @@ impl RedundantJoin {
                 }
 
                 // If we find an input that can be removed, we should do so!
-                // We only do this once per invocation to keep our sanity, but we could rewrite it to iterate.
+                // We only do this once per invocation to keep our sanity, but we could
+                // rewrite it to iterate. We can avoid looking for any relation that
+                // does not have keys, as it cannot be redundant in that case.
                 if let Some((input, bindings)) = (0..input_types.len())
                     .rev()
                     .filter(|i| !input_types[*i].keys.is_empty())
@@ -116,8 +139,9 @@ impl RedundantJoin {
                     })
                     .next()
                 {
-                    // println!("Found redundancy: \n\tinput {:?}\n\tbinding {:?}", input, bindings);
-
+                    // From `binding`, we produce the projection we will apply to the join
+                    // once `input` is removed. This is valuable also to rewrite expressions
+                    // in the join constraints.
                     let mut columns = 0;
                     let mut projection = Vec::new();
                     for i in 0..input_arities.len() {
@@ -125,17 +149,24 @@ impl RedundantJoin {
                             projection.extend(columns..columns + input_arities[i]);
                             columns += input_arities[i];
                         } else {
+                            // When we reach the removed relation, we should introduce
+                            // references to the columns that are meant to replace these.
                             // This should happen only once, and `.drain(..)` could work.
                             projection.extend(bindings.clone());
                         }
                     }
-                    // Bindings need to be refreshed, now that we know where each target column will be.
-                    // This is important because they could have been to columns *after* the removed
-                    // relation, and our original take on where they would be is no longer correct.
+                    // The references introduced from `bindings` need to be refreshed, now that we
+                    // know where each target column will be. This is important because they could
+                    // have been to columns *after* `input`, and our original take on where they
+                    // would be is no longer correct. References before `input` should stay as they
+                    // are, and references afterwards will likely be decreased.
                     for c in prior_arities[input]..prior_arities[input] + input_arities[input] {
                         projection[c] = projection[projection[c]];
                     }
 
+                    // Tidy up equivalences rewriting column references with `projection` and
+                    // removing any equivalence classes that are now redundant (e.g. those that
+                    // related the columns of `input` with the relation that showed its redundancy)
                     for equivalence in equivalences.iter_mut() {
                         for expr in equivalence.iter_mut() {
                             expr.permute(&projection[..]);
@@ -146,7 +177,6 @@ impl RedundantJoin {
                     equivalences.retain(|es| es.len() > 1);
 
                     inputs.remove(input);
-                    input_prov.remove(input);
 
                     // Unset demand and implementation, as irrevocably hosed by this transformation.
                     *demand = None;
@@ -154,6 +184,7 @@ impl RedundantJoin {
 
                     *relation = relation.take_dangerous().project(projection);
                     // The projection will gum up provenance reasoning anyhow, so don't work hard.
+                    // We will return to this expression again with the same analysis.
                     Vec::new()
                 } else {
                     // Provenance information should be the union of input provenance information,
@@ -174,7 +205,7 @@ impl RedundantJoin {
             }
 
             RelationExpr::Filter { input, .. } => {
-                // Filter drops records, and so is not set to `exact`.
+                // Filter may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
                     prov.exact = false;
@@ -231,7 +262,7 @@ impl RedundantJoin {
             }
 
             RelationExpr::Threshold { input } => {
-                // Threshold may drop records, and so is not set to `exact`.
+                // Threshold may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
                     prov.exact = false;
@@ -240,7 +271,7 @@ impl RedundantJoin {
             }
 
             RelationExpr::TopK { input, .. } => {
-                // TopK may drop records, and so is not exact.
+                // TopK may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
                     prov.exact = false;
@@ -256,7 +287,7 @@ impl RedundantJoin {
             }
 
             RelationExpr::FlatMap { input, .. } => {
-                // FlatMap may drop records, and so is not set to `exact`.
+                // FlatMap may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
                     prov.exact = false;
@@ -282,18 +313,34 @@ impl RedundantJoin {
 }
 
 /// A relationship between a collections columns and some source columns.
+///
+/// An instance of this type indicates that some of the bearer's columns
+/// derive from `id`. In particular, each column in the second element of
+/// `binding` is derived from the column of `id` found in the corresponding
+/// first element.
+///
+/// The guarantee is that projected on to these columns, the distinct values
+/// of the bearer are contained in the set of distinct values of projected
+/// columns of `id`. In the case that `exact` is set, the two sets are equal.
 #[derive(Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct ProvInfo {
-    // The Id (local or global) of the source
+    // The Id (local or global) of the source.
     id: Id,
-    // A list of source column, current column associations.
+    // A list of (source column, current column) associations.
     // There should be at most one occurrence of each number in the second position.
     binding: Vec<(usize, usize)>,
-    // Are these the exact set of columns, with none omitted?
+    // If true, all distinct projected source rows are present in the rows of
+    // the projection of the current collection. This constraint is lost as soon
+    // as a transformation may drop records.
     exact: bool,
 }
 
 impl ProvInfo {
+    /// Merge two constraints to find a constraint that satisfies both inputs.
+    ///
+    /// This method returns nothing if no columns are in common (either because
+    /// difference sources are identified, or just no columns in common) and it
+    /// intersects bindings and the `exact` bit.
     fn meet(&self, other: &Self) -> Option<Self> {
         if self.id == other.id {
             let mut result = self.clone();
@@ -310,7 +357,18 @@ impl ProvInfo {
     }
 }
 
-// Attempts to discover a replacement relation for `input`, and replacement column bindings for its columns.
+/// Attempts to find column bindings that make `input` redundant.
+///
+/// This method attempts to find evidence that `input` may be redundant by searching
+/// the join structure for another relation `other` with provenance that contains some
+/// provenance of `input`, and keys for `input` that are equated by the join to the
+/// corresponding columns of `other` under their provenance. The `input` provenance
+/// must also have its `exact` bit set.
+///
+/// In these circumstances, the claim is that because the key columns are equated and
+/// determine non key columns (the meaning of a key), any matches between `input` and
+/// `other` will neither introduce new information to `other`, nor restrict the rows
+/// of `other`, nor alter their multplicity.
 fn find_redundancy(
     input: usize,
     keys: &[Vec<usize>],
@@ -319,57 +377,37 @@ fn find_redundancy(
     equivalences: &[Vec<ScalarExpr>],
     input_prov: &[Vec<ProvInfo>],
 ) -> Option<Vec<usize>> {
-
-    // println!();
-    // println!("Input: {}", input);
-    // println!("Arities: {:?}", input_arities);
-    // println!("Prior: {:?}", prior_arities);
-    // println!("Equiv: {:?}", equivalences);
-    // println!("Prov: {:?}", input_prov);
-
-    // A join input can be removed if
-    //   1. it contains distinct records (i.e. has a key),
-    //   2. it has some `exact` provenance for all columns,
-    //   3. each of its key columns are equated to another input whose provenance contains it.
-    // If the input is removed, all references to its columns should be replaced by references
-    // to the corresponding columns in the other input.
-
     for provenance in input_prov[input].iter() {
         // We can only elide if the input contains all records, and binds all columns.
         if provenance.exact && provenance.binding.len() == input_arities[input] {
             // examine all *other* inputs that have not been removed...
-            for other in 0..input_arities.len() {
-                if other != input {
-                    for other_prov in input_prov[other].iter().filter(|p| p.id == provenance.id) {
-                        // We need to find each column of `input` bound in `other` with this provenance.
-                        let mut bindings = HashMap::new();
-                        for (src, input_col) in provenance.binding.iter() {
-                            for (src2, other_col) in other_prov.binding.iter() {
-                                if src == src2 {
-                                    bindings.insert(input_col, *other_col);
-                                }
+            for other in (0..input_arities.len()).filter(|other| other != input) {
+                for other_prov in input_prov[other].iter().filter(|p| p.id == provenance.id) {
+                    // We need to find each column of `input` bound in `other` with this provenance.
+                    let mut bindings = HashMap::new();
+                    for (src, input_col) in provenance.binding.iter() {
+                        for (src2, other_col) in other_prov.binding.iter() {
+                            if src == src2 {
+                                bindings.insert(input_col, *other_col);
                             }
                         }
-                        if bindings.len() == input_arities[input] {
-                            for key in keys.iter() {
-                                if key.iter().all(|input_col| {
-                                    let other_col = bindings[&input_col];
-                                    equivalences.iter().any(|e| {
-                                        e.contains(&ScalarExpr::Column(
-                                            prior_arities[input] + input_col,
-                                        )) && e.contains(&ScalarExpr::Column(
-                                            prior_arities[other] + other_col,
-                                        ))
-                                    })
-                                }) {
-                                    let binding = (0..input_arities[input])
-                                        .map(|c| prior_arities[other] + bindings[&c])
-                                        .collect::<Vec<_>>();
-                                    // println!("Found redundancy for {:?}", input);
-                                    // println!("\tother: {:?}", other);
-                                    // println!("\tbinding: {:?}", binding);
-                                    return Some(binding);
-                                }
+                    }
+                    if bindings.len() == input_arities[input] {
+                        for key in keys.iter() {
+                            if key.iter().all(|input_col| {
+                                let other_col = bindings[&input_col];
+                                equivalences.iter().any(|e| {
+                                    e.contains(&ScalarExpr::Column(
+                                        prior_arities[input] + input_col,
+                                    )) && e.contains(&ScalarExpr::Column(
+                                        prior_arities[other] + other_col,
+                                    ))
+                                })
+                            }) {
+                                let binding = (0..input_arities[input])
+                                    .map(|c| prior_arities[other] + bindings[&c])
+                                    .collect::<Vec<_>>();
+                                return Some(binding);
                             }
                         }
                     }
