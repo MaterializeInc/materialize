@@ -250,12 +250,13 @@ where
 pub type PartitionCount = i32;
 
 /// A type wrapper for a timestamp update
-/// For real-time sources, it consists of a PartitionCount
+/// For real-time sources, it consists of a PartitionCount and HashMap from Partition ID to current
+/// max number of messages for that source.
 /// For BYO sources, it consists of a mapping from PartitionId to a vector of
 /// (PartitionCount, Timestamp, MzOffset) tuple.
 pub enum TimestampDataUpdate {
     /// RT sources see a current estimate of the number of partitions for the soruce
-    RealTime(PartitionCount),
+    RealTime(PartitionCount, HashMap<PartitionId, MzOffset>),
     /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
     BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
 }
@@ -717,8 +718,13 @@ where
                                 panic!("Unexpected message type. Expected BYO update.")
                             }
                         }
-                        TimestampDataUpdate::RealTime(current_partition_count) => {
-                            if let TimestampSourceUpdate::RealTime(partition_count) = update {
+                        TimestampDataUpdate::RealTime(
+                            current_partition_count,
+                            current_max_offsets,
+                        ) => {
+                            if let TimestampSourceUpdate::RealTime(partition_count, max_offsets) =
+                                update
+                            {
                                 assert!(
                                     *current_partition_count <= partition_count,
                                     "The number of partititions\
@@ -728,6 +734,8 @@ where
                                     current_partition_count
                                 );
                                 *current_partition_count = partition_count;
+                                current_max_offsets.extend(max_offsets);
+                            // *max_offsets =  current_max_offsets;
                             } else {
                                 panic!("Expected message type. Expected RT update.");
                             }

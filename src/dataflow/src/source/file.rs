@@ -184,7 +184,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
             } else {
                 timestamp_data_updates
                     .borrow_mut()
-                    .insert(id.clone(), TimestampDataUpdate::RealTime(1))
+                    .insert(id.clone(), TimestampDataUpdate::RealTime(1, HashMap::new()))
             };
             // Check that this is the first time this source id is registered
             assert!(prev.is_none());

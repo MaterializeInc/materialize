@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -168,7 +168,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
         } else {
             timestamp_data_updates
                 .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1));
+                .insert(id.clone(), TimestampDataUpdate::RealTime(1, HashMap::new()));
             timestamp_metadata_channel
                 .as_ref()
                 .borrow_mut()

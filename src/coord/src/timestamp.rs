@@ -37,7 +37,7 @@ use rusoto_kinesis::KinesisClient;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
+    Consistency, DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector, KafkaOffset,
     KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector, TimestampSourceUpdate,
 };
 use expr::{PartitionId, SourceInstanceId};
@@ -1460,13 +1460,6 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                             diff, new_partition_count, c.topic, c.id,
                         );
                         current_partition_count = new_partition_count;
-                        c.coordination_state
-                            .coordinator_channel
-                            .unbounded_send(coord::Message::AdvanceSourceTimestamp {
-                                id: c.id,
-                                update: TimestampSourceUpdate::RealTime(current_partition_count),
-                            })
-                            .expect("Failed to send update to coordinator. This should not happen");
                     }
                     cmp::Ordering::Less => {
                         error!(
@@ -1486,7 +1479,7 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
         }
 
         // Fetch the latest offset for each partition.
-        //
+        let mut max_offsets = HashMap::new();
         // TODO(benesch): Kafka supports fetching these in bulk, but
         // rust-rdkafka does not. That would save us a lot of requests on
         // large topics.
@@ -1498,6 +1491,10 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                         &c.id.to_string(),
                         &pid.to_string(),
                     ]);
+                    max_offsets.insert(
+                        PartitionId::Kafka(pid),
+                        MzOffset::from(KafkaOffset { offset: high }),
+                    );
                     max_offset.set(high);
                 }
                 Err(e) => {
@@ -1508,6 +1505,14 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                 }
             }
         }
+
+        c.coordination_state
+            .coordinator_channel
+            .unbounded_send(coord::Message::AdvanceSourceTimestamp {
+                id: c.id,
+                update: TimestampSourceUpdate::RealTime(current_partition_count, max_offsets),
+            })
+            .expect("Failed to send update to coordinator. This should not happen");
 
         if current_partition_count > 0 {
             thread::sleep(wait);

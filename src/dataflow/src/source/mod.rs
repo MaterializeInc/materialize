@@ -430,6 +430,22 @@ impl ConsistencyInfo {
         Some(self.last_closed_ts)
     }
 
+    /// This function returns true if, on any partition, the number of processed messages
+    /// is X smaller than the known number of existing messages on this source partition.
+    /// TODO(): X is currently set to 10000 as default
+    fn is_trailing(&self, max_offsets: Option<&mut HashMap<PartitionId, MzOffset>>) -> bool {
+        if let Some(max_offsets) = max_offsets {
+            for (pid, processed_offset) in &self.partition_metadata {
+                if let Some(known_offset) = max_offsets.get(pid) {
+                    //TODO(): make this configurable
+                    if known_offset.offset - processed_offset.offset.offset > 10000 {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
     /// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
     /// For a given partition pid, messages in interval [0,offset1] get assigned ts1, all messages in interval [offset1+1,offset2]
     /// get assigned ts2, etc.
@@ -529,17 +545,24 @@ impl ConsistencyInfo {
         } else {
             // This a RT source. It is always possible to close the timestamp and downgrade the
             // capability
-            if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            let mut timestamp_updates = timestamp_histories.borrow_mut();
+            let max_offsets = if let Some(entries) = timestamp_updates.get_mut(id) {
                 match entries {
-                    TimestampDataUpdate::RealTime(partition_count) => {
-                        source.update_partition_count(self, *partition_count)
+                    TimestampDataUpdate::RealTime(partition_count, max_offsets) => {
+                        source.update_partition_count(self, *partition_count);
+                        Some(max_offsets)
                     }
                     _ => panic!("Unexpected timestamp message. Expected RT update."),
                 }
-            }
+            } else {
+                None
+            };
 
             if self.time_since_downgrade.elapsed().as_millis()
                 > self.downgrade_capability_frequency.try_into().unwrap()
+                // Only downgrade the capability if have caught up with the source, otherwise,
+                // skip in an attempt to create larger batches
+                && !self.is_trailing(max_offsets)
             {
                 let ts = self.generate_next_timestamp();
                 if let Some(ts) = ts {
