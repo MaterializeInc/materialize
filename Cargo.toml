@@ -25,15 +25,15 @@ members = [
     "src/sql-parser",
     "src/symbiosis",
     "src/testdrive",
+    "src/test-util",
     "src/transform",
     "src/walkabout",
     "test/chaos",
     "test/correctness",
     "test/metabase/smoketest",
-    "test/performance/perf-kinesis",
-    "test/performance/perf-upsert",
+    "test/perf/kinesis",
+    "test/perf/upsert",
     "test/smith",
-    "test/test-util",
 ]
 
 [profile.dev.package]

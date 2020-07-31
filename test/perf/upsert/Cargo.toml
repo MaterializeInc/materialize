@@ -18,6 +18,6 @@ postgres-types = "0.1.1"
 rand = "0.7.3"
 rand_distr = "0.2.2"
 structopt = "0.3.15"
-test-util = { path = "../../test-util" }
+test-util = { path = "../../../src/test-util" }
 tokio = { version = "0.2.22", features = ["full"] }
 tokio-postgres = "0.5.5"

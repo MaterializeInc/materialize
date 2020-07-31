@@ -14,5 +14,5 @@ md-5 = "0.9"
 ore = { path = "../../src/ore" }
 rand = "0.7.3"
 structopt = "0.3.15"
-test-util = { path = "../test-util" }
+test-util = { path = "../../src/test-util" }
 tokio = { version = "0.2.22", features = ["full"] }
