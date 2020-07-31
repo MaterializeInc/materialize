@@ -62,6 +62,9 @@ Wrap your release notes at the 80 character mark.
 - Improve performance of `TopK` operator {{% gh 3758 %}}.
 
 - Handle Snappy-encoded Avro OCF files.
+- Add support for the [regular expression matching operators](/sql/functions/#string)
+  `~`, `~*`, `!~`, and `!~*`, which report whether a string does or does not
+  match a regular expression.
 
 <span id="v0.4.0"></span>
 ## v0.4.0

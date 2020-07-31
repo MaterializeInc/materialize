@@ -1067,6 +1067,30 @@ lazy_static! {
                 })
             },
 
+            // REGEX
+            RegexMatch => {
+                params!(String, String) => MatchRegex { case_insensitive: false }
+            },
+            RegexIMatch => {
+                params!(String, String) => binary_op(|_ecx, lhs, rhs| {
+                    Ok(lhs.call_binary(rhs, MatchRegex { case_insensitive: true }))
+                })
+            },
+            RegexNotMatch => {
+                params!(String, String) => binary_op(|_ecx, lhs, rhs| {
+                    Ok(lhs
+                        .call_binary(rhs, MatchRegex { case_insensitive: false })
+                        .call_unary(UnaryFunc::Not))
+                })
+            },
+            RegexNotIMatch => {
+                params!(String, String) => binary_op(|_ecx, lhs, rhs| {
+                    Ok(lhs
+                        .call_binary(rhs, MatchRegex { case_insensitive: true })
+                        .call_unary(UnaryFunc::Not))
+                })
+            },
+
             // CONCAT
             Concat => {
                 vec![Plain(String), StringAny] => TextConcat,

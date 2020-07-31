@@ -58,6 +58,18 @@ Operator | Computes
 Operator | Computes
 ---------|---------
 <code>&vert;&vert;</code> | Concatenation
+`~` | Matches regular expression, case sensitive
+`~*` | Matches regular expression, case insensitive
+`!~` | Does not match regular expression, case insensitive
+`!~*` | Does not match regular expression, case insensitive
+
+The regular expression syntax supported by Materialize is documented by the
+[Rust `regex` crate](https://docs.rs/regex/*/#syntax).
+
+{{< warning >}}
+Materialize regular expressions are similar to, but not identical to, PostgreSQL
+regular expressions.
+{{< /warning >}}
 
 ### Time-like
 
