@@ -1750,36 +1750,32 @@ ORDER BY
 | ArrangeBy (#0)
 
 %4 =
-| Get %2
-| ArrangeBy (#0)
-
-%5 =
 | Get materialize.public.orders (u18)
 | ArrangeBy (#1)
 
-%6 =
-| Join %4 %5 (= #0 #12)
-| | implementation = DeltaQuery %4 %5.(#1) | %5 %4.(#0)
+%5 =
+| Join %3 %4 (= #0 #12)
+| | implementation = DeltaQuery %3 %4.(#1) | %4 %3.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 | Negate
 
-%7 =
+%6 =
 | Get %2
 | Project (#0)
 
-%8 =
-| Union %6 %7
+%7 =
+| Union %5 %6
 
-%9 =
+%8 =
 | Get %2
 | ArrangeBy (#0)
 
-%10 =
-| Join %3 %8 %9 (= #0 #11 #12)
-| | implementation = Differential %8 %3.(#0) %9.(#0)
-| | demand = (#4, #5)
-| Reduce group=(substr(#4, 1, 2)) countall(true) sum(#5)
+%9 =
+| Join %7 %8 (= #0 #1)
+| | implementation = Differential %7 %8.(#0)
+| | demand = (#5, #6)
+| Reduce group=(substr(#5, 1, 2)) countall(true) sum(#6)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
 
