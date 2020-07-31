@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::iter;
+
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -37,7 +39,8 @@ where
         relation_expr: &RelationExpr,
         predicates: &[ScalarExpr],
         // TODO(frank): use this argument to create a region surrounding the join.
-        _scope: &mut G,
+        scope: &mut G,
+        worker_index: usize,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
         if let RelationExpr::Join {
             inputs,
@@ -56,7 +59,6 @@ where
                 equivalence.sort();
                 equivalence.dedup();
             }
-
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             let arities = types
                 .iter()
@@ -69,6 +71,37 @@ where
                 offset += arities[input];
             }
 
+            // if possible, shorten input arrangements by joining them with a
+            // constant row. Save the `RelationExpr` of the new shortened arrangements
+            let mut filtered_inputs = inputs.clone();
+            let mut filter_constants = vec![];
+            for (input, keys) in iter::once((start, start_arr.as_ref()))
+                .chain(order.iter().map(|(input, keys)| (input, Some(keys))))
+            {
+                if let Some(keys) = keys {
+                    let result = self.filter_on_index_if_able(
+                        &inputs[*input],
+                        prior_arities[*input],
+                        keys,
+                        &equivalences,
+                        scope,
+                        worker_index,
+                    );
+                    if let Some((filtered_input, constants)) = result {
+                        filter_constants.extend(constants);
+                        filtered_inputs[*input] = filtered_input;
+                    }
+                }
+            }
+            filter_constants.sort();
+            filter_constants.dedup();
+            // eliminate filters that have already been applied from
+            // `equivalences`
+            for equivalence in equivalences.iter_mut() {
+                equivalence.retain(|expr| !filter_constants.contains(expr));
+            }
+            equivalences.retain(|e| e.len() > 1);
+
             // Unwrap demand
             // TODO: If we pushed predicates into the operator, we could have a
             // more accurate view of demand that does not include the support of
@@ -76,7 +109,7 @@ where
             let demand = demand.clone().unwrap_or_else(|| (0..arity).collect());
 
             // This collection will evolve as we join in more inputs.
-            let (mut joined, mut errs) = self.collection(&inputs[*start]).unwrap();
+            let (mut joined, mut errs) = self.collection(&filtered_inputs[*start]).unwrap();
 
             // Maintain sources of each in-progress column.
             let mut source_columns = (prior_arities[*start]
@@ -99,7 +132,6 @@ where
                     errs.concat(&es);
                 }
             }
-
             for (input_index, (input, next_keys)) in order.iter().enumerate() {
                 let mut next_keys_rebased = next_keys.clone();
                 for expr in next_keys_rebased.iter_mut() {
@@ -176,82 +208,84 @@ where
 
                 // When joining the first input, check to see if there is a
                 // convenient ready-made arrangement
-                let (j, es, prev_vals) =
-                    match (input_index, self.arrangement(&inputs[*start], &prev_keys)) {
-                        (0, Some(ArrangementFlavor::Local(oks, es))) => {
-                            let (j, next_es) = self.differential_join(
-                                oks,
-                                &inputs[*input],
-                                &next_keys[..],
-                                next_vals,
-                            );
-                            (
-                                j,
-                                es.as_collection(|k, _v| k.clone()).concat(&next_es),
-                                source_columns,
-                            )
-                        }
-                        (0, Some(ArrangementFlavor::Trace(_gid, oks, es))) => {
-                            let (j, next_es) = self.differential_join(
-                                oks,
-                                &inputs[*input],
-                                &next_keys[..],
-                                next_vals,
-                            );
-                            (
-                                j,
-                                es.as_collection(|k, _v| k.clone()).concat(&next_es),
-                                source_columns,
-                            )
-                        }
-                        _ => {
-                            // Otherwise, build a new arrangement from the collection of
-                            // joins of previous inputs.
-                            // We exploit the demand information to restrict `prev` to
-                            // its demanded columns.
+                let (j, es, prev_vals) = match (
+                    input_index,
+                    self.arrangement(&filtered_inputs[*start], &prev_keys),
+                ) {
+                    (0, Some(ArrangementFlavor::Local(oks, es))) => {
+                        let (j, next_es) = self.differential_join(
+                            oks,
+                            &filtered_inputs[*input],
+                            &next_keys[..],
+                            next_vals,
+                        );
+                        (
+                            j,
+                            es.as_collection(|k, _v| k.clone()).concat(&next_es),
+                            source_columns,
+                        )
+                    }
+                    (0, Some(ArrangementFlavor::Trace(_gid, oks, es))) => {
+                        let (j, next_es) = self.differential_join(
+                            oks,
+                            &filtered_inputs[*input],
+                            &next_keys[..],
+                            next_vals,
+                        );
+                        (
+                            j,
+                            es.as_collection(|k, _v| k.clone()).concat(&next_es),
+                            source_columns,
+                        )
+                    }
+                    _ => {
+                        // Otherwise, build a new arrangement from the collection of
+                        // joins of previous inputs.
+                        // We exploit the demand information to restrict `prev` to
+                        // its demanded columns.
 
-                            // Identify the *indexes* of columns that are demanded by any
-                            // remaining predicates and equivalence classes.
-                            let prev_vals = source_columns
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(i, c)| {
-                                    if column_demand.contains(c) {
-                                        Some(i)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-
-                            // Identify the columns we intend to retain.
-                            let prev_source_vals =
-                                prev_vals.iter().map(|i| source_columns[*i]).collect();
-
-                            let (prev_keyed, es) = joined.map_fallible({
-                                let mut row_packer = repr::RowPacker::new();
-                                move |row| {
-                                    let datums = row.unpack();
-                                    let temp_storage = RowArena::new();
-                                    let key = Row::try_pack(
-                                        prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
-                                    )?;
-                                    let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
-                                    Ok((key, row))
+                        // Identify the *indexes* of columns that are demanded by any
+                        // remaining predicates and equivalence classes.
+                        let prev_vals = source_columns
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, c)| {
+                                if column_demand.contains(c) {
+                                    Some(i)
+                                } else {
+                                    None
                                 }
-                            });
-                            let prev_keyed = prev_keyed.arrange_named::<OrdValSpine<_, _, _, _>>(
-                                &format!("JoinStage: {}", input),
-                            );
-                            let (j, next_es) = self.differential_join(
-                                prev_keyed,
-                                &inputs[*input],
-                                &next_keys[..],
-                                next_vals,
-                            );
-                            (j, es.concat(&next_es), prev_source_vals)
-                        }
-                    };
+                            })
+                            .collect::<Vec<_>>();
+
+                        // Identify the columns we intend to retain.
+                        let prev_source_vals =
+                            prev_vals.iter().map(|i| source_columns[*i]).collect();
+
+                        let (prev_keyed, es) = joined.map_fallible({
+                            let mut row_packer = repr::RowPacker::new();
+                            move |row| {
+                                let datums = row.unpack();
+                                let temp_storage = RowArena::new();
+                                let key = Row::try_pack(
+                                    prev_keys.iter().map(|e| e.eval(&datums, &temp_storage)),
+                                )?;
+                                let row = row_packer.pack(prev_vals.iter().map(|i| datums[*i]));
+                                Ok((key, row))
+                            }
+                        });
+                        let prev_keyed = prev_keyed.arrange_named::<OrdValSpine<_, _, _, _>>(
+                            &format!("JoinStage: {}", input),
+                        );
+                        let (j, next_es) = self.differential_join(
+                            prev_keyed,
+                            &filtered_inputs[*input],
+                            &next_keys[..],
+                            next_vals,
+                        );
+                        (j, es.concat(&next_es), prev_source_vals)
+                    }
+                };
 
                 joined = j;
                 errs = errs.concat(&es);
@@ -376,80 +410,115 @@ where
         })
     }
 
-    /// Renders a join of an arrangement to a constant collection of size 1.
-    /// `input` should be of the form
-    /// `Join { inputs: [ArrangeBy{...}], implementation: Semijoin, ...}`
-    pub fn render_semi_join(&mut self, input: &RelationExpr, scope: &mut G, worker_index: usize) {
-        if let RelationExpr::Join {
-            inputs,
-            equivalences,
-            implementation: expr::JoinImplementation::Semijoin,
-            ..
+    /// Given an input, check if it is an arrangement, and if the
+    /// arrangement can be filtered for equality to a constant.
+    /// If such filtering can be performed, render the filter as
+    /// a differential join of an arrangement to a constant collection of
+    /// size 1.
+    /// Return the RelationExpr, if any, that was rendered and the constants
+    /// in the rendered RelationExpr
+    pub fn filter_on_index_if_able(
+        &mut self,
+        input: &RelationExpr,
+        prior_arity: usize,
+        keys: &[ScalarExpr],
+        equivalences: &[Vec<ScalarExpr>],
+        scope: &mut G,
+        worker_index: usize,
+    ) -> Option<(RelationExpr, Vec<ScalarExpr>)> {
+        if let RelationExpr::ArrangeBy {
+            input: inner_input, ..
         } = input
         {
-            if let RelationExpr::ArrangeBy {
-                input: inner_input,
-                keys,
-            } = &inputs[0]
-            {
-                let keys = &keys[0];
-                // For each key ...
-                let constant_row = keys
-                    .iter()
-                    .map(|k| {
-                        equivalences
-                            .iter()
-                            .find_map(|e| {
-                                // ... look for the equivalence class containing the key ...
-                                if e.contains(k) {
-                                    // ... and find the constant within that equivalence
-                                    // class.
-                                    return e.iter().find_map(|s| match s.as_literal() {
-                                        Some(Ok(datum)) => Some(datum),
-                                        Some(Err(_)) => unreachable!(
-                                            "Error occurred when evaluating semijoin constant"
-                                        ),
-                                        None => None,
-                                    });
+            // For each key ...
+            let constant_row = keys
+                .iter()
+                .flat_map(|k| {
+                    let mut k_rebased = k.clone();
+                    k_rebased.visit_mut(&mut |e| {
+                        if let ScalarExpr::Column(c) = e {
+                            *c += prior_arity;
+                        }
+                    });
+                    equivalences.iter().find_map(|e| {
+                        // ... look for the equivalence class containing the key ...
+                        if e.contains(&k_rebased) {
+                            // ... and find the constant within that equivalence
+                            // class.
+                            return e.iter().find_map(|s| {
+                                if s.is_literal() {
+                                    Some(s.clone())
+                                } else {
+                                    None
                                 }
-                                None
-                            })
-                            .unwrap()
+                            });
+                        }
+                        None
                     })
+                })
+                .collect::<Vec<_>>();
+
+            if constant_row.len() == keys.len() {
+                // We can filter the arrangement using a semijoin
+
+                // 1. Create a RelationExpr representing the join
+
+                // 1a. Figure out the equivalences in the join.
+                let new_equivalences = keys
+                    .iter()
+                    .zip(constant_row.iter())
+                    .map(|(key, constant)| vec![key.clone(), (*constant).clone()])
                     .collect::<Vec<_>>();
 
-                // TODO: convert join to filter if the corresponding equivalent
-                // constant for each key cannot be found?
-
-                // Create a RelationExpr representing the constant
+                // 1b. Create a RelationExpr representing the constant
+                // Extract the datum from each ScalarExpr::Literal
+                let datums = constant_row.iter().map(|s| match s.as_literal() {
+                    Some(Ok(datum)) => datum,
+                    Some(Err(_)) => unreachable!(""),
+                    None => unreachable!(""),
+                });
+                let mut row_packer = repr::RowPacker::new();
                 // Having the RelationType is technically not an accurate
                 // representation of the expression, but relation type doesn't
                 // matter when it comes to rendering.
-                let mut row_packer = repr::RowPacker::new();
                 let constant_row_expr = RelationExpr::Constant {
-                    rows: vec![(row_packer.pack(constant_row), 1)],
+                    rows: vec![(row_packer.pack(datums), 1)],
                     typ: RelationType::empty(),
                 };
 
+                // 1c. Render the constant collection
                 self.render_constant(&constant_row_expr, scope, worker_index);
-
                 let (constant_collection, errs) = self.collection(&constant_row_expr).unwrap();
+
+                // 1d. Assemble parts of the Join `RelationExpr` together.
+                let join_expr = RelationExpr::join_scalars(
+                    vec![constant_row_expr, input.clone()],
+                    new_equivalences,
+                )
+                .arrange_by(&[keys.to_vec()]);
+
+                // 2. Render the join expression
                 match self.arrangement(&inner_input, keys) {
                     Some(ArrangementFlavor::Local(oks, es)) => {
                         let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
                         let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
-                        self.set_local(input, keys, (result, es));
+                        self.set_local(&join_expr, keys, (result, es));
                     }
                     Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
                         let result = oks.semijoin(&constant_collection).arrange_named("Semijoin");
                         let es = errs.concat(&es.as_collection(|k, _v| k.clone())).arrange();
-                        self.set_local(input, keys, (result, es));
+                        self.set_local(&join_expr, keys, (result, es));
                     }
                     None => {
                         panic!("Arrangement alarmingly absent!");
                     }
                 };
+
+                // 3. Return the join expression + the vector of constants
+                return Some((join_expr, constant_row));
             }
         }
+        //
+        None
     }
 }

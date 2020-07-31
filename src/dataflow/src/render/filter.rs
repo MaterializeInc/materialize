@@ -11,7 +11,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Collection;
 
 use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{RelationExpr, ScalarExpr};
@@ -20,11 +19,9 @@ use repr::{Datum, Row};
 use crate::operator::CollectionExt;
 use crate::render::context::Context;
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G> Context<G, RelationExpr, Row, dataflow_types::Timestamp>
 where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G: Scope<Timestamp = dataflow_types::Timestamp>,
 {
     /// Finds collection corresponding to input RelationExpr and then applies
     /// predicates to the input collection.
@@ -32,7 +29,10 @@ where
         &mut self,
         input: &RelationExpr,
         predicates: Vec<ScalarExpr>,
+        scope: &mut G,
+        worker_index: usize,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
+        self.ensure_rendered(input, scope, worker_index);
         let (ok_collection, err_collection) = self.collection(input).unwrap();
         let (ok_collection, new_err_collection) = render_filter_inner(ok_collection, predicates);
         let err_collection = err_collection.concat(&new_err_collection);

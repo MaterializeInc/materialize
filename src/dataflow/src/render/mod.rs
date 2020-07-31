@@ -898,24 +898,19 @@ where
                         }
                         let (ok_collection, err_collection) = match implementation {
                             expr::JoinImplementation::Differential(_start, _order) => {
-                                self.render_join(input, predicates, scope)
+                                self.render_join(input, predicates, scope, worker_index)
                             }
                             expr::JoinImplementation::DeltaQuery(_orders) => self
                                 .render_delta_join(input, predicates, scope, worker_index, |t| {
                                     t.saturating_sub(1)
                                 }),
-                            expr::JoinImplementation::Semijoin => {
-                                self.ensure_rendered(input, scope, worker_index);
-                                self.render_filter(input, predicates.clone())
-                            }
                             expr::JoinImplementation::Unimplemented => {
                                 panic!("Attempt to render unimplemented join");
                             }
                         };
                         (ok_collection, err_collection.map(Into::into))
                     } else {
-                        self.ensure_rendered(input, scope, worker_index);
-                        self.render_filter(input, predicates.clone())
+                        self.render_filter(input, predicates.clone(), scope, worker_index)
                     };
                     self.collections.insert(relation_expr.clone(), collections);
                 }
@@ -930,7 +925,8 @@ where
                     }
                     match implementation {
                         expr::JoinImplementation::Differential(_start, _order) => {
-                            let collection = self.render_join(relation_expr, &[], scope);
+                            let collection =
+                                self.render_join(relation_expr, &[], scope, worker_index);
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::DeltaQuery(_orders) => {
@@ -942,9 +938,6 @@ where
                                 |t| t.saturating_sub(1),
                             );
                             self.collections.insert(relation_expr.clone(), collection);
-                        }
-                        expr::JoinImplementation::Semijoin => {
-                            self.render_semi_join(relation_expr, scope, worker_index);
                         }
                         expr::JoinImplementation::Unimplemented => {
                             panic!("Attempt to render unimplemented join");

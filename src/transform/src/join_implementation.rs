@@ -16,7 +16,7 @@
 //! determining the orders of collections, lifting predicates if useful arrangements exist,
 //! and identifying opportunities to use indexes to replace filters.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
 use expr::{Id, RelationExpr, ScalarExpr};
@@ -75,21 +75,13 @@ impl JoinImplementation {
 
     /// Determines the join implementation for join operators.
     pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {
-<<<<<<< HEAD
         if let RelationExpr::Join {
             inputs,
             equivalences,
             ..
         } = relation
         {
-=======
-        if let RelationExpr::Join { inputs, .. } = relation {
-            if inputs.len() == 1 {
-                *relation = semijoin::plan(relation);
-                return;
-            }
 
->>>>>>> Do a semijoin when there is a filter on an index.
             // Common information of broad utility.
             // TODO: Figure out how to package this up for everyone who uses it.
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -426,76 +418,6 @@ mod differential {
     }
 }
 
-mod semijoin {
-
-    use expr::{JoinImplementation, RelationExpr, ScalarExpr};
-
-    /// Creates a semijoin plan and lifts any predicates that don't belong.
-    pub fn plan(join: &RelationExpr) -> RelationExpr {
-        let mut new_join = join.clone();
-
-        if let RelationExpr::Join {
-            inputs,
-            equivalences,
-            demand: _,
-            implementation,
-        } = &mut new_join
-        {
-            let mut input = &mut inputs[0];
-            while let RelationExpr::Filter {
-                input: inner,
-                predicates: _,
-            } = input
-            {
-                input = inner;
-            }
-            if let RelationExpr::ArrangeBy { input: _, keys } = input {
-                let available_arrangements = vec![keys.clone()];
-                let order = vec![(0, keys[0].clone())];
-                let mut lifted = Vec::new();
-                super::implement_arrangements(
-                    inputs,
-                    &available_arrangements,
-                    &[0],
-                    order.iter(),
-                    &mut lifted,
-                );
-                *implementation = JoinImplementation::Semijoin;
-                if !lifted.is_empty() {
-                    new_join = new_join.filter(lifted);
-                }
-                new_join
-            } else {
-                // Currently, this branch should never be traversed because
-                // we assume that join_elision has done its job of removing
-                // spurious single-input joins and has only left behind ones
-                // resulting from filters on indexed columns -> join transforms
-                // but if there is no index, the proper thing to do would be
-                // to convert the join back into a filter.
-                let filters = equivalences.iter_mut().flat_map(|equivalence| {
-                    let last = equivalence.pop();
-                    let mut filters = vec![];
-                    if let Some(last) = last {
-                        let mut expr = equivalence.pop();
-                        while let Some(e) = expr {
-                            filters.push(ScalarExpr::CallBinary {
-                                func: expr::BinaryFunc::Eq,
-                                expr1: Box::new(last.clone()),
-                                expr2: Box::new(e),
-                            });
-                            expr = equivalence.pop();
-                        }
-                    }
-                    filters
-                });
-                inputs[0].take_dangerous().filter(filters)
-            }
-        } else {
-            panic!("semijoin::plan call on non-join expression.")
-        }
-    }
-}
-
 /// Modify `inputs` to ensure specified arrangements are available.
 ///
 /// Lift filter predicates when all needed arrangements are otherwise available.
@@ -606,6 +528,7 @@ struct Orderer<'a> {
     input_relation: &'a [usize],
     prior_arities: &'a [usize],
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
+    literal_equivalences: Vec<HashSet<ScalarExpr>>,
     unique_arrangement: Vec<Vec<bool>>,
 
     order: Vec<(Characteristics, Vec<ScalarExpr>, usize)>,
@@ -634,6 +557,31 @@ impl<'a> Orderer<'a> {
                 }
             }
         }
+
+        // For each input, store each expression that is equivalent to a literal
+        let mut literal_equivalences = vec![HashSet::new(); inputs];
+        for equivalence in equivalences.iter() {
+            // see if equivalence class contains a literal
+            if equivalence.iter().any(|expr| expr.is_literal()) {
+                for expr in equivalence.iter() {
+                    let support = expr.support();
+                    let mut support_iter = support.iter();
+                    if let Some(first) = support_iter.next() {
+                        let input = input_relation[*first];
+                        if support_iter.all(|col| input_relation[*col] == input) {
+                            let mut rebased_expr = expr.clone();
+                            rebased_expr.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(c) = e {
+                                    *c -= prior_arities[input];
+                                }
+                            });
+                            literal_equivalences[input].insert(rebased_expr);
+                        }
+                    }
+                }
+            }
+        }
+
         // Per-arrangement information about uniqueness of the arrangement key.
         let mut unique_arrangement = vec![Vec::new(); inputs];
         for (input, keys) in arrangements.iter().enumerate() {
@@ -660,6 +608,7 @@ impl<'a> Orderer<'a> {
             input_relation,
             prior_arities,
             reverse_equivalences,
+            literal_equivalences,
             unique_arrangement,
             order,
             placed,
@@ -724,71 +673,7 @@ impl<'a> Orderer<'a> {
         }
 
         // calculate characteristics of an arrangement, if any on the starting input
-        // by default, there is no arrangement on the starting input
-        let mut start_tuple = (Characteristics::new(false, 0, false, start), vec![], start);
-        // use an arrangement if there exists one that lines up with the keys of
-        // the second input
-        if let Some((_, key, second)) = self.order.get(0) {
-            // for each element in key ...
-            let candidate_start_key = key
-                .iter()
-                .filter_map(|k| {
-                    let mut k = k.clone();
-                    k.visit_mut(&mut |e| {
-                        if let ScalarExpr::Column(c) = e {
-                            *c += self.prior_arities[*second]
-                        }
-                    });
-                    // ... find the equivalence it belongs to ...
-                    if let Some(key_equivalence) = self
-                        .equivalences
-                        .iter()
-                        .position(|e| e.iter().any(|expr| expr == &k))
-                    {
-                        // ... then within that equivalence, find the position
-                        // of an expression that came from start ...
-                        let key_pos =
-                            self.reverse_equivalences[start]
-                                .iter()
-                                .find_map(|(idx, idx2)| {
-                                    if idx == &key_equivalence {
-                                        Some(idx2)
-                                    } else {
-                                        None
-                                    }
-                                });
-                        // ... extract the expression that came from start
-                        // and shift the column numbers
-                        if let Some(key_pos) = key_pos {
-                            let mut result = self.equivalences[key_equivalence][*key_pos].clone();
-                            result.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(c) = e {
-                                    *c -= self.prior_arities[start]
-                                }
-                            });
-                            Some(result)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            if candidate_start_key.len() == key.len() {
-                if let Some(pos) = self.arrangements[start]
-                    .iter()
-                    .position(|k| k == &candidate_start_key)
-                {
-                    let is_unique = self.unique_arrangement[start][pos];
-                    start_tuple = (
-                        Characteristics::new(is_unique, candidate_start_key.len(), true, start),
-                        candidate_start_key,
-                        start,
-                    );
-                }
-            }
-        }
+        let start_tuple = self.find_start_characteristics(start);
         self.order.insert(0, start_tuple);
 
         std::mem::replace(&mut self.order, Vec::new())
@@ -886,5 +771,101 @@ impl<'a> Orderer<'a> {
                 }
             }
         }
+    }
+
+    fn find_start_characteristics(
+        &mut self,
+        start: usize,
+    ) -> (Characteristics, Vec<ScalarExpr>, usize) {
+        // best start characteristic: an arrangement that lines up with the keys of
+        // the second input
+        if let Some((_, key, second)) = self.order.get(0) {
+            // for each element in key ...
+            let candidate_start_key = key
+                .iter()
+                .filter_map(|k| {
+                    let mut k = k.clone();
+                    k.visit_mut(&mut |e| {
+                        if let ScalarExpr::Column(c) = e {
+                            *c += self.prior_arities[*second]
+                        }
+                    });
+                    // ... find the equivalence it belongs to ...
+                    let key_equivalence = self
+                        .equivalences
+                        .iter()
+                        .position(|e| e.iter().any(|expr| expr == &k))
+                        .unwrap();
+                    // ... then within that equivalence, find the position
+                    // of an expression that came from start ...
+                    let key_pos =
+                        self.reverse_equivalences[start]
+                            .iter()
+                            .find_map(|(idx, idx2)| {
+                                if idx == &key_equivalence {
+                                    Some(idx2)
+                                } else {
+                                    None
+                                }
+                            });
+                    // ... extract the expression that came from start
+                    // and shift the column numbers
+                    if let Some(key_pos) = key_pos {
+                        let mut result = self.equivalences[key_equivalence][*key_pos].clone();
+                        result.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                *c -= self.prior_arities[start]
+                            }
+                        });
+                        Some(result)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            if candidate_start_key.len() == key.len() {
+                if let Some(pos) = self.arrangements[start]
+                    .iter()
+                    .position(|k| k == &candidate_start_key)
+                {
+                    let is_unique = self.unique_arrangement[start][pos];
+                    return (
+                        Characteristics::new(is_unique, candidate_start_key.len(), true, start),
+                        candidate_start_key,
+                        start,
+                    );
+                }
+            }
+        }
+        // Second best: something that enables converting (filters for equality
+        // to literals) -> a join
+        if !self.literal_equivalences[start].is_empty() {
+            // we want to find the arrangement with the most key columns for
+            // which every column is equivalent to a literal
+            let best_filter_arr = self.arrangements[start]
+                .iter()
+                .enumerate()
+                .filter_map(|(pos, keys)| {
+                    if keys
+                        .iter()
+                        .all(|c| self.literal_equivalences[start].contains(c))
+                    {
+                        let is_unique = self.unique_arrangement[start][pos];
+                        Some((
+                            Characteristics::new(is_unique, keys.len(), true, start),
+                            keys.clone(),
+                            start,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .max_by_key(|(_, key, _)| key.len());
+            if let Some(best_filter_arr) = best_filter_arr {
+                return best_filter_arr;
+            }
+        }
+        // by default, there is no arrangement on the starting input
+        (Characteristics::new(false, 0, false, start), vec![], start)
     }
 }

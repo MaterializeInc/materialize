@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use crate::TransformArgs;
 use expr::{BinaryFunc, GlobalId, Id, RelationExpr, ScalarExpr};
 
-<<<<<<< HEAD
 /// Suppose you have
 /// %0 =
 /// | Get <some input>
@@ -42,15 +41,6 @@ use expr::{BinaryFunc, GlobalId, Id, RelationExpr, ScalarExpr};
 /// Note that it is the responsibility of ColumnKnowledge (PredicateKnowledge
 /// in the future) to clean up the Filter after the Join. It is the responsibility
 /// of JoinImplementation to determine an implementation for the Join.
-=======
-/// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
-/// which an index exists, with a
-/// Join{
-///   equivalences: [(0, i), (1,0)],
-///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
-///   <constant>
-/// }
->>>>>>> Do a semijoin when there is a filter on an index.
 #[derive(Debug)]
 pub struct FilterEqualLiteral;
 
@@ -71,22 +61,11 @@ impl crate::Transform for FilterEqualLiteral {
 }
 
 impl FilterEqualLiteral {
-<<<<<<< HEAD
     fn transform(
         &self,
         relation: &mut RelationExpr,
         indexes: &HashMap<GlobalId, Vec<Vec<ScalarExpr>>>,
     ) {
-=======
-    /// Replaces filters of the form ScalarExpr::Column(i) == ScalarExpr::Literal, where i is a column for
-    /// which an index exists, with a
-    /// Join{
-    ///   equivalences: [(0, i), (1,0)],
-    ///   ArrangeBy{input, keys: [ScalarExpr::Column(i)]},
-    ///   <constant>
-    /// }
-    pub fn transform(&self, relation: &mut RelationExpr, args: TransformArgs) {
->>>>>>> Do a semijoin when there is a filter on an index.
         relation.visit_mut(&mut |e| {
             self.action(e, indexes);
         });
@@ -134,6 +113,40 @@ impl FilterEqualLiteral {
                                 }
                                 _ => {}
                             }
+                        }
+                    }
+                    if !expr_to_equivalent_literal.is_empty() {
+                        let key_set = &indexes[id];
+                        // find all sets of keys for which every column
+                        // corresponds to an equality to a literal
+                        // The JoinImplementation transform will decide which
+                        // set of key is used
+                        let spanning_key_set = key_set
+                            .iter()
+                            .filter_map(|ks| {
+                                if ks.iter().all(|k| expr_to_equivalent_literal.contains_key(k)) {
+                                    Some(ks.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        if !spanning_key_set.is_empty() {
+                            let mut equivalences = Vec::new();
+                            for spanning_keys in spanning_key_set.iter() {
+                                for key in spanning_keys {
+                                    let equivalent_literal = expr_to_equivalent_literal.remove(&key);
+                                    if equivalent_literal.is_some() {
+                                        equivalences
+                                            .push(vec![key.clone(), equivalent_literal.unwrap()])
+                                    }
+                                }
+                            }
+                            let converted_join = RelationExpr::join_scalars(
+                                vec![input.take_dangerous().arrange_by(&spanning_key_set)],
+                                equivalences,
+                            );
+                            *input = Box::new(converted_join);
                         }
                     }
                 }

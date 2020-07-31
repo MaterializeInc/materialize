@@ -9,6 +9,8 @@
 
 #![allow(clippy::op_ref)]
 
+use std::collections::HashMap;
+
 use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
 use timely::dataflow::Scope;
@@ -73,16 +75,54 @@ where
                             offset += arities[input];
                         }
 
+                        // filter arrangements using semijoins if possible
+                        let mut equivalences = equivalences.clone();
+                        for equivalence in equivalences.iter_mut() {
+                            equivalence.sort();
+                            equivalence.dedup();
+                        }
+
+                        // if possible, shorten input arrangements by joining them with a
+                        // constant row. Create a map to look up the shortened
+                        // arrangements to use
+                        let mut filter_constants = vec![];
+                        let mut filtered_input_lookup = HashMap::new();
+
+                        for (index, input) in inputs.iter().enumerate() {
+                            if let RelationExpr::ArrangeBy {keys, ..} = input {
+                                for key in keys.iter() {
+                                    let result = self.filter_on_index_if_able(
+                                        &input,
+                                        prior_arities[index],
+                                        key,
+                                        &equivalences,
+                                        scope,
+                                        worker_index
+                                    );
+                                    if let Some((filtered_input, constants)) = result {
+                                        filter_constants.extend(constants);
+                                        filtered_input_lookup.insert((index, key.clone()), filtered_input);
+                                    } else {
+                                        filtered_input_lookup.insert((index, key.clone()), input.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        filter_constants.sort();
+                        filter_constants.dedup();
+                        // eliminate filters that have already been applied from
+                        // `equivalences`
+                        for equivalence in equivalences.iter_mut() {
+                            equivalence.retain(|expr| !filter_constants.contains(expr));
+                        }
+                        equivalences.retain(|e| e.len() > 1);
+
                         let mut err_streams = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
-
                             // We maintain a private copy of `equivalences`, which we will digest
                             // as we produce the join.
                             let mut equivalences = equivalences.clone();
-                            for equivalence in equivalences.iter_mut() {
-                                equivalence.sort();
-                                equivalence.dedup();
-                            }
 
                             // This collection determines changes that result from updates inbound
                             // from `inputs[relation]` and reflects all strictly prior updates and
@@ -116,7 +156,6 @@ where
                                 // Repeatedly update `update_stream` to reflect joins with more and more
                                 // other relations, in the specified order.
                                 for (other, next_key) in order.iter() {
-
                                     let mut next_key_rebased = next_key.clone();
                                     for expr in next_key_rebased.iter_mut() {
                                         expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
@@ -170,11 +209,11 @@ where
                                     // arrangement, rather than re-wrap each time we use a thing.
                                     let subtract = subtract.clone();
                                     let (oks, errs) = match self
-                                        .arrangement(&inputs[*other], &next_key[..])
+                                        .arrangement(&filtered_input_lookup[&(*other, next_key.clone())], &next_key[..])
                                         .unwrap_or_else(|| {
                                             panic!(
                                                 "Arrangement alarmingly absent!: {}, {:?}",
-                                                inputs[*other].pretty(),
+                                                filtered_input_lookup[&(*other, next_key.clone())].pretty(),
                                                 &next_key[..]
                                             )
                                         }) {

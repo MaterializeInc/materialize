@@ -7,26 +7,38 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Tests of converting filters to joins when there are useful indexes
+# Annotate each explain plan with what indexes exist to make
+# verifying the correctness of the plan easier
+
 statement ok
 create table foo (
     a int NOT NULL,
     b varchar,
-    c decimal(13, 1)
+    c int
 )
 
+## Plain filter tests ##
+
+### Single equality filter tests ###
+
 statement ok
-INSERT INTO foo (a, b, c) VALUES (5, 'this', -4.4), (3, 'just', 11.3), (-45, 'it', 10.2)
+INSERT INTO foo (a, b, c) VALUES (5, 'this', -4), (3, 'just', 11), (5, 'it', 5), (5, null, 12)
+
+statement ok
+INSERT INTO foo (a, b, c) VALUES (4, 'it', 10), (4, null, 4)
 
 statement ok
 create table bar (
     a int NOT NULL,
     d varchar,
-    e decimal(13, 1)
+    e int
 )
 
 statement ok
-INSERT INTO bar (a, d, e) VALUES (-45, 'our', 3.14), (5, 'still', -0.0), (-3, 'is', -1.0)
+INSERT INTO bar (a, d, e) VALUES (-45, 'our', 3), (5, 'still', 12), (3, 'is', -1), (3, 'time', 11)
 
+# no indexes
 query T multiline
 explain plan for select b, c from foo where a = 5
 ----
@@ -40,85 +52,1174 @@ EOF
 query TR
 select b, c from foo where a = 5
 ----
+NULL
+12
+it
+5
 this
--4.400
+-4
+
+# alternative way to write the same filter
+query T multiline
+EXPLAIN PLAN FOR select b, c from foo, (SELECT 5 as a) const WHERE const.a=foo.a;
+----
+%0 =
+| Get materialize.public.foo (u1)
+
+%1 =
+| Join %0 (= #0 5)
+| | implementation = Differential %0
+| | demand = (#1, #2)
+| Project (#1, #2)
+
+EOF
+
+#TODO: more ideal plan should be:
+# %0 =
+#| Get materialize.public.foo (u1)
+#| Filter (#0 = 5)
+#| Project (#1, #2)
+
+query TR
+select b, c from foo, (SELECT 5 as a) const WHERE const.a=foo.a;
+----
+NULL
+12
+it
+5
+this
+-4
 
 statement ok
 create index foo_idx on foo(a);
 
-#TODO (wangandi) (materialize#616): uncomment these tests when FilterEqualLiteral is enabled
+#index foo(a) exists
+query T multiline
+EXPLAIN PLAN FOR SELECT b, c FROM foo WHERE a = 5
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
 
-#query T multiline
-#explain plan for select b, c from foo where a = 5
-#----
-#Project {
-#  outputs: [1, 2],
-#  Join {
-#    variables: [[(0, 0), (1, 0)]],
-#    ArrangeBy { keys: [[#0]], Get { foo (u1) } },
-#    Constant [[5]]
-#  }
-#}
+%1 =
+| Join %0 (= #0 5)
+| | implementation = Differential %0.(#0)
+| | demand = (#1, #2)
+| Project (#1, #2)
+
+EOF
 
 query TR
 select b, c from foo where a = 5
 ----
+NULL
+12
+it
+5
 this
--4.400
+-4
 
-#query T multiline
-#explain plan for select b, c from foo where a = 5 and b = 'this'
-#----
-#Project {
-#  outputs: [1, 2],
-#  Filter {
-#    predicates: [#1 = "this"],
-#    Join {
-#      variables: [[(0, 0), (1, 0)]],
-#      ArrangeBy { keys: [[#0]], Get { foo (u1) } },
-#      Constant [[5]],
-#    }
-#  }
-#}
+#index foo(a) exists
+query T multiline
+EXPLAIN PLAN FOR select b, c from foo, (SELECT 5 as a) const WHERE const.a=foo.a;
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Join %0 (= #0 5)
+| | implementation = Differential %0.(#0)
+| | demand = (#1, #2)
+| Project (#1, #2)
+
+EOF
 
 query TR
-select b, c from foo where a = 5
+select b, c from foo, (SELECT 5 as a) const WHERE const.a=foo.a;
+----
+NULL
+12
+it
+5
+this
+-4
+
+### Tests involving two equality filters ###
+
+#index on foo(a) exists
+query T multiline
+EXPLAIN PLAN FOR SELECT b, c FROM foo WHERE a = 5 and b = 'this'
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Join %0 (= #0 5)
+| | implementation = Differential %0.(#0)
+| | demand = (#1, #2)
+| Filter (#1 = "this")
+| Project (#1, #2)
+
+EOF
+
+query TR
+SELECT b, c FROM foo WHERE a = 5 and b = 'this'
 ----
 this
--4.400
-
-statement ok
-create index foo_idx2 on foo(b, a);
+-4
 
 statement ok
 create index foo_idx3 on foo(b);
 
-#query T multiline
-#explain plan for select b, c from foo where a = 5 and b = 'this'
-#----
-#Project {
-#  outputs: [1, 2],
-#  Join {
-#    variables: [[(0, 1), (1, 0)], [(0, 0), (1, 1)]],
-#    ArrangeBy { keys: [[#1, #0]], Get { foo (u1) } },
-#    Constant [["this", 5]],
-#  }
-#}
+#indexes on foo(a) and foo(b) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT b, c FROM foo WHERE a = 5 and b = 'this'
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#1)
 
-#TODO (wangandi) (materialize#616): uncomment these tests when FilterEqualLiteral is enabled
-#think about what the desired plan is when
-#statement ok
-#create index bar_idx on bar(a)
-#
-#query T multiline
-#explain plan for select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
-#----
+%1 =
+| Join %0 (= #0 5) (= #1 "this")
+| | implementation = Differential %0.(#1)
+| | demand = (#1, #2)
+| Project (#1, #2)
+
+EOF
+
+query TR
+select b, c from foo where a = 5 and b = 'this'
+----
+this
+-4
+
+statement ok
+create index foo_idx2 on foo(b, a);
+
+#indexes on foo(a), foo(b, a), and foo(b) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT b, c FROM foo WHERE a = 5 and b = 'this'
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#1, #0)
+
+%1 =
+| Join %0 (= #0 5) (= #1 "this")
+| | implementation = Differential %0.(#1, #0)
+| | demand = (#1, #2)
+| Project (#1, #2)
+
+EOF
+
+query TR
+SELECT b, c FROM foo WHERE a = 5 and b = 'this'
+----
+this
+-4
+
+### Test of two equality filters, both containing the same literal ###
+
+#indexes on foo(a), foo(b, a), and foo(b) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT b FROM foo WHERE a = 5 and c = 5
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Join %0 (= #0 5)
+| | implementation = Differential %0.(#0)
+| | demand = (#1, #2)
+| Filter (#2 = 5)
+| Project (#1)
+
+EOF
+
+query T
+SELECT b FROM foo WHERE a = 5 and c = 5
+----
+it
+
+statement ok
+create index foo_idx4 on foo(a, c)
+
+#indexes on foo(a), foo(b, a), foo(b), and foo(a,c) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT b FROM foo WHERE a = 5 and c = 5
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0, #2)
+
+%1 =
+| Join %0 (= #0 #2 5)
+| | implementation = Differential %0.(#0, #2)
+| | demand = (#1)
+| Project (#1)
+
+EOF
+
+query T
+SELECT b FROM foo WHERE a = 5 and c = 5
+----
+it
+
+### Test of one equality on literal + one equality on non-literals ###
+
+#indexes on foo(a), foo(b, a), foo(b), and foo(a,c) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT a, c FROM foo WHERE b = 'it' and a = c
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#1)
+
+%1 =
+| Join %0 (= #1 "it")
+| | implementation = Differential %0.(#1)
+| | demand = (#0, #2)
+| Filter (#0 = #2)
+| Project (#0, #2)
+
+EOF
+
+query II
+SELECT a, c FROM foo WHERE b = 'it' and a = c
+----
+5
+5
+
+### Test of one equality on literal + one inequality on literal ###
+
+#indexes on foo(a), foo(b, a), foo(b), and foo(a,c) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT b FROM foo WHERE a = 5 and c < 10
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Join %0 (= #0 5)
+| | implementation = Differential %0.(#0)
+| | demand = (#1, #2)
+| Filter (#2 < 10)
+| Project (#1)
+
+EOF
+
+query T
+SELECT b FROM foo WHERE a = 5 and c < 10
+----
+it
+this
+
+statement ok
+drop index foo_idx4
+
+#indexes on foo(a), foo(b, a), and foo(b) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT b FROM foo WHERE a = 5 and c < 10
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Join %0 (= #0 5)
+| | implementation = Differential %0.(#0)
+| | demand = (#1, #2)
+| Filter (#2 < 10)
+| Project (#1)
+
+EOF
+
+query T
+SELECT b FROM foo WHERE a = 5 and c < 10
+----
+it
+this
+
+## Join Interaction Tests ##
+
+statement ok
+create index bar_idx on bar(a)
+
+### Edge case: multiple unequal literals in the same equivalence class ###
+
+#indexes on bar(a), foo(a), foo(b, a), and foo(b) exist
+query T multiline
+explain plan for select b, c from foo, bar where bar.a = foo.a and foo.a=5 and foo.a=-45
+----
+%0 =
+| Constant
+
+EOF
+
+query TR
+select b, c from foo, bar where bar.a = foo.a and foo.a=5 and foo.a=-45
+----
+
+#indexes on bar(a), foo(a), foo(b, a), and foo(b) exist
+query T multiline
+explain plan for select b, c from foo, bar where bar.a = foo.a and bar.a=5 and foo.a=-45
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0)
+
+%2 =
+| Join %0 %1 (= #0 #3 5 -45)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | demand = (#1, #2)
+| Project (#1, #2)
+
+EOF
+
+# TODO: this plan should become
+# %0 =
+#| Constant
+
+query TR
+select b, c from foo, bar where bar.a = foo.a and foo.a=5 and foo.a=-45
+----
+
+### tests of join + filter for equality on a column that is not a column being joined on ###
+
+#indexes on bar(a), foo(a), foo(b, a), and foo(b) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and b = 'this'
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0)
+
+%2 =
+| Join %0 %1 (= #1 "this") (= #0 #3)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | demand = (#0..#2, #4, #5)
+| Project (#0..#2, #4, #5)
+
+EOF
 
 query ITRTR
-select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and b = 'this'
 ----
 5
 this
--4.400
+-4
 still
-0.000
+12
+
+statement ok
+drop index foo_idx2;
+
+#indexes on bar(a), foo(a), and foo(b) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and b = 'this'
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0)
+
+%2 =
+| Join %0 %1 (= #1 "this") (= #0 #3)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | demand = (#0..#2, #4, #5)
+| Project (#0..#2, #4, #5)
+
+EOF
+
+query ITRTR
+SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and b = 'this'
+----
+5
+this
+-4
+still
+12
+
+statement ok
+drop index foo_idx3;
+
+#indexes on bar(a) and foo(a) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and b = 'this'
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0)
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = DeltaQuery %0 %1.(#0) | %1 %0.(#0)
+| | demand = (#0..#2, #4, #5)
+| Filter (#1 = "this")
+| Project (#0..#2, #4, #5)
+
+EOF
+
+query ITRTR
+SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and b = 'this'
+----
+5
+this
+-4
+still
+12
+
+statement ok
+drop index foo_idx;
+
+statement ok
+create index foo_idx3 on foo(b);
+
+# indexes on bar(a) and foo(b) exist
+query T multiline
+EXPLAIN PLAN FOR SELECT foo.a, b, c, d, e FROM foo, bar WHERE bar.a = foo.a and b = 'this'
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#1)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0)
+
+%2 =
+| Join %0 %1 (= #0 #3) (= #1 "this")
+| | implementation = Differential %0.(#1) %1.(#0)
+| | demand = (#0..#2, #4, #5)
+| Project (#0..#2, #4, #5)
+
+EOF
+
+query ITRTR
+select foo.a, b, c, d, e from foo, bar where bar.a = foo.a and b = 'this'
+----
+5
+this
+-4
+still
+12
+
+### tests of join + filter for equality on a column that is also being joined on ###
+
+# Note: this is a simplified version of a test FROM sqlite/SELECT5.test
+
+statement ok
+CREATE TABLE t36(
+  a36 INTEGER PRIMARY KEY,
+  b36 INTEGER,
+  x36 VARCHAR(40)
+)
+
+statement ok
+INSERT INTO t36 VALUES(1,7,'table t36 row 1')
+
+statement ok
+INSERT INTO t36 VALUES(2,8,'table t36 row 2')
+
+statement ok
+INSERT INTO t36 VALUES(3,6,'table t36 row 3')
+
+statement ok
+INSERT INTO t36 VALUES(4,4,'table t36 row 4')
+
+statement ok
+INSERT INTO t36 VALUES(5,9,'table t36 row 5')
+
+statement ok
+INSERT INTO t36 VALUES(6,1,'table t36 row 6')
+
+statement ok
+INSERT INTO t36 VALUES(7,2,'table t36 row 7')
+
+statement ok
+INSERT INTO t36 VALUES(8,3,'table t36 row 8')
+
+statement ok
+INSERT INTO t36 VALUES(9,5,'table t36 row 9')
+
+statement ok
+INSERT INTO t36 VALUES(10,10,'table t36 row 10')
+
+statement ok
+CREATE TABLE t36_no_primary(
+  a36 INTEGER,
+  b36 INTEGER,
+  x36 VARCHAR(40)
+)
+
+statement ok
+INSERT INTO t36_no_primary VALUES(1,7,'table t36 row 1')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(2,8,'table t36 row 2')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(3,6,'table t36 row 3')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(4,4,'table t36 row 4')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(5,9,'table t36 row 5')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(6,1,'table t36 row 6')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(7,2,'table t36 row 7')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(8,3,'table t36 row 8')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(9,5,'table t36 row 9')
+
+statement ok
+INSERT INTO t36_no_primary VALUES(10,10,'table t36 row 10')
+
+statement ok
+CREATE TABLE t57(
+  a57 INTEGER PRIMARY KEY,
+  b57 INTEGER,
+  x57 VARCHAR(40)
+)
+
+statement ok
+INSERT INTO t57 VALUES(1,9,'table t57 row 1')
+
+statement ok
+INSERT INTO t57 VALUES(2,5,'table t57 row 2')
+
+statement ok
+INSERT INTO t57 VALUES(3,4,'table t57 row 3')
+
+statement ok
+INSERT INTO t57 VALUES(4,8,'table t57 row 4')
+
+statement ok
+INSERT INTO t57 VALUES(5,2,'table t57 row 5')
+
+statement ok
+INSERT INTO t57 VALUES(6,3,'table t57 row 6')
+
+statement ok
+INSERT INTO t57 VALUES(7,10,'table t57 row 7')
+
+statement ok
+INSERT INTO t57 VALUES(8,7,'table t57 row 8')
+
+statement ok
+INSERT INTO t57 VALUES(9,1,'table t57 row 9')
+
+statement ok
+INSERT INTO t57 VALUES(10,6,'table t57 row 10')
+
+statement ok
+INSERT INTO t57 VALUES(11,12,'table t57 row 11')
+
+# indices exist on t36(a) and t57(a)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, x57 FROM t36, t57 WHERE a36=3 AND a36=b57
+----
+%0 =
+| Get materialize.public.t36 (u41)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t57 (u45)
+
+%2 =
+| Join %0 %1 (= #0 #4 3)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#2, #5)
+| Project (#2, #5)
+
+EOF
+
+query TT valuesort
+SELECT x36, x57 FROM t36, t57 WHERE a36=3 AND a36=b57
+----
+table t36 row 3
+table t57 row 6
+
+statement ok
+create index b57 on t57(b57)
+
+# indices exist on t36(a57), t57(a57), and t57(b57)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, x57 FROM t36, t57 WHERE a36=3 AND a36=b57
+----
+%0 =
+| Get materialize.public.t36 (u41)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t57 (u45)
+| ArrangeBy (#1)
+
+%2 =
+| Join %0 %1 (= #0 #4 3)
+| | implementation = DeltaQuery %0 %1.(#1) | %1 %0.(#0)
+| | demand = (#2, #5)
+| Project (#2, #5)
+
+EOF
+
+query TT valuesort
+SELECT x36, x57 FROM t36, t57 WHERE a36=3 AND a36=b57
+----
+table t36 row 3
+table t57 row 6
+
+statement ok
+drop index b57
+
+statement ok
+create index b36 on t36_no_primary(b36)
+
+# indices exist on t36(b36), t57(a57)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, x57 FROM t36_no_primary, t57 WHERE a36=3 AND a36=b57
+----
+%0 =
+| Get materialize.public.t36_no_primary (u43)
+| Filter (#0 = 3)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t57 (u45)
+
+%2 =
+| Join %0 %1 (= #0 #4)
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#2, #5)
+| Project (#2, #5)
+
+EOF
+
+query TT valuesort
+SELECT x36, x57 FROM t36_no_primary, t57 WHERE a36=3 AND a36=b57
+----
+table t36 row 3
+table t57 row 6
+
+### test of join + filter on a join column + filter not on a join column but ###
+### with same literal as other filter ###
+
+statement ok
+create index foo_idx5 on foo(c)
+
+# indexes exist on t36_no_primary(b36), foo(b), foo(c)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, foo.b FROM t36_no_primary, foo WHERE foo.a = 5 AND foo.c = 5 AND a36 = foo.a
+----
+%0 =
+| Get materialize.public.t36_no_primary (u43)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#2)
+
+%2 =
+| Join %0 %1 (= #0 #3) (= #5 5)
+| | implementation = Differential %1.(#2) %0.(#0)
+| | demand = (#0, #2, #4)
+| Filter (#0 = 5)
+| Project (#2, #4)
+
+EOF
+
+query TT valuesort
+SELECT x36, foo.b FROM t36_no_primary, foo WHERE foo.a = 5 AND foo.c = 5 AND a36 = foo.a
+----
+it
+table t36 row 5
+
+statement ok
+create index foo_idx4 on foo(a, c)
+
+# indexes exist on t36_no_primary(b36), foo(b), foo(c), foo(a, c)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, foo.b FROM t36_no_primary, foo WHERE foo.a = 5 AND foo.c = 5 AND a36 = foo.a
+----
+%0 =
+| Get materialize.public.t36_no_primary (u43)
+
+%1 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0, #2)
+
+%2 =
+| Join %0 %1 (= #0 #3 #5 5)
+| | implementation = Differential %0 %1.(#0, #2)
+| | demand = (#2, #4)
+| Project (#2, #4)
+
+EOF
+
+query TT valuesort
+SELECT x36, foo.b FROM t36_no_primary, foo WHERE foo.a = 5 AND foo.c = 5 AND a36 = foo.a
+----
+it
+table t36 row 5
+
+statement ok
+create index foo_idx on foo(a)
+
+# indexes exist on t36(a), foo(a), foo(b), foo(c), foo(a, c)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, foo.b FROM t36, foo WHERE foo.a = 5 AND foo.c = 5 AND a36 = foo.a
+----
+%0 =
+| Get materialize.public.t36 (u41)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0, #2)
+
+%2 =
+| Join %0 %1 (= #0 #3 #5 5)
+| | implementation = DeltaQuery %0 %1.(#0, #2) | %1 %0.(#0)
+| | demand = (#2, #4)
+| Project (#2, #4)
+
+EOF
+
+query TT valuesort
+SELECT x36, foo.b FROM t36, foo WHERE foo.a = 5 AND foo.c = 5 AND a36 = foo.a
+----
+it
+table t36 row 5
+
+### tests of delta query where there are two arrangements on an input that is being filtered ###
+
+# arrangements in delta query do not overlap - single filter test
+
+statement ok
+create index t36_idx2 on t36(b36)
+
+statement ok
+create index b57 on t57(b57)
+
+# indexes exist on t36(a36), t36(b36), foo(a), foo(b), foo(c), foo(a, c), t57(a57)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, x57, foo.b FROM foo, t36, t57 WHERE a36 = 5 AND foo.a = a36 AND b36 = b57
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.t36 (u41)
+| ArrangeBy (#0) (#1)
+
+%2 =
+| Get materialize.public.t57 (u45)
+| ArrangeBy (#1)
+
+%3 =
+| Join %0 %1 %2 (= #0 #3 5) (= #4 #7)
+| | implementation = DeltaQuery %0 %1.(#0) %2.(#1) | %1 %0.(#0) %2.(#1) | %2 %1.(#1) %0.(#0)
+| | demand = (#1, #4, #5, #8)
+| Filter !(isnull(#4))
+| Project (#5, #8, #1)
+
+EOF
+
+query TTT
+SELECT x36, x57, foo.b FROM foo, t36, t57 WHERE a36 = 5 AND foo.a = a36 AND b36 = b57
+----
+table t36 row 5
+table t57 row 1
+NULL
+table t36 row 5
+table t57 row 1
+it
+table t36 row 5
+table t57 row 1
+this
+
+# arrangements in delta query do not overlap - one filter for each
+# non-overlapping arrangement
+
+# indexes exist on t36(a36), t36(b36), foo(a), foo(b), foo(c), foo(a, c),
+# t57(a57)
+query T multiline
+EXPLAIN PLAN FOR SELECT x36, x57, foo.b FROM foo, t36, t57 WHERE a36=5 AND foo.a = a36 AND foo.c = b57 AND b57=12
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0) (#2)
+
+%1 =
+| Get materialize.public.t36 (u41)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.t57 (u45)
+| ArrangeBy (#1)
+
+%3 =
+| Join %0 %1 %2 (= #0 #3 5) (= #2 #7 12)
+| | implementation = DeltaQuery %0 %1.(#0) %2.(#1) | %1 %0.(#0) %2.(#1) | %2 %0.(#2) %1.(#0)
+| | demand = (#1, #5, #8)
+| Project (#5, #8, #1)
+
+EOF
+
+query TTT
+SELECT x36, x57, foo.b FROM foo, t36, t57 WHERE a36=5 AND foo.a = a36 AND foo.c = b57 AND b57=12
+----
+table t36 row 5
+table t57 row 11
+NULL
+
+# arrangements in delta query do overlap - single filter
+
+statement ok
+create index bar_idx2 on bar(a, e)
+
+# indexes exist on t36(a36), t36(b36), foo(a), foo(b), foo(c), foo(a, c), bar(a), bar(a,e)
+query T multiline
+EXPLAIN PLAN FOR
+SELECT x36, bar.d, foo.b
+FROM foo, bar, t36
+WHERE foo.a = bar.a
+  AND foo.a = a36
+  AND foo.c = bar.e
+  AND foo.a = 5
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0) (#0, #2)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0, #2)
+
+%2 =
+| Get materialize.public.t36 (u41)
+| ArrangeBy (#0)
+
+%3 =
+| Join %0 %1 %2 (= #0 #3 #6 5) (= #2 #5)
+| | implementation = DeltaQuery %0 %2.(#0) %1.(#0, #2) | %1 %2.(#0) %0.(#0, #2) | %2 %0.(#0) %1.(#0, #2)
+| | demand = (#1, #2, #4, #8)
+| Filter !(isnull(#2))
+| Project (#8, #4, #1)
+
+EOF
+
+query TTT
+SELECT x36, bar.d, foo.b
+FROM foo, bar, t36
+WHERE foo.a = bar.a
+  AND foo.a = a36
+  AND foo.c = bar.e
+  AND foo.a = 5
+----
+table t36 row 5
+still
+NULL
+
+# arrangements in delta query overlap and filters span an input's join columns
+statement ok
+CREATE TABLE baz(a int NOT NULL, f VARCHAR, g int);
+
+statement ok
+INSERT INTO baz (a, f, g) VALUES (12, 'dream', null), (3, 'just', 5), (12, 'is', -4), (-1, null, 11)
+
+statement ok
+INSERT INTO baz (a, f, g) VALUES (5, 'this', -1)
+
+statement ok
+CREATE INDEX baz_idx ON baz(a, f);
+
+statement ok
+CREATE INDEX foo_idx2 on foo(b, a);
+
+# indexes exist on foo(a), foo(b), foo(c), foo(a, c), foo(a,b), bar(a), bar(a,e), baz(a,f)
+query T multiline
+EXPLAIN PLAN FOR select c, e, g
+from foo, bar, baz
+where foo.a = baz.a
+  and foo.b = baz.f
+  and foo.a = bar.a
+  and foo.c = bar.e
+  and foo.a = 3
+  and foo.b = 'just'
+  and foo.c = 11
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0, #2) (#1, #0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0, #2)
+
+%2 =
+| Get materialize.public.baz (u73)
+| ArrangeBy (#0, #1)
+
+%3 =
+| Join %0 %1 %2 (= #0 #3 #6 3) (= #1 #7 "just") (= #2 #5 11)
+| | implementation = DeltaQuery %0 %1.(#0, #2) %2.(#0, #1) | %1 %0.(#0, #2) %2.(#0, #1) | %2 %0.(#1, #0) %1.(#0, #2)
+| | demand = (#2, #8)
+| Project (#2, #2, #8)
+
+EOF
+
+query ITI
+select c, d, g
+from foo, bar, baz
+where foo.a = bar.a
+  and foo.b = baz.f
+  and foo.a = baz.a
+  and foo.c = bar.e
+  and foo.a = 3
+  and foo.b = 'just'
+  and foo.c = 11
+----
+11
+time
+5
+
+### interaction with differential joins whose plans involve a starting ###
+### arrangement that does not line up with the join keys in the next input ###
+
+statement ok
+drop index foo_idx2
+
+# indexes exist on foo(a), foo(b), foo(c), foo(a, c), baz(a,f)
+# also, there exist default indexes on foo(a, b, c), baz(a, b, c)
+query T multiline
+EXPLAIN PLAN FOR select c, g
+from foo, baz
+where foo.b = baz.f
+  and foo.a = baz.a
+  and foo.a = 3
+  and foo.b = 'just'
+  and foo.c = 11
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0, #1, #2)
+
+%1 =
+| Get materialize.public.baz (u73)
+| ArrangeBy (#0, #1)
+
+%2 =
+| Join %0 %1 (= #0 #3 3) (= #1 #4 "just") (= #2 11)
+| | implementation = Differential %0.(#0, #1, #2) %1.(#0, #1)
+| | demand = (#2, #5)
+| Project (#2, #5)
+
+EOF
+
+query II
+select c, g
+from foo, baz
+where foo.b = baz.f
+  and foo.a = baz.a
+  and foo.a = 3
+  and foo.b = 'just'
+  and foo.c = 11
+----
+11
+5
+
+statement ok
+DROP INDEX baz_idx;
+
+# indexes exist on foo(a), foo(b), foo(c), foo(a, c)
+# also, there exist default indexes on foo(a, b, c), baz(a, b, c)
+query T multiline
+EXPLAIN PLAN FOR select c, g
+from foo, baz
+where foo.b = baz.f
+  and foo.a = baz.a
+  and foo.a = 3
+  and foo.b = 'just'
+  and foo.c = 11
+  and baz.a = 3
+  and baz.f = 'just'
+  and baz.g = 5
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0, #1)
+
+%1 =
+| Get materialize.public.baz (u73)
+| ArrangeBy (#0, #1, #2)
+
+%2 =
+| Join %0 %1 (= #0 #3 3) (= #1 #4 "just") (= #2 11) (= #5 5)
+| | implementation = Differential %1.(#0, #1, #2) %0.(#0, #1)
+| | demand = (#2, #5)
+| Project (#2, #5)
+
+EOF
+
+query II
+select c, g
+from foo, baz
+where foo.b = baz.f
+  and foo.a = baz.a
+  and foo.a = 3
+  and foo.b = 'just'
+  and foo.c = 11
+  and baz.a = 3
+  and baz.f = 'just'
+  and baz.g = 5
+----
+11
+5
+
+### interaction with differential joins whose plans involve a starting ###
+### arrangement that does line up with the join keys in the next input ###
+
+statement ok
+drop index bar_idx2
+
+statement ok
+drop index foo_idx4
+
+statement ok
+CREATE INDEX baz_idx2 ON baz(a, g);
+
+# indexes exist on foo(a), bar(a), baz(a, g)
+query T multiline
+EXPLAIN PLAN FOR select b, d, f
+from foo, bar, baz
+where foo.a = bar.a
+  and bar.e = baz.a
+  and foo.c = baz.g
+  and foo.a = 5
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#0)
+
+%2 =
+| Get materialize.public.baz (u73)
+| ArrangeBy (#0, #2)
+
+%3 =
+| Join %0 %1 %2 (= #0 #3 5) (= #2 #8) (= #5 #6)
+| | implementation = Differential %1.(#0) %0.(#0) %2.(#0, #2)
+| | demand = (#1, #2, #4, #7)
+| Filter !(isnull(#2))
+| Project (#1, #4, #7)
+
+EOF
+
+query TTT
+select b, d, f
+from foo, bar, baz
+where foo.a = bar.a
+  and bar.e = baz.a
+  and foo.c = baz.g
+  and foo.a = 5
+----
+this
+still
+is
+
+### interaction with differential joins -- two different inputs having filters ###
+### on columns not actually being joined together.
+
+statement ok
+create index baz_idx on baz(g);
+
+statement ok
+drop index bar_idx
+
+statement ok
+create index bar_idx3 on bar(d)
+
+statement ok
+create index baz_idx3 on baz(a)
+
+statement ok
+create index bar_idx4 on bar(a,d)
+
+# indexes on foo(a), bar(d), bar(a,d), baz(a), baz(a, g), baz(g)
+query T multiline
+EXPLAIN PLAN FOR select b, d, f
+from foo, bar, baz
+where foo.a = bar.a
+  and foo.c = baz.a
+  and bar.d = 'still'
+  and baz.g = -1
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| ArrangeBy (#1)
+
+%2 =
+| Get materialize.public.baz (u73)
+| ArrangeBy (#0)
+
+%3 =
+| Join %0 %1 %2 (= #0 #3) (= #2 #6) (= #4 "still") (= #8 -1)
+| | implementation = Differential %1.(#1) %0.(#0) %2.(#0)
+| | demand = (#1, #4, #7)
+| Project (#1, #4, #7)
+
+EOF
+
+query TTT
+select b, d, f
+from foo, bar, baz
+where foo.a = bar.a
+  and foo.c = baz.a
+  and bar.d = 'still'
+  and baz.g = -1
+----
+it
+still
+this
