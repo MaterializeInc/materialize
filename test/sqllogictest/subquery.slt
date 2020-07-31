@@ -503,24 +503,14 @@ EXPLAIN PLAN FOR SELECT b IN (SELECT a FROM x) FROM y
 
 %8 =
 | Union %6 %7
+| Map false
 
 %9 =
-| Get %0
-| ArrangeBy (#0)
+| Union %5 %8
 
 %10 =
-| Join %8 %9 (= #0 #1)
-| | implementation = Differential %8 %9.(#0)
-| | demand = (#0)
-| Map false
-| Project (#0, #2)
-
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11 (= #0 #1)
-| | implementation = Differential %11 %4.(#0)
+| Join %4 %9 (= #0 #1)
+| | implementation = Differential %9 %4.(#0)
 | | demand = (#2)
 | Project (#2)
 
@@ -564,24 +554,14 @@ EXPLAIN PLAN FOR SELECT b != ALL(SELECT a FROM x) FROM y
 
 %8 =
 | Union %6 %7
+| Map false
 
 %9 =
-| Get %0
-| ArrangeBy (#0)
+| Union %5 %8
 
 %10 =
-| Join %8 %9 (= #0 #1)
-| | implementation = Differential %8 %9.(#0)
-| | demand = (#0)
-| Map false
-| Project (#0, #2)
-
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11 (= #0 #1)
-| | implementation = Differential %11 %4.(#0)
+| Join %4 %9 (= #0 #1)
+| | implementation = Differential %9 %4.(#0)
 | | demand = (#2)
 | Map !(#2)
 | Project (#3)
@@ -627,24 +607,14 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 
 %8 =
 | Union %6 %7
+| Map false
 
 %9 =
-| Get %0
-| ArrangeBy (#0)
+| Union %5 %8
 
 %10 =
-| Join %8 %9 (= #0 #1)
-| | implementation = Differential %8 %9.(#0)
-| | demand = (#0)
-| Map false
-| Project (#0, #2)
-
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11 (= #0 #1)
-| | implementation = Differential %11 %4.(#0)
+| Join %4 %9 (= #0 #1)
+| | implementation = Differential %9 %4.(#0)
 | | demand = (#2)
 | Map !(#2)
 | Project (#3)

@@ -185,9 +185,13 @@ impl RedundantJoin {
             RelationExpr::Map { input, .. } => self.action(input, lets),
 
             RelationExpr::Union { left, right } => {
-                self.action(left, lets);
-                self.action(right, lets);
-                Vec::new()
+                let prov_l = self.action(left, lets);
+                let prov_r = self.action(right, lets);
+                let mut result = Vec::new();
+                for l in prov_l {
+                    result.extend(prov_r.iter().flat_map(|r| l.meet(r)))
+                }
+                result
             }
 
             RelationExpr::Constant { .. } => Vec::new(),
@@ -220,6 +224,7 @@ impl RedundantJoin {
                         .collect::<Vec<_>>();
                     prov.binding = new_bindings;
                 }
+                result.retain(|p| !p.binding.is_empty());
                 // TODO: For min, max aggregates, we could preserve provenance
                 // if the expression references a column.
                 result
@@ -277,7 +282,7 @@ impl RedundantJoin {
 }
 
 /// A relationship between a collections columns and some source columns.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct ProvInfo {
     // The Id (local or global) of the source
     id: Id,
@@ -286,6 +291,23 @@ pub struct ProvInfo {
     binding: Vec<(usize, usize)>,
     // Are these the exact set of columns, with none omitted?
     exact: bool,
+}
+
+impl ProvInfo {
+    fn meet(&self, other: &Self) -> Option<Self> {
+        if self.id == other.id {
+            let mut result = self.clone();
+            result.binding.retain(|b| other.binding.contains(b));
+            result.exact &= other.exact;
+            if !result.binding.is_empty() {
+                Some(result)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 // Attempts to discover a replacement relation for `input`, and replacement column bindings for its columns.
@@ -297,6 +319,7 @@ fn find_redundancy(
     equivalences: &[Vec<ScalarExpr>],
     input_prov: &[Vec<ProvInfo>],
 ) -> Option<Vec<usize>> {
+
     // println!();
     // println!("Input: {}", input);
     // println!("Arities: {:?}", input_arities);
