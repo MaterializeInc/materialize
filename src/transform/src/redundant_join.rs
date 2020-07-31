@@ -101,6 +101,7 @@ impl RedundantJoin {
                 // If we find an input that can be removed, we should do so!
                 // We only do this once per invocation to keep our sanity, but we could rewrite it to iterate.
                 if let Some((input, bindings)) = (0..input_types.len())
+                    .rev()
                     .filter(|i| !input_types[*i].keys.is_empty())
                     .flat_map(|i| {
                         find_redundancy(
