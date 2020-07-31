@@ -259,7 +259,10 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use std::error::Error;
+    use std::rc::Rc;
 
     use super::*;
     use crate::catalog::DummyCatalog;
@@ -270,6 +273,7 @@ mod tests {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
             catalog: &DummyCatalog,
+            param_types: Rc::new(RefCell::new(BTreeMap::new())),
         };
 
         let parsed = sql_parser::parser::parse_statements(

@@ -541,10 +541,11 @@ where
                 Message::Command(Command::Describe {
                     name,
                     stmt,
+                    param_types,
                     mut session,
                     tx,
                 }) => {
-                    let result = self.handle_describe(&mut session, name, stmt);
+                    let result = self.handle_describe(&mut session, name, stmt, param_types);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -2470,9 +2471,14 @@ where
         session: &mut Session,
         name: String,
         stmt: Option<Statement>,
+        param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), anyhow::Error> {
         let (desc, param_types) = if let Some(stmt) = stmt.clone() {
-            match sql::plan::describe(&self.catalog.for_session(session), stmt.clone()) {
+            match sql::plan::describe(
+                &self.catalog.for_session(session),
+                stmt.clone(),
+                &param_types,
+            ) {
                 Ok((desc, param_types)) => (desc, param_types),
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres

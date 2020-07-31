@@ -124,9 +124,11 @@ where
 
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => self.query(session, sql).await?,
-            Some(FrontendMessage::Parse { name, sql, .. }) => {
-                self.parse(session, name, sql).await?
-            }
+            Some(FrontendMessage::Parse {
+                name,
+                sql,
+                param_types,
+            }) => self.parse(session, name, sql, param_types).await?,
             Some(FrontendMessage::Bind {
                 portal_name,
                 statement_name,
@@ -273,6 +275,7 @@ where
         let cmd = coord::Command::Describe {
             name: stmt_name.clone(),
             stmt: Some(stmt),
+            param_types: vec![],
             session,
             tx,
         };
@@ -383,7 +386,25 @@ where
         session: Session,
         name: String,
         sql: String,
+        param_oids: Vec<u32>,
     ) -> Result<State, comm::Error> {
+        let mut param_types = vec![];
+        for oid in param_oids {
+            match pgrepr::Type::from_oid(oid) {
+                Some(ty) => param_types.push(Some(ty)),
+                None if oid == 0 => param_types.push(None),
+                None => {
+                    return self
+                        .error(
+                            session,
+                            SqlState::PROTOCOL_VIOLATION,
+                            format!("unable to decode parameter whose type OID is {}", oid),
+                        )
+                        .await
+                }
+            }
+        }
+
         let (tx, rx) = futures::channel::oneshot::channel();
         let stmts = match sql::parse::parse(sql.clone()) {
             Ok(stmts) => stmts,
@@ -406,6 +427,7 @@ where
         let cmd = coord::Command::Describe {
             name,
             stmt: maybe_stmt,
+            param_types,
             session,
             tx,
         };

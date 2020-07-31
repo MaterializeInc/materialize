@@ -61,6 +61,28 @@ lazy_static! {
 }
 
 impl Type {
+    /// Returns the type corresponding to the provided OID, if the OID is known.
+    pub fn from_oid(oid: u32) -> Option<Type> {
+        let ty = postgres_types::Type::from_oid(oid)?;
+        match ty {
+            postgres_types::Type::BOOL => Some(Type::Bool),
+            postgres_types::Type::BYTEA => Some(Type::Bytea),
+            postgres_types::Type::DATE => Some(Type::Date),
+            postgres_types::Type::FLOAT4 => Some(Type::Float4),
+            postgres_types::Type::FLOAT8 => Some(Type::Float8),
+            postgres_types::Type::INT4 => Some(Type::Int4),
+            postgres_types::Type::INT8 => Some(Type::Int8),
+            postgres_types::Type::INTERVAL => Some(Type::Interval),
+            postgres_types::Type::JSONB => Some(Type::Jsonb),
+            postgres_types::Type::NUMERIC => Some(Type::Numeric),
+            postgres_types::Type::TEXT | postgres_types::Type::VARCHAR => Some(Type::Text),
+            postgres_types::Type::TIME => Some(Type::Time),
+            postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
+            postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
+            _ => None,
+        }
+    }
+
     pub(crate) fn inner(&self) -> &'static postgres_types::Type {
         match self {
             Type::Bool => &postgres_types::Type::BOOL,
