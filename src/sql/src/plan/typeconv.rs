@@ -193,6 +193,7 @@ lazy_static! {
         casts! {
             // BOOL
             (Bool, Explicit(String)) => CastBoolToStringExplicit,
+            (Bool, Explicit(Int32)) => CastBoolToInt32,
             (Bool, JsonbAny) => CastJsonbOrNullToJsonb,
 
             //INT32
