@@ -39,9 +39,9 @@ pub struct BuiltinCommand {
 }
 
 #[derive(Debug, Clone)]
-pub enum SqlExpectedResult {
+pub enum SqlOutput {
     Full {
-        column_names: Vec<String>,
+        column_names: Option<Vec<String>>,
         expected_rows: Vec<Vec<String>>,
     },
     Hashed {
@@ -52,7 +52,7 @@ pub enum SqlExpectedResult {
 #[derive(Debug, Clone)]
 pub struct SqlCommand {
     pub query: String,
-    pub expected_result: SqlExpectedResult,
+    pub expected_output: SqlOutput,
 }
 
 #[derive(Debug, Clone)]
@@ -136,7 +136,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     let query = line1[1..].trim().to_owned();
     let line2 = slurp_one(line_reader);
     let line3 = slurp_one(line_reader);
-    let mut column_names = Vec::new();
+    let mut column_names = None;
     let mut expected_rows = Vec::new();
     lazy_static! {
         static ref HASH_REGEX: Regex = Regex::new(r"^(\S+) values hashing to (\S+)$").unwrap();
@@ -144,7 +144,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     match (line2, line3) {
         (Some((pos2, line2)), Some((pos3, line3))) => {
             if line3.len() >= 3 && line3.chars().all(|c| c == '-') {
-                column_names = split_line(pos2, &line2)?;
+                column_names = Some(split_line(pos2, &line2)?);
             } else {
                 expected_rows.push(split_line(pos2, &line2)?);
                 expected_rows.push(split_line(pos3, &line3)?);
@@ -155,7 +155,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
                 Ok(num_values) => {
                     return Ok(SqlCommand {
                         query,
-                        expected_result: SqlExpectedResult::Hashed {
+                        expected_output: SqlOutput::Hashed {
                             num_values,
                             md5: captures[2].to_owned(),
                         },
@@ -177,7 +177,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     }
     Ok(SqlCommand {
         query,
-        expected_result: SqlExpectedResult::Full {
+        expected_output: SqlOutput::Full {
             column_names,
             expected_rows,
         },

@@ -19,7 +19,7 @@ New York,NY,10004
   FORMAT CSV WITH 3 COLUMNS
 
 > SELECT * FROM static_csv
-column1        column1  column2  mz_line_no
+column1        column2  column3  mz_line_no
 --------------------------------------------
 city           state     zip     1
 Rochester      NY        14618   2

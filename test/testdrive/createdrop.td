@@ -202,7 +202,7 @@ unknown catalog item 'nonexistent'
 > CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 42 AS a
 
 > SHOW CREATE VIEW test1
-View                      Create View
+View                      "Create View"
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
 

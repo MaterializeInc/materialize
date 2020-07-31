@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=1minute
-
 $ set consistency={
      "name": "materialize.byo.consistency",
      "type": "record",
@@ -67,7 +65,7 @@ $ avro-ocf-write path=data2.ocf schema=${schema}
 At least one input has no complete timestamps yet:
 
 > SELECT * FROM data_byo2;
-a b  line
+a b mz_obj_no
 -------
 1  1  1
 2  2  2
@@ -76,7 +74,7 @@ $ avro-ocf-append path=consistency.ocf
 {"source": "${testdrive.temp-dir}/data.ocf", "partition_count": 1, "partition_id": 0, "timestamp": 1, "offset": 2}
 
 > SELECT * FROM data_byo;
-a b  line
+a b  mz_obj_no
 --------
 1  1  1
 2  2  2
@@ -90,7 +88,7 @@ $ avro-ocf-append path=data2.ocf
 {"a": 4, "b": 4}
 
 > SELECT * FROM data_byo;
-a b line
+a b mz_obj_no
 -------
 1  1  1
 2  2  2
@@ -99,7 +97,7 @@ a b line
 
 
 > SELECT * FROM data_byo2;
-a b  line
+a b  mz_obj_no
 -------
 1  1  1
 2  2  2

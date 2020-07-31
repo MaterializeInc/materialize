@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=1minute
-
 $ set keyschema={
     "type": "record",
     "name": "Key",
@@ -127,7 +125,7 @@ $ file-append path=data-schema.json
   ENVELOPE UPSERT FORMAT TEXT
 
 > select * from bytesavro
-key           f1       f2
+key0          f1       f2
 ---------------------------
 fish          fish     1000
 b\xc3\xacrd1  goose    1
@@ -141,7 +139,7 @@ $ kafka-ingest format=avro topic=data-consistency schema=${consistency}
 {"source": "testdrive-textavro-${testdrive.seed}", "partition_count": 1, "partition_id": 0, "timestamp": 13, "offset": 8}
 
 > select * from textavro
-key           f1       f2
+key0          f1       f2
 ---------------------------
 fish          fish     1000
 birdmore      geese    56
@@ -193,7 +191,7 @@ testdrive-textbytes-${testdrive.seed},1,0,6,4
 testdrive-textbytes-${testdrive.seed},1,0,10,5
 
 > select * from texttext
-key           data  mz_offset
+key0          text  mz_offset
 -----------------------------
 fish          fish  1
 bírdmore      geese 3
@@ -204,7 +202,7 @@ testdrive-textbytes-${testdrive.seed},1,0,15,8
 testdrive-textbytes-${testdrive.seed},1,0,21,9
 
 > select * from textbytes
-key           data             mz_offset
+key0          data             mz_offset
 ----------------------------------------
 fish          fish             1
 bírdmore      g\xc3\xa9ese     6
@@ -215,7 +213,7 @@ $ kafka-ingest format=bytes topic=data-consistency2
 testdrive-textbytes-${testdrive.seed},1,0,28,10
 
 > select * from bytesbytes
-key              data             mz_offset
+key0             data             mz_offset
 ----------------------------------------
 fish             fish             1
 b\xc3\xadrdmore  g\xc3\xa9ese     6
@@ -231,7 +229,7 @@ testdrive-textbytes-${testdrive.seed},1,0,36,11
 testdrive-textbytes-${testdrive.seed},1,0,45,12
 
 > select * from bytestext
-key              data             mz_offset
+key0             text             mz_offset
 ----------------------------------------
 b\xc3\xadrdmore  géese            6
 mammal1          mouse            9
@@ -265,7 +263,7 @@ testdrive-nullkey-${testdrive.seed},1,0,46,6
 testdrive-nullkey-${testdrive.seed},1,0,51,7
 
 > select * from nullkey
-key           data  mz_offset
+key0          text  mz_offset
 -----------------------------
 birdmore      geese 5
 mammalmore    moose 6
@@ -316,7 +314,7 @@ water     <null>  crocodile      7
   ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > SELECT * FROM realtimeavroavro_ff
-f3        f4        f1           f2
+f3        f1        f1           f2
 -----------------------------------
 <null>    yin       sheep        54
 water     <null>    crocodile    7
@@ -333,7 +331,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": "water", "f1": null}
 
 > select * from realtimeavroavro_view
-key        f4          f1             f2
+f3         f4          f1             f2
 -----------------------------------------
 fire       yang        dog            42
 air        qi          chicken        47

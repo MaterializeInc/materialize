@@ -25,7 +25,7 @@ use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::Statement;
 
 use crate::action::{Action, State};
-use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedResult};
+use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -39,7 +39,7 @@ pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, St
     if stmts.len() != 1 {
         return Err(format!("expected one statement, but got {}", stmts.len()));
     }
-    if let SqlExpectedResult::Full { expected_rows, .. } = &mut cmd.expected_result {
+    if let SqlOutput::Full { expected_rows, .. } = &mut cmd.expected_output {
         // TODO(benesch): one day we'll support SQL queries where order matters.
         expected_rows.sort();
     }
@@ -174,16 +174,32 @@ impl SqlAction {
     }
 
     async fn try_redo(&self, pgclient: &tokio_postgres::Client, query: &str) -> Result<(), String> {
-        let mut actual: Vec<_> = pgclient
-            .query(query, &[])
+        let stmt = pgclient
+            .prepare(query)
             .await
-            .map_err(|e| format!("query failed: {}", e))?
+            .map_err(|e| format!("preparing query failed: {}", e))?;
+        let mut actual: Vec<_> = pgclient
+            .query(&stmt, &[])
+            .await
+            .map_err(|e| format!("executing query failed: {}", e))?
             .into_iter()
             .map(decode_row)
             .collect::<Result<_, _>>()?;
         actual.sort();
-        match &self.cmd.expected_result {
-            SqlExpectedResult::Full { expected_rows, .. } => {
+        match &self.cmd.expected_output {
+            SqlOutput::Full {
+                expected_rows,
+                column_names,
+            } => {
+                if let Some(column_names) = column_names {
+                    let actual_columns: Vec<_> = stmt.columns().iter().map(|c| c.name()).collect();
+                    if actual_columns.iter().ne(column_names) {
+                        return Err(format!(
+                            "column name mismatch\nexpected: {:?}\nactual:   {:?}",
+                            column_names, actual_columns
+                        ));
+                    }
+                }
                 if &actual == expected_rows {
                     Ok(())
                 } else {
@@ -219,7 +235,7 @@ impl SqlAction {
                     ))
                 }
             }
-            SqlExpectedResult::Hashed { num_values, md5 } => {
+            SqlOutput::Hashed { num_values, md5 } => {
                 if &actual.len() != num_values {
                     Err(format!(
                         "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
