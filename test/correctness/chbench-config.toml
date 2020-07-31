@@ -10,8 +10,10 @@
 [[sources]]
 kafka_broker = "kafka:9092"
 schema_registry = "http://schema-registry:8081"
-topic_namespace = "mysql.tpcch."
+topic_namespace = "debezium.tpcch."
 materialized = false
+is_byo = true
+consistency_topic = "debezium.transaction"
 names = [
     "customer",
     "item",
