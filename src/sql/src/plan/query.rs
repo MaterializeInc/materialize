@@ -622,7 +622,7 @@ fn plan_view_select_intrusive(
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in group_by {
-            let expr = plan_group_by_expr(ecx, group_expr, &projection)?;
+            let (group_expr, expr) = plan_group_by_expr(ecx, group_expr, &projection)?;
             let new_column = group_key.len();
             // Repeated expressions in GROUP BY confuse name resolution later,
             // and dropping them doesn't change the result.
@@ -643,12 +643,12 @@ fn plan_view_select_intrusive(
                     // the movement here.
                     select_all_mapping.insert(*old_column, new_column);
                     let mut scope_item = ecx.scope.items[*old_column].clone();
-                    scope_item.expr = Some(group_expr.clone());
+                    scope_item.expr = group_expr.cloned();
                     scope_item
                 } else {
                     ScopeItem {
-                        names: invent_column_name(ecx, group_expr).into_iter().collect(),
-                        expr: Some(group_expr.clone()),
+                        names: vec![],
+                        expr: group_expr.cloned(),
                         nameable: true,
                     }
                 };
@@ -820,17 +820,23 @@ fn plan_view_select_intrusive(
 /// names/expressions defined in the `SELECT` clause. These special cases are
 /// handled by this function; see comments within the implementation for
 /// details.
-fn plan_group_by_expr(
+fn plan_group_by_expr<'a>(
     ecx: &ExprContext,
-    group_expr: &Expr,
-    projection: &[(ExpandedSelectItem, Option<ColumnName>)],
-) -> Result<ScalarExpr, anyhow::Error> {
+    group_expr: &'a Expr,
+    projection: &'a [(ExpandedSelectItem, Option<ColumnName>)],
+) -> Result<(Option<&'a Expr>, ScalarExpr), anyhow::Error> {
     let plan_projection = |column: usize| match &projection[column].0 {
-        ExpandedSelectItem::InputOrdinal(column) => Ok(ScalarExpr::Column(ColumnRef {
-            level: 0,
-            column: *column,
-        })),
-        ExpandedSelectItem::Expr(expr) => Ok(plan_expr(&ecx, expr)?.type_as_any(ecx)?),
+        ExpandedSelectItem::InputOrdinal(column) => Ok((
+            None,
+            ScalarExpr::Column(ColumnRef {
+                level: 0,
+                column: *column,
+            }),
+        )),
+        ExpandedSelectItem::Expr(expr) => Ok((
+            Some(expr.as_ref()),
+            plan_expr(&ecx, expr)?.type_as_any(ecx)?,
+        )),
     };
 
     // Check if the expression is a numeric literal, as in `GROUP BY 1`. This is
@@ -861,9 +867,12 @@ fn plan_group_by_expr(
                     Err(e.into())
                 }
             }
-            res => Ok(res?),
+            res => Ok((Some(group_expr), res?)),
         },
-        _ => plan_expr(&ecx, group_expr)?.type_as_any(ecx),
+        _ => Ok((
+            Some(group_expr),
+            plan_expr(&ecx, group_expr)?.type_as_any(ecx)?,
+        )),
     }
 }
 

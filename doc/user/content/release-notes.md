@@ -52,6 +52,20 @@ Wrap your release notes at the 80 character mark.
 - Permit broker addresses in [Kafka sources](/sql/create-source/avro-kafka/) and
   [Kafka sinks](/sql/create-sink/) to use IP addresses in addition to hostnames.
 
+- Allow ordinal references in `GROUP BY` clauses to refer to items in the
+  `SELECT` list that are formed from arbitrary expressions, as in:
+
+  ```sql
+  SELECT a + 1, sum(b) FROM ... GROUP BY 1
+  ```
+
+  Previously, Materialize only handled ordinal references to items that were
+  simple column references, as in:
+
+  ```sql
+  SELECT a, sum(b) FROM ... GROUP BY 1
+  ```
+
 <span id="v0.4.0"></span>
 ## v0.4.0
 
