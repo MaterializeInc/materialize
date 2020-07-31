@@ -105,6 +105,7 @@ impl RedundantJoin {
                     .flat_map(|i| {
                         find_redundancy(
                             i,
+                            &input_types[i].keys,
                             &input_arities[..],
                             &prior_arities[..],
                             equivalences,
@@ -289,12 +290,12 @@ pub struct ProvInfo {
 // Attempts to discover a replacement relation for `input`, and replacement column bindings for its columns.
 fn find_redundancy(
     input: usize,
+    keys: &[Vec<usize>],
     input_arities: &[usize],
     prior_arities: &[usize],
     equivalences: &[Vec<ScalarExpr>],
     input_prov: &[Vec<ProvInfo>],
 ) -> Option<Vec<usize>> {
-
     // println!();
     // println!("Input: {}", input);
     // println!("Arities: {:?}", input_arities);
@@ -305,7 +306,7 @@ fn find_redundancy(
     // A join input can be removed if
     //   1. it contains distinct records (i.e. has a key),
     //   2. it has some `exact` provenance for all columns,
-    //   3. all of its columns are equated to another inputs by the join and by its provenance.
+    //   3. each of its key columns are equated to another input whose provenance contains it.
     // If the input is removed, all references to its columns should be replaced by references
     // to the corresponding columns in the other input.
 
@@ -321,27 +322,31 @@ fn find_redundancy(
                         for (src, input_col) in provenance.binding.iter() {
                             for (src2, other_col) in other_prov.binding.iter() {
                                 if src == src2 {
-                                    if equivalences.iter().any(|e| {
+                                    bindings.insert(input_col, *other_col);
+                                }
+                            }
+                        }
+                        if bindings.len() == input_arities[input] {
+                            for key in keys.iter() {
+                                if key.iter().all(|input_col| {
+                                    let other_col = bindings[&input_col];
+                                    equivalences.iter().any(|e| {
                                         e.contains(&ScalarExpr::Column(
                                             prior_arities[input] + input_col,
                                         )) && e.contains(&ScalarExpr::Column(
                                             prior_arities[other] + other_col,
                                         ))
-                                    }) {
-                                        bindings
-                                            .insert(input_col, prior_arities[other] + *other_col);
-                                    }
+                                    })
+                                }) {
+                                    let binding = (0..input_arities[input])
+                                        .map(|c| prior_arities[other] + bindings[&c])
+                                        .collect::<Vec<_>>();
+                                    // println!("Found redundancy for {:?}", input);
+                                    // println!("\tother: {:?}", other);
+                                    // println!("\tbinding: {:?}", binding);
+                                    return Some(binding);
                                 }
                             }
-                        }
-                        if bindings.len() == input_arities[input] {
-                            let binding = (0..input_arities[input])
-                                .map(|c| bindings[&c])
-                                .collect::<Vec<_>>();
-                            // println!("Found redundancy for {:?}", input);
-                            // println!("\tother: {:?}", other);
-                            // println!("\tbinding: {:?}", binding);
-                            return Some(binding);
                         }
                     }
                 }
