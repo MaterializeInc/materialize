@@ -7,10 +7,6 @@ use std::io::{Read, Write};
 use std::str::FromStr;
 
 use anyhow::Error;
-#[cfg(feature = "snappy")]
-use byteorder;
-#[cfg(feature = "snappy")]
-use crc;
 use libflate::deflate::{Decoder, Encoder};
 
 use crate::types::{ToAvro, Value};
