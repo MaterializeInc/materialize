@@ -56,6 +56,26 @@ a          NO        int8
 b          NO        int4
 mz_obj_no  NO        int8
 
+$ avro-ocf-write path=data-snappy.ocf schema=${writer-schema} codec=snappy
+{"a": 1, "b": 2}
+{"a": 3, "b": 4}
+
+> CREATE MATERIALIZED SOURCE basic_snappy
+  FROM AVRO OCF '${testdrive.temp-dir}/data-snappy.ocf'
+
+> SELECT * FROM basic_snappy
+a  b  mz_obj_no
+---------------
+1  2  1
+3  4  2
+
+> SHOW COLUMNS FROM basic_snappy
+Field      Nullable  Type
+-------------------------
+a          NO        int8
+b          NO        int4
+mz_obj_no  NO        int8
+
 $ set reader-schema={
     "name": "row",
     "type": "record",
