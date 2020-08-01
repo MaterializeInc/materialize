@@ -551,9 +551,6 @@ SELECT 1::bigint::integer;
 ----
 1
 
-query error CAST does not support casting from bool to i32
-SELECT TRUE::boolean::integer
-
 query error CAST does not support casting from date to i32
 SELECT '2001 02-03'::date::integer
 
