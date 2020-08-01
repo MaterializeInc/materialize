@@ -101,6 +101,8 @@ mzconduct:
           --kafka-host kafka
           --schema-registry-url http://schema-registry:8081
           --csv-file-name /share/billing-demo/data/prices.csv
+          --create-topic
+          --replication-factor 1
           --partitions 10
           --check-sink
       - step: down
@@ -123,6 +125,8 @@ mzconduct:
           --kafka-host kafka
           --schema-registry-url http://schema-registry:8081
           --csv-file-name /share/billing-demo/data/prices.csv
+          --create-topic
+          --replication-factor 1
           --partitions 10
 
     load-test:
@@ -140,6 +144,8 @@ mzconduct:
           --kafka-host kafka
           --schema-registry-url http://schema-registry:8081
           --csv-file-name /share/billing-demo/data/prices.csv
+          --create-topic
+          --replication-factor 1
           --partitions 10
 
     # Helper workflows

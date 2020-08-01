@@ -20,7 +20,6 @@ use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 
 pub struct KafkaClient {
     producer: FutureProducer<DefaultClientContext>,
-    messages: i64,
     kafka_url: String,
     topic: String,
 }
@@ -43,7 +42,6 @@ impl KafkaClient {
 
         Ok(KafkaClient {
             producer,
-            messages: 0,
             kafka_url: kafka_url.to_string(),
             topic: topic.to_string(),
         })
@@ -81,10 +79,7 @@ impl KafkaClient {
         Ok(())
     }
 
-    pub fn send(
-        &self,
-        message: &[u8],
-    ) -> std::result::Result<rdkafka::producer::DeliveryFuture, rdkafka::error::KafkaError> {
+    pub fn send(&self, message: &[u8]) -> Result<DeliveryFuture, KafkaError> {
         let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic)
             .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
