@@ -12,6 +12,8 @@ mod kafka;
 mod tail;
 mod util;
 
+mod cdc_v2;
+
 pub use avro_ocf::avro_ocf;
 pub use kafka::kafka;
 pub use tail::tail;
