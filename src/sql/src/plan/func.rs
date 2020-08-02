@@ -47,6 +47,7 @@ pub enum TypeCategory {
     Array,
     Bool,
     DateTime,
+    List,
     Numeric,
     Pseudo,
     String,
@@ -70,9 +71,7 @@ impl TypeCategory {
         match typ {
             ScalarType::Array(..) => Self::Array,
             ScalarType::Bool => Self::Bool,
-            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid | ScalarType::List(..) => {
-                Self::UserDefined
-            }
+            ScalarType::Bytes | ScalarType::Jsonb | ScalarType::Uuid => Self::UserDefined,
             ScalarType::Date
             | ScalarType::Time
             | ScalarType::Timestamp
@@ -84,6 +83,7 @@ impl TypeCategory {
             | ScalarType::Int64
             | ScalarType::Oid => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
+            ScalarType::List(..) => Self::List,
             ScalarType::String => Self::String,
             ScalarType::Record { .. } => Self::Pseudo,
         }
@@ -91,9 +91,13 @@ impl TypeCategory {
 
     fn from_param(param: &ParamType) -> Self {
         match param {
-            ParamType::Any | ParamType::ArrayAny | ParamType::StringAny | ParamType::JsonbAny => {
-                Self::Pseudo
-            }
+            ParamType::Any
+            | ParamType::ArrayAny
+            | ParamType::JsonbAny
+            | ParamType::ListAny
+            | ParamType::ListElementAny
+            | ParamType::NonVecAny
+            | ParamType::StringAny => Self::Pseudo,
             ParamType::Plain(t) => Self::from_type(t),
         }
     }
@@ -107,7 +111,7 @@ impl TypeCategory {
     /// ```
     fn preferred_type(&self) -> Option<ScalarType> {
         match self {
-            Self::Array | Self::Pseudo | Self::UserDefined => None,
+            Self::Array | Self::List | Self::Pseudo | Self::UserDefined => None,
             Self::Bool => Some(ScalarType::Bool),
             Self::DateTime => Some(ScalarType::TimestampTz),
             Self::Numeric => Some(ScalarType::Float64),
@@ -313,6 +317,18 @@ pub enum ParamType {
     /// A pseudotype permitting any type, but requires it to be cast to a
     /// [`ScalarType::Jsonb`], or an element within a `Jsonb`.
     JsonbAny,
+    /// A pseudotype permitting a `ScalarType::List` of any element type.
+    ListAny,
+    /// A pseudotype permitting all types, with more constraints than `Any`.
+    ///
+    /// These constraints include:
+    /// - If multiple parameters expect `ListElementAny`, they must all be of
+    ///   the same type.
+    /// - If `ListElementAny` is used with `ListAny`, `ListElementAny`'s type
+    ///   must be `ListAny`'s elements' type.
+    ListElementAny,
+    /// A pseudotype permitting any type except `ScalarType::List`.
+    NonVecAny,
     /// A standard parameter that accepts arguments that match its embedded
     /// `ScalarType`.
     Plain(ScalarType),
@@ -337,9 +353,11 @@ impl ParamType {
     fn accepts_type_directly(&self, t: &ScalarType) -> bool {
         use ParamType::*;
         match self {
-            Any => true,
+            Any | ListElementAny => true,
             ArrayAny => matches!(t, ScalarType::Array(..)),
             JsonbAny => matches!(t, ScalarType::Jsonb),
+            ListAny => matches!(t, ScalarType::List(..)),
+            NonVecAny => !t.is_vec(),
             Plain(s) => *s == t.desaturate(),
             StringAny => matches!(t, ScalarType::String),
         }
@@ -349,8 +367,8 @@ impl ParamType {
     fn accepts_cat(&self, c: &TypeCategory) -> bool {
         use ParamType::*;
         match self {
-            Any | JsonbAny | StringAny => true,
-            ArrayAny | Plain(_) => TypeCategory::from_param(&self) == *c,
+            Any | JsonbAny | ListElementAny | NonVecAny | StringAny => true,
+            ArrayAny | ListAny | Plain(_) => TypeCategory::from_param(&self) == *c,
         }
     }
 
@@ -379,9 +397,10 @@ impl ParamType {
         use ParamType::*;
         use ScalarType::*;
         match self {
-            Any | StringAny => CoerceTo::Plain(String),
+            Any | ListElementAny | NonVecAny | StringAny => CoerceTo::Plain(String),
             ArrayAny => CoerceTo::Plain(Array(Box::new(String))),
             JsonbAny => CoerceTo::JsonbAny,
+            ListAny => CoerceTo::Plain(List(Box::new(String))),
             Plain(s) => CoerceTo::Plain(s.clone()),
         }
     }
@@ -394,9 +413,11 @@ impl ParamType {
 
         Ok(match self {
             // Reflexive cast because `self` accepts any type.
-            Any => CastTo::Implicit(arg_type.clone()),
+            Any | ListElementAny => CastTo::Implicit(arg_type.clone()),
             ArrayAny if matches!(arg_type, Array(..)) => CastTo::Implicit(arg_type.clone()),
             JsonbAny => CastTo::JsonbAny,
+            ListAny if matches!(arg_type, List(..)) => CastTo::Implicit(arg_type.clone()),
+            NonVecAny if !arg_type.is_vec() => CastTo::Implicit(arg_type.clone()),
             Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => {
                 CastTo::Implicit(arg_type.clone())
             }
@@ -1181,6 +1202,7 @@ lazy_static! {
 
     static ref MZ_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
         use ScalarType::*;
+        use ParamType::*;
         builtins! {
             "csv_extract" => Table {
                 params!(Int64, String) => binary_op(move |_ecx, ncols, input| {
@@ -1199,17 +1221,17 @@ lazy_static! {
                 })
             },
             "list_ndims" => Scalar {
-                params!(List(Box::new(String))) => unary_op(|ecx, e| {
+                vec![ListAny] => unary_op(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
                     let d = ecx.scalar_type(&e).unwrap_list_n_dims();
                     Ok(ScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
                 })
             },
             "list_length" => Scalar {
-                params!(List(Box::new(String))) => UnaryFunc::ListLength
+                vec![ListAny] => UnaryFunc::ListLength
             },
             "list_length_max" => Scalar {
-                params!(List(Box::new(String)), Int64) => binary_op(|ecx, lhs, rhs| {
+                vec![ListAny, Plain(Int64)] => binary_op(|ecx, lhs, rhs| {
                     ecx.require_experimental_mode("list_length_max")?;
                     let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
                     Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
@@ -1557,8 +1579,25 @@ lazy_static! {
 
             // CONCAT
             Concat => Scalar {
-                vec![Plain(String), StringAny] => TextConcat,
-                vec![StringAny, Plain(String)] => TextConcat,
+                vec![Plain(String), NonVecAny] => binary_op(|ecx, lhs, rhs| {
+                    let rhs = typeconv::plan_cast(
+                        "text_concat",
+                        ecx,
+                        rhs,
+                        typeconv::CastTo::Explicit(ScalarType::String)
+                    )?;
+
+                    Ok(lhs.call_binary(rhs, TextConcat))
+                }),
+                vec![NonVecAny, Plain(String)] =>  binary_op(|ecx, lhs, rhs| {
+                    let lhs = typeconv::plan_cast(
+                        "text_concat",
+                        ecx,
+                        lhs,
+                        typeconv::CastTo::Explicit(ScalarType::String)
+                    )?;
+                    Ok(lhs.call_binary(rhs, TextConcat))
+                }),
                 params!(String, String) => TextConcat,
                 params!(Jsonb, Jsonb) => JsonbConcat
             },

@@ -773,6 +773,16 @@ impl<'a> ScalarType {
             scalar_type: self,
         }
     }
+
+    /// Returns whether or not `self` is a vector-like type, i.e.
+    /// [`ScalarType::List`] or [`ScalarType::Array`], irrespective of its
+    /// element type.
+    pub fn is_vec(&self) -> bool {
+        match self {
+            ScalarType::List(_) | ScalarType::Array(_) => true,
+            _ => false,
+        }
+    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can
