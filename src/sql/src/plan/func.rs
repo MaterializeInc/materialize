@@ -482,6 +482,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         // Check for exact match.
         if all_types_known {
             let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).collect();
+
             let matching_impls: Vec<&FuncImpl<_>> = impls
                 .iter()
                 .filter(|i| i.params.match_scalartypes(&known_types))
@@ -700,6 +701,12 @@ impl<'a> ArgImplementationMatcher<'a> {
         let cast_to = param_type.get_cast_to_for_type(&arg_type)?;
         typeconv::plan_cast(self.ident, self.ecx, arg, cast_to)
     }
+}
+
+macro_rules! concat_err {
+    ($l:expr, $r:expr) => {
+        bail!("Cannot concatenate {} and {}", $l, $r)
+    };
 }
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
@@ -1163,7 +1170,39 @@ lazy_static! {
                 vec![Plain(String), NonListAny] => TextConcat,
                 vec![NonListAny, Plain(String)] => TextConcat,
                 params!(String, String) => TextConcat,
-                params!(Jsonb, Jsonb) => JsonbConcat
+                params!(Jsonb, Jsonb) => JsonbConcat,
+                params!(ListAny, ListAny) => binary_op(|ecx, lhs, rhs| {
+                    let ltyp = ecx.scalar_type(&lhs);
+                    let rtyp = ecx.scalar_type(&rhs);
+
+                    if ltyp == rtyp {
+                        Ok(lhs.call_binary(rhs, ListListConcat))
+                    } else if ltyp == *rtyp.unwrap_list_element_type() {
+                        Ok(lhs.call_binary(rhs, ElementListConcat))
+                    } else if *ltyp.unwrap_list_element_type() == rtyp {
+                        Ok(lhs.call_binary(rhs, ListElementConcat))
+                    } else {
+                        concat_err!(ltyp, rtyp)
+                    }
+                }),
+                params!(ListAny, ListElementAny) => binary_op(|ecx, lhs, rhs| {
+                    let ltyp = ecx.scalar_type(&lhs);
+                    let rtyp = ecx.scalar_type(&rhs);
+
+                    if *ltyp.unwrap_list_element_type() != rtyp {
+                        concat_err!(ltyp, rtyp)
+                    }
+                    Ok(lhs.call_binary(rhs, ListElementConcat))
+                }),
+                params!(ListElementAny, ListAny) => binary_op(|ecx, lhs, rhs| {
+                    let ltyp = ecx.scalar_type(&lhs);
+                    let rtyp = ecx.scalar_type(&rhs);
+
+                    if ltyp != *rtyp.unwrap_list_element_type() {
+                        concat_err!(ltyp, rtyp)
+                    }
+                    Ok(lhs.call_binary(rhs, ElementListConcat))
+                })
             },
 
             //JSON
@@ -1336,7 +1375,39 @@ pub fn plan_binary_op<'a>(
         None => unsupported!(op),
     };
 
-    let cexprs = vec![query::plan_expr(ecx, left)?, query::plan_expr(ecx, right)?];
+    let mut cexprs = vec![query::plan_expr(ecx, left)?, query::plan_expr(ecx, right)?];
+
+    // Special case for `LIST[t] || NULL` or `NULL || LIST[t]`. This must be
+    // special cased because our eager coercion of `NULL`s to
+    // `ScalarType::String` makes `NULL` indistinguishable from `NULL::text`,
+    // each of which has distinct behavior in PG.
+    //
+    // ```
+    // SELECT ARRAY['a'] || NULL
+    // ----
+    // {'a'}
+    //
+    // SELECT ARRAY['a'] || NULL::text
+    // ----
+    // {'a', NULL}
+    // ```
+    if *op == BinaryOperator::Concat {
+        // Check whether the exprs contain a literal NULL and a list.
+        let pairs = vec![(0, 1), (1, 0)];
+        for p in pairs {
+            if cexprs[p.0] == CoercibleScalarExpr::LiteralNull {
+                if let Some(ScalarType::List(typ)) =
+                    ecx.column_type(&cexprs[p.1]).map(|t| t.scalar_type)
+                {
+                    return typeconv::plan_coerce(
+                        ecx,
+                        cexprs.remove(p.1),
+                        CoerceTo::Plain(ScalarType::List(typ)),
+                    );
+                }
+            }
+        }
+    }
 
     ArgImplementationMatcher::select_implementation(
         &op.to_string(),

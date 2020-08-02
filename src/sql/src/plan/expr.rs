@@ -173,7 +173,7 @@ pub enum ScalarExpr {
 ///
 /// the `WHERE` clause will coerce the contained unconstrained type parameter
 /// `$1` to have type bool.
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CoercibleScalarExpr {
     Coerced(ScalarExpr),
     Parameter(usize),
@@ -232,8 +232,29 @@ impl ScalarTypeable for CoercibleScalarExpr {
         inner: &RelationType,
         params: &BTreeMap<usize, ScalarType>,
     ) -> Self::Type {
+        use CoercibleScalarExpr::*;
         match self {
-            CoercibleScalarExpr::Coerced(expr) => Some(expr.typ(outers, inner, params)),
+            Coerced(expr) => Some(expr.typ(outers, inner, params)),
+            LiteralList(exprs) => {
+                let mut element_typ: Self::Type = None;
+                for e in exprs {
+                    match (element_typ.as_ref(), e.typ(outers, inner, params)) {
+                        (Some(seen_typ), Some(new_typ)) => assert!(
+                            *seen_typ == new_typ,
+                            "internal error: list has heterogeneous types: {:?}, {:?}",
+                            seen_typ,
+                            new_typ
+                        ),
+                        (None, Some(new_typ)) => element_typ = Some(new_typ),
+                        _ => {}
+                    }
+                }
+
+                match element_typ {
+                    Some(e) => Some(ScalarType::List(Box::new(e.scalar_type)).nullable(e.nullable)),
+                    None => None,
+                }
+            }
             _ => None,
         }
     }
