@@ -81,7 +81,12 @@ impl TypeCategory {
     fn from_param(param: &ParamType) -> Self {
         match param {
             ParamType::Plain(t) => Self::from_type(t),
-            ParamType::Any | ParamType::StringAny | ParamType::JsonbAny => Self::Pseudo,
+            ParamType::ListAny => Self::UserDefined,
+            ParamType::Any
+            | ParamType::StringAny
+            | ParamType::JsonbAny
+            | ParamType::ListElementAny
+            | ParamType::NonListAny => Self::Pseudo,
         }
     }
 
@@ -247,11 +252,27 @@ pub enum ParamType {
     Plain(ScalarType),
     /// A psuedotype permitting any type.
     Any,
-    /// A pseudotype permitting any type, but requires it to be cast to a `ScalarType::String`.
+    /// A pseudotype permitting any type, but requires it to be cast to a
+    /// `ScalarType::String`.
     StringAny,
     /// A pseudotype permitting any type, but requires it to be cast to a
     /// [`ScalarType::Jsonb`], or an element within a `Jsonb`.
     JsonbAny,
+    /// A pseudotype permitting a `ScalarType::List` of any element type.
+    ListAny,
+    /// A pseudotype permitting all types, with more limitations than `Any`.
+    ///
+    /// These limitations include:
+    /// - If multiple parameters expect `ListElementAny`, they must all be of
+    ///   the same type.
+    /// - If `ListElementAny` is used with `ListAny`, `ListElementAny`'s type
+    ///   must be `ListAny`'s elements' type.
+    ListElementAny,
+    /// A pseudotype permitting any type except `ScalarType::List`.
+    ///
+    /// `NonListAny` is only used for concatenating text with other, non-list
+    /// types.
+    NonListAny,
 }
 
 impl ParamType {
@@ -260,7 +281,9 @@ impl ParamType {
         use ParamType::*;
         match self {
             Plain(s) => *s == t.desaturate(),
-            Any | StringAny | JsonbAny => true,
+            Any | StringAny | JsonbAny | ListElementAny => true,
+            ListAny => t.is_list(),
+            NonListAny => !t.is_list(),
         }
     }
 
@@ -269,7 +292,9 @@ impl ParamType {
         use ParamType::*;
         match self {
             Plain(s) => typeconv::get_cast(t, &CastTo::Implicit(s.clone())).is_some(),
-            Any | JsonbAny | StringAny => true,
+            Any | JsonbAny | StringAny | ListElementAny => true,
+            ListAny => t.is_list(),
+            NonListAny => !t.is_list(),
         }
     }
 
@@ -277,8 +302,8 @@ impl ParamType {
     fn accepts_cat(&self, c: &TypeCategory) -> bool {
         use ParamType::*;
         match self {
-            Plain(_) => TypeCategory::from_param(&self) == *c,
-            Any | StringAny | JsonbAny => true,
+            Plain(_) | ListAny => TypeCategory::from_param(&self) == *c,
+            Any | StringAny | JsonbAny | ListElementAny | NonListAny => true,
         }
     }
 
@@ -308,8 +333,9 @@ impl ParamType {
         use ScalarType::*;
         match self {
             Plain(s) => CoerceTo::Plain(s.clone()),
-            Any | StringAny => CoerceTo::Plain(String),
+            Any | StringAny | ListElementAny | NonListAny => CoerceTo::Plain(String),
             JsonbAny => CoerceTo::JsonbAny,
+            ListAny => CoerceTo::Plain(List(Box::new(String))),
         }
     }
 
@@ -323,10 +349,20 @@ impl ParamType {
                 CastTo::Implicit(arg_type.clone())
             }
             Plain(s) => CastTo::Implicit(s.clone()),
+            // Reflexive cast because `self` accepts any type.
+            Any | ListElementAny => CastTo::Implicit(arg_type.clone()),
             JsonbAny => CastTo::JsonbAny,
             StringAny => CastTo::Explicit(ScalarType::String),
-            // No `CastTo` value needed because this accepts any type.
-            Any => CastTo::Implicit(arg_type.clone()),
+            // `NonListAny` is only used to convert non-list elements to text
+            // for concatenation.
+            NonListAny if !arg_type.is_list() => CastTo::Explicit(ScalarType::String),
+            // Reflexive cast for any `ScalarType::List` because any list type is
+            // valid, but only list types are valid.
+            ListAny if arg_type.is_list() => CastTo::Implicit(arg_type.clone()),
+            _ => bail!(
+                "arguments cannot be implicitly cast to any implementation's parameters; \
+                 try providing explicit casts"
+            ),
         })
     }
 }
@@ -336,8 +372,8 @@ impl PartialEq<ScalarType> for ParamType {
         use ParamType::*;
         match self {
             Plain(s) => *s == other.desaturate(),
-            // Pseudotypes do not equal concrete types.
-            Any | StringAny | JsonbAny => false,
+            ListAny => other.is_list(),
+            Any | StringAny | JsonbAny | ListElementAny | NonListAny => false,
         }
     }
 }
@@ -824,17 +860,17 @@ lazy_static! {
                 params!(String) => UnaryFunc::ByteLengthString
             },
             "list_ndims" => {
-                params!(List(Box::new(String))) => unary_op(|ecx, e| {
+                vec![ListAny] => unary_op(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
                     let d = ecx.scalar_type(&e).unwrap_list_n_dims();
                     Ok(ScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
                 })
             },
             "list_length" => {
-                params!(List(Box::new(String))) => UnaryFunc::ListLength
+                vec![ListAny] => UnaryFunc::ListLength
             },
             "list_length_max" => {
-                params!(List(Box::new(String)), Int64) => binary_op(|ecx, lhs, rhs| {
+                vec![ListAny, Plain(Int64)] => binary_op(|ecx, lhs, rhs| {
                     ecx.require_experimental_mode("list_length_max")?;
                     let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
                     Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
@@ -1124,8 +1160,8 @@ lazy_static! {
 
             // CONCAT
             Concat => {
-                vec![Plain(String), StringAny] => TextConcat,
-                vec![StringAny, Plain(String)] => TextConcat,
+                vec![Plain(String), NonListAny] => TextConcat,
+                vec![NonListAny, Plain(String)] => TextConcat,
                 params!(String, String) => TextConcat,
                 params!(Jsonb, Jsonb) => JsonbConcat
             },
