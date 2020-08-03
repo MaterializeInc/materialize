@@ -21,9 +21,6 @@ The `SELECT` statement is the root of a SQL query, and is used both to interacti
 
 When used to interactively query data, your query must depend only on materialized sources and views. There are exceptions, discussed in more detail below. When used to construct views, this restriction is lifted.
 
-To perform reads, Materialize simply returns the result set of a dataflow.
-(Naturally, if the dataflow doesn't exist, it must be created.)
-
 This is covered in much greater detail in our [architecture
 overview](../../overview/architecture), but here's a quick summary of how
 Materialize handles `SELECT` in different circumstances.
@@ -68,7 +65,7 @@ A materialized view costs Materialize both CPU and RAM to maintain. Materialize 
 
 ### Reading from sources and views
 
-Performing a `SELECT * from` a materialized source or materialized view is Materialize's ideal operation. When Materialize receives such a `SELECT` query, it quickly returns the maintained results from memory, with no re-execution.
+Performing a `SELECT * FROM` a materialized source or materialized view is Materialize's ideal operation. When Materialize receives such a `SELECT` query, it quickly returns the maintained results from memory, with no re-execution.
 
 Materialize also quickly returns results for queries that only filter, project, and re-order results of materialized sources or materialized views.
 
@@ -78,7 +75,7 @@ Performing a `SELECT` query that does not directly read out of a materialization
 
 For technical reasons, you are not able to perform a `SELECT` query that depends, even transitively, on non-materialized sources. This is because Materialize must choose a "moment" at which to execute your query, and Materialize does not know which moments are valid for non-materialized sources. You can use the [`SHOW FULL VIEWS`](../show-views) command to report which views may be queried.
 
-You can create a materialize view out of any query using [`CREATE MATERIALIZED VIEW`](../create-materialized-view), and it will always then be queryable.
+You can create a materialized view out of any query using [`CREATE MATERIALIZED VIEW`](../create-materialized-view), and it will always then be queryable.
 
 ## Examples
 
