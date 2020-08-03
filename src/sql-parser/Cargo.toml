@@ -11,7 +11,7 @@ lazy_static = "1.4.0"
 log = "0.4.11"
 ore = { path = "../ore" }
 repr = { path = "../repr" }
-stacker = "0.1.9"
+stacker = "0.1.10"
 
 [dev-dependencies]
 datadriven = "0.1.0"
