@@ -173,6 +173,7 @@ async fn handle_home(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> 
     <ul>
       <li><a href="/status">server status</a></li>
       <li><a href="/metrics">prometheus metrics</a></li>
+      <li><a href="/prof">profiling functions</a></li>
     </ul>
   </body>
 </html>
