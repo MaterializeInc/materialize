@@ -9,12 +9,7 @@
 
 use lazy_static::lazy_static;
 
-use jemalloc_ctl::raw;
-use std::os::unix::ffi::OsStrExt;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Instant;
-use tempfile::NamedTempFile;
 
 #[cfg(not(target_os = "macos"))]
 mod non_macos_imports {
@@ -29,15 +24,12 @@ mod non_macos_imports {
 use non_macos_imports::*;
 
 #[derive(Copy, Clone, Debug)]
-#[cfg(not(target_os = "macos"))]
+// These constructors are dead on macOS
+#[allow(clippy::dead_code)]
 pub enum ProfStartTime {
     Instant(Instant),
     TimeImmemorial,
 }
-
-#[derive(Copy, Clone, Debug)]
-#[cfg(target_os = "macos")]
-pub struct ProfStartTime;
 
 #[derive(Copy, Clone, Debug)]
 pub struct JemallocProfMetadata {
