@@ -13,6 +13,7 @@ license = "proprietary"
 anyhow = "1.0.32"
 async-trait = "0.1.36"
 backtrace = { version = "0.3.50" }
+chrono = "0.4.13"
 comm = { path = "../comm" }
 compile-time-run = "0.2.11"
 coord = { path = "../coord" }
@@ -21,7 +22,8 @@ dataflow-types = { path = "../dataflow-types" }
 futures = "0.3"
 getopts = "0.2"
 hyper = "0.13.7"
-jemallocator = { version = "0.3.0", features = ["profiling"] }
+jemallocator = { version = "0.3", features = ["profiling"] }
+jemalloc-ctl = { version = "0.3", features = ["use_std"] }
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 log = "0.4.11"
@@ -42,7 +44,7 @@ tokio = "0.2"
 tokio-openssl = "0.4.0"
 tracing = "0.1.18"
 tracing-subscriber = "0.2.7"
-chrono = "0.4.13"
+url = "2"
 
 [dev-dependencies]
 assert_cmd = "1.0.1"

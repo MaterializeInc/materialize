@@ -45,6 +45,7 @@ use crate::mux::Mux;
 
 mod http;
 mod mux;
+mod prof;
 
 /// The version of the crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
