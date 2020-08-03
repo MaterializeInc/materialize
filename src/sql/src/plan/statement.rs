@@ -23,7 +23,8 @@ use url::Url;
 use dataflow_types::{
     AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding, Envelope,
     ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
-    KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
+    KinesisSourceConnector, PeekWhen, Persistence, ProtobufEncoding, SinkConnectorBuilder,
+    SourceConnector,
 };
 use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -1238,6 +1239,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
             let mut consistency = Consistency::RealTime;
             let mut max_ts_batch = 0;
             let mut ts_frequency = Duration::from_secs(1);
+            let mut persistence = None;
 
             let (external_connector, mut encoding) = match connector {
                 Connector::Kafka { broker, topic, .. } => {
@@ -1276,6 +1278,25 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     if start_offset != 0 && consistency != Consistency::RealTime {
                         bail!("`start_offset` is not yet implemented for BYO consistency sources.")
                     }
+
+                    persistence = match with_options.remove("persistence") {
+                        None => None,
+                        Some(Value::Boolean(false)) => None,
+                        Some(Value::Boolean(true)) => {
+                            Some(Persistence {
+                                path: PathBuf::from("mzdata/persistence-raw/"),
+                                // TODO clean this up
+                                startup_time: scx
+                                    .catalog
+                                    .startup_time()
+                                    .duration_since(UNIX_EPOCH)?
+                                    .as_secs(),
+                                nonce: scx.catalog.nonce(),
+                                restart: None,
+                            })
+                        }
+                        Some(_) => bail!("persistence must be a bool!"),
+                    };
 
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         addr: broker.parse()?,
@@ -1522,6 +1543,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                     consistency,
                     max_ts_batch,
                     ts_frequency,
+                    persistence,
                 },
                 desc,
             };

@@ -263,6 +263,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     consistency,
                     max_ts_batch: _,
                     ts_frequency,
+                    persistence: _,
                 } = src.connector
                 {
                     let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
