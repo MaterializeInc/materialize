@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Instant;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use lazy_static::lazy_static;
 
@@ -103,7 +103,7 @@ impl JemallocProfCtl {
     }
 
     pub fn activate(&mut self) -> Result<(), jemalloc_ctl::Error> {
-        // SAFETY: "prof.active" is documented as being readable and returning a bool:
+        // SAFETY: "prof.active" is documented as being writable and returning a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", true) }?;
         if self.md.start_time.is_none() {
@@ -113,7 +113,7 @@ impl JemallocProfCtl {
     }
 
     pub fn deactivate(&mut self) -> Result<(), jemalloc_ctl::Error> {
-        // SAFETY: "prof.active" is documented as being readable and returning a bool:
+        // SAFETY: "prof.active" is documented as being writable and returning a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", false) }?;
         self.md.start_time = None;
