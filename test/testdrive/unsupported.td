@@ -9,9 +9,6 @@
 
 $ set-sql-timeout duration=125ms
 
-! INSERT INTO foo VALUES (1)
-INSERT statements are not supported
-
 ! UPDATE foo SET x = 1
 UPDATE statements are not supported
 

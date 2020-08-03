@@ -30,7 +30,7 @@ use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
 use repr::adt::decimal::Significand;
-use repr::strconv;
+use repr::{strconv, ColumnName};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
     AvroSchema, ColumnOption, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format,
@@ -1778,10 +1778,10 @@ fn handle_drop_item(
 
 fn generate_datum_from_value<'a>(
     value: &'a Expr,
-    column_type: &ColumnType,
+    column_info: (Option<&ColumnName>, &ColumnType),
 ) -> Result<Datum<'a>, anyhow::Error> {
     let datum = if let Expr::Value(value) = value {
-        match (value, &column_type.scalar_type) {
+        match (value, &column_info.1.scalar_type) {
             (Value::Number(n), ScalarType::Int32) => Datum::Int32(strconv::parse_int32(n)?),
             (Value::Number(n), ScalarType::Int64) => Datum::Int64(strconv::parse_int64(n)?),
             (Value::Number(n), ScalarType::Float32) => {
@@ -1793,7 +1793,8 @@ fn generate_datum_from_value<'a>(
             (Value::Number(n), ScalarType::Decimal(_, _)) => {
                 Datum::Decimal(Significand::new(strconv::parse_decimal(n)?.significand()))
             }
-            (Value::String(s), ScalarType::String) => Datum::String(s), // todo: support bytes?
+            (Value::String(s), ScalarType::String) => Datum::String(s),
+            (Value::String(s), ScalarType::Bytes) => Datum::Bytes(s.as_bytes()),
             (Value::HexString(s), ScalarType::String) => Datum::String(s),
             (Value::Boolean(true), ScalarType::Bool) => Datum::True,
             (Value::Boolean(false), ScalarType::Bool) => Datum::False,
@@ -1801,13 +1802,21 @@ fn generate_datum_from_value<'a>(
                 Datum::Interval(strconv::parse_interval(&i.value)?)
             }
             (Value::Null, _) => {
-                if column_type.nullable {
+                if column_info.1.nullable {
                     Datum::Null
                 } else {
-                    bail!("trying to insert NULL value into non-nullable column");
+                    bail!(format!(
+                        "trying to insert NULL value into non-nullable column {}",
+                        column_info
+                            .0
+                            .unwrap_or(&ColumnName::from("unnammed column"))
+                    ));
                 }
             }
-            (value, typ) => unsupported!(format!("value {:?} with type {:?}", value, typ)),
+            (value, typ) => bail!(format!(
+                "value {} is not compatible with type {:#?}",
+                value, typ
+            )),
         }
     } else {
         unsupported!(format!(
@@ -1827,22 +1836,23 @@ fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow
             source,
         } => {
             let table = scx.catalog.get_item(&scx.resolve_item(table_name.clone())?);
-            let column_types: Vec<&ColumnType> = table.desc()?.iter_types().collect();
+            let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
+                table.desc()?.iter().collect();
 
             if let SetExpr::Values(values) = &source.body {
                 let mut updates = Vec::with_capacity(values.0.len());
                 for to_update in &values.0 {
-                    if to_update.len() != column_types.len() {
+                    if to_update.len() != column_info.len() {
                         bail!(
                             "expected to insert {} values, found {}",
-                            column_types.len(),
+                            column_info.len(),
                             values.0.len()
                         );
                     }
                     let datums: Vec<Datum> = to_update
                         .iter()
                         .enumerate()
-                        .map(|(index, value)| generate_datum_from_value(value, column_types[index]))
+                        .map(|(index, value)| generate_datum_from_value(value, column_info[index]))
                         .collect::<Result<Vec<Datum>, anyhow::Error>>()?;
                     updates.push((Row::pack(datums), 1));
                 }
@@ -1853,10 +1863,7 @@ fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow
                     kind: MutationKind::Insert,
                 })
             } else {
-                unsupported!(format!(
-                    "expected to find values to insert, found: {}",
-                    source.body
-                ));
+                unsupported!(format!("INSERT body {}", source.body));
             }
         }
         other => unreachable!(format!("{:?}", other)),

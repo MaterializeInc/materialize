@@ -2440,14 +2440,19 @@ where
     ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
 
-        // When symbiosis mode is enabled, default to the symbiosis planning of CREATE
-        // TABLE and DROP TABLE. Symbiosis stores table information locally, which is
-        // required for other statements to be executed correctly.
+        // When symbiosis mode is enabled, use symbiosis planning for:
+        //  - CREATE TABLE
+        //  - DROP TABLE
+        //  - INSERT
+        // When these statements are routed through symbiosis, table information
+        // is created and maintained locally, which is required for other statements
+        // to be executed correctly.
         if let Statement::CreateTable { .. }
         | Statement::DropObjects {
             object_type: ObjectType::Table,
             ..
-        } = &stmt
+        }
+        | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
                 let plan =

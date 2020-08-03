@@ -49,11 +49,18 @@ a    b
 2    "b"
 3    "c"
 
+
+! INSERT INTO t SELECT * FROM t;
+INSERT body SELECT * FROM t not yet supported
+
 ! INSERT INTO t VALUES (1);
 expected to insert 2 values, found 1
 
 ! INSERT INTO t VALUES (1, NULL);
-trying to insert NULL value into non-nullable column
+trying to insert NULL value into non-nullable column b
+
+! INSERT INTO t VALUES ('d', 4);
+value 'd' is not compatible with type Int32
 
 > INSERT INTO t VALUES (NULL, 'd');
 
