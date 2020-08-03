@@ -52,6 +52,10 @@ production readiness.
 
   - [ ] Open a PR, and land it.
 
+- [ ] Create an issue and assign it to the @MaterializeInc/relnotes team to review the
+  Release Notes and (if applicable) the Release Announcement. All members of the team
+  should leave a comment stating that the release looks good.
+
 
 ### Test the release candidate
 
@@ -61,69 +65,38 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 [load-instr]: https://github.com/MaterializeInc/infra/tree/main/cloud#starting-a-load-test
 
-- [ ] Run the chbench load test on the release candidate tag.
+- [ ] Kick off a [full SQL logic test run](https://buildkite.com/materialize/sql-logic-tests)
+  and verify that it passes.
 
-  - [ ] Spin up a fresh VM and start the load test.
+- [ ] Start the load tests according to the instructions above
 
-  - [ ] From the VM, ensure all containers are running:
+- [ ] Find the load tests in grafana.mz , and link to them in #release, validating that
+    data is showing up:
 
-    ```shell script
-    docker ps -a
-    ```
+  - [ ] chbench
+  - [ ] billing-demo
+  - [ ] perf-kinesis
 
-  - [ ] Let the test run for 24 hours.
+- [ ] Let the tests run for at least 24 hours, with the following success criteria:
 
-  - [ ] Take a screenshot of the Grafana dashboard with the full 24 hours of
-    data and share it in the #release channel in Slack.
+  - [ ] Chbench should not have slower ingest than the previous release
+  - [ ] The billing-demo container should run and finish without error
+  - [ ] The "Time behind external source" dashboard panel in Grafana should have remained
+    at 0ms or similar for the entirety of the run.
 
-- [ ] Run the billing-demo load test on the release candidate tag.
-
-  - [ ] Spin up a fresh VM and start the load test.
-
-  - [ ] From the VM, ensure all containers are running:
-
-    ```shell script
-    docker ps -a
-    ```
-
-  - [ ] The billing-demo container should run and finish without error.
-
-- [ ] Run the perf-kinesis load test on the tag.
-
-  - [ ] Spin up a fresh VM and start the load test.
-
-  - [ ] From the VM, ensure all containers are running:
-
-    ```shell script
-    docker ps -a
-    ```
-
-  - [ ] Let the test run for 24 hours.
-
-  - [ ] Take a screenshot of the "Time behind external source" dashboard panel
-    in Grafana. (This metric should have remained at 0ms or similar for the entirety
-    of the run). Share the screenshot in the Slack channel.
+- [ ] Remove all load test machines.
 
 ## Final release
 
 ### Create git tag
 
-- [ ] Check out the final RC tag.
+- [ ] Create the final release based on the final RC tag. For example, if there was only
+  one RC then that would be `-rc1`
 
-- [ ] Update the version field in
-  [`src/materialized/Cargo.toml`](../../src/materialized/Cargo.toml) and commit
-  that change.
-
-- [ ] Ensure the change date in [`LICENSE`](/../) is correct.
-
-- [ ] Run `cargo check` to update `Cargo.lock` with the new version.
-
-- [ ] Create the release tag on that commit.
-
-  ```shell
-  tag=v<VERSION>
-  git tag -a $tag -m $tag
-  git push origin $tag  # where 'origin' is your MaterializeInc/materialize remote
+  ```console
+  $ tag=v<VERSION>
+  $ bin/mkrelease --checkout ${tag}-rc1 $tag
+  git push origin $tag
   ```
 
 ### Create Homebrew bottle and update tap
@@ -168,15 +141,17 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 - [ ] On **main**, update the various files that must be up to date:
 
-  - [ ] Ensure that the [Release Notes] are up
-    to date, including the current version.
+  - [ ] Ensure that the [Release Notes] are up to date, including the current version.
 
-  - [ ] Add the version to the website's list of versions in
-    [`doc/user/config.toml`].
+  - [ ] Add the version to the website's list of versions in [`doc/user/config.toml`].
+
+  - [ ] Ensure that the issue for checking the release notes has been closed.
+
+  - [ ] (If applicable) Ensure that the announcement blog post has been published and
+    announced, by pinging the PM in `#release`.
 
 ## Finish
 
-- [ ] Remove all load test machines.
 - [ ] Update the current status at the top of this issue.
 - [ ] Close this issue.
 
@@ -187,3 +162,5 @@ in the infrastructure repository. All of these tests can be run in parallel.
 [Release Notes]: https://github.com/MaterializeInc/materialize/tree/main/doc/user/content/release-notes.md
 [releases]: https://github.com/MaterializeInc/materialize/releases
 [v0.1.2]: https://github.com/MaterializeInc/materialize/releases/tag/v0.1.2
+[our blog]: https://materialize.io/wp-admin/edit.php?post_type=post
+[makes sense]: https://github.com/MaterializeInc/materialize/pull/3769#pullrequestreview-456713779

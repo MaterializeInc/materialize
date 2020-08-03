@@ -85,7 +85,7 @@ case "$cmd" in
         ;;
     run)
         args=(
-            --rm --interactive --tty
+            --rm --interactive
             --volume "$(pwd):$(pwd)"
             --workdir "$(pwd)"
             --env AWS_ACCESS_KEY_ID
@@ -100,6 +100,9 @@ case "$cmd" in
             --env BUILDKITE_TAG
             --env CI
         )
+        if [[ -t 1 ]]; then
+            args+=(--tty)
+        fi
         if [[ "$(uname -s)" = Linux ]]; then
             # Allow Docker-in-Docker by mounting the Docker socket in the
             # container. Host networking allows us to see ports created by

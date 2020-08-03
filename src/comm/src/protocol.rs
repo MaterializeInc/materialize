@@ -166,7 +166,7 @@ where
     C: Connection,
 {
     let mut codec = LengthDelimitedCodec::new();
-    codec.set_max_frame_length(1 << 30 /* 1GiB */);
+    codec.set_max_frame_length(usize::MAX);
     Framed::new(conn, codec)
 }
 

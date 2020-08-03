@@ -80,7 +80,7 @@ renamed_mz_view
 
 # Item's own `CREATE VIEW` statement updated
 > SHOW CREATE VIEW renamed_mz_view
-View                                Create View
+View                                "Create View"
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"renamed_mz_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_data\""
 
@@ -93,30 +93,30 @@ Source_or_view                      Key_name                          Column_nam
  materialize.public.renamed_mz_view materialize.public.renamed_index  mz_obj_no   <null>     false            3
 
 > SHOW CREATE INDEX renamed_index
-Index               Create Index
+Index               "Create Index"
 ---------------------------------------------------------------------------------------------------------------------
 materialize.public.renamed_index "CREATE INDEX \"renamed_index\" ON \"materialize\".\"public\".\"renamed_mz_view\" (\"a\", \"b\", \"mz_obj_no\")"
 
 # Simple dependencies are renamed
 > SHOW CREATE VIEW dependent_view
-View                                Create View
+View                                "Create View"
 ------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\""
 
 > SHOW CREATE SINK renamed_sink
-Sink                            Create Sink
+Sink                            "Create Sink"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' WITH SNAPSHOT"
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
-View                              Create View
+View                              "Create View"
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.byzantine_view "CREATE VIEW \"materialize\".\"public\".\"byzantine_view\" AS SELECT \"renamed_mz_data\".\"a\", \"renamed_mz_view\".\"b\" FROM \"materialize\".\"public\".\"renamed_mz_data\" JOIN \"materialize\".\"public\".\"renamed_mz_view\" ON \"renamed_mz_data\".\"a\" = \"renamed_mz_view\".\"a\""
 
 # Strings containing old item name are not modified
 > SHOW CREATE VIEW oppositional_view
-View                                 Create View
+View                                 "Create View"
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.oppositional_view "CREATE VIEW \"materialize\".\"public\".\"oppositional_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\" WHERE \"b\" = '   an adversarial string   \"materialize\".\"public\".\"mz_data\"   '"
 
@@ -277,7 +277,7 @@ renaming conflict
 > ALTER VIEW db2.scm1.v RENAME TO v2
 
 > SHOW CREATE VIEW db1_db2_scm1_valid_qual
-View                                       Create View
+View                                       "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.db1_db2_scm1_valid_qual "CREATE VIEW \"materialize\".\"public\".\"db1_db2_scm1_valid_qual\" AS SELECT * FROM (SELECT \"db1\".\"scm1\".\"v1\".\"a\" FROM \"db1\".\"scm1\".\"v1\") AS \"l\" JOIN (SELECT \"db2\".\"scm1\".\"v2\".\"b\" FROM \"db2\".\"scm1\".\"v2\") AS \"r\" ON \"l\".\"a\" = \"r\".\"b\""
 
@@ -312,7 +312,7 @@ renaming conflict
 > ALTER VIEW db1.scm1.v1 RENAME TO v4;
 
 > SHOW CREATE VIEW db_db_qual_diff_s_v
-View                          Create View
+View                          "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.db_db_qual_diff_s_v "CREATE VIEW \"materialize\".\"public\".\"db_db_qual_diff_s_v\" AS SELECT \"db2\".\"scm2\".\"v3\".\"z\" FROM \"db2\".\"scm2\".\"v3\" JOIN \"db1\".\"scm1\".\"v4\" ON \"db2\".\"scm2\".\"v3\".\"z\" = \"db1\".\"scm1\".\"v4\".\"a\""
 
@@ -337,7 +337,7 @@ materialize.public.db_db_qual_diff_s_v "CREATE VIEW \"materialize\".\"public\".\
 > ALTER VIEW db1.scm1.v4 RENAME TO v5;
 
 > SHOW CREATE VIEW db_scm_qual
-View                           Create View
+View                           "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.db_scm_qual "CREATE VIEW \"materialize\".\"public\".\"db_scm_qual\" AS SELECT \"scm3\".\"v3\".\"z\", \"db1\".\"scm1\".\"v5\".\"a\" FROM \"materialize\".\"scm3\".\"v3\" JOIN \"db1\".\"scm1\".\"v5\" ON \"scm3\".\"v3\".\"z\" = \"db1\".\"scm1\".\"v5\".\"a\""
 
@@ -373,7 +373,7 @@ renaming conflict
 > ALTER VIEW db1.scm1.v5 RENAME TO v6;
 
 > SHOW CREATE VIEW db_v_qual
-View                         Create View
+View                         "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.db_v_qual "CREATE VIEW \"materialize\".\"public\".\"db_v_qual\" AS SELECT \"v2\".\"z\", \"db1\".\"scm1\".\"v6\".\"a\" FROM \"materialize\".\"public\".\"v2\" JOIN \"db1\".\"scm1\".\"v6\" ON \"v2\".\"z\" = \"db1\".\"scm1\".\"v6\".\"a\""
 
@@ -446,7 +446,7 @@ renaming conflict
 > ALTER VIEW db1.scm2.v RENAME TO v5
 
 > SHOW CREATE VIEW db1_scm1_scm2_valid_qual
-View                                       Create View
+View                                       "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.db1_scm1_scm2_valid_qual "CREATE VIEW \"materialize\".\"public\".\"db1_scm1_scm2_valid_qual\" AS SELECT * FROM (SELECT \"scm1\".\"v4\".\"a\" FROM \"db1\".\"scm1\".\"v4\") AS \"l\" JOIN (SELECT \"scm2\".\"v5\".\"b\" FROM \"db1\".\"scm2\".\"v5\") AS \"r\" ON \"l\".\"a\" = \"r\".\"b\""
 
@@ -487,7 +487,7 @@ renaming conflict
 > ALTER VIEW scm5.v2 RENAME TO v4;
 
 > SHOW CREATE VIEW scm_scm_qual
-View                           Create View
+View                           "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.scm_scm_qual "CREATE VIEW \"materialize\".\"public\".\"scm_scm_qual\" AS SELECT \"scm4\".\"v3\".\"z\", \"scm5\".\"v4\".\"a\" FROM \"materialize\".\"scm4\".\"v3\" JOIN \"materialize\".\"scm5\".\"v4\" ON \"scm4\".\"v3\".\"z\" = \"scm5\".\"v4\".\"a\""
 
@@ -519,7 +519,7 @@ renaming conflict
 > ALTER VIEW scm5.v4 RENAME TO v6;
 
 > SHOW CREATE VIEW scm_v_qual
-View                          Create View
+View                          "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.scm_v_qual "CREATE VIEW \"materialize\".\"public\".\"scm_v_qual\" AS SELECT \"v3\".\"z\", \"scm5\".\"v6\".\"a\" FROM \"materialize\".\"public\".\"v3\" JOIN \"materialize\".\"scm5\".\"v6\" ON \"v3\".\"z\" = \"scm5\".\"v6\".\"a\""
 
@@ -546,7 +546,7 @@ renaming conflict
 > ALTER VIEW v3 RENAME TO v5;
 
 > SHOW CREATE VIEW v_v_qual
-View                          Create View
+View                          "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.v_v_qual "CREATE VIEW \"materialize\".\"public\".\"v_v_qual\" AS SELECT \"v5\".\"z\", \"v6\".\"a\" FROM \"materialize\".\"public\".\"v5\" JOIN \"materialize\".\"public\".\"v6\" ON \"v5\".\"z\" = \"v6\".\"a\""
 
@@ -562,7 +562,7 @@ materialize.public.v_v_qual "CREATE VIEW \"materialize\".\"public\".\"v_v_qual\"
 > ALTER VIEW v5 RENAME TO v7
 
 > SHOW CREATE VIEW qualified_wildcard
-View                                  Create View
+View                                  "Create View"
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.qualified_wildcard "CREATE VIEW \"materialize\".\"public\".\"qualified_wildcard\" AS SELECT \"v7\".* FROM \"materialize\".\"public\".\"v7\""
 
@@ -585,7 +585,7 @@ renaming conflict
 > ALTER VIEW v8 RENAME TO v9
 
 > SHOW CREATE VIEW v9
-View                   Create View
+View                   "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.v9 "CREATE VIEW \"materialize\".\"public\".\"v9\" AS SELECT \"b\" FROM \"materialize\".\"public\".\"t1\" WHERE \"b\" IN ('v8')"
 
@@ -615,7 +615,7 @@ renaming conflict
 > ALTER VIEW "already has space" RENAME TO "still has space"
 
 > SHOW CREATE VIEW space_dependent
-View                               Create View
+View                               "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.space_dependent "CREATE VIEW \"materialize\".\"public\".\"space_dependent\" AS SELECT * FROM \"materialize\".\"public\".\"now has space\" JOIN \"materialize\".\"public\".\"still has space\" ON \"still has space\".\"my_space\" = \"now has space\".\"has space\""
 
@@ -630,7 +630,7 @@ materialize.public.space_dependent "CREATE VIEW \"materialize\".\"public\".\"spa
 > ALTER VIEW natural RENAME TO unnatural
 
 > SHOW CREATE VIEW unnatural
-View                         Create View
+View                         "Create View"
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.unnatural "CREATE VIEW \"materialize\".\"public\".\"unnatural\" AS SELECT * FROM \"materialize\".\"public\".\"t1\" NATURAL JOIN \"materialize\".\"public\".\"t1\""
 
@@ -659,14 +659,14 @@ renaming conflict
 > ALTER VIEW no_func RENAME TO count
 
 > SHOW CREATE VIEW func_dependency
-View                                Create View
+View                                "Create View"
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.func_dependency "CREATE VIEW \"materialize\".\"public\".\"func_dependency\" AS SELECT * FROM \"materialize\".\"public\".\"count\" JOIN (SELECT * FROM \"materialize\".\"public\".\"count\") AS \"x\" ON \"count\".\"a\" = \"x\".\"a\""
 
 > CREATE VIEW "materialize"."public"."func_dependency_test" AS SELECT * FROM count JOIN (SELECT * FROM count) AS x ON count.a = x.a
 
 > SHOW CREATE VIEW count
-View                     Create View
+View                     "Create View"
 ---------------------------------------------------------------------------------------
 materialize.public.count "CREATE VIEW \"materialize\".\"public\".\"count\" AS SELECT 1 AS \"a\""
 

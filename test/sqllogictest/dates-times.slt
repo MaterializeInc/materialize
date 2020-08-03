@@ -831,7 +831,7 @@ SELECT to_timestamp(946684800)
 query T
 SELECT to_timestamp(1262349296.7890123)
 ----
-2010-01-01 12:34:56+00.789012
+2010-01-01 12:34:56.789012+00
 
 # TODO(benesch): this should return an error, not NULL.
 query T

@@ -9,11 +9,12 @@
 
 use std::time::Duration;
 
+use anyhow::Result;
 use tokio_postgres::{Client, Error, NoTls, Row};
 
 /// Create and return a new PostgreSQL client, spawning off the connection
 /// object along the way.
-pub async fn client(host: &str, port: u16) -> Result<Client, anyhow::Error> {
+pub async fn client(host: &str, port: u16) -> Result<Client> {
     let (mz_client, conn) = tokio_postgres::Config::new()
         .user("mzd")
         .host(host)
@@ -34,11 +35,7 @@ pub async fn client(host: &str, port: u16) -> Result<Client, anyhow::Error> {
 
 /// Try running PostgresSQL's `query` function, checking for a common
 /// Materialize error in `check_error`.
-pub async fn try_query(
-    mz_client: &Client,
-    query: &str,
-    delay: Duration,
-) -> Result<Vec<Row>, anyhow::Error> {
+pub async fn try_query(mz_client: &Client, query: &str, delay: Duration) -> Result<Vec<Row>> {
     loop {
         let timer = std::time::Instant::now();
         match mz_client.query(&*query, &[]).await {
@@ -51,11 +48,7 @@ pub async fn try_query(
 
 /// Try running PostgreSQL's `query_one` function, checking for a common
 /// Materialize error in `check_error`.
-pub async fn try_query_one(
-    mz_client: &Client,
-    query: &str,
-    delay: Duration,
-) -> Result<Row, anyhow::Error> {
+pub async fn try_query_one(mz_client: &Client, query: &str, delay: Duration) -> Result<Row> {
     loop {
         let timer = std::time::Instant::now();
         match mz_client.query_one(&*query, &[]).await {
@@ -72,7 +65,7 @@ pub async fn try_query_one(
 ///
 /// Since this error is likely transient, we should retry reading from the view
 /// instead of failing.
-fn check_error(e: Error) -> Result<(), anyhow::Error> {
+fn check_error(e: Error) -> Result<()> {
     if e.to_string()
         .contains("At least one input has no complete timestamps yet")
     {
@@ -94,4 +87,36 @@ async fn delay_for(elapsed: Duration, delay: Duration) {
             elapsed
         );
     }
+}
+
+/// Run Materialize's `SHOW SOURCES` command
+pub async fn show_sources(mz_client: &Client) -> Result<Vec<String>> {
+    let mut res = Vec::new();
+    for row in mz_client.query("SHOW SOURCES", &[]).await? {
+        res.push(row.get(0))
+    }
+
+    Ok(res)
+}
+
+/// Delete a source and all dependent views, if the source exists
+pub async fn drop_source(mz_client: &Client, name: &str) -> Result<()> {
+    let q = format!("DROP SOURCE IF EXISTS {} CASCADE", name);
+    log::debug!("deleting source=> {}", q);
+    mz_client.execute(&*q, &[]).await?;
+    Ok(())
+}
+
+/// Run PostgreSQL's `execute` function
+pub async fn execute(mz_client: &Client, query: &str) -> Result<u64> {
+    log::debug!("exec=> {}", query);
+    Ok(mz_client.execute(query, &[]).await?)
+}
+
+/// Delete an index
+pub async fn drop_index(mz_client: &Client, name: &str) -> Result<()> {
+    let q = format!("DROP INDEX {}", name);
+    log::debug!("deleting index=> {}", q);
+    mz_client.execute(&*q, &[]).await?;
+    Ok(())
 }

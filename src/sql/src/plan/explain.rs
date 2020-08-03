@@ -133,7 +133,7 @@ impl RelationExpr {
                 Some(parent_expr) => match parent_expr {
                     Project { .. }
                     | Map { .. }
-                    | FlatMap { .. }
+                    | CallTable { .. }
                     | Filter { .. }
                     | Reduce { .. }
                     | TopK { .. }
@@ -163,7 +163,7 @@ impl RelationExpr {
                 | TopK { .. } => (),
                 Map { scalars, .. } => scalar_exprs.extend(scalars),
                 Filter { predicates, .. } => scalar_exprs.extend(predicates),
-                FlatMap { exprs, .. } => scalar_exprs.extend(exprs),
+                CallTable { exprs, .. } => scalar_exprs.extend(exprs),
                 Join { on, .. } => scalar_exprs.push(on),
                 Reduce { aggregates, .. } => {
                     scalar_exprs.extend(aggregates.iter().map(|a| &*a.expr))
@@ -241,10 +241,10 @@ impl RelationExpr {
                     )
                     .unwrap();
                 }
-                FlatMap { func, exprs, .. } => {
+                CallTable { func, exprs } => {
                     write!(
                         pretty,
-                        "FlatMap {}({})",
+                        "CallTable {}({})",
                         func,
                         Separated(
                             ", ",
@@ -445,8 +445,10 @@ impl std::fmt::Display for JoinKind {
             f,
             "{}",
             match self {
-                JoinKind::Inner => "Inner",
-                JoinKind::LeftOuter => "LeftOuter",
+                JoinKind::Inner { lateral: false } => "Inner",
+                JoinKind::Inner { lateral: true } => "InnerLateral",
+                JoinKind::LeftOuter { lateral: false } => "LeftOuter",
+                JoinKind::LeftOuter { lateral: true } => "LeftOuterLateral",
                 JoinKind::RightOuter => "RightOuter",
                 JoinKind::FullOuter => "FullOuter",
             }

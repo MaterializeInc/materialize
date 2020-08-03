@@ -254,3 +254,50 @@ Parse error:
 SELECT [1, 2]
        ^
 Expected an expression, found: [
+
+# Subscripts must have values
+parse-statement
+SELECT LIST[1][]
+----
+error:
+Parse error:
+SELECT LIST[1][]
+               ^
+Expected an expression, found: ]
+
+# Multi-dimensional subscripts must all be slices
+parse-statement
+SELECT LIST[1][1:2, 1]
+----
+error:
+Parse error:
+SELECT LIST[1][1:2, 1]
+                     ^
+Expected :, found: ]
+
+parse-statement
+SELECT LIST[1][1, 1]
+----
+error:
+Parse error:
+SELECT LIST[1][1, 1]
+                ^
+Expected ], found: ,
+
+parse-statement
+SELECT LIST[1][1, 1:1]
+----
+error:
+Parse error:
+SELECT LIST[1][1, 1:1]
+                ^
+Expected ], found: ,
+
+parse-statement
+SELECT LIST[1][1:1, ]
+----
+error:
+Parse error:
+SELECT LIST[1][1:1, ]
+                    ^
+Expected an expression, found: ]

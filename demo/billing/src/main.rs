@@ -18,36 +18,29 @@
 
 #![deny(missing_debug_implementations, missing_docs)]
 
-use std::error::Error as _;
 use std::process;
+use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Result;
 use protobuf::Message;
 use structopt::StructOpt;
 
 use test_util::kafka::kafka_client;
+use test_util::mz_client;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
-use crate::error::Result;
-use crate::mz_client::MzClient;
 
 mod config;
-mod error;
 mod gen;
-mod macros;
-mod mz_client;
+mod mz;
 mod proto;
 mod randomizer;
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        println!("ERROR: {}", e);
-        let mut err = e.source();
-        while let Some(e) = err {
-            println!("    caused by: {}", e);
-            err = e.source();
-        }
+        eprintln!("ERROR: {:#}", e);
         process::exit(1);
     }
 }
@@ -70,24 +63,20 @@ async fn run() -> Result<()> {
         k_config.seed,
     );
 
-    let mz_client = MzClient::new(&mz_config.host, mz_config.port).await?;
+    let mz_client = mz_client::client(&mz_config.host, mz_config.port).await?;
     let check_sink = mz_config.check_sink;
 
-    let k = tokio::spawn(async move { create_kafka_messages(k_config).await });
-
-    let mz = tokio::spawn(async move { create_materialized_source(mz_config).await });
-    let (k_res, mz_res) = futures::join!(k, mz);
-    k_res??;
-    mz_res??;
+    create_materialized_source(mz_config).await?;
+    create_kafka_messages(k_config).await?;
 
     if check_sink {
-        mz_client
-            .validate_sink(
-                "check_sink",
-                "billing_monthly_statement",
-                "invalid_sink_rows",
-            )
-            .await?;
+        mz::validate_sink(
+            &mz_client,
+            "check_sink",
+            "billing_monthly_statement",
+            "invalid_sink_rows",
+        )
+        .await?;
     }
     Ok(())
 }
@@ -100,114 +89,116 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         last_time: config.start_time,
     };
 
-    let mut k_client =
-        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])
-            .map_err(|e| error::Error::from(e.to_string()))?;
+    let k_client = Arc::new(kafka_client::KafkaClient::new(
+        &config.url,
+        &config.group_id,
+        &config.topic,
+        &[],
+    )?);
 
-    if let Some(partitions) = config.partitions {
+    if let Some(create_topic) = &config.create_topic {
         k_client
-            .create_topic(partitions, 1, &[], Some(Duration::from_secs(5)))
-            .await
-            .map_err(|e| error::Error::from(e.to_string()))?;
+            .create_topic(
+                create_topic.partitions,
+                create_topic.replication_factor,
+                &[],
+                None,
+            )
+            .await?;
     }
 
     let mut buf = vec![];
-    let mut interval = config.message_sleep.map(tokio::time::interval);
-    let mut total_size = 0;
-    for i in 0..config.message_count {
-        if let Some(int) = interval.as_mut() {
-            int.tick().await;
+    let mut total_messages_sent = 0;
+    loop {
+        let mut bytes_sent = 0;
+        let backoff = tokio::time::delay_for(Duration::from_secs(1));
+        for _ in 0..config.messages_per_second {
+            let m = randomizer::random_batch(rng, &mut recordstate);
+            m.write_to_vec(&mut buf)?;
+            log::trace!("sending: {:?}", m);
+            let res = k_client.send(&buf);
+            match res {
+                Ok(fut) => {
+                    tokio::spawn(fut);
+                }
+                Err(e) => {
+                    log::error!("failed to produce message: {}", e);
+                    tokio::time::delay_for(Duration::from_millis(100)).await;
+                }
+            };
+            bytes_sent += buf.len();
+            buf.clear();
         }
-        let m = randomizer::random_batch(rng, &mut recordstate);
-        m.write_to_vec(&mut buf)?;
-        log::trace!("sending: {:?}", m);
-        k_client
-            .send(&buf)
-            .await
-            .map_err(|e| error::Error::from(e.to_string()))?;
-        total_size += buf.len();
-        buf.clear();
-        if i % (config.message_count / 100).max(5) == 0 {
-            log::info!(
-                "sent message {} average message size: {}B",
-                i,
-                total_size / i.max(1)
-            );
+        log::info!(
+            "produced {} records ({} bytes / record)",
+            config.messages_per_second,
+            bytes_sent / config.messages_per_second
+        );
+        total_messages_sent += config.messages_per_second;
+
+        if total_messages_sent >= config.message_count {
+            break;
         }
+        backoff.await;
     }
     Ok(())
 }
 
 async fn create_materialized_source(config: MzConfig) -> Result<()> {
-    let client = MzClient::new(&config.host, config.port).await?;
+    let client = mz_client::client(&config.host, config.port).await?;
 
     if !config.preserve_source {
-        let sources = client.show_sources().await?;
-        if any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-            client.drop_source(config::KAFKA_SOURCE_NAME).await?;
-            client.drop_source(config::CSV_SOURCE_NAME).await?;
-            client
-                .drop_source(config::REINGESTED_SINK_SOURCE_NAME)
-                .await?;
-        }
+        mz_client::drop_source(&client, config::KAFKA_SOURCE_NAME).await?;
+        mz_client::drop_source(&client, config::CSV_SOURCE_NAME).await?;
+        mz_client::drop_source(&client, config::REINGESTED_SINK_SOURCE_NAME).await?;
     }
 
-    let sources = client.show_sources().await?;
+    let sources = mz_client::show_sources(&client).await?;
     if !any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-        client
-            .create_csv_source(
-                &config.csv_file_name,
-                config::CSV_SOURCE_NAME,
-                randomizer::NUM_CLIENTS,
-                config.seed,
-                config.batch_size,
-            )
-            .await?;
+        mz::create_csv_source(
+            &client,
+            &config.csv_file_name,
+            config::CSV_SOURCE_NAME,
+            randomizer::NUM_CLIENTS,
+            config.seed,
+            config.batch_size,
+        )
+        .await?;
 
-        client
-            .create_proto_source(
-                proto::BILLING_DESCRIPTOR,
-                &config.kafka_url,
-                &config.kafka_topic,
-                config::KAFKA_SOURCE_NAME,
-                proto::BILLING_MESSAGE_NAME,
-                config.batch_size,
-            )
-            .await?;
+        mz::create_proto_source(
+            &client,
+            proto::BILLING_DESCRIPTOR,
+            &config.kafka_url,
+            &config.kafka_topic,
+            config::KAFKA_SOURCE_NAME,
+            proto::BILLING_MESSAGE_NAME,
+            config.batch_size,
+        )
+        .await?;
 
-        exec_query!(client, "billing_raw_data");
-        exec_query!(client, "billing_prices");
-        exec_query!(client, "billing_batches");
-        exec_query!(client, "billing_records");
-        exec_query!(client, "billing_agg_by_minute");
-        exec_query!(client, "billing_agg_by_hour");
-        exec_query!(client, "billing_agg_by_day");
-        exec_query!(client, "billing_agg_by_month");
-        exec_query!(client, "billing_monthly_statement");
+        mz::init_views(&client, config::KAFKA_SOURCE_NAME, config::CSV_SOURCE_NAME).await?;
+
         if config.low_memory {
-            exec_query!(client, "drop_index_billing_raw_data");
-            exec_query!(client, "drop_index_billing_records");
+            mz::drop_indexes(&client).await?;
         }
-
-        let sink_topic = client
-            .create_kafka_sink(
+        let sink_topic = mz::create_kafka_sink(
+            &client,
+            &config.kafka_url,
+            config::KAFKA_SINK_TOPIC_NAME,
+            config::KAFKA_SINK_NAME,
+            &config.schema_registry_url,
+        )
+        .await?;
+        if config.check_sink {
+            mz::reingest_sink(
+                &client,
                 &config.kafka_url,
-                config::KAFKA_SINK_TOPIC_NAME,
-                config::KAFKA_SINK_NAME,
                 &config.schema_registry_url,
+                config::REINGESTED_SINK_SOURCE_NAME,
+                &sink_topic,
             )
             .await?;
-        if config.check_sink {
-            client
-                .reingest_sink(
-                    &config.kafka_url,
-                    &config.schema_registry_url,
-                    config::REINGESTED_SINK_SOURCE_NAME,
-                    &sink_topic,
-                )
-                .await?;
-            exec_query!(client, "check_sink");
-            exec_query!(client, "invalid_sink_rows");
+            mz::init_sink_views(&client, config::REINGESTED_SINK_SOURCE_NAME).await?;
         }
     } else {
         log::info!(

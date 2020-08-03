@@ -301,12 +301,12 @@ impl TableWithJoins {
 pub enum TableFactor {
     Table {
         name: ObjectName,
-        /// Arguments of a table-valued function, as supported by Postgres
-        /// and MSSQL.
-        args: Option<FunctionArgs>,
         alias: Option<TableAlias>,
-        /// MSSQL-specific `WITH (...)` hints such as NOLOCK.
-        with_hints: Vec<Expr>,
+    },
+    Function {
+        name: ObjectName,
+        args: FunctionArgs,
+        alias: Option<TableAlias>,
     },
     Derived {
         lateral: bool,
@@ -317,32 +317,30 @@ pub enum TableFactor {
     /// `(foo <JOIN> bar [ <JOIN> baz ... ])`.
     /// The inner `TableWithJoins` can have no joins only if its
     /// `relation` is itself a `TableFactor::NestedJoin`.
-    NestedJoin(Box<TableWithJoins>),
+    NestedJoin {
+        join: Box<TableWithJoins>,
+        alias: Option<TableAlias>,
+    },
 }
 
 impl AstDisplay for TableFactor {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            TableFactor::Table {
-                name,
-                alias,
-                args,
-                with_hints,
-            } => {
+            TableFactor::Table { name, alias } => {
                 f.write_node(name);
-                if let Some(args) = args {
-                    f.write_str("(");
-                    f.write_node(args);
-                    f.write_str(")");
-                }
                 if let Some(alias) = alias {
                     f.write_str(" AS ");
                     f.write_node(alias);
                 }
-                if !with_hints.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(with_hints));
-                    f.write_str(")");
+            }
+            TableFactor::Function { name, args, alias } => {
+                f.write_node(name);
+                f.write_str("(");
+                f.write_node(args);
+                f.write_str(")");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
                 }
             }
             TableFactor::Derived {
@@ -361,10 +359,14 @@ impl AstDisplay for TableFactor {
                     f.write_node(alias);
                 }
             }
-            TableFactor::NestedJoin(table_reference) => {
+            TableFactor::NestedJoin { join, alias } => {
                 f.write_str("(");
-                f.write_node(table_reference);
+                f.write_node(join);
                 f.write_str(")");
+                if let Some(alias) = alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
             }
         }
     }
@@ -462,14 +464,6 @@ impl AstDisplay for Join {
                 f.write_str(" CROSS JOIN ");
                 f.write_node(&self.relation);
             }
-            JoinOperator::CrossApply => {
-                f.write_str(" CROSS APPLY ");
-                f.write_node(&self.relation);
-            }
-            JoinOperator::OuterApply => {
-                f.write_str(" OUTER APPLY ");
-                f.write_node(&self.relation);
-            }
         }
     }
 }
@@ -482,10 +476,6 @@ pub enum JoinOperator {
     RightOuter(JoinConstraint),
     FullOuter(JoinConstraint),
     CrossJoin,
-    /// CROSS APPLY (non-standard)
-    CrossApply,
-    /// OUTER APPLY (non-standard)
-    OuterApply,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

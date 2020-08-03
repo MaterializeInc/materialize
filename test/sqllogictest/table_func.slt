@@ -81,8 +81,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
 %0 =
-| Constant ()
-| FlatMap generate_series(-(2), 2)
+| CallTable generate_series(-(2), 2)
 
 EOF
 
@@ -94,15 +93,13 @@ EXPLAIN PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 
 EOF
 
-# TODO(justin): currently incorrect. Should return element directly, not
-# 1-tuple.
-query T colnames
+query I colnames
 SELECT x FROM generate_series(1, 3) x
 ----
 x
-(1)
-(2)
-(3)
+1
+2
+3
 
 # TODO(justin): Don't currently support the 3-argument version.
 statement error
@@ -167,7 +164,12 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(1, a)
 ----
 %0 =
 | Get materialize.public.x (u5)
-| FlatMap generate_series(1, #0)
+
+%1 =
+| CallTable generate_series(1, #^0)
+
+%2 =
+| InnerLateralJoin %0 %1 on true
 
 EOF
 
@@ -176,7 +178,22 @@ EXPLAIN RAW PLAN FOR SELECT * FROM x, generate_series(100::bigint, a)
 ----
 %0 =
 | Get materialize.public.x (u5)
-| FlatMap generate_series(i32toi64(100), i32toi64(#0))
+
+%1 =
+| CallTable generate_series(i32toi64(100), i32toi64(#^0))
+
+%2 =
+| InnerLateralJoin %0 %1 on true
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM x, generate_series(1, 10)
+----
+%0 =
+| Get materialize.public.x (u5)
+| FlatMap generate_series(1, 10)
+| | demand = (#0..#2)
 
 EOF
 

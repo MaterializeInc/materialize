@@ -38,6 +38,7 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_JMX_PORT: 9991
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
   perf-upsert:
     mzbuild: perf-upsert
     environment:
@@ -47,7 +48,7 @@ services:
       --materialized-host materialized
       --kafka-host kafka
       --create-topic
-      --partitions 5
+      --partitions 1
       --replication-factor 1
     depends_on: [kafka, materialized]
   dashboard:
@@ -79,13 +80,6 @@ mzconduct:
       - step: run
         service: perf-upsert
         daemon: false
-        command: >-
-          --message-count 16000
-          --materialized-host materialized
-          --kafka-host kafka
-          --create-topic
-          --partitions 1
-          --replication-factor 1
       - step: down
         destroy_volumes: true
 

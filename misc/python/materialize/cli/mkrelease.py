@@ -30,10 +30,21 @@ say = ui.speaker("")
 @click.option(
     "-b", "--create-branch", default=None, help="Create a branch and check it out",
 )
-@click.option("--checkout", default=None, help="Commit or branch to check out")
+@click.option("-c", "--checkout", default=None, help="Commit or branch to check out")
 @click.option("--tag/--no-tag", default=True, help="")
 def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -> None:
     """Update documents for a release and create tags
+
+    If both `-b` and `-c` are specified, the checkout happens before the branch creation,
+    meaning that the new branch is created on the target of `-c`.
+
+    For example make release::
+
+        mkrelease -b prepare-v0.1.2 -c v0.1.1-rc1 v0.1.2-dev
+
+    Has the same git semantics as::
+
+        git checkout -b prepare-v0.1.2 v0.1.1-rc1
 
     \b
     Arguments:
@@ -55,10 +66,10 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
         )
         sys.exit(1)
 
-    if create_branch is not None:
-        git.create_branch(create_branch)
     if checkout is not None:
         git.checkout(checkout)
+    if create_branch is not None:
+        git.create_branch(create_branch)
 
     change_line(BIN_CARGO_TOML, "version", f'version = "{version}"')
     change_line(
@@ -66,8 +77,11 @@ def main(version: str, checkout: Optional[str], create_branch: str, tag: bool) -
         "Licensed Work:",
         f"Licensed Work:             Materialize Version {version}",
     )
-    future = four_years_hence()
-    change_line(LICENSE, "Change Date", f"Change Date:               {future}")
+    # Don't update the change date unless some code has changed
+    if "-rc" in version or "-dev" in version:
+        future = four_years_hence()
+        change_line(LICENSE, "Change Date", f"Change Date:               {future}")
+
     say("Updating Cargo.lock")
     spawn.runv(["cargo", "check", "-p", "materialized"])
     if tag:
@@ -133,6 +147,8 @@ def confirm_version_is_next(version: str) -> None:
                 and latest_tag.prerelease is not None
             ):
                 pass
+            elif this_tag.prerelease is None and latest_tag.prerelease is not None:
+                say("Congratulations on the successful release!")
             else:
                 say(f"ERROR: {this_tag} is not the next release after {latest_tag}")
                 sys.exit(1)

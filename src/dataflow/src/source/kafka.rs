@@ -13,19 +13,19 @@ use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
-};
-use expr::{PartitionId, SourceInstanceId};
-use log::{error, info, log_enabled, warn};
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
-
 use timely::scheduling::activate::{Activator, SyncActivator};
-use url::Url;
+
+use dataflow_types::{
+    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
+};
+use expr::{PartitionId, SourceInstanceId};
+use kafka_util::KafkaAddr;
+use log::{error, info, log_enabled, warn};
 
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
@@ -68,16 +68,16 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         connector: ExternalSourceConnector,
         _: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> KafkaSourceInfo {
+    ) -> Result<KafkaSourceInfo, failure::Error> {
         match connector {
-            ExternalSourceConnector::Kafka(kc) => KafkaSourceInfo::new(
+            ExternalSourceConnector::Kafka(kc) => Ok(KafkaSourceInfo::new(
                 source_name,
                 source_id,
                 worker_id,
                 worker_count,
                 consumer_activator,
                 kc,
-            ),
+            )),
             _ => unreachable!(),
         }
     }
@@ -340,14 +340,14 @@ impl KafkaSourceInfo {
         kc: KafkaSourceConnector,
     ) -> KafkaSourceInfo {
         let KafkaSourceConnector {
-            url,
+            addr,
             topic,
             config_options,
             group_id_prefix,
             ..
         } = kc;
         let kafka_config =
-            create_kafka_config(&source_name, &url, group_id_prefix, &config_options);
+            create_kafka_config(&source_name, &addr, group_id_prefix, &config_options);
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
@@ -408,30 +408,6 @@ impl KafkaSourceInfo {
             .assign(&partition_list)
             .expect("assignment known to be valid");
 
-        // Trick librdkafka into updating its metadata for the topic so that we
-        // start seeing data for the partition immediately. Otherwise we might
-        // need to wait the full `topic.metadata.refresh.interval.ms` interval.
-        //
-        // We don't actually care about the results of the metadata refresh, and
-        // would prefer not to wait for it to complete, so we execute this
-        // request with a timeout of 0s and ignore the result. This relies on an
-        // implementation detail, which is that librdkafka does not proactively
-        // cancel metadata fetch operations when they reach their timeout.
-        // Unfortunately there is no asynchronous metadata fetch API.
-        //
-        // It is not a problem if the metadata request fails, because the
-        // background metadata refresh will retry indefinitely. As long as a
-        // background request succeeds eventually, we'll start receiving data
-        // for the new partitions.
-        //
-        // TODO(benesch): remove this if upstream makes this metadata refresh
-        // happen automatically [0].
-        //
-        // [0]: https://github.com/edenhill/librdkafka/issues/2917
-        let _ = self
-            .consumer
-            .fetch_metadata(Some(&self.topic_name), Duration::from_secs(0));
-
         let partition_queue = self
             .consumer
             .split_partition_queue(&self.topic_name, partition_id)
@@ -486,14 +462,14 @@ impl KafkaSourceInfo {
 /// Creates a Kafka config.
 fn create_kafka_config(
     name: &str,
-    url: &Url,
+    addr: &KafkaAddr,
     group_id_prefix: Option<String>,
     config_options: &HashMap<String, String>,
 ) -> ClientConfig {
     let mut kafka_config = ClientConfig::new();
 
     // Broker configuration.
-    kafka_config.set("bootstrap.servers", &url.to_string());
+    kafka_config.set("bootstrap.servers", &addr.to_string());
 
     // Opt-out of Kafka's offset management facilities. Whenever we restart,
     // we want to restart from the beginning of the topic.

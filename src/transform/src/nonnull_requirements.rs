@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{Id, RelationExpr, ScalarExpr, TableFunc};
+use expr::{Id, RelationExpr, ScalarExpr};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -93,15 +93,17 @@ impl NonNullRequirements {
                     // the entire expression can be zerod out.
                     relation.take_safely();
                 } else {
-                    let mut new_columns = HashSet::new();
-                    for column in columns {
-                        if column < arity {
-                            new_columns.insert(column);
-                        } else {
-                            scalars[column - arity].non_null_requirements(&mut new_columns);
+                    // For each column, if it must be non-null, extract the expression's
+                    // non-null requirements and include them too. We go in reverse order
+                    // to ensure we squeegee down all requirements even for references to
+                    // other columns produced in this operator.
+                    for column in (arity..(arity + scalars.len())).rev() {
+                        if columns.contains(&column) {
+                            scalars[column - arity].non_null_requirements(&mut columns);
                         }
+                        columns.remove(&column);
                     }
-                    self.action(input, new_columns, gets);
+                    self.action(input, columns, gets);
                 }
             }
             RelationExpr::FlatMap {
@@ -110,18 +112,9 @@ impl NonNullRequirements {
                 exprs,
                 demand: _,
             } => {
-                match func {
-                    // outputs zero rows if input is null
-                    TableFunc::JsonbEach { .. }
-                    | TableFunc::JsonbObjectKeys
-                    | TableFunc::JsonbArrayElements { .. }
-                    | TableFunc::GenerateSeries(_)
-                    | TableFunc::RegexpExtract(_)
-                    | TableFunc::CsvExtract(_)
-                    | TableFunc::Repeat => {
-                        for expr in exprs {
-                            expr.non_null_requirements(&mut columns);
-                        }
+                if func.empty_on_null_input() {
+                    for expr in exprs {
+                        expr.non_null_requirements(&mut columns);
                     }
                 }
                 self.action(input, columns, gets);

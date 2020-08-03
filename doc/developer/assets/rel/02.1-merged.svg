@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="598.344" height="453.5">
+    <g fill="transparent" stroke-width="10">
+        <path d="M24 424V104 24" stroke="#979797"/>
+        <path d="M24 344c0-40 50-40 50-80" stroke="#008fb5"/>
+        <path d="M74 264c0-40 50-40 50-80v-80c0-40-100-40-100-80" stroke="#f1c109"/>
+    </g>
+    <g transform="translate(10 410)">
+        <defs>
+            <clipPath id="b">
+                <use href="#a" xlink:href="#a"/>
+            </clipPath>
+            <circle cx="14" cy="14" r="14" id="a" fill="#979797"/>
+        </defs>
+        <use href="#a" xlink:href="#a" clip-path="url(#b)" stroke-width="0"/>
+    </g>
+    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(160 424)">
+        A - &lt;&gt;
+    </text>
+    <g transform="translate(10 330)">
+        <defs>
+            <clipPath id="d">
+                <use href="#c" xlink:href="#c"/>
+            </clipPath>
+            <circle cx="14" cy="14" r="14" id="c" fill="#979797"/>
+        </defs>
+        <use href="#c" xlink:href="#c" clip-path="url(#d)" stroke-width="0"/>
+    </g>
+    <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(160 344)">
+        B - &lt;&gt;
+    </text>
+    <g transform="translate(60 250)">
+        <defs>
+            <clipPath id="f">
+                <use href="#e" xlink:href="#e"/>
+            </clipPath>
+            <circle cx="14" cy="14" r="14" id="e" fill="#008fb5"/>
+        </defs>
+        <use href="#e" xlink:href="#e" clip-path="url(#f)" stroke-width="0"/>
+    </g>
+    <text alignment-baseline="central" dominant-baseline="central" fill="#008fb5" style="font:14pt Arial" transform="translate(423.89 264)">
+        D - &lt;&gt;
+    </text>
+    <g transform="translate(160 250)">
+        <rect width="128.922" height="31" rx="10" fill="#fff" stroke="#008fb5"/>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#008fb5" style="font:14pt Arial" x="10" y="15.5">
+            release-0.1.0
+        </text>
+    </g>
+    <g data-offset="12">
+        <path d="M298.922 264l12 15.5h92.969q10 0 10-10v-11q0-10-10-10h-92.97 0z" fill="#008fb5" stroke="#008fb5"/>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#fff" style="font:14pt Arial" x="22" transform="translate(298.922 264)">
+            v0.1.0-rc1
+        </text>
+    </g>
+    <g>
+        <g transform="translate(10 170)">
+            <defs>
+                <clipPath id="h">
+                    <use href="#g" xlink:href="#g"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="g" fill="#979797"/>
+            </defs>
+            <use href="#g" xlink:href="#g" clip-path="url(#h)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(160 184)">
+            C - &lt;&gt;
+        </text>
+    </g>
+    <g>
+        <g transform="translate(110 90)">
+            <defs>
+                <clipPath id="j">
+                    <use href="#i" xlink:href="#i"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="i" fill="#f1c109"/>
+            </defs>
+            <use href="#i" xlink:href="#i" clip-path="url(#j)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#f1c109" style="font:14pt Arial" transform="translate(311.375 104)">
+            E - &lt;&gt;
+        </text>
+        <g transform="translate(160 90)">
+            <rect width="141.375" height="31" rx="10" fill="#fff" stroke="#f1c109"/>
+            <text alignment-baseline="central" dominant-baseline="central" fill="#f1c109" style="font:14pt Arial" x="10" y="15.5">
+                prepare-v0.1.1
+            </text>
+        </g>
+    </g>
+    <g>
+        <g transform="translate(10 10)">
+            <defs>
+                <clipPath id="l">
+                    <use href="#k" xlink:href="#k"/>
+                </clipPath>
+                <circle cx="14" cy="14" r="14" id="k" fill="#979797"/>
+            </defs>
+            <use href="#k" xlink:href="#k" clip-path="url(#l)" stroke-width="0"/>
+        </g>
+        <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" transform="translate(230.453 24)">
+            1b79160 Merge branch prepare-v0.1.1 - &lt;&gt;
+        </text>
+        <g transform="translate(160 10)">
+            <rect width="60.453" height="31" rx="10" fill="#fff" stroke="#979797"/>
+            <text alignment-baseline="central" dominant-baseline="central" fill="#979797" style="font:14pt Arial" x="10" y="15.5">
+                main
+            </text>
+        </g>
+    </g>
+</svg>

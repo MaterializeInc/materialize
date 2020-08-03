@@ -37,6 +37,7 @@ use crate::adt::decimal::Decimal;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 
+/// Yes should be provided for types that will *never* return true for [`ElementEscaper::needs_escaping`]
 #[derive(Debug)]
 pub enum Nestable {
     Yes,
@@ -236,9 +237,7 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", d);
-    // NOTE(benesch): this may be overly conservative. Perhaps dates never
-    // have special characters.
-    Nestable::MayNeedEscaping
+    Nestable::Yes
 }
 
 /// Parses a `NaiveTime` from `s`, using the following grammar.
@@ -260,10 +259,8 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", t.format("%H:%M:%S"));
-    format_nanos(buf, t.nanosecond());
-    // NOTE(benesch): this may be overly conservative. Perhaps times never
-    // have special characters.
-    Nestable::MayNeedEscaping
+    format_nanos_to_micros(buf, t.nanosecond());
+    Nestable::Yes
 }
 
 /// Parses a `NaiveDateTime` from `s`.
@@ -280,9 +277,8 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
-    format_nanos(buf, ts.timestamp_subsec_nanos());
-    // NOTE(benesch): this may be overly conservative. Perhaps timestamps never
-    // have special characters.
+    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }
 
@@ -304,10 +300,10 @@ pub fn format_timestamptz<F>(buf: &mut F, ts: DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S+00"));
-    format_nanos(buf, ts.timestamp_subsec_nanos());
-    // NOTE(benesch): this may be overly conservative. Perhaps timestamptzs
-    // never have special characters.
+    write!(buf, "{}", ts.format("%Y-%m-%d %H:%M:%S"));
+    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    write!(buf, "+00");
+    // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
 }
 
@@ -444,17 +440,23 @@ where
     write!(buf, "{:#}", jsonb)
 }
 
-fn format_nanos<F>(buf: &mut F, mut nanos: u32)
+fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
 where
     F: FormatBuffer,
 {
     if nanos > 0 {
-        let mut width = 9;
-        while nanos % 10 == 0 {
-            width -= 1;
-            nanos /= 10;
+        let mut micros = nanos / 1000;
+        let rem = nanos % 1000;
+        if rem >= 500 {
+            micros += 1;
         }
-        write!(buf, ".{:0width$}", nanos, width = width);
+        // strip trailing zeros
+        let mut width = 6;
+        while micros % 10 == 0 {
+            width -= 1;
+            micros /= 10;
+        }
+        write!(buf, ".{:0width$}", micros, width = width);
     }
 }
 

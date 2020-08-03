@@ -647,7 +647,7 @@ fn plan_view_select_intrusive(
                     scope_item
                 } else {
                     ScopeItem {
-                        names: invent_column_name(group_expr).into_iter().collect(),
+                        names: invent_column_name(ecx, group_expr).into_iter().collect(),
                         expr: Some(group_expr.clone()),
                         nameable: true,
                     }
@@ -915,76 +915,82 @@ fn plan_table_with_joins<'a>(
     Ok((left, left_scope))
 }
 
-fn plan_table_factor<'a>(
+fn plan_table_factor(
     qcx: &QueryContext,
     left: RelationExpr,
     left_scope: Scope,
     join_operator: &JoinOperator,
-    table_factor: &'a TableFactor,
+    table_factor: &TableFactor,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
-    match table_factor {
-        TableFactor::Table {
-            name,
-            alias,
-            args,
-            with_hints,
-        } => {
-            if !with_hints.is_empty() {
-                unsupported!("WITH hints");
-            }
-            if let Some(args) = args {
-                let ecx = &ExprContext {
-                    qcx,
-                    name: "FROM table function",
-                    scope: &left_scope,
-                    relation_type: &qcx.relation_type(&left),
-                    allow_aggregates: false,
-                    allow_subqueries: true,
-                };
-                plan_table_function(ecx, left, &name, alias.as_ref(), args)
-            } else {
-                let name = qcx.scx.resolve_item(name.clone())?;
-                let item = qcx.scx.catalog.get_item(&name);
-                let expr = RelationExpr::Get {
-                    id: Id::Global(item.id()),
-                    typ: item.desc()?.typ().clone(),
-                };
-                let column_names = item.desc()?.iter_names().map(|n| n.cloned()).collect();
-                let scope = plan_table_alias(qcx, alias.as_ref(), Some(name.into()), column_names)?;
-                plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
-            }
+    let lateral = matches!(
+        table_factor,
+        TableFactor::Function { .. } | TableFactor::Derived { lateral: true, .. }
+    );
+
+    let qcx = if lateral {
+        Cow::Owned(qcx.derived_context(left_scope.clone(), &qcx.relation_type(&left)))
+    } else {
+        Cow::Borrowed(qcx)
+    };
+
+    let (expr, scope) = match table_factor {
+        TableFactor::Table { name, alias } => {
+            let name = qcx.scx.resolve_item(name.clone())?;
+            let item = qcx.scx.catalog.get_item(&name);
+            let expr = RelationExpr::Get {
+                id: Id::Global(item.id()),
+                typ: item.desc()?.typ().clone(),
+            };
+            let scope = Scope::from_source(
+                Some(name.into()),
+                item.desc()?.iter_names().map(|n| n.cloned()),
+                Some(qcx.outer_scope.clone()),
+            );
+            let scope = plan_table_alias(scope, alias.as_ref())?;
+            (expr, scope)
         }
+
+        TableFactor::Function { name, args, alias } => {
+            let ecx = &ExprContext {
+                qcx: &qcx,
+                name: "FROM table function",
+                scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: true,
+            };
+            plan_table_function(ecx, &name, alias.as_ref(), args)?
+        }
+
         TableFactor::Derived {
-            lateral,
+            lateral: _,
             subquery,
             alias,
         } => {
-            if *lateral {
-                unsupported!(3111, "LATERAL derived tables");
-            }
             let (expr, scope) = plan_subquery(&qcx, &subquery)?;
-            let table_name = None;
-            let column_names = scope.column_names().map(|n| n.cloned()).collect();
-            let scope = plan_table_alias(qcx, alias.as_ref(), table_name, column_names)?;
-            plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
+            let scope = plan_table_alias(scope, alias.as_ref())?;
+            (expr, scope)
         }
-        TableFactor::NestedJoin(table_with_joins) => {
-            let (identity, identity_scope) = plan_join_identity(qcx);
+
+        TableFactor::NestedJoin { join, alias } => {
+            let (identity, identity_scope) = plan_join_identity(&qcx);
             let (expr, scope) = plan_table_with_joins(
-                qcx,
+                &qcx,
                 identity,
                 identity_scope,
                 &JoinOperator::CrossJoin,
-                table_with_joins,
+                join,
             )?;
-            plan_join_operator(qcx, &join_operator, left, left_scope, expr, scope)
+            let scope = plan_table_alias(scope, alias.as_ref())?;
+            (expr, scope)
         }
-    }
+    };
+
+    plan_join_operator(&qcx, &join_operator, left, left_scope, expr, scope, lateral)
 }
 
 fn plan_table_function(
     ecx: &ExprContext,
-    left: RelationExpr,
     name: &ObjectName,
     alias: Option<&TableAlias>,
     args: &FunctionArgs,
@@ -995,73 +1001,81 @@ fn plan_table_function(
         FunctionArgs::Args(args) => args,
     };
     let tf = func::select_table_func(ecx, &*ident, args)?;
-    let call = RelationExpr::FlatMap {
-        input: Box::new(left),
+    let call = RelationExpr::CallTable {
         func: tf.func,
         exprs: tf.exprs,
     };
-    let name = PartialName {
-        database: None,
-        schema: None,
-        item: ident,
-    };
-    let scope = plan_table_alias(ecx.qcx, alias, Some(name), tf.column_names)?;
-    Ok((call, ecx.scope.clone().product(scope)))
-}
-
-fn plan_table_alias(
-    qcx: &QueryContext,
-    alias: Option<&TableAlias>,
-    inherent_table_name: Option<PartialName>,
-    inherent_column_names: Vec<Option<ColumnName>>,
-) -> Result<Scope, anyhow::Error> {
-    let table_name = match alias {
-        None => inherent_table_name,
-        Some(TableAlias { name, .. }) => Some(PartialName {
+    let scope = Scope::from_source(
+        Some(PartialName {
             database: None,
             schema: None,
-            item: normalize::ident(name.to_owned()),
+            item: ident,
         }),
-    };
-    let column_names = match alias {
-        None => inherent_column_names,
-        Some(TableAlias {
-            columns,
-            strict: false,
-            ..
-        }) if columns.is_empty() => inherent_column_names,
+        tf.column_names,
+        Some(ecx.qcx.outer_scope.clone()),
+    );
+    let mut scope = plan_table_alias(scope, alias)?;
+    if let Some(alias) = alias {
+        if let [item] = &mut *scope.items {
+            // Strange special case for table functions that ouput one column.
+            // If a table alias is provided but not a column alias, the column
+            // implicitly takes on the same alias in addition to its inherent
+            // name.
+            //
+            // Concretely, this means `SELECT x FROM generate_series(1, 5) AS x`
+            // returns a single column of type int, even though
+            //
+            //     CREATE TABLE t (a int)
+            //     SELECT x FROM t AS x
+            //
+            // would return a single column of type record(int).
+            item.names.push(ScopeItemName {
+                table_name: None,
+                column_name: Some(normalize::column_name(alias.name.clone())),
+                priority: false,
+            });
+        }
+    }
+    Ok((call, scope))
+}
 
-        Some(TableAlias {
-            columns, strict, ..
-        }) if (columns.len() > inherent_column_names.len())
-            || (*strict && columns.len() != inherent_column_names.len()) =>
-        {
+fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scope, anyhow::Error> {
+    if let Some(TableAlias {
+        name,
+        columns,
+        strict,
+    }) = alias
+    {
+        if (columns.len() > scope.items.len()) || (*strict && columns.len() != scope.items.len()) {
             bail!(
                 "{} has {} columns available but {} columns specified",
-                table_name
-                    .map(|n| n.to_string())
-                    .as_deref()
-                    .unwrap_or("subquery"),
-                inherent_column_names.len(),
+                name,
+                scope.items.len(),
                 columns.len()
             );
         }
 
-        Some(TableAlias { columns, .. }) => columns
-            .iter()
-            .cloned()
-            .map(|n| Some(normalize::column_name(n)))
-            .chain(inherent_column_names.into_iter().skip(columns.len()))
-            .collect(),
-    };
-    Ok(Scope::from_source(
-        table_name,
-        column_names,
-        Some(qcx.outer_scope.clone()),
-    ))
+        let table_name = normalize::ident(name.to_owned());
+        for (i, item) in scope.items.iter_mut().enumerate() {
+            let column_name = columns
+                .get(i)
+                .map(|a| normalize::column_name(a.clone()))
+                .or_else(|| item.names.get(0).and_then(|name| name.column_name.clone()));
+            item.names = vec![ScopeItemName {
+                table_name: Some(PartialName {
+                    database: None,
+                    schema: None,
+                    item: table_name.clone(),
+                }),
+                column_name,
+                priority: false,
+            }];
+        }
+    }
+    Ok(scope)
 }
 
-fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
+fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
         Expr::Function(func) => func
@@ -1071,8 +1085,20 @@ fn invent_column_name(expr: &Expr) -> Option<ScopeItemName> {
             .map(|n| normalize::column_name(n.clone())),
         Expr::Coalesce { .. } => Some("coalesce".into()),
         Expr::List { .. } => Some("list".into()),
-        Expr::Cast { expr, .. } => return invent_column_name(expr),
+        Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
         Expr::FieldAccess { field, .. } => Some(normalize::column_name(field.clone())),
+        Expr::Exists { .. } => Some("exists".into()),
+        Expr::Subquery(query) => {
+            // A bit silly to have to plan the query here just to get its column
+            // name, since we throw away the planned expression, but fixing this
+            // requires a separate semantic analysis phase.
+            let (_expr, scope) = plan_subquery(&ecx.derived_query_context(), query).ok()?;
+            scope
+                .items
+                .first()
+                .and_then(|item| item.names.first())
+                .and_then(|name| name.column_name.clone())
+        }
         _ => return None,
     };
     name.map(|n| ScopeItemName {
@@ -1156,7 +1182,7 @@ fn expand_select_item<'a>(
             let name = alias
                 .clone()
                 .map(normalize::column_name)
-                .or_else(|| invent_column_name(&expr).and_then(|n| n.column_name));
+                .or_else(|| invent_column_name(ecx, &expr).and_then(|n| n.column_name));
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
@@ -1169,6 +1195,7 @@ fn plan_join_operator(
     left_scope: Scope,
     right: RelationExpr,
     right_scope: Scope,
+    lateral: bool,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     match operator {
         JoinOperator::Inner(constraint) => plan_join_constraint(
@@ -1178,7 +1205,7 @@ fn plan_join_operator(
             left_scope,
             right,
             right_scope,
-            JoinKind::Inner,
+            JoinKind::Inner { lateral },
         ),
         JoinOperator::LeftOuter(constraint) => plan_join_constraint(
             qcx,
@@ -1187,32 +1214,51 @@ fn plan_join_operator(
             left_scope,
             right,
             right_scope,
-            JoinKind::LeftOuter,
+            JoinKind::LeftOuter { lateral },
         ),
-        JoinOperator::RightOuter(constraint) => plan_join_constraint(
-            qcx,
-            &constraint,
-            left,
-            left_scope,
-            right,
-            right_scope,
-            JoinKind::RightOuter,
-        ),
-        JoinOperator::FullOuter(constraint) => plan_join_constraint(
-            qcx,
-            &constraint,
-            left,
-            left_scope,
-            right,
-            right_scope,
-            JoinKind::FullOuter,
-        ),
-        JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
-        // The remaining join types are MSSQL-specific. We are unlikely to
-        // ever support them. The standard SQL equivalent is LATERAL, which
-        // we are not capable of even parsing at the moment.
-        JoinOperator::CrossApply => unsupported!("CROSS APPLY"),
-        JoinOperator::OuterApply => unsupported!("OUTER APPLY"),
+        JoinOperator::RightOuter(constraint) => {
+            if lateral {
+                bail!("the combining JOIN type must be INNER or LEFT for a LATERAL reference");
+            }
+            plan_join_constraint(
+                qcx,
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                JoinKind::RightOuter,
+            )
+        }
+        JoinOperator::FullOuter(constraint) => {
+            if lateral {
+                bail!("the combining JOIN type must be INNER or LEFT for a LATERAL reference");
+            }
+            plan_join_constraint(
+                qcx,
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                JoinKind::FullOuter,
+            )
+        }
+        JoinOperator::CrossJoin => {
+            let join = if left.is_join_identity() {
+                right
+            } else if right.is_join_identity() {
+                left
+            } else {
+                RelationExpr::Join {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    on: ScalarExpr::literal_true(),
+                    kind: JoinKind::Inner { lateral },
+                }
+            };
+            Ok((join, left_scope.product(right_scope)))
+        }
     }
 }
 
@@ -1244,7 +1290,7 @@ fn plan_join_constraint<'a>(
                 allow_subqueries: true,
             };
             let on = plan_expr(ecx, expr)?.type_as(ecx, ScalarType::Bool)?;
-            if kind == JoinKind::Inner {
+            if let JoinKind::Inner { .. } = kind {
                 for (l, r) in find_trivial_column_equivalences(&on) {
                     // When we can statically prove that two columns are
                     // equivalent after a join, the right column becomes
@@ -1514,6 +1560,79 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             }
         }
         Expr::WildcardAccess(expr) => plan_expr(ecx, expr)?,
+        Expr::SubscriptIndex { expr, subscript } => {
+            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+            let ty = ecx.scalar_type(&expr);
+            match &ty {
+                ScalarType::List(_) => {}
+                ty => bail!("cannot subscript type {}", ty),
+            };
+
+            expr.call_binary(
+                plan_expr(ecx, subscript)?.explicit_cast_to(
+                    "subscript (indexing)",
+                    ecx,
+                    ScalarType::Int64,
+                )?,
+                BinaryFunc::ListIndex,
+            )
+            .into()
+        }
+
+        Expr::SubscriptSlice { expr, positions } => {
+            assert_ne!(
+                positions.len(),
+                0,
+                "subscript expression must contain at least one position"
+            );
+            ecx.require_experimental_mode_if(positions.len() > 1, "multi-dimensional slicing")?;
+            let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
+            let ty = ecx.scalar_type(&expr);
+            match &ty {
+                ScalarType::List(_) => {
+                    let pos_len = positions.len();
+                    let n_dims = ty.unwrap_list_n_dims();
+                    if pos_len > n_dims {
+                        bail!(
+                            "cannot slice on {} dimensions; list only has {} dimension{}",
+                            pos_len,
+                            n_dims,
+                            if n_dims == 1 { "" } else { "s" }
+                        )
+                    }
+                }
+                ty => bail!("cannot subscript type {}", ty),
+            };
+
+            let mut exprs = vec![expr];
+            let op_str = "subscript (slicing)";
+
+            for p in positions {
+                let start = if let Some(start) = &p.start {
+                    plan_expr(ecx, start)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
+                } else {
+                    ScalarExpr::literal(Datum::Int64(1), ColumnType::new(ScalarType::Int64, true))
+                };
+
+                let end = if let Some(end) = &p.end {
+                    plan_expr(ecx, end)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
+                } else {
+                    ScalarExpr::literal(
+                        Datum::Int64(i64::MAX - 1),
+                        ColumnType::new(ScalarType::Int64, true),
+                    )
+                };
+
+                exprs.push(start);
+                exprs.push(end);
+            }
+
+            ScalarExpr::CallVariadic {
+                func: VariadicFunc::ListSlice,
+                exprs,
+            }
+            .into()
+        }
 
         // Subqueries.
         Expr::Exists(query) => {
@@ -1657,6 +1776,23 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
             els: Box::new(ScalarExpr::literal_null(expr_typ)),
         };
     }
+
+    let mut seen_outer = false;
+    let mut seen_inner = false;
+    expr.visit_columns(0, &mut |depth, col| {
+        if col.level - depth == 0 {
+            seen_inner = true;
+        } else {
+            seen_outer = true;
+        }
+    });
+    if seen_outer && !seen_inner {
+        unsupported!(
+            3720,
+            "aggregate functions that refer exclusively to outer columns"
+        );
+    }
+
     Ok(AggregateExpr {
         func,
         expr: Box::new(expr),
@@ -1690,24 +1826,25 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<ScalarExpr, Pla
     // ask what table it came from. Stupid, but it works.
     let (exprs, field_names): (Vec<_>, Vec<_>) = ecx
         .scope
-        .items
+        .all_items()
         .iter()
-        .enumerate()
-        .filter(|(_i, item)| {
+        .filter(|(_level, _column, item)| {
             item.is_from_table(&PartialName {
                 database: None,
                 schema: None,
                 item: col_name.as_str().to_owned(),
             })
         })
-        .enumerate()
-        .map(|(i, (column, item))| {
-            let expr = ScalarExpr::Column(ColumnRef { level: 0, column });
+        .map(|(level, column, item)| {
+            let expr = ScalarExpr::Column(ColumnRef {
+                level: *level,
+                column: *column,
+            });
             let name = item
                 .names
                 .first()
                 .and_then(|n| n.column_name.clone())
-                .unwrap_or_else(|| ColumnName::from(format!("f{}", i + 1)));
+                .unwrap_or_else(|| ColumnName::from(format!("f{}", column + 1)));
             (expr, name)
         })
         .unzip();
@@ -2027,7 +2164,7 @@ pub enum QueryLifetime {
 }
 
 /// The state required when planning a `Query`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QueryContext<'a> {
     /// The context for the containing `Statement`.
     pub scx: &'a StatementContext<'a>,
@@ -2059,6 +2196,21 @@ impl<'a> QueryContext<'a> {
 
     fn relation_type(&self, expr: &RelationExpr) -> RelationType {
         expr.typ(&self.outer_relation_types, &self.param_types.borrow())
+    }
+
+    fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext<'a> {
+        QueryContext {
+            scx: self.scx,
+            lifetime: self.lifetime,
+            outer_scope: scope,
+            outer_relation_types: self
+                .outer_relation_types
+                .iter()
+                .chain(std::iter::once(relation_type))
+                .cloned()
+                .collect(),
+            param_types: self.param_types.clone(),
+        }
     }
 }
 
@@ -2103,18 +2255,27 @@ impl<'a> ExprContext<'a> {
     }
 
     fn derived_query_context(&self) -> QueryContext {
-        QueryContext {
-            scx: self.qcx.scx,
-            lifetime: self.qcx.lifetime,
-            outer_scope: self.scope.clone(),
-            outer_relation_types: self
-                .qcx
-                .outer_relation_types
-                .iter()
-                .chain(std::iter::once(self.relation_type))
-                .cloned()
-                .collect(),
-            param_types: self.qcx.param_types.clone(),
+        self.qcx
+            .derived_context(self.scope.clone(), self.relation_type)
+    }
+
+    pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+        self.require_experimental_mode_if(true, feature_name)
+    }
+
+    pub fn require_experimental_mode_if(
+        &self,
+        predicate: bool,
+        feature_name: &str,
+    ) -> Result<(), anyhow::Error> {
+        if predicate && !self.qcx.scx.experimental_mode() {
+            bail!(
+                "{} requires experimental mode; see \
+            https://materialize.io/docs/cli/#experimental-mode",
+                feature_name
+            )
+        } else {
+            Ok(())
         }
     }
 }

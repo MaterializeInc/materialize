@@ -169,7 +169,7 @@ impl Scope {
         self.items.len()
     }
 
-    fn all_items(&self) -> Vec<(usize, usize, &ScopeItem)> {
+    pub fn all_items(&self) -> Vec<(usize, usize, &ScopeItem)> {
         // These are in order of preference eg
         // given scopes A(B(C))
         // items from C should be preferred to items from B to items from A
@@ -266,7 +266,6 @@ impl Scope {
     }
 
     pub fn product(self, right: Self) -> Self {
-        assert!(self.outer_scope == right.outer_scope);
         Scope {
             items: self
                 .items

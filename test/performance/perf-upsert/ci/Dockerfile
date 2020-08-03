@@ -9,8 +9,6 @@
 
 FROM ubuntu:bionic-20200403
 
-RUN apt-get update && apt-get install -qy postgresql-client
-
 COPY perf-upsert /usr/local/bin
 
 ENTRYPOINT ["perf-upsert"]

@@ -650,3 +650,41 @@ EXPLAIN PLAN FOR SELECT b > ALL(SELECT a FROM x) FROM y
 | Project (#3)
 
 EOF
+
+statement ok
+CREATE TABLE xs (x int not null)
+
+statement ok
+CREATE TABLE ys (y int not null)
+
+statement ok
+INSERT INTO xs VALUES (1), (1), (2);
+
+statement ok
+INSERT INTO ys VALUES (0), (1), (2);
+
+# Check that we correctly perform subqueries that do not preserve
+# multiplicity of the outer relation.
+query II rowsort
+select x, (select count(*) from ys where y < x) from xs
+----
+1  1
+1  1
+2  2
+
+# Tests that conditional subqueries should not error.
+query II rowsort
+select y, (
+    case when (select count(*) from xs where x < y) != 0
+         then (select 1.0 / count(*) from xs where x < y)
+         else (select 1.0 / (count(*) - 1) from xs where x < y)
+         end
+  )
+from ys
+----
+0  -1
+1  -1
+2  1
+
+query error aggregate functions that refer exclusively to outer columns not yet supported
+SELECT (SELECT count(likes.likee)) FROM likes

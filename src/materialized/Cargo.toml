@@ -10,7 +10,7 @@ authors = ["Materialize, Inc."]
 license = "proprietary"
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 async-trait = "0.1.36"
 backtrace = { version = "0.3.50" }
 comm = { path = "../comm" }
@@ -40,7 +40,7 @@ sysctl = "0.4.0"
 tempfile = "3.1"
 tokio = "0.2"
 tokio-openssl = "0.4.0"
-tracing = "0.1.16"
+tracing = "0.1.18"
 tracing-subscriber = "0.2.7"
 chrono = "0.4.13"
 
@@ -53,7 +53,7 @@ pgrepr = { path = "../pgrepr" }
 postgres = { version = "0.17", features = ["with-chrono-0_4"] }
 predicates = "1.0.5"
 serde_json = "1"
-tokio-postgres = { version = "0.5.2", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
 
 [package.metadata.deb]
 depends = "$auto"

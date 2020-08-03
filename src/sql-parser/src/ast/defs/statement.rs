@@ -38,8 +38,8 @@ pub enum Statement {
         table_name: ObjectName,
         /// COLUMNS
         columns: Vec<Ident>,
-        /// A SQL query that specifies what to insert
-        source: Box<Query>,
+        /// A SQL query that specifies what to insert.
+        source: InsertSource,
     },
     Copy {
         /// TABLE
@@ -274,7 +274,7 @@ impl AstDisplay for Statement {
                     f.write_str(")");
                 }
                 f.write_str(" ");
-                f.write_node(&source);
+                f.write_node(source);
             }
             Statement::Copy {
                 table_name,
@@ -740,6 +740,22 @@ impl AstDisplay for Statement {
     }
 }
 impl_display!(Statement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum InsertSource {
+    Query(Box<Query>),
+    DefaultValues,
+}
+
+impl AstDisplay for InsertSource {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            InsertSource::Query(query) => f.write_node(query),
+            InsertSource::DefaultValues => f.write_str("DEFAULT VALUES"),
+        }
+    }
+}
+impl_display!(InsertSource);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum ObjectType {

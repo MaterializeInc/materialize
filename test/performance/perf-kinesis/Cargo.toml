@@ -6,21 +6,20 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.31"
+anyhow = "1.0.32"
 aws-util = { path = "../../../src/aws-util" }
 bytes = "0.5.6"
 chrono = "0.4"
 env_logger = "0.7.1"
-futures = "0.3.4"
+futures = "0.3.5"
 futures-channel = "0.3.5"
 log = "0.4.11"
 ore = { path = "../../../src/ore" }
 rand = "0.7.3"
-rusoto_core = "0.44.0"
-rusoto_credential = "0.44.0"
-rusoto_kinesis = "0.44.0"
+rusoto_core = "0.45.0"
+rusoto_credential = "0.45.0"
+rusoto_kinesis = "0.45.0"
 structopt = "0.3.15"
-thiserror = "1.0.20"
-tokio = { version = "0.2.21", features = ["full"] }
-tokio-postgres = "0.5.4"
+tokio = { version = "0.2.22", features = ["full"] }
+tokio-postgres = "0.5.5"
 test-util = { path = "../../test-util" }

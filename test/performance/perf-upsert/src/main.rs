@@ -18,25 +18,19 @@ use std::time::Duration;
 use anyhow::Result;
 use rand::Rng;
 use structopt::StructOpt;
+use tokio_postgres::Client;
 
 use test_util::kafka::kafka_client;
+use test_util::mz_client;
 
 use crate::config::{Args, KafkaConfig, MzConfig};
-use crate::mz_client::MzClient;
 
 mod config;
-mod mz_client;
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("ERROR: {}", e);
-        // TODO(rkhaitan) could this be simpler
-        let mut err = e.source();
-        while let Some(e) = err {
-            eprintln!("    caused by: {}", e);
-            err = e.source();
-        }
+        eprintln!("ERROR: {:#}", e);
         process::exit(1);
     }
 }
@@ -134,25 +128,41 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
     Ok(())
 }
 
+async fn create_upsert_text_source(
+    mz_client: &Client,
+    kafka_url: &impl std::fmt::Display,
+    kafka_topic_name: &str,
+    source_name: &str,
+) -> Result<()> {
+    let query = format!(
+        "CREATE MATERIALIZED SOURCE {source} FROM KAFKA BROKER '{kafka_url}' TOPIC '{topic}' \
+             FORMAT TEXT ENVELOPE UPSERT",
+        kafka_url = kafka_url,
+        topic = kafka_topic_name,
+        source = source_name,
+    );
+    log::debug!("creating source=> {}", query);
+
+    mz_client.execute(&*query, &[]).await?;
+    Ok(())
+}
+
 async fn create_materialized_source(config: MzConfig) -> Result<()> {
-    let client = MzClient::new(&config.host, config.port).await?;
+    let client = mz_client::client(&config.host, config.port).await?;
 
     if !config.preserve_source {
-        let sources = client.show_sources().await?;
-        if any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-            client.drop_source(config::KAFKA_SOURCE_NAME).await?;
-        }
+        mz_client::drop_source(&client, config::KAFKA_SOURCE_NAME).await?;
     }
 
-    let sources = client.show_sources().await?;
+    let sources = mz_client::show_sources(&client).await?;
     if !any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-        client
-            .create_upsert_text_source(
-                &config.kafka_url,
-                &config.kafka_topic,
-                config::KAFKA_SOURCE_NAME,
-            )
-            .await?;
+        create_upsert_text_source(
+            &client,
+            &config.kafka_url,
+            &config.kafka_topic,
+            config::KAFKA_SOURCE_NAME,
+        )
+        .await?;
     } else {
         log::info!(
             "source '{}' already exists, not recreating",

@@ -143,6 +143,7 @@ enum Precedence {
     Times,
     UnaryOp,
     DoubleColon,
+    Subscript,
 }
 
 impl Parser {
@@ -873,10 +874,64 @@ impl Parser {
             }
         } else if Token::DoubleColon == tok {
             self.parse_pg_cast(expr)
+        } else if Token::LBracket == tok {
+            self.parse_subscript(expr)
         } else {
             // Can only happen if `get_next_precedence` got out of sync with this function
             panic!("No infix parser for token {:?}", tok)
         }
+    }
+
+    /// Parse subscript expression, i.e. either an index value or slice range.
+    fn parse_subscript(&mut self, expr: Expr) -> Result<Expr, ParserError> {
+        let mut is_slice = false;
+        let mut positions = Vec::new();
+        loop {
+            let start = if self.consume_token(&Token::Colon) {
+                is_slice = true;
+                None
+            } else {
+                let e = Some(self.parse_expr()?);
+                if is_slice {
+                    self.expect_token(&Token::Colon)?;
+                } else {
+                    is_slice = self.consume_token(&Token::Colon);
+                }
+                e
+            };
+
+            let end = if is_slice
+                && (Some(Token::RBracket) != self.peek_token()
+                    && Some(Token::Comma) != self.peek_token())
+            {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            positions.push(SubscriptPosition { start, end });
+
+            if !is_slice || !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
+
+        self.expect_token(&Token::RBracket)?;
+
+        Ok(if is_slice {
+            Expr::SubscriptSlice {
+                expr: Box::new(expr),
+                positions,
+            }
+        } else {
+            assert!(
+                positions.len() == 1 && positions[0].start.is_some() && positions[0].end.is_none(),
+            );
+            Expr::SubscriptIndex {
+                expr: Box::new(expr),
+                subscript: Box::new(positions.remove(0).start.unwrap()),
+            }
+        })
     }
 
     /// Parses the parens following the `[ NOT ] IN` operator
@@ -968,6 +1023,7 @@ impl Parser {
                 Token::Plus | Token::Minus => Precedence::Plus,
                 Token::Mult | Token::Div | Token::Mod => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,
+                Token::LBracket => Precedence::Subscript,
                 _ => Precedence::Zero,
             }
         } else {
@@ -2677,15 +2733,18 @@ impl Parser {
     /// A table name or a parenthesized subquery, followed by optional `[AS] alias`
     fn parse_table_factor(&mut self) -> Result<TableFactor, ParserError> {
         if self.parse_keyword("LATERAL") {
-            // LATERAL must always be followed by a subquery.
-            if !self.consume_token(&Token::LParen) {
-                self.expected(
-                    self.peek_range(),
-                    "subquery after LATERAL",
-                    self.peek_token(),
-                )?;
+            // LATERAL must always be followed by a subquery or table function.
+            if self.consume_token(&Token::LParen) {
+                return self.parse_derived_table_factor(Lateral);
+            } else {
+                let name = self.parse_object_name()?;
+                self.expect_token(&Token::LParen)?;
+                return Ok(TableFactor::Function {
+                    name,
+                    args: self.parse_optional_args()?,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                });
             }
-            return self.parse_derived_table_factor(Lateral);
         }
 
         if self.consume_token(&Token::LParen) {
@@ -2734,33 +2793,24 @@ impl Parser {
                 }
             }
             self.expect_token(&Token::RParen)?;
-            Ok(TableFactor::NestedJoin(Box::new(table_and_joins)))
+            Ok(TableFactor::NestedJoin {
+                join: Box::new(table_and_joins),
+                alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+            })
         } else {
             let name = self.parse_object_name()?;
-            // Postgres, MSSQL: table-valued functions:
-            let args = if self.consume_token(&Token::LParen) {
-                Some(self.parse_optional_args()?)
+            if self.consume_token(&Token::LParen) {
+                Ok(TableFactor::Function {
+                    name,
+                    args: self.parse_optional_args()?,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                })
             } else {
-                None
-            };
-            let alias = self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?;
-            // MSSQL-specific table hints:
-            let mut with_hints = vec![];
-            if self.parse_keyword("WITH") {
-                if self.consume_token(&Token::LParen) {
-                    with_hints = self.parse_comma_separated(Parser::parse_expr)?;
-                    self.expect_token(&Token::RParen)?;
-                } else {
-                    // rewind, as WITH may belong to the next statement's CTE
-                    self.prev_token();
-                }
-            };
-            Ok(TableFactor::Table {
-                name,
-                alias,
-                args,
-                with_hints,
-            })
+                Ok(TableFactor::Table {
+                    name,
+                    alias: self.parse_optional_table_alias(keywords::RESERVED_FOR_TABLE_ALIAS)?,
+                })
+            }
         }
     }
 
@@ -2804,7 +2854,11 @@ impl Parser {
         self.expect_keyword("INTO")?;
         let table_name = self.parse_object_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let source = Box::new(self.parse_query()?);
+        let source = if self.parse_keywords(vec!["DEFAULT", "VALUES"]) {
+            InsertSource::DefaultValues
+        } else {
+            InsertSource::Query(Box::new(self.parse_query()?))
+        };
         Ok(Statement::Insert {
             table_name,
             columns,

@@ -245,7 +245,7 @@ END $$;
                 let mut updates = vec![];
                 let table_name = scx.resolve_item(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql).await? {
+                for row in self.run_query(&table_name, sql, 0).await? {
                     updates.push((row, -1));
                 }
                 let affected_rows = updates.len();
@@ -259,8 +259,12 @@ END $$;
             Statement::Insert { table_name, .. } => {
                 let mut updates = vec![];
                 let table_name = scx.resolve_item(table_name.clone())?;
-                let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql).await? {
+                // RETURNING cannot return zero columns, but we might be
+                // executing INSERT INTO t DEFAULT VALUES where t is a zero
+                // arity table. So use a time-honored trick of always including
+                // a junk column in RETURNING, then stripping that column out.
+                let sql = format!("{} RETURNING *, 1", stmt.to_string());
+                for row in self.run_query(&table_name, sql, 1).await? {
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
@@ -282,12 +286,12 @@ END $$;
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
                 }
-                for row in self.run_query(&table_name, sql).await? {
+                for row in self.run_query(&table_name, sql, 0).await? {
                     updates.push((row, -1))
                 }
                 let affected_rows = updates.len();
                 let sql = format!("{} RETURNING *", stmt.to_string());
-                for row in self.run_query(&table_name, sql).await? {
+                for row in self.run_query(&table_name, sql, 0).await? {
                     updates.push((row, 1));
                 }
                 assert_eq!(affected_rows * 2, updates.len());
@@ -306,6 +310,7 @@ END $$;
         &mut self,
         table_name: &FullName,
         query: String,
+        junk: usize,
     ) -> Result<Vec<Row>, anyhow::Error> {
         let (sql_types, desc) = self
             .table_types
@@ -316,7 +321,7 @@ END $$;
         let postgres_rows = self.client.query(&*query, &[]).await?;
         let mut row = RowPacker::new();
         for postgres_row in postgres_rows.iter() {
-            for c in 0..postgres_row.len() {
+            for c in 0..postgres_row.len() - junk {
                 row = push_column(
                     row,
                     &postgres_row,

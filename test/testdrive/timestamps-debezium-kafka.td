@@ -40,51 +40,29 @@ $ set trxschemakey={
       ]
   }
 
-
 $ set trxschema={
-      "name": "io.debezium.connector.common.TransactionMetadataValue",
-      "type": "record",
-      "fields": [
-        {
-              "name": "id",
-              "type": "string"
-         },
-         {
-              "name": "status",
-              "type": "string"
-         },
-          {
-              "name": "event_count",
-              "type": [
-                  "long",
-                  "null"
-              ]
-          },
-          {
-              "name": "data_collections",
-              "type": [
-                  {
-                      "type": "array",
-                      "items": {
-                          "name": "data",
-                          "type": "record",
-                          "fields": [
-                              {
-                                  "name": "event_count",
-                                  "type": "long"
-                              },
-                              {
-                                  "name": "data_collection",
-                                  "type": "string"
-                              }
-                          ]
-                      }
-                  },
-                  "null"
-              ]
-          }
-      ]
-  }
+    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
+    "fields":[
+    {"name":"status","type":"string"},
+    {"name":"id","type": "string"},
+    {"name": "event_count",
+    "type": ["null", "long"],
+    "default": null
+    },
+    {"name":"data_collections","type":["null",{"type":"array",
+    "items": {"type":"record",
+    "name":"ConnectDefault",
+    "namespace":"io.confluent.connect.Avro",
+    "fields": [ {
+    "name": "data_collection",
+    "type": "string"
+    },
+    {
+    "name": "event_count",
+    "type": "long" }]}}],
+    "default": null}],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+    }
 
 $ kafka-create-topic topic=consistency
 
@@ -146,8 +124,8 @@ b  sum
 1  10
 
 > SELECT * FROM join;
-a  a  b
-------
+b sum sum
+---------
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
@@ -173,8 +151,8 @@ b  sum
 3  30
 
 > SELECT * FROM join;
-a  a  b
-------
+b sum sum
+---------
 1  1  10
 
 $ kafka-ingest format=avro topic=foo schema=${schema} timestamp=1
@@ -189,7 +167,7 @@ b  sum
 4  4
 
 > SELECT * FROM join;
-a  a  b
-------
+b sum sum
+---------
 1  1  10
 3  3  30

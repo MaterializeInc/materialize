@@ -22,6 +22,7 @@ Type | Aliases | Use | Size (bytes) | Syntax
 [`integer`](integer) | `int4`, `int` | Signed integer | 4 | `123`
 [`interval`](interval) | | Duration of time | 32 | `INTERVAL '1-2 3 4:5:6.7'`
 [`jsonb`](jsonb) | `json` | JSON | Variable | `'{"1":2,"3":4}'::jsonb`
+[`record`](record) | | Tuple with arbitrary contents | Variable | `ROW($expr, ...)`
 [`text`](text) | `string` | Unicode string | Variable | `'foo'`
 [`time`](time) | | Time without date | 4 | `TIME '01:23:45'`
 [`timestamp`](timestamp) | | Date and time | 8 | `TIMESTAMP '2007-02-01 15:04:05'`

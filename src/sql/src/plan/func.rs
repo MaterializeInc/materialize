@@ -628,6 +628,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         let arg_type = self.ecx.scalar_type(&arg);
         let cast_to = match typ {
             ParamType::Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => return Ok(arg),
+            ParamType::Plain(List(..)) if matches!(arg_type, List(..)) => return Ok(arg),
             ParamType::Plain(s) => CastTo::Implicit(s.clone()),
             ParamType::Any => return Ok(arg),
             ParamType::JsonbAny => CastTo::JsonbAny,
@@ -793,6 +794,23 @@ lazy_static! {
             "octet_length" => {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes,
                 params!(String) => UnaryFunc::ByteLengthString
+            },
+            "list_ndims" => {
+                params!(List(Box::new(String))) => unary_op(|ecx, e| {
+                    ecx.require_experimental_mode("list_ndims")?;
+                    let d = ecx.scalar_type(&e).unwrap_list_n_dims();
+                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ColumnType::new(ScalarType::Int32, false)))
+                })
+            },
+            "list_length" => {
+                params!(List(Box::new(String))) => UnaryFunc::ListLength
+            },
+            "list_length_max" => {
+                params!(List(Box::new(String)), Int64) => binary_op(|ecx, lhs, rhs| {
+                    ecx.require_experimental_mode("list_length_max")?;
+                    let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
+                    Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
+                })
             },
             "ltrim" => {
                 params!(String) => UnaryFunc::TrimLeadingWhitespace,
@@ -1324,8 +1342,20 @@ lazy_static! {
                 })
             },
             "generate_series" => {
-                params!(Int32, Int32) => plan_generate_series(Int32),
-                params!(Int64, Int64) => plan_generate_series(Int64)
+                params!(Int32, Int32) => binary_op(move |_ecx, start, stop| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesInt32,
+                        exprs: vec![start, stop],
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                }),
+                params!(Int64, Int64) => binary_op(move |_ecx, start, stop| {
+                    Ok(TableFuncPlan {
+                        func: TableFunc::GenerateSeriesInt64,
+                        exprs: vec![start, stop],
+                        column_names: vec![Some("generate_series".into())],
+                    })
+                })
             },
             "jsonb_array_elements" => {
                 params!(Jsonb) => unary_op(move |_ecx, jsonb| {
@@ -1393,7 +1423,8 @@ lazy_static! {
                 })
             },
             "repeat" => {
-                params!(Int64) => unary_op(move |_ecx, n| {
+                params!(Int64) => unary_op(move |ecx, n| {
+                    ecx.require_experimental_mode("repeat")?;
                     Ok(TableFuncPlan {
                         func: TableFunc::Repeat,
                         exprs: vec![n],
@@ -1403,16 +1434,6 @@ lazy_static! {
             }
         }
     };
-}
-
-fn plan_generate_series(ty: ScalarType) -> Operation<TableFuncPlan> {
-    variadic_op(move |_ecx, exprs| {
-        Ok(TableFuncPlan {
-            func: TableFunc::GenerateSeries(ty.clone()),
-            exprs,
-            column_names: vec![Some("generate_series".into())],
-        })
-    })
 }
 
 pub fn is_table_func(ident: &str) -> bool {

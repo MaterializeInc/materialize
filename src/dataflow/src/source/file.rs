@@ -14,8 +14,12 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Error};
+use log::error;
+#[cfg(not(target_os = "macos"))]
+use notify::{RecursiveMode, Watcher};
 use timely::scheduling::{Activator, SyncActivator};
 
+use avro::types::Value;
 use avro::{AvroRead, Schema, Skip};
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
@@ -26,11 +30,6 @@ use crate::server::{
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
-
-use avro::types::Value;
-use log::error;
-#[cfg(not(target_os = "macos"))]
-use notify::{RecursiveMode, Watcher};
 
 /// Contains all information necessary to ingest data from file sources (either
 /// regular sources, or Avro OCF sources)
@@ -76,7 +75,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
-    ) -> FileSourceInfo<Value> {
+    ) -> Result<FileSourceInfo<Value>, failure::Error> {
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
@@ -110,14 +109,14 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
-        FileSourceInfo {
+        Ok(FileSourceInfo {
             name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             buffer: None,
             current_file_offset: FileOffset { offset: 0 },
-        }
+        })
     }
 }
 
@@ -132,7 +131,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> FileSourceInfo<Vec<u8>> {
+    ) -> Result<FileSourceInfo<Vec<u8>>, failure::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
                 let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
@@ -157,14 +156,14 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         );
         consistency_info.update_partition_metadata(PartitionId::File);
 
-        FileSourceInfo {
+        Ok(FileSourceInfo {
             name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             buffer: None,
             current_file_offset: FileOffset { offset: 0 },
-        }
+        })
     }
 }
 
@@ -400,6 +399,7 @@ impl<Ev, H> Skip for ForeverTailedFile<Ev, H> {
         self.inner.skip(len)
     }
 }
+
 impl<Ev, H> AvroRead for ForeverTailedFile<Ev, H> {}
 
 impl<Ev, H> Read for ForeverTailedFile<Ev, H> {

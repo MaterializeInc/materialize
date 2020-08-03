@@ -846,6 +846,22 @@ impl RowPacker {
         })
     }
 
+    /// # Safety
+    ///
+    /// Truncates the underlying storage to the specified byte position.
+    ///
+    /// `pos` MUST specify a byte offset that lies on a datum boundary.
+    /// If `pos` specifies a byte offset that is *within* a datum, the row
+    /// packer will produce an invalid row, the unpacking of which may
+    /// trigger undefined behavior!
+    ///
+    /// To find the byte offset of a datum boundary, inspect the the packer's
+    /// byte length by calling `packer.data().len()` after pushing the desired
+    /// number of datums onto the packer.
+    pub unsafe fn truncate(&mut self, pos: usize) {
+        self.data.truncate(pos)
+    }
+
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data

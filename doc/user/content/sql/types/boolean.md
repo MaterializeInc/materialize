@@ -29,6 +29,7 @@ Detail | Info
 You can [cast](../../functions/cast) `boolean` to:
 
 - [`text`](../text)
+- [`int`](../int)
 
 #### To `boolean`
 

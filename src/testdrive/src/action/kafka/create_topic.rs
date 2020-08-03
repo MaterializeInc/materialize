@@ -13,9 +13,6 @@ use async_trait::async_trait;
 use rdkafka::admin::{NewTopic, TopicReplication};
 use rdkafka::error::RDKafkaError;
 
-use ore::collections::CollectionExt;
-use ore::retry;
-
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
@@ -89,11 +86,6 @@ impl Action for CreateTopicAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
-        println!(
-            "Creating Kafka topic {} with partition count of {}",
-            topic_name, self.partitions
-        );
         // NOTE(benesch): it is critical that we invent a new topic name on
         // every testdrive run. We previously tried to delete and recreate the
         // topic with a fixed name, but ran into serious race conditions in
@@ -143,6 +135,11 @@ impl Action for CreateTopicAction {
         // strategy.
         //
         // [0]: https://github.com/confluentinc/confluent-kafka-python/issues/524#issuecomment-456783176
+        let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
+        println!(
+            "Creating Kafka topic {} with partition count of {}",
+            topic_name, self.partitions
+        );
         let new_topic = NewTopic::new(&topic_name, self.partitions, TopicReplication::Fixed(1))
             // Disabling retention is very important! Our testdrive tests
             // use hardcoded timestamps that are immediately eligible for
@@ -150,66 +147,9 @@ impl Action for CreateTopicAction {
             // "1" is interpreted as January 1, 1970 00:00:01, which is
             // breaches the default 7-day retention policy.
             .set("retention.ms", "-1");
-        let res = state
-            .kafka_admin
-            .create_topics(&[new_topic], &state.kafka_admin_opts)
-            .await;
-        let res = match res {
-            Err(err) => return Err(err.to_string()),
-            Ok(res) => res,
-        };
-        if res.len() != 1 {
-            return Err(format!(
-                "kafka topic creation returned {} results, but exactly one result was expected",
-                res.len()
-            ));
-        }
-        match res.into_element() {
-            Ok(_) | Err((_, RDKafkaError::TopicAlreadyExists)) => Ok(()),
-            Err((_, err)) => Err(err.to_string()),
-        }?;
-
-        // Topic creation is asynchronous, and if we don't wait for it to
-        // complete, we might produce a message (below) that causes it to
-        // get automatically created with multiple partitions. (Since
-        // multiple partitions have no ordering guarantees, this violates
-        // many assumptions that our tests make.)
-        retry::retry_for(Duration::from_secs(8), |_| async {
-            let metadata = state
-                .kafka_producer
-                .client()
-                // N.B. It is extremely important not to ask specifically
-                // about the topic here, even though the API supports it!
-                // Asking about the topic will create it automatically...
-                // with the wrong number of partitions. Yes, this is
-                // unbelievably horrible.
-                .fetch_metadata(None, Some(Duration::from_secs(1)))
-                .map_err(|e| e.to_string())?;
-            if metadata.topics().is_empty() {
-                return Err("metadata fetch returned no topics".to_string());
-            }
-            let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
-                Some(topic) => topic,
-                None => {
-                    return Err(format!(
-                        "metadata fetch did not return topic {}",
-                        topic_name,
-                    ))
-                }
-            };
-            if topic.partitions().is_empty() {
-                return Err("metadata fetch returned a topic with no partitions".to_string());
-            } else if topic.partitions().len() as i32 != self.partitions {
-                return Err(format!(
-                    "topic {} was created with {} partitions when exactly {} was expected",
-                    topic_name,
-                    topic.partitions().len(),
-                    self.partitions
-                ));
-            }
-            Ok(())
-        })
-        .await?;
+        kafka_util::admin::create_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
+            .await
+            .map_err(|e| e.to_string())?;
         state.kafka_topics.insert(topic_name, self.partitions);
         Ok(())
     }

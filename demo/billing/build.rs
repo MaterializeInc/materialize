@@ -24,15 +24,11 @@ fn main() {
         println!("cargo:rerun-if-changed={}", fname);
     }
 
-    println!(
-        "cargo:rustc-env=VIEWS_DIR={}",
-        canonicalize("resources/views")
-    );
     println!("cargo:rerun-if-env-changed={}", ENV_VAR);
     if let Err(e) = compile_proto_descriptors(input) {
-        println!("ERROR: {}", e);
+        eprintln!("ERROR: {}", e);
         while let Some(e) = e.source() {
-            println!("    caused by: {}", e);
+            eprintln!("    caused by: {}", e);
         }
         std::process::exit(1);
     }

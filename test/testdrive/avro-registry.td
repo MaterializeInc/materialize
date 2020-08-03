@@ -114,8 +114,8 @@ $ kafka-ingest topic=data publish=true timestamp=5
   ENVELOPE DEBEZIUM
 
 > SELECT * FROM data_v3
-a
----
+a b
+----
 1 42
 1 42
 2 -1

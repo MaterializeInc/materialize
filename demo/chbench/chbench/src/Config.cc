@@ -16,6 +16,7 @@ limitations under the License.
 
 #include "MySqlDialect.h"
 #include "HanaDialect.h"
+#include "PostgresDialect.h"
 #include "Random.h"
 #include "Config.h"
 #include "mz-config.h"
@@ -56,10 +57,13 @@ mz::Config Config::get_config(libconfig::Config &config) {
             ret.dialect = new MySqlDialect();
         } else if (dialect == "hana") {
             ret.dialect = new HanaDialect();
+        } else if (dialect == "postgres") {
+            ret.dialect = new PostgresDialect();
         } else {
             throw Config::UnrecognizedDialectException {dialect};
         }
     }
+
     if (config.exists("all_queries")) {
         const Setting& all_queries = config.lookup("all_queries");
         for (const auto& query: all_queries) {
@@ -70,6 +74,7 @@ mz::Config Config::get_config(libconfig::Config &config) {
             };
         }
     }
+
     if (config.exists("active_queries")) {
         const Setting& active_queries = config.lookup("active_queries");
 

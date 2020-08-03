@@ -114,8 +114,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data_schema_inline
-Source   Create Source
-------------------
+Source   "Create Source"
+------------------------
 materialize.public.data_schema_inline "CREATE SOURCE \"materialize\".\"public\".\"data_schema_inline\" FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             },             {               \"name\": \"c\",               \"type\": {                 \"type\": \"enum\",                 \"name\": \"Bool\",                 \"symbols\": [\"True\", \"False\", \"FileNotFound\"]               }             },             {\"name\": \"d\", \"type\": \"Bool\"},             {\"name\": \"e\", \"type\": [\"null\",{               \"type\": \"record\",               \"name\": \"nested_data_1\",               \"fields\": [                   {\"name\": \"n1_a\", \"type\": \"long\"},                   {\"name\": \"n1_b\", \"type\": [\"null\", \"double\", {                       \"type\": \"record\",                       \"name\": \"nested_data_2\",                       \"fields\": [                         {\"name\": \"n2_a\", \"type\": \"long\"},                         {\"name\": \"n2_b\", \"type\": \"int\"}                       ]                     }]                   }                 ]               }]             },             {\"name\": \"f\", \"type\": [\"null\", \"nested_data_2\"]}           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] },     {       \"name\": \"source\",       \"type\": {         \"type\": \"record\",         \"name\": \"Source\",         \"namespace\": \"io.debezium.connector.mysql\",         \"fields\": [           {             \"name\": \"file\",             \"type\": \"string\"           },           {             \"name\": \"pos\",             \"type\": \"long\"           },           {             \"name\": \"row\",             \"type\": \"int\"           },           {             \"name\": \"snapshot\",             \"type\": [               {                 \"type\": \"boolean\",                 \"connect.default\": false               },               \"null\"             ],             \"default\": false           }         ],         \"connect.name\": \"io.debezium.connector.mysql.Source\"       }     }   ] }\' ENVELOPE DEBEZIUM"
 
 > SELECT a, b, json, c, d, e::text, f::text FROM data_schema_inline
@@ -167,8 +167,8 @@ $ file-append path=data-schema.json
   ENVELOPE DEBEZIUM
 
 > SHOW CREATE SOURCE data_schema_file
-Source   Create Source
-------------------
+Source   "Create Source"
+------------------------
 materialize.public.data_schema_file  "CREATE SOURCE \"materialize\".\"public\".\"data_schema_file\" FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' FORMAT AVRO USING SCHEMA \'{   \"type\": \"record\",   \"name\": \"envelope\",   \"fields\": [     {       \"name\": \"before\",       \"type\": [         {           \"name\": \"row\",           \"type\": \"record\",           \"fields\": [             {\"name\": \"a\", \"type\": \"long\"},             {\"name\": \"b\", \"type\": \"long\"},             {               \"name\": \"json\",               \"type\": {                 \"connect.name\": \"io.debezium.data.Json\",                 \"type\": \"string\"               }             },             {               \"name\": \"c\",               \"type\": {                 \"type\": \"enum\",                 \"name\": \"Bool\",                 \"symbols\": [\"True\", \"False\", \"FileNotFound\"]               }             },             {\"name\": \"d\", \"type\": \"Bool\"},             {\"name\": \"e\", \"type\": [\"null\",{               \"type\": \"record\",               \"name\": \"nested_data_1\",               \"fields\": [                   {\"name\": \"n1_a\", \"type\": \"long\"},                   {\"name\": \"n1_b\", \"type\": [\"null\", \"double\", {                       \"type\": \"record\",                       \"name\": \"nested_data_2\",                       \"fields\": [                         {\"name\": \"n2_a\", \"type\": \"long\"},                         {\"name\": \"n2_b\", \"type\": \"int\"}                       ]                     }]                   }                 ]               }]             },             {\"name\": \"f\", \"type\": [\"null\", \"nested_data_2\"]}           ]         },         \"null\"       ]     },     { \"name\": \"after\", \"type\": [\"row\", \"null\"] },     {       \"name\": \"source\",       \"type\": {         \"type\": \"record\",         \"name\": \"Source\",         \"namespace\": \"io.debezium.connector.mysql\",         \"fields\": [           {             \"name\": \"file\",             \"type\": \"string\"           },           {             \"name\": \"pos\",             \"type\": \"long\"           },           {             \"name\": \"row\",             \"type\": \"int\"           },           {             \"name\": \"snapshot\",             \"type\": [               {                 \"type\": \"boolean\",                 \"connect.default\": false               },               \"null\"             ],             \"default\": false           }         ],         \"connect.name\": \"io.debezium.connector.mysql.Source\"       }     }   ] }\n\' ENVELOPE DEBEZIUM"
 
 > SELECT a, b, json, c, d FROM data_schema_file
@@ -362,3 +362,75 @@ $ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key
 a
 ---
 "asdf"
+
+# Test that Postgres-style sources can be ingested.
+$ set pg-dbz-schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "whatever",
+          "fields": [
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "string",
+                  "connect.version": 1,
+                  "connect.parameters": {
+                    "allowed": "true,last,false"
+                  },
+                  "connect.default": "false",
+                  "connect.name": "io.debezium.data.Enum"
+                },
+                "null"
+              ],
+              "default": "false"
+            },
+            {
+              "name": "lsn",
+              "type": ["long", "null"]
+            }
+          ]
+        }
+      }
+    ]
+  }
+
+$ kafka-create-topic topic=pg-dbz-data
+
+# The third record will be skipped, since `lsn` has gone backwards.
+$ kafka-ingest format=avro topic=pg-dbz-data schema=${pg-dbz-schema} timestamp=1
+{"before": null, "after": {"a": 1, "b": 1}, "source": {"lsn": 1, "snapshot": "false"}}
+{"before": null, "after": {"a": 2, "b": 3}, "source": {"lsn": 2, "snapshot": "false"}}
+{"before": null, "after": {"a": -1, "b": 7}, "source": {"lsn": 0, "snapshot": "false"}}
+
+> CREATE MATERIALIZED SOURCE pg_dbz
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM pg_dbz
+a b
+---
+1 1
+2 3

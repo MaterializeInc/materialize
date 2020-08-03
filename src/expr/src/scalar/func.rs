@@ -15,6 +15,7 @@ use std::str;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use ore::collections::CollectionExt;
@@ -124,6 +125,13 @@ fn cast_bool_to_string_explicit<'a>(a: Datum<'a>) -> Datum<'a> {
 
 fn cast_bool_to_string_implicit<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::String(strconv::format_bool_static(a.unwrap_bool()))
+}
+
+fn cast_bool_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a.unwrap_bool() {
+        true => Datum::Int32(1),
+        false => Datum::Int32(0),
+    }
 }
 
 fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1747,6 +1755,8 @@ pub enum BinaryFunc {
     TrimLeading,
     TrimTrailing,
     EncodedBytesCharLength,
+    ListIndex,
+    ListLengthMax { max_dim: usize },
 }
 
 impl BinaryFunc {
@@ -1855,6 +1865,8 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
+            BinaryFunc::ListIndex => Ok(eager!(list_index)),
+            BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
         }
     }
 
@@ -1979,6 +1991,13 @@ impl BinaryFunc {
             JsonbContainsString | JsonbContainsJsonb => {
                 ColumnType::new(ScalarType::Bool, in_nullable)
             }
+
+            ListIndex => ColumnType::new(
+                input1_type.scalar_type.unwrap_list_element_type().clone(),
+                true,
+            ),
+
+            ListLengthMax { .. } => ColumnType::new(ScalarType::Int64, true),
         }
     }
 
@@ -2108,7 +2127,8 @@ impl BinaryFunc {
             | JsonbContainsString
             | JsonbDeleteInt64
             | JsonbDeleteString
-            | TextConcat => true,
+            | TextConcat
+            | ListIndex => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2124,7 +2144,8 @@ impl BinaryFunc {
             | Trim
             | TrimLeading
             | TrimTrailing
-            | EncodedBytesCharLength => false,
+            | EncodedBytesCharLength
+            | ListLengthMax { .. } => false,
         }
     }
 }
@@ -2204,6 +2225,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
             BinaryFunc::EncodedBytesCharLength => f.write_str("length"),
+            BinaryFunc::ListIndex => f.write_str("list_index"),
+            BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
         }
     }
 }
@@ -2232,6 +2255,7 @@ pub enum UnaryFunc {
     AbsDecimal,
     CastBoolToStringExplicit,
     CastBoolToStringImplicit,
+    CastBoolToInt32,
     CastInt32ToBool,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
@@ -2317,6 +2341,7 @@ pub enum UnaryFunc {
     TrimLeadingWhitespace,
     TrimTrailingWhitespace,
     RecordGet(usize),
+    ListLength,
 }
 
 impl UnaryFunc {
@@ -2347,6 +2372,7 @@ impl UnaryFunc {
             UnaryFunc::AbsDecimal => Ok(abs_decimal(a)),
             UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
             UnaryFunc::CastBoolToStringImplicit => Ok(cast_bool_to_string_implicit(a)),
+            UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
             UnaryFunc::CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
@@ -2445,6 +2471,7 @@ impl UnaryFunc {
             UnaryFunc::TrimLeadingWhitespace => Ok(trim_leading_whitespace(a)),
             UnaryFunc::TrimTrailingWhitespace => Ok(trim_trailing_whitespace(a)),
             UnaryFunc::RecordGet(i) => Ok(record_get(a, *i)),
+            UnaryFunc::ListLength => Ok(list_length(a)),
         }
     }
 
@@ -2475,6 +2502,8 @@ impl UnaryFunc {
             CastStringToInterval | CastTimeToInterval => {
                 ColumnType::new(ScalarType::Interval, true)
             }
+
+            CastBoolToInt32 => ColumnType::new(ScalarType::Int32, in_nullable),
 
             CastBoolToStringExplicit
             | CastBoolToStringImplicit
@@ -2581,6 +2610,8 @@ impl UnaryFunc {
                 }
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
+
+            ListLength => ColumnType::new(ScalarType::Int64, true),
         }
     }
 
@@ -2640,6 +2671,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
             UnaryFunc::CastBoolToStringImplicit => f.write_str("booltostrim"),
+            UnaryFunc::CastBoolToInt32 => f.write_str("booltoi32"),
             UnaryFunc::CastInt32ToBool => f.write_str("i32tobool"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
             UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),
@@ -2728,6 +2760,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
             UnaryFunc::RecordGet(_) => f.write_str("record_get"),
+            UnaryFunc::ListLength => f.write_str("list_length"),
         }
     }
 }
@@ -2875,8 +2908,85 @@ where
     }
 }
 
+fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    // Return value indicates whether this level's slices are empty results.
+    fn slice_and_descend(d: Datum, ranges: &[(usize, usize)], packer: &mut RowPacker) -> bool {
+        match ranges {
+            [(start, n), ranges @ ..] if !d.is_null() => {
+                let mut iter = d.unwrap_list().iter().skip(*start).take(*n).peekable();
+                if iter.peek().is_none() {
+                    packer.push(Datum::Null);
+                    true
+                } else {
+                    let mut empty_results = true;
+                    let start = packer.data().len();
+                    packer.push_list_with(|packer| {
+                        for d in iter {
+                            // Determine if all higher-dimension slices produced empty results.
+                            empty_results = slice_and_descend(d, ranges, packer) && empty_results;
+                        }
+                    });
+
+                    if empty_results {
+                        // If all results were empty, delete the list, insert a
+                        // NULL, and notify lower-order slices that your results
+                        // were empty.
+
+                        // SAFETY: `start` points to a datum boundary because a)
+                        // it comes from a call to `packer.data().len()` above,
+                        // and b) recursive calls to `slice_and_descend` will
+                        // not shrink the packer. (The recursive calls may write
+                        // data and then erase that data, but a recursive call
+                        // will never erase data that it did not write itself.)
+                        unsafe { packer.truncate(start) }
+                        packer.push(Datum::Null);
+                    }
+                    empty_results
+                }
+            }
+            _ => {
+                packer.push(d);
+                // Slicing a NULL produces an empty result.
+                d.is_null() && ranges.len() > 0
+            }
+        }
+    }
+
+    assert_eq!(
+        datums.len() % 2,
+        1,
+        "expr::scalar::func::list_slice expects an odd number of arguments; 1 for list + 2 \
+        for each start-end pair"
+    );
+    assert!(
+        datums.len() > 2,
+        "expr::scalar::func::list_slice expects at least 3 arguments; 1 for list + at least \
+        one start-end pair"
+    );
+
+    let mut ranges = Vec::new();
+    for (start, end) in datums[1..].iter().tuples::<(_, _)>() {
+        let start = std::cmp::max(start.unwrap_int64(), 1);
+        let end = end.unwrap_int64();
+
+        if start > end {
+            return Datum::Null;
+        }
+
+        ranges.push((start as usize - 1, (end - start) as usize + 1));
+    }
+
+    temp_storage.make_datum(|packer| {
+        slice_and_descend(datums[0], &ranges, packer);
+    })
+}
+
 fn record_get(a: Datum, i: usize) -> Datum {
     a.unwrap_list().iter().nth(i).unwrap()
+}
+
+fn list_length(a: Datum) -> Datum {
+    Datum::Int64(a.unwrap_list().iter().count() as i64)
 }
 
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
@@ -2947,6 +3057,50 @@ fn trim_trailing<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_end_matches(|c| trim_chars.contains(c)))
 }
 
+fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    a.unwrap_list()
+        .iter()
+        .nth(i as usize - 1)
+        .unwrap_or(Datum::Null)
+}
+
+fn list_length_max<'a>(a: Datum<'a>, b: Datum<'a>, max_dim: usize) -> Result<Datum<'a>, EvalError> {
+    fn max_len_on_dim<'a>(d: Datum<'a>, on_dim: i64) -> Option<i64> {
+        match d {
+            Datum::List(i) => {
+                let mut i = i.iter();
+                if on_dim > 1 {
+                    let mut max_len = None;
+                    while let Some(Datum::List(i)) = i.next() {
+                        max_len =
+                            std::cmp::max(max_len_on_dim(Datum::List(i), on_dim - 1), max_len);
+                    }
+                    max_len
+                } else {
+                    Some(i.count() as i64)
+                }
+            }
+            Datum::Null => None,
+            _ => unreachable!(),
+        }
+    }
+
+    let b = b.unwrap_int64();
+
+    if b as usize > max_dim || b < 1 {
+        Err(EvalError::InvalidDimension { max_dim, val: b })
+    } else {
+        Ok(match max_len_on_dim(a, b) {
+            Some(l) => Datum::from(l),
+            None => Datum::Null,
+        })
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
@@ -2963,6 +3117,7 @@ pub enum VariadicFunc {
     RecordCreate {
         field_names: Vec<ColumnName>,
     },
+    ListSlice,
 }
 
 impl VariadicFunc {
@@ -2995,6 +3150,7 @@ impl VariadicFunc {
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
                 Ok(eager!(list_create, temp_storage))
             }
+            VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
         }
     }
 
@@ -3024,6 +3180,7 @@ impl VariadicFunc {
                 );
                 ColumnType::new(ScalarType::List(Box::new(elem_type.clone())), false)
             }
+            ListSlice { .. } => ColumnType::new(input_types[0].scalar_type.clone(), true),
             RecordCreate { field_names } => ColumnType::new(
                 ScalarType::Record {
                     fields: field_names
@@ -3063,6 +3220,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
+            VariadicFunc::ListSlice => f.write_str("list_slice"),
         }
     }
 }

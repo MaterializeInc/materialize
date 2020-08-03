@@ -1,4 +1,0 @@
-CREATE MATERIALIZED VIEW invalid_sink_rows AS
-SELECT * FROM check_sink
-WHERE
-t1 != t2 or bill1 != bill2;
