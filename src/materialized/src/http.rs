@@ -9,11 +9,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
-use std::time::Instant;
+use std::io::Read;
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
+use anyhow::anyhow;
+use anyhow::bail;
 use futures::channel::mpsc::UnboundedSender;
 use futures::future::TryFutureExt;
 use futures::sink::SinkExt;
+use futures::stream::TryStreamExt;
+use hyper::body::HttpBody;
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
 use openssl::ssl::SslAcceptor;
@@ -22,7 +30,12 @@ use prometheus::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::prof::JemallocProfCtl;
+use crate::prof::{JemallocProfMetadata, ProfStartTime, PROF_METADATA};
+use header::HeaderValue;
+use jemalloc_ctl::raw;
 use ore::netio::SniffedStream;
+use url::{form_urlencoded, Url};
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
@@ -67,6 +80,7 @@ pub struct Server {
     cmdq_tx: UnboundedSender<coord::Command>,
     /// When this server started
     start_time: Instant,
+    mem_profiling: Option<Arc<Mutex<JemallocProfCtl>>>,
 }
 
 impl Server {
@@ -78,10 +92,12 @@ impl Server {
     ) -> Server {
         // just set this so it shows up in metrics
         WORKER_COUNT.with_label_values(&[worker_count]).set(1);
+        let mem_profiling = PROF_METADATA.clone();
         Server {
             tls,
             cmdq_tx,
             start_time,
+            mem_profiling,
         }
     }
 
@@ -117,11 +133,17 @@ impl Server {
         let svc = service::service_fn(move |req: Request<Body>| {
             let cmdq_tx = (self.cmdq_tx).clone();
             let start_time = self.start_time;
+            let prof_ctl = self.mem_profiling.clone();
+            let prof_md = prof_ctl
+                .as_ref()
+                .map(|arc_mtx| arc_mtx.lock().expect("Profiler lock poisoned!").get_md());
             async move {
                 match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => handle_home(req).await,
                     (&Method::GET, "/metrics") => handle_prometheus(req, start_time).await,
                     (&Method::GET, "/status") => handle_status(req, start_time).await,
+                    (&Method::GET, "/prof") => handle_prof(prof_md).await,
+                    (&Method::POST, "/prof") => handle_prof_action(req, prof_ctl).await,
                     (&Method::GET, "/internal/catalog") => {
                         handle_internal_catalog(req, cmdq_tx).await
                     }
@@ -154,6 +176,135 @@ async fn handle_home(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> 
         version = crate::VERSION,
         build_sha = crate::BUILD_SHA,
         build_time = crate::BUILD_TIME,
+    ))))
+}
+
+async fn handle_prof_action(
+    body: Request<Body>,
+    prof_ctl: Option<Arc<Mutex<JemallocProfCtl>>>,
+) -> Result<Response<Body>, anyhow::Error> {
+    let prof_ctl = if let Some(prof_ctl) = prof_ctl {
+        prof_ctl
+    } else {
+        return Ok(Response::builder()
+            .status(400)
+            .body(Body::from("Profiling is not enabled."))?);
+    };
+    let body = body
+        .into_body()
+        .try_fold(vec![], |mut v, b| async move {
+            v.extend(b);
+            Ok(v)
+        })
+        .await?;
+    let action = match form_urlencoded::parse(&body)
+        .find(|(k, _v)| &**k == "action")
+        .map(|(_k, v)| v)
+    {
+        Some(action) => action,
+        None => {
+            return Ok(Response::builder()
+                .status(400)
+                .body(Body::from("Expected `action` parameter"))?)
+        }
+    };
+    match action.as_ref() {
+        "activate" => {
+            let md = {
+                let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+                borrow.activate()?;
+                Some(borrow.get_md())
+            };
+            handle_prof(md).await
+        }
+        "deactivate" => {
+            let md = {
+                let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+                borrow.deactivate()?;
+                Some(borrow.get_md())
+            };
+            handle_prof(md).await
+        }
+        "dump_file" => {
+            let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+            let mut f = borrow.dump()?;
+            let mut s = String::new();
+            f.read_to_string(&mut s)?;
+            let body = Body::from(s);
+            let mut response = Response::new(body);
+            response.headers_mut().append(
+                "Content-Disposition",
+                HeaderValue::from_static("attachment; filename=\"jeprof.heap\""),
+            );
+            Ok(response)
+        }
+        x => Ok(Response::builder().status(400).body(Body::from(format!(
+            "Unrecognized `action` parameter: {}",
+            x
+        )))?),
+    }
+}
+
+async fn handle_prof(
+    prof_md: Option<JemallocProfMetadata>,
+) -> Result<Response<Body>, anyhow::Error> {
+    let (prof_status, can_activate, is_active) = match prof_md {
+        None => (format!("Jemalloc profiling disabled"), false, false),
+        Some(md) => match md.start_time {
+            Some(ProfStartTime::TimeImmemorial) => (
+                format!("Jemalloc profiling active since server start"),
+                false,
+                true,
+            ),
+            Some(ProfStartTime::Instant(when)) => (
+                format!(
+                    "Jemalloc profiling active since {:?}",
+                    Instant::now() - when,
+                ),
+                false,
+                true,
+            ),
+            None => (
+                format!("Jemalloc profiling enabled but inactive"),
+                true,
+                false,
+            ),
+        },
+    };
+    let activate_link = if can_activate {
+        r#"<form action="/prof" method="POST"><button type="submit" name="action" value="activate">Activate</button></form>"#
+    } else {
+        ""
+    };
+    let deactivate_link = if is_active {
+        r#"<form action="/prof" method="POST"><button type="submit" name="action" value="deactivate">Deactivate</button></form>"#
+    } else {
+        ""
+    };
+    let dump_file_link = if is_active {
+        r#"<form action="/prof" method="POST"><button type="submit" name="action" value="dump_file">Download heap profile</button></form>"#
+    } else {
+        ""
+    };
+    Ok(Response::new(Body::from(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>materialized profiling functions</title>
+  </head>
+  <body>
+    <p>{prof_status}</p>
+    {activate_link}
+    {deactivate_link}
+    {dump_file_link}
+  </body>
+</html>
+"#,
+        prof_status = prof_status,
+        activate_link = activate_link,
+        deactivate_link = deactivate_link,
+        dump_file_link = dump_file_link,
     ))))
 }
 
