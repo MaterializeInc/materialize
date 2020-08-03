@@ -29,4 +29,4 @@ sql = { path = "../sql" }
 tokio = "0.2"
 tokio-openssl = "0.4.0"
 tokio-util = { version = "0.3", features = ["codec"] }
-postgres = "0.17.3"
+postgres = "0.17.5"
