@@ -41,12 +41,10 @@ For more detail about how different clauses impact memory usage, check out our
 
 ### Indexes
 
-Though most users do not need to be concerned with indexes, for the sake of
-completeness, they deserve a brief mention.
-
-Materialize automatically creates an in-memory index which stores all columns in
-the `SELECT` query's result set; this is the crucial structure that the view
-maintains to provide low-latency access to your query's results.
+A brief mention on indexes: Materialize automatically creates an in-memory index
+which stores all columns in the `SELECT` query's result set; this is the crucial
+structure that the view maintains to provide low-latency access to your query's
+results.
 
 Some things you might want to do with indexes...
 
@@ -58,7 +56,7 @@ Some things you might want to do with indexes...
 ## Examples
 
 ```sql
-CREATE VIEW purchase_sum_by_region
+CREATE MATERIALIZED VIEW purchase_sum_by_region
 AS
     SELECT sum(purchase.amount) AS region_sum, region.id AS region_id
     FROM mysql_simple_region AS region
