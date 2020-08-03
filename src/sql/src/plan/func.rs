@@ -1423,7 +1423,8 @@ lazy_static! {
                 })
             },
             "repeat" => {
-                params!(Int64) => unary_op(move |_ecx, n| {
+                params!(Int64) => unary_op(move |ecx, n| {
+                    ecx.require_experimental_mode("repeat")?;
                     Ok(TableFuncPlan {
                         func: TableFunc::Repeat,
                         exprs: vec![n],
