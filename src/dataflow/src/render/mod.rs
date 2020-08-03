@@ -113,7 +113,6 @@ use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use avro::types::Value;
@@ -180,7 +179,9 @@ pub fn build_local_input<A: Allocate>(
             // data is being stored, identified by the index_id
             // 2) the source stream that data comes in from, which is identified
             //    by the source_id, passed into this method as index.on_id
-            let mut context = Context::<_, _, _, Timestamp>::new();
+            let mut context = Context::<_, _, _, Timestamp>::for_dataflow(&DataflowDesc::new(
+                "local-input".into(),
+            ));
             let ((handle, capability), stream) = region.new_unordered_input();
             if region.index() == 0 {
                 render_state
@@ -225,20 +226,7 @@ pub fn build_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region(|region| {
-            let mut context = Context::<_, _, _, Timestamp>::new();
-
-            let mut source_tokens = HashMap::new();
-            // this is stopgap measure so dropping an index and recreating one with the same name
-            // does not result in timestamp/reading from source errors.
-            // use an export id to distinguish between different dataflows
-            // TODO (materialize#1720): replace `first_export_id` by some form of dataflow identifier
-            let first_export_id = if let Some((id, _, _)) = dataflow.index_exports.first() {
-                *id
-            } else if let Some((id, _)) = dataflow.sink_exports.first() {
-                *id
-            } else {
-                unreachable!()
-            };
+            let mut context = Context::for_dataflow(&dataflow);
 
             assert!(
                 !dataflow
@@ -248,15 +236,6 @@ pub fn build_dataflow<A: Allocate>(
                     .has_duplicates(),
                 "computation of unique IDs assumes a source appears no more than once per dataflow"
             );
-
-            // When set, `as_of` indicates a frontier that can be used to compact input timestamps
-            // without affecting the results. We *should* apply it, to sources and imported traces,
-            // both because it improves performance, and because potentially incorrect results are
-            // visible in sinks.
-            let as_of_frontier = dataflow
-                .as_of
-                .clone()
-                .unwrap_or_else(|| Antichain::from_elem(0));
 
             // Load declared sources into the rendering context.
             for (src_id, mut src) in dataflow.source_imports.clone() {
@@ -283,7 +262,7 @@ pub fn build_dataflow<A: Allocate>(
                     // This uid must be unique across all different instantiations of a source
                     let uid = SourceInstanceId {
                         sid: src_id.sid,
-                        vid: first_export_id,
+                        vid: context.first_export_id,
                     };
 
                     // TODO(benesch): we force all sources to have an empty
@@ -339,7 +318,7 @@ pub fn build_dataflow<A: Allocate>(
                                         key_encoding,
                                         &dataflow.debug_name,
                                         scope.index(),
-                                        as_of_frontier.clone(),
+                                        context.as_of_frontier.clone(),
                                         &mut src.operators,
                                         src.desc.typ(),
                                     );
@@ -511,7 +490,7 @@ pub fn build_dataflow<A: Allocate>(
                         }
 
                         // Apply `as_of` to each timestamp.
-                        let as_of_frontier1 = as_of_frontier.clone();
+                        let as_of_frontier1 = context.as_of_frontier.clone();
                         collection = collection
                             .inner
                             .map_in_place(move |(_, time, _)| {
@@ -519,7 +498,7 @@ pub fn build_dataflow<A: Allocate>(
                             })
                             .as_collection();
 
-                        let as_of_frontier2 = as_of_frontier.clone();
+                        let as_of_frontier2 = context.as_of_frontier.clone();
                         err_collection = err_collection
                             .inner
                             .map_in_place(move |(_, time, _)| {
@@ -535,7 +514,7 @@ pub fn build_dataflow<A: Allocate>(
                         capability
                     };
                     let token = Rc::new(capability);
-                    source_tokens.insert(src_id.sid, token.clone());
+                    context.source_tokens.insert(src_id.sid, token.clone());
 
                     // We also need to keep track of this mapping globally to activate sources
                     // on timestamp advancement queries
@@ -546,20 +525,18 @@ pub fn build_dataflow<A: Allocate>(
                 }
             }
 
-            let mut index_tokens = HashMap::new();
-
             for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
                 if let Some(traces) = render_state.traces.get_mut(id) {
                     let token = traces.to_drop().clone();
                     let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                         scope,
                         &format!("Index({}, {:?})", index_desc.on_id, index_desc.keys),
-                        as_of_frontier.clone(),
+                        context.as_of_frontier.clone(),
                     );
                     let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                         scope,
                         &format!("ErrIndex({}, {:?})", index_desc.on_id, index_desc.keys),
-                        as_of_frontier.clone(),
+                        context.as_of_frontier.clone(),
                     );
                     let ok_arranged = ok_arranged.enter(region);
                     let err_arranged = err_arranged.enter(region);
@@ -570,14 +547,14 @@ pub fn build_dataflow<A: Allocate>(
                         &index_desc.keys,
                         (ok_arranged, err_arranged),
                     );
-                    index_tokens.insert(
-                        id,
+                    context.index_tokens.insert(
+                        *id,
                         Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
                     );
                 } else {
                     panic!(
                         "import of index {} failed while building dataflow {}",
-                        id, first_export_id
+                        id, context.first_export_id
                     );
                 }
             }
@@ -635,7 +612,7 @@ pub fn build_dataflow<A: Allocate>(
                 let mut needed_source_tokens = Vec::new();
                 let mut needed_index_tokens = Vec::new();
                 for import_id in dataflow.get_imports(&index_desc.on_id) {
-                    if let Some(index_token) = index_tokens.get(&import_id) {
+                    if let Some(index_token) = context.index_tokens.get(&import_id) {
                         if let Some(logger) = &mut materialized_logging {
                             // Log the dependency.
                             logger.log(MaterializedEvent::DataflowDependency {
@@ -644,7 +621,7 @@ pub fn build_dataflow<A: Allocate>(
                             });
                         }
                         needed_index_tokens.push(index_token.clone());
-                    } else if let Some(source_token) = source_tokens.get(&import_id) {
+                    } else if let Some(source_token) = context.source_tokens.get(&import_id) {
                         needed_source_tokens.push(source_token.clone());
                     }
                 }
@@ -676,9 +653,9 @@ pub fn build_dataflow<A: Allocate>(
                 let mut needed_index_tokens = Vec::new();
                 let mut needed_sink_tokens = Vec::new();
                 for import_id in dataflow.get_imports(&sink.from.0) {
-                    if let Some(index_token) = index_tokens.get(&import_id) {
+                    if let Some(index_token) = context.index_tokens.get(&import_id) {
                         needed_index_tokens.push(index_token.clone());
-                    } else if let Some(source_token) = source_tokens.get(&import_id) {
+                    } else if let Some(source_token) = context.source_tokens.get(&import_id) {
                         needed_source_tokens.push(source_token.clone());
                     }
                 }
