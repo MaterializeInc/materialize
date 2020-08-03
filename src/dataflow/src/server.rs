@@ -226,7 +226,7 @@ where
                 .request_unparks(&executor);
             let worker_idx = timely_worker.index();
             Worker {
-                inner: timely_worker,
+                timely_worker,
                 pending_peeks: Vec::new(),
                 traces: TraceManager::new(worker_idx),
                 logging_config: logging_config.clone(),
@@ -284,7 +284,7 @@ struct Worker<'w, A>
 where
     A: Allocate,
 {
-    inner: &'w mut TimelyWorker<A>,
+    timely_worker: &'w mut TimelyWorker<A>,
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
@@ -326,32 +326,34 @@ where
             let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
             // Construct logging dataflows and endpoints before registering any.
-            let t_traces = logging::timely::construct(&mut self.inner, logging, t_linked);
-            let d_traces = logging::differential::construct(&mut self.inner, logging, d_linked);
-            let m_traces = logging::materialized::construct(&mut self.inner, logging, m_linked);
+            let t_traces = logging::timely::construct(&mut self.timely_worker, logging, t_linked);
+            let d_traces =
+                logging::differential::construct(&mut self.timely_worker, logging, d_linked);
+            let m_traces =
+                logging::materialized::construct(&mut self.timely_worker, logging, m_linked);
 
             // Register each logger endpoint.
-            self.inner
+            self.timely_worker
                 .log_register()
                 .insert::<timely::logging::TimelyEvent, _>("timely", move |time, data| {
                     t_logger.publish_batch(time, data)
                 });
 
-            self.inner
+            self.timely_worker
                 .log_register()
                 .insert::<differential_dataflow::logging::DifferentialEvent, _>(
                     "differential/arrange",
                     move |time, data| d_logger.publish_batch(time, data),
                 );
 
-            self.inner
+            self.timely_worker
                 .log_register()
                 .insert::<logging::materialized::MaterializedEvent, _>(
                     "materialized",
                     move |time, data| m_logger.publish_batch(time, data),
                 );
 
-            let errs = self.inner.dataflow::<Timestamp, _, _>(|scope| {
+            let errs = self.timely_worker.dataflow::<Timestamp, _, _>(|scope| {
                 Collection::<_, DataflowError, isize>::empty(scope)
                     .arrange()
                     .trace
@@ -377,7 +379,7 @@ where
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
 
-            self.materialized_logger = self.inner.log_register().get("materialized");
+            self.materialized_logger = self.timely_worker.log_register().get("materialized");
         }
     }
 
@@ -386,9 +388,11 @@ where
     /// This does not unpublish views and is only useful to terminate logging streams to ensure that
     /// materialized can terminate cleanly.
     fn shutdown_logging(&mut self) {
-        self.inner.log_register().remove("timely");
-        self.inner.log_register().remove("differential/arrange");
-        self.inner.log_register().remove("materialized");
+        self.timely_worker.log_register().remove("timely");
+        self.timely_worker
+            .log_register()
+            .remove("differential/arrange");
+        self.timely_worker.log_register().remove("materialized");
     }
 
     /// Draws from `dataflow_command_receiver` until shutdown.
@@ -408,7 +412,7 @@ where
             // nothing to do, it will park the thread. We rely on another thread
             // unparking us when there's new work to be done, e.g., when sending
             // a command or when new Kafka messages have arrived.
-            self.inner.step_or_park(None);
+            self.timely_worker.step_or_park(None);
 
             // Report frontier information back the coordinator.
             self.report_frontiers();
@@ -446,7 +450,7 @@ where
                     self.ts_source_mapping.remove(id);
                     let connector = self.feedback_tx.as_mut().unwrap();
                     block_on(connector.send(WorkerFeedbackWithMeta {
-                        worker_id: self.inner.index(),
+                        worker_id: self.timely_worker.index(),
                         message: WorkerFeedback::DroppedSource(*id),
                     }))
                     .unwrap();
@@ -455,7 +459,7 @@ where
                     // A source was created
                     let connector = self.feedback_tx.as_mut().unwrap();
                     block_on(connector.send(WorkerFeedbackWithMeta {
-                        worker_id: self.inner.index(),
+                        worker_id: self.timely_worker.index(),
                         message: WorkerFeedback::CreateSource(*id),
                     }))
                     .unwrap();
@@ -498,7 +502,7 @@ where
             }
             if !progress.is_empty() {
                 block_on(feedback_tx.send(WorkerFeedbackWithMeta {
-                    worker_id: self.inner.index(),
+                    worker_id: self.timely_worker.index(),
                     message: WorkerFeedback::FrontierUppers(progress),
                 }))
                 .unwrap();
@@ -520,7 +524,7 @@ where
                     render::build_dataflow(
                         dataflow,
                         &mut self.traces,
-                        self.inner,
+                        self.timely_worker,
                         &mut self.sink_tokens,
                         &mut self.ts_source_mapping,
                         self.ts_histories.clone(),
@@ -637,7 +641,7 @@ where
             } => {
                 render::build_local_input(
                     &mut self.traces,
-                    self.inner,
+                    self.timely_worker,
                     &mut self.local_inputs,
                     index_id,
                     &name,
@@ -665,7 +669,7 @@ where
             }
 
             SequencedCommand::AppendLog(event) => {
-                if self.inner.index() == 0 {
+                if self.timely_worker.index() == 0 {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(event);
                     }
