@@ -173,7 +173,7 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
 
 /// Generate byte records, push them to Kafka, and return their md5 hash.
 async fn generate_and_push_records(
-    mut kafka_client: kafka::kafka_client::KafkaClient,
+    kafka_client: kafka::kafka_client::KafkaClient,
     message_count: usize,
 ) -> Result<String, anyhow::Error> {
     log::info!("pushing {} records to Kafka", message_count);
@@ -186,12 +186,12 @@ async fn generate_and_push_records(
         }
 
         let record = generator::bytes::generate_bytes(30);
-        match kafka_client.send(&record).await {
-            Ok(()) => {
+        match kafka_client.send(&record)?.await? {
+            Ok(_) => {
                 sent += 1;
                 records.push(record);
             }
-            Err(e) => {
+            Err((e, _)) => {
                 log::error!("failed to send bytes to Kafka: {}", e);
             }
         }
