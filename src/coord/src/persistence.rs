@@ -14,16 +14,29 @@ use futures::executor::block_on;
 use futures::stream::StreamExt;
 use log::info;
 
-use comm::mpsc::Receiver;
-use dataflow_types::WorkerPersistenceData;
+use dataflow_types::{Persistence, WorkerPersistenceData};
+use expr::GlobalId;
+
+#[derive(Debug)]
+pub enum PersistenceMetadata {
+    AddSource(GlobalId, Persistence),
+    DropSource(GlobalId),
+}
 
 pub struct Persister {
-    data_rx: Receiver<WorkerPersistenceData>,
+    data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
+    metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
 }
 
 impl Persister {
-    pub fn new(data_rx: Receiver<WorkerPersistenceData>) -> Self {
-        Persister { data_rx }
+    pub fn new(
+        data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
+        metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
+    ) -> Self {
+        Persister {
+            data_rx,
+            metadata_rx,
+        }
     }
 
     pub fn update(&mut self) {

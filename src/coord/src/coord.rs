@@ -39,7 +39,6 @@ use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
     SinkConnector, SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
-    WorkerPersistenceData,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -56,7 +55,7 @@ use sql::plan::{MutationKind, Params, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
-use crate::persistence::Persister;
+use crate::persistence::{PersistenceMetadata, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -132,7 +131,8 @@ where
     logging_granularity: Option<u64>,
     executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
-    persistence_rx: Option<comm::mpsc::Receiver<WorkerPersistenceData>>,
+    persister: Option<Persister>,
+    persistence_metadata_tx: std::sync::mpsc::Sender<PersistenceMetadata>,
     /// The startup time of the coordinator, from which local input timstamps are generated
     /// relative to.
     start_time: Instant,
@@ -196,6 +196,8 @@ where
 
         // TODO not sure if this is the right place
         let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
+        let (persistence_metadata_tx, persistence_metadata_rx) = std::sync::mpsc::channel();
+        let persister = Persister::new(persistence_rx, persistence_metadata_rx);
         broadcast(
             &mut broadcast_tx,
             SequencedCommand::EnablePersistence(persistence_tx),
@@ -224,7 +226,8 @@ where
             timestamp_config: config.timestamp,
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
-            persistence_rx: Some(persistence_rx),
+            persister: Some(persister),
+            persistence_metadata_tx,
             start_time: Instant::now(),
             closed_up_to: 1,
             read_lower_bound: 1,
@@ -432,8 +435,8 @@ where
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
 
-        let mut persister = Persister::new(self.persistence_rx.take().unwrap());
         let executor = self.executor.clone();
+        let mut persister = self.persister.take().unwrap();
         let _persister_thread =
             thread::spawn(move || executor.enter(|| persister.update())).join_on_drop();
 
