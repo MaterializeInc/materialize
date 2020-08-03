@@ -109,7 +109,8 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::{AsCollection, Collection};
-use futures::sink::Sink;
+use futures::executor::block_on;
+use futures::sink::{Sink, SinkExt};
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
@@ -202,7 +203,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
     timestamp_histories: TimestampDataUpdates,
     timestamp_channel: TimestampMetadataUpdates,
     logger: &mut Option<Logger>,
-    persistence_tx: &mut Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+    persistence_tx: &Option<comm::mpsc::Sender<WorkerPersistenceData>>,
 ) {
     let worker_index = worker.index();
     let worker_peers = worker.peers();
@@ -299,26 +300,40 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         (usize::cast_from(uid.hashed()) % worker_peers) == worker_index
                     };
 
-                    let source_config = SourceConfig {
-                        name: format!("{}-{}", connector.name(), uid),
-                        id: uid,
-                        scope: region,
-                        // Distribute read responsibility among workers.
-                        active: active_read_worker,
-                        timestamp_histories: timestamp_histories.clone(),
-                        timestamp_tx: timestamp_channel.clone(),
-                        consistency,
-                        timestamp_frequency: ts_frequency,
-                        worker_id: worker_index,
-                        // Assumption: worker.peers() == total number of workers in Materialize
-                        worker_count: worker_peers,
-                        encoding: encoding.clone(),
-                        persistence_tx: if let Some(_) = persistence {
-                            persistence_tx
-                        } else {
-                            &mut None
-                        },
-                    };
+                    let source_config =
+                        SourceConfig {
+                            name: format!("{}-{}", connector.name(), uid),
+                            id: uid,
+                            scope: region,
+                            // Distribute read responsibility among workers.
+                            active: active_read_worker,
+                            timestamp_histories: timestamp_histories.clone(),
+                            timestamp_tx: timestamp_channel.clone(),
+                            consistency,
+                            timestamp_frequency: ts_frequency,
+                            worker_id: worker_index,
+                            // Assumption: worker.peers() == total number of workers in Materialize
+                            worker_count: worker_peers,
+                            encoding: encoding.clone(),
+                            persistence_tx: if let Some(_) = persistence {
+                                let persistence_tx: Option<
+                                    Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>,
+                                > =
+                                    if let Some(tx) = persistence_tx {
+                                        let tx_inner = tx.clone();
+                                        Some(Box::pin(
+                            block_on(tx_inner.connect()).unwrap().sink_map_err(|err| {
+                                panic!("error enabling dataflow worker persistence: {}", err)
+                            }),
+                        ))
+                                    } else {
+                                        None
+                                    };
+                                persistence_tx
+                            } else {
+                                None
+                            },
+                        };
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
                         match connector {

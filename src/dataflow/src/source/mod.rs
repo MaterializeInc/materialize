@@ -87,7 +87,7 @@ pub struct SourceConfig<'a, G> {
     /// Data encoding
     pub encoding: DataEncoding,
     /// Channel to send persistence information to persister thread
-    pub persistence_tx: &'a mut Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+    pub persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -734,7 +734,7 @@ where
         timestamp_frequency,
         active,
         encoding,
-        persistence_tx,
+        mut persistence_tx,
         ..
     } = config;
 
@@ -835,6 +835,7 @@ where
                                     return SourceStatus::Alive;
                                 }
                                 Some(ts) => {
+                                    source_info.persist_message(&mut persistence_tx, &message, ts);
                                     // Note: empty and null payload/keys are currently
                                     // treated as the same thing.
                                     let key = message.key.unwrap_or_default();
@@ -850,8 +851,6 @@ where
                                     bytes_read += key.len() as i64;
                                     bytes_read += out.len().unwrap_or(0) as i64;
                                     let ts_cap = cap.delayed(&ts);
-
-                                    source_info.persist_message(persistence_tx, &message, ts);
 
                                     output.session(&ts_cap).give(Ok(SourceOutput::new(
                                         key,

@@ -292,7 +292,7 @@ where
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
     feedback_tx: Option<Pin<Box<dyn Sink<WorkerFeedbackWithMeta, Error = ()>>>>,
-    persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+    persistence_tx: Option<comm::mpsc::Sender<WorkerPersistenceData>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
@@ -530,7 +530,7 @@ where
                         self.ts_histories.clone(),
                         self.ts_source_updates.clone(),
                         &mut self.materialized_logger,
-                        &mut self.persistence_tx,
+                        &self.persistence_tx,
                     );
                 }
             }
@@ -684,9 +684,7 @@ where
                     )));
             }
             SequencedCommand::EnablePersistence(tx) => {
-                self.persistence_tx = Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
-                    |err| panic!("error enabling dataflow worker persistence: {}", err),
-                )));
+                self.persistence_tx = Some(tx);
             }
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
