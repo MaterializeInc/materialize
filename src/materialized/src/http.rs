@@ -254,7 +254,12 @@ async fn handle_prof(
     prof_md: Option<JemallocProfMetadata>,
 ) -> Result<Response<Body>, anyhow::Error> {
     let (prof_status, can_activate, is_active) = match prof_md {
-        None => ("Jemalloc profiling disabled".to_string(), false, false),
+        None => (
+            "Jemalloc profiling disabled (HINT: run on Linux with _RJEM_MALLOC_CONF=prof:true)"
+                .to_string(),
+            false,
+            false,
+        ),
         Some(md) => match md.start_time {
             Some(ProfStartTime::TimeImmemorial) => (
                 "Jemalloc profiling active since server start".to_string(),
