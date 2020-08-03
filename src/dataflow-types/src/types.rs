@@ -455,6 +455,7 @@ pub enum SourceConnector {
         consistency: Consistency,
         max_ts_batch: i64,
         ts_frequency: Duration,
+        persistence: Option<Persistence>,
     },
     Local,
 }
@@ -504,6 +505,20 @@ impl ExternalSourceConnector {
 pub enum Consistency {
     BringYourOwn(String),
     RealTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Persistence {
+    pub path: PathBuf,
+    pub startup_time: u64,
+    pub nonce: u64,
+    pub restart: Option<PersistenceRestart>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PersistenceRestart {
+    pub offset: i64,
+    pub files: Vec<PathBuf>,
 }
 
 /// Universal language for describing message positions in Materialize, in a source independent
@@ -659,6 +674,16 @@ pub struct KafkaSinkConnectorBuilder {
     pub replication_factor: u32,
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkerPersistenceData {
+    pub source_id: GlobalId,
+    // TODO change this to be better
+    pub partition: i32,
+    pub offset: i64,
+    pub timestamp: Timestamp,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

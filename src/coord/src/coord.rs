@@ -55,6 +55,7 @@ use sql::plan::{MutationKind, Params, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
+use crate::persistence::{PersistenceMetadata, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -130,6 +131,8 @@ where
     logging_granularity: Option<u64>,
     executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
+    persister: Option<Persister>,
+    persistence_metadata_tx: std::sync::mpsc::Sender<PersistenceMetadata>,
     /// The startup time of the coordinator, from which local input timstamps are generated
     /// relative to.
     start_time: Instant,
@@ -190,6 +193,16 @@ where
         let logging = config.logging;
         let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
         broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
+
+        // TODO not sure if this is the right place
+        let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
+        let (persistence_metadata_tx, persistence_metadata_rx) = std::sync::mpsc::channel();
+        let persister = Persister::new(persistence_rx, persistence_metadata_rx);
+        broadcast(
+            &mut broadcast_tx,
+            SequencedCommand::EnablePersistence(persistence_tx),
+        );
+
         let mut coord = Self {
             switchboard: config.switchboard,
             broadcast_tx,
@@ -213,6 +226,8 @@ where
             timestamp_config: config.timestamp,
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
+            persister: Some(persister),
+            persistence_metadata_tx,
             start_time: Instant::now(),
             closed_up_to: 1,
             read_lower_bound: 1,
@@ -233,7 +248,17 @@ where
                 //about how it was built. If we start building multiple sinks and/or indexes
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
+                    // TODO is there a nicer way to do this destructuring
+                    // Tell the persister that we have a new source to persist
+                    if let SourceConnector::External { persistence, .. } = &source.connector {
+                        if let Some(persistence) = &persistence {
+                            coord
+                                .persistence_metadata_tx
+                                .send(PersistenceMetadata::AddSource(*id, persistence.clone()))
+                                .expect("Failed to send CREATE SOURCE notice to persister");
+                        };
+                    };
                     coord.views.insert(*id, ViewState::new(false, vec![]));
                 }
                 CatalogItem::View(view) => {
@@ -420,6 +445,11 @@ where
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
 
+        let executor = self.executor.clone();
+        let mut persister = self.persister.take().unwrap();
+        let _persister_thread =
+            thread::spawn(move || executor.enter(|| persister.update())).join_on_drop();
+
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
             // (`internal_cmd_stream` and `feedback_stream`) before processing
@@ -605,6 +635,9 @@ where
                 }
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
+                    self.persistence_metadata_tx
+                        .send(PersistenceMetadata::Shutdown)
+                        .unwrap();
                     self.shutdown();
                     break;
                 }
@@ -1024,6 +1057,19 @@ where
                         dataflow,
                     );
                 }
+
+                // TODO is there a nicer way to do this destructuring
+                // Tell the persister that we have a new source to persist
+                if let SourceConnector::External { persistence, .. } = &source.connector {
+                    if let Some(persistence) = &persistence {
+                        self.persistence_metadata_tx
+                            .send(PersistenceMetadata::AddSource(
+                                source_id,
+                                persistence.clone(),
+                            ))
+                            .expect("Failed to send CREATE SOURCE notice to persister");
+                    };
+                };
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -1233,7 +1279,14 @@ where
         self.catalog_transact(ops)?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
-            ObjectType::Source => ExecuteResponse::DroppedSource,
+            ObjectType::Source => {
+                for id in items.iter() {
+                    self.persistence_metadata_tx
+                        .send(PersistenceMetadata::DropSource(*id))
+                        .expect("Failed to send DROP SOURCE notice to persister");
+                }
+                ExecuteResponse::DroppedSource
+            }
             ObjectType::View => ExecuteResponse::DroppedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
@@ -2049,12 +2102,6 @@ where
                 SequencedCommand::DropIndexes(trace_keys),
             )
         }
-    }
-
-    pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {
-        let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-        broadcast(&mut self.broadcast_tx, SequencedCommand::EnableFeedback(tx));
-        rx
     }
 
     pub fn shutdown(&mut self) {
