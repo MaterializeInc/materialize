@@ -11,6 +11,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
+use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use dataflow_types::{DataflowError, Timestamp};
@@ -20,7 +21,7 @@ use repr::{Datum, Row, RowArena};
 use super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
 
-impl<G> Context<G, RelationExpr, Row, Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -29,10 +30,13 @@ where
         &mut self,
         relation_expr: &RelationExpr,
         predicates: &[ScalarExpr],
-        scope: &mut G,
+        scope: &mut Child<'g, G, G::Timestamp>,
         worker_index: usize,
         subtract: F,
-    ) -> (Collection<G, Row>, Collection<G, DataflowError>)
+    ) -> (
+        Collection<Child<'g, G, G::Timestamp>, Row>,
+        Collection<Child<'g, G, G::Timestamp>, DataflowError>,
+    )
     where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {

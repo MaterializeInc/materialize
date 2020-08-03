@@ -525,10 +525,17 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    for (id, _, _) in dataflow.index_exports.iter() {
-                        self.reported_frontiers.insert(*id, Antichain::from_elem(0));
+                    for (idx_id, idx, _) in dataflow.index_exports.iter() {
+                        self.reported_frontiers
+                            .insert(*idx_id, Antichain::from_elem(0));
                         if let Some(logger) = self.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(*id, true));
+                            logger.log(MaterializedEvent::Dataflow(*idx_id, true));
+                            for import_id in dataflow.get_imports(&idx.on_id) {
+                                logger.log(MaterializedEvent::DataflowDependency {
+                                    dataflow: *idx_id,
+                                    source: import_id,
+                                })
+                            }
                         }
                     }
 
