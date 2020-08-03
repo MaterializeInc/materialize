@@ -11,11 +11,11 @@ use std::thread;
 use std::time::Duration;
 
 use futures::executor::block_on;
-use futures::stream::StreamExt;
 use log::info;
 
 use dataflow_types::{Persistence, WorkerPersistenceData};
 use expr::GlobalId;
+use ore::future::OreTryStreamExt;
 
 #[derive(Debug)]
 pub enum PersistenceMetadata {
@@ -48,7 +48,7 @@ impl Persister {
     }
 
     fn update_persistence(&mut self) {
-        while let Some(_) = block_on(self.data_rx.next()) {
+        while let Ok(_) = block_on(self.data_rx.try_recv()) {
             log::info!("received some data to be persisted");
         }
     }
