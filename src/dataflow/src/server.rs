@@ -42,7 +42,7 @@ use timely::worker::Worker as TimelyWorker;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowError, IndexDesc, MzOffset, PeekResponse, Timestamp,
-    TimestampSourceUpdate, Update,
+    TimestampSourceUpdate, Update, WorkerPersistenceData,
 };
 use expr::{Diff, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -155,6 +155,8 @@ pub enum SequencedCommand {
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
+    /// Request that persistence data is streamed to the provided channel..
+    EnablePersistence(comm::mpsc::Sender<WorkerPersistenceData>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -231,6 +233,7 @@ where
                 traces: TraceManager::new(worker_idx),
                 logging_config: logging_config.clone(),
                 feedback_tx: None,
+                persistence_tx: None,
                 command_rx,
                 materialized_logger: None,
                 sink_tokens: HashMap::new(),
@@ -289,6 +292,7 @@ where
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
     feedback_tx: Option<Pin<Box<dyn Sink<WorkerFeedbackWithMeta, Error = ()>>>>,
+    persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
@@ -677,6 +681,11 @@ where
                     Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
                         |err| panic!("error sending worker feedback: {}", err),
                     )));
+            }
+            SequencedCommand::EnablePersistence(tx) => {
+                self.persistence_tx = Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
+                    |err| panic!("error enabling dataflow worker persistence: {}", err),
+                )));
             }
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually

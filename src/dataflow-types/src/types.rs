@@ -661,6 +661,16 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkerPersistenceData {
+    pub source_id: GlobalId,
+    // TODO change this to be better
+    pub partition: i32,
+    pub offset: i64,
+    pub timestamp: Timestamp,
+    pub data: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 /// An index storing processed updates so they can be queried
 /// or reused in other computations

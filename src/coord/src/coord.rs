@@ -55,6 +55,7 @@ use sql::plan::{MutationKind, Params, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
+use crate::persistence::Persister;
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -419,6 +420,17 @@ where
         let executor = self.executor.clone();
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
+
+        // TODO not sure if this is the right place
+        let (persistence_tx, persistence_rx) = self.switchboard.mpsc();
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::EnablePersistence(persistence_tx),
+        );
+        let mut persister = Persister::new(persistence_rx);
+        let executor = self.executor.clone();
+        let _persister_thread =
+            thread::spawn(move || executor.enter(|| persister.update())).join_on_drop();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -2048,12 +2060,6 @@ where
                 SequencedCommand::DropIndexes(trace_keys),
             )
         }
-    }
-
-    pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {
-        let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-        broadcast(&mut self.broadcast_tx, SequencedCommand::EnableFeedback(tx));
-        rx
     }
 
     pub fn shutdown(&mut self) {
