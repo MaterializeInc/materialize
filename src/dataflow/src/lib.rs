@@ -16,10 +16,10 @@ mod decode;
 mod metrics;
 mod operator;
 mod render;
+mod server;
 mod sink;
 
 pub mod logging;
-pub mod server;
 pub mod source;
 
 pub use server::{serve, BroadcastToken, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};

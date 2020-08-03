@@ -9,14 +9,12 @@
 
 //! An interactive dataflow server.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::net::TcpStream;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::rc::Weak;
 use std::sync::Mutex;
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -48,13 +46,12 @@ use expr::{Diff, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
-use self::metrics::Metrics;
-use super::render;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::operator::CollectionExt;
-use crate::source::SourceToken;
+use crate::render::{self, RenderState};
+use crate::server::metrics::Metrics;
 
 mod metrics;
 
@@ -183,7 +180,6 @@ pub enum WorkerFeedback {
 ///
 /// TODO(benesch): pass a config struct here, or find some other way to cut
 /// down on the number of arguments.
-#[allow(clippy::too_many_arguments)]
 pub fn serve<C>(
     sockets: Vec<Option<TcpStream>>,
     threads: usize,
@@ -227,19 +223,21 @@ where
             let worker_idx = timely_worker.index();
             Worker {
                 timely_worker,
-                pending_peeks: Vec::new(),
-                traces: TraceManager::new(worker_idx),
+                render_state: RenderState {
+                    traces: TraceManager::new(worker_idx),
+                    local_inputs: HashMap::new(),
+                    ts_source_mapping: HashMap::new(),
+                    ts_histories: Default::default(),
+                    ts_source_updates: Default::default(),
+                    dataflow_tokens: HashMap::new(),
+                },
                 logging_config: logging_config.clone(),
-                feedback_tx: None,
-                command_rx,
                 materialized_logger: None,
-                sink_tokens: HashMap::new(),
-                local_inputs: HashMap::new(),
+                command_rx,
+                pending_peeks: Vec::new(),
+                feedback_tx: None,
                 reported_frontiers: HashMap::new(),
                 metrics: Metrics::for_worker_id(worker_idx),
-                ts_histories: Default::default(),
-                ts_source_mapping: HashMap::new(),
-                ts_source_updates: Default::default(),
             }
             .run()
         })
@@ -284,19 +282,23 @@ struct Worker<'w, A>
 where
     A: Allocate,
 {
+    /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
-    pending_peeks: Vec<PendingPeek>,
-    traces: TraceManager,
+    /// The state associated with rendering dataflows.
+    render_state: RenderState,
+    // The configuration for Timely's logging framework.
     logging_config: Option<LoggingConfig>,
-    feedback_tx: Option<Pin<Box<dyn Sink<WorkerFeedbackWithMeta, Error = ()>>>>,
-    command_rx: UnboundedReceiver<SequencedCommand>,
+    /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
-    sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
-    local_inputs: HashMap<GlobalId, LocalInput>,
-    ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
-    ts_histories: TimestampDataUpdates,
-    ts_source_updates: TimestampMetadataUpdates,
+    /// The channel from which commands are drawn.
+    command_rx: UnboundedReceiver<SequencedCommand>,
+    /// Peek commands that are awaiting fulfillment.
+    pending_peeks: Vec<PendingPeek>,
+    /// The channel over which fontier information is reported.
+    feedback_tx: Option<Pin<Box<dyn Sink<WorkerFeedbackWithMeta, Error = ()>>>>,
+    /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Metrics bundle.
     metrics: Metrics,
 }
 
@@ -361,19 +363,22 @@ where
 
             // Install traces as maintained indexes
             for (log, (_, trace)) in t_traces {
-                self.traces
+                self.render_state
+                    .traces
                     .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
             for (log, (_, trace)) in d_traces {
-                self.traces
+                self.render_state
+                    .traces
                     .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
             }
             for (log, (_, trace)) in m_traces {
-                self.traces
+                self.render_state
+                    .traces
                     .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
@@ -406,7 +411,7 @@ where
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
-            self.traces.maintenance();
+            self.render_state.traces.maintenance();
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -441,13 +446,13 @@ where
 
     /// Report source drops or creations to the coordinator
     fn report_source_modifications(&mut self) {
-        let mut updates = self.ts_source_updates.borrow_mut();
+        let mut updates = self.render_state.ts_source_updates.borrow_mut();
         for source_update in updates.iter() {
             match source_update {
                 TimestampMetadataUpdate::StopTimestamping(id) => {
                     // A source was deleted
-                    self.ts_histories.borrow_mut().remove(id);
-                    self.ts_source_mapping.remove(id);
+                    self.render_state.ts_histories.borrow_mut().remove(id);
+                    self.render_state.ts_source_mapping.remove(id);
                     let connector = self.feedback_tx.as_mut().unwrap();
                     block_on(connector.send(WorkerFeedbackWithMeta {
                         worker_id: self.timely_worker.index(),
@@ -474,9 +479,15 @@ where
         if let Some(feedback_tx) = &mut self.feedback_tx {
             let mut upper = Antichain::new();
             let mut progress = Vec::new();
-            let ids = self.traces.traces.keys().cloned().collect::<Vec<_>>();
+            let ids = self
+                .render_state
+                .traces
+                .traces
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
             for id in ids {
-                if let Some(traces) = self.traces.get_mut(&id) {
+                if let Some(traces) = self.render_state.traces.get_mut(&id) {
                     // Read the upper frontier and compare to what we've reported.
                     traces.oks_mut().read_upper(&mut upper);
                     let lower = self
@@ -521,32 +532,23 @@ where
                         }
                     }
 
-                    render::build_dataflow(
-                        dataflow,
-                        &mut self.traces,
-                        self.timely_worker,
-                        &mut self.sink_tokens,
-                        &mut self.ts_source_mapping,
-                        self.ts_histories.clone(),
-                        self.ts_source_updates.clone(),
-                        &mut self.materialized_logger,
-                    );
+                    render::build_dataflow(self.timely_worker, &mut self.render_state, dataflow);
                 }
             }
 
             SequencedCommand::DropSources(names) => {
                 for name in names {
-                    self.local_inputs.remove(&name);
+                    self.render_state.local_inputs.remove(&name);
                 }
             }
             SequencedCommand::DropSinks(ids) => {
                 for id in ids {
-                    self.sink_tokens.remove(&id);
+                    self.render_state.dataflow_tokens.remove(&id);
                 }
             }
             SequencedCommand::DropIndexes(ids) => {
                 for id in ids {
-                    self.traces.del_trace(&id);
+                    self.render_state.traces.del_trace(&id);
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(id, false));
                     }
@@ -566,7 +568,7 @@ where
                 filter,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace_bundle = self.traces.get(&id).unwrap().clone();
+                let mut trace_bundle = self.render_state.traces.get(&id).unwrap().clone();
                 let timestamp_frontier = Antichain::from_elem(timestamp);
                 let empty_frontier = Antichain::new();
                 trace_bundle
@@ -628,7 +630,7 @@ where
             }
 
             SequencedCommand::AdvanceAllLocalInputs { advance_to } => {
-                for (_, local_input) in self.local_inputs.iter_mut() {
+                for (_, local_input) in self.render_state.local_inputs.iter_mut() {
                     local_input.capability.downgrade(&advance_to);
                 }
             }
@@ -640,9 +642,8 @@ where
                 on_type,
             } => {
                 render::build_local_input(
-                    &mut self.traces,
                     self.timely_worker,
-                    &mut self.local_inputs,
+                    &mut self.render_state,
                     index_id,
                     &name,
                     index,
@@ -653,7 +654,7 @@ where
             }
 
             SequencedCommand::Insert { id, updates } => {
-                if let Some(input) = self.local_inputs.get_mut(&id) {
+                if let Some(input) = self.render_state.local_inputs.get_mut(&id) {
                     let mut session = input.handle.session(input.capability.clone());
                     for update in updates {
                         assert!(update.timestamp >= *input.capability.time());
@@ -664,7 +665,9 @@ where
 
             SequencedCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
-                    self.traces.allow_compaction(id, frontier.borrow());
+                    self.render_state
+                        .traces
+                        .allow_compaction(id, frontier.borrow());
                 }
             }
 
@@ -684,11 +687,11 @@ where
             }
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
-                self.traces.del_all_traces();
+                self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
-                let mut timestamps = self.ts_histories.borrow_mut();
+                let mut timestamps = self.render_state.ts_histories.borrow_mut();
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
                     match ts_entries {
                         TimestampDataUpdate::BringYourOwn(entries) => {
@@ -738,6 +741,7 @@ where
                         }
                     }
                     let source = self
+                        .render_state
                         .ts_source_mapping
                         .get(&id)
                         .expect("Id should be present");
@@ -773,7 +777,7 @@ where
     }
 }
 
-pub(crate) struct LocalInput {
+pub struct LocalInput {
     pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
     pub capability: ActivateCapability<Timestamp>,
 }

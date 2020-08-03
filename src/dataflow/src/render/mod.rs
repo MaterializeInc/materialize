@@ -146,19 +146,35 @@ mod threshold;
 mod top_k;
 mod upsert;
 
-pub(crate) fn build_local_input<A: Allocate>(
-    manager: &mut TraceManager,
-    worker: &mut TimelyWorker<A>,
-    local_inputs: &mut HashMap<GlobalId, LocalInput>,
+/// Worker-local state used during rendering.
+pub struct RenderState {
+    /// The traces available for sharing across dataflows.
+    pub traces: TraceManager,
+    /// Handles to local inputs, keyed by ID.
+    pub local_inputs: HashMap<GlobalId, LocalInput>,
+    /// Handles to external sources, keyed by ID.
+    pub ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
+    /// Timestamp data updates for each source.
+    pub ts_histories: TimestampDataUpdates,
+    /// Communication channel for enabling/disabling timestamping on new/dropped
+    /// sources.
+    pub ts_source_updates: TimestampMetadataUpdates,
+    /// Tokens that should be dropped when a dataflow is dropped to clean up
+    /// associated state.
+    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+}
+
+pub fn build_local_input<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    render_state: &mut RenderState,
     index_id: GlobalId,
     name: &str,
     index: IndexDesc,
     on_type: RelationType,
 ) {
-    let worker_index = worker.index();
     let name = format!("Dataflow: {}", name);
-    let worker_logging = worker.log_register().get("timely");
-    worker.dataflow_core::<Timestamp, _, _, _>(&name, worker_logging, Box::new(()), |_, scope| {
+    let worker_logging = timely_worker.log_register().get("timely");
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         scope.clone().region(|region| {
             // A local input has two parts: 1) the arrangement/index where the
             // data is being stored, identified by the index_id
@@ -166,8 +182,10 @@ pub(crate) fn build_local_input<A: Allocate>(
             //    by the source_id, passed into this method as index.on_id
             let mut context = Context::<_, _, _, Timestamp>::new();
             let ((handle, capability), stream) = region.new_unordered_input();
-            if worker_index == 0 {
-                local_inputs.insert(index.on_id, LocalInput { handle, capability });
+            if region.index() == 0 {
+                render_state
+                    .local_inputs
+                    .insert(index.on_id, LocalInput { handle, capability });
             }
             let get_expr = RelationExpr::global_get(index.on_id, on_type);
             let err_collection = Collection::empty(region);
@@ -180,7 +198,9 @@ pub(crate) fn build_local_input<A: Allocate>(
             );
             match context.arrangement(&get_expr, &index.keys) {
                 Some(ArrangementFlavor::Local(oks, errs)) => {
-                    manager.set(index_id, TraceBundle::new(oks.trace, errs.trace));
+                    render_state
+                        .traces
+                        .set(index_id, TraceBundle::new(oks.trace, errs.trace));
                 }
                 _ => {
                     panic!("Arrangement alarmingly absent!");
@@ -190,23 +210,16 @@ pub(crate) fn build_local_input<A: Allocate>(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_dataflow<A: Allocate>(
+pub fn build_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    render_state: &mut RenderState,
     dataflow: DataflowDesc,
-    manager: &mut TraceManager,
-    worker: &mut TimelyWorker<A>,
-    dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
-    global_source_mappings: &mut HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
-    timestamp_histories: TimestampDataUpdates,
-    timestamp_channel: TimestampMetadataUpdates,
-    logger: &mut Option<Logger>,
 ) {
-    let worker_index = worker.index();
-    let worker_peers = worker.peers();
-    let worker_logging = worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely");
+    let mut materialized_logging: Option<Logger> = timely_worker.log_register().get("materialized");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
-    worker.dataflow_core::<Timestamp, _, _, _>(&name, worker_logging, Box::new(()), |_, scope| {
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
@@ -292,7 +305,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
                         true
                     } else {
-                        (usize::cast_from(uid.hashed()) % worker_peers) == worker_index
+                        (usize::cast_from(uid.hashed()) % region.peers()) == region.index()
                     };
 
                     let source_config = SourceConfig {
@@ -301,13 +314,12 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         scope: region,
                         // Distribute read responsibility among workers.
                         active: active_read_worker,
-                        timestamp_histories: timestamp_histories.clone(),
-                        timestamp_tx: timestamp_channel.clone(),
+                        timestamp_histories: render_state.ts_histories.clone(),
+                        timestamp_tx: render_state.ts_source_updates.clone(),
                         consistency,
                         timestamp_frequency: ts_frequency,
-                        worker_id: worker_index,
-                        // Assumption: worker.peers() == total number of workers in Materialize
-                        worker_count: worker_peers,
+                        worker_id: scope.index(),
+                        worker_count: scope.peers(),
                         encoding: encoding.clone(),
                     };
 
@@ -326,7 +338,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                         encoding,
                                         key_encoding,
                                         &dataflow.debug_name,
-                                        worker_index,
+                                        scope.index(),
                                         as_of_frontier.clone(),
                                         &mut src.operators,
                                         src.desc.typ(),
@@ -527,7 +539,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                     // We also need to keep track of this mapping globally to activate sources
                     // on timestamp advancement queries
-                    let prev = global_source_mappings.insert(uid, Rc::downgrade(&token));
+                    let prev = render_state
+                        .ts_source_mapping
+                        .insert(uid, Rc::downgrade(&token));
                     assert!(prev.is_none());
                 }
             }
@@ -535,7 +549,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
             let mut index_tokens = HashMap::new();
 
             for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
-                if let Some(traces) = manager.get_mut(id) {
+                if let Some(traces) = render_state.traces.get_mut(id) {
                     let token = traces.to_drop().clone();
                     let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
                         scope,
@@ -569,7 +583,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
             }
 
             for object in dataflow.objects_to_build.clone() {
-                context.ensure_rendered(object.relation_expr.as_ref(), region, worker_index);
+                context.ensure_rendered(object.relation_expr.as_ref(), region, scope.index());
                 if let Some(typ) = object.typ {
                     context.clone_from_to(
                         &object.relation_expr.as_ref(),
@@ -622,7 +636,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 let mut needed_index_tokens = Vec::new();
                 for import_id in dataflow.get_imports(&index_desc.on_id) {
                     if let Some(index_token) = index_tokens.get(&import_id) {
-                        if let Some(logger) = logger {
+                        if let Some(logger) = &mut materialized_logging {
                             // Log the dependency.
                             logger.log(MaterializedEvent::DataflowDependency {
                                 dataflow: *export_id,
@@ -638,7 +652,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
                 match context.arrangement(&get_expr, &index_desc.keys) {
                     Some(ArrangementFlavor::Local(oks, errs)) => {
-                        manager.set(
+                        render_state.traces.set(
                             *export_id,
                             TraceBundle::new(oks.trace.clone(), errs.trace.clone())
                                 .with_drop(tokens),
@@ -647,8 +661,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     Some(ArrangementFlavor::Trace(gid, _, _)) => {
                         // Duplicate of existing arrangement with id `gid`, so
                         // just create another handle to that arrangement.
-                        let trace = manager.get(&gid).unwrap().clone();
-                        manager.set(*export_id, trace);
+                        let trace = render_state.traces.get(&gid).unwrap().clone();
+                        render_state.traces.set(*export_id, trace);
                     }
                     None => {
                         panic!("Arrangement alarmingly absent!");
@@ -708,7 +722,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     needed_source_tokens,
                     needed_index_tokens,
                 ));
-                dataflow_drops.insert(sink_id, Box::new(tokens));
+                render_state
+                    .dataflow_tokens
+                    .insert(sink_id, Box::new(tokens));
             }
         });
     })
