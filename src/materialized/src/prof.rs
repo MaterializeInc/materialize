@@ -13,10 +13,7 @@ use jemalloc_ctl::raw;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::{
-    ffi::{CString},
-    time::Instant,
-};
+use std::{ffi::CString, time::Instant};
 use tempfile::NamedTempFile;
 
 #[derive(Copy, Clone, Debug)]
@@ -61,11 +58,13 @@ impl JemallocProfCtl {
 #[cfg(not(target_os = "macos"))]
 impl JemallocProfCtl {
     // Creates and returns the global singleton.
-    // This must only be called once - from the static initializer of
-    // `PROF_METADATA`.
     fn get() -> Option<Self> {
+        // SAFETY: "opt.prof" is documented as being readable and returning a bool:
+        // http://jemalloc.net/jemalloc.3.html#opt.prof
         let prof_enabled: bool = unsafe { raw::read(b"opt.prof\0") }.unwrap();
         if prof_enabled {
+            // SAFETY: "opt.prof_active" is documented as being readable and returning a bool:
+            // http://jemalloc.net/jemalloc.3.html#opt.prof_active
             let prof_active: bool = unsafe { raw::read(b"opt.prof_active\0") }.unwrap();
             let start_time = if prof_active {
                 Some(ProfStartTime::TimeImmemorial)
@@ -84,6 +83,8 @@ impl JemallocProfCtl {
     }
 
     pub fn activate(&mut self) -> Result<(), jemalloc_ctl::Error> {
+        // SAFETY: "prof.active" is documented as being readable and returning a bool:
+        // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", true) }?;
         if self.md.start_time.is_none() {
             self.md.start_time = Some(ProfStartTime::Instant(Instant::now()));
@@ -92,6 +93,8 @@ impl JemallocProfCtl {
     }
 
     pub fn deactivate(&mut self) -> Result<(), jemalloc_ctl::Error> {
+        // SAFETY: "prof.active" is documented as being readable and returning a bool:
+        // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", false) }?;
         self.md.start_time = None;
         Ok(())
@@ -101,6 +104,8 @@ impl JemallocProfCtl {
         let f = NamedTempFile::new()?;
         let path = CString::new(f.path().as_os_str().as_bytes().to_vec()).unwrap();
 
+        // SAFETY: "prof.dump" is documented as being writable and taking a C string as input:
+        // http://jemalloc.net/jemalloc.3.html#prof.dump
         unsafe { raw::write(b"prof.dump\0", path.as_ptr()) }?;
         Ok(f.into_file())
     }
