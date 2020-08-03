@@ -58,7 +58,7 @@ Some things you might want to do with indexes...
 ## Examples
 
 ```sql
-CREATE VIEW purchase_sum_by_region
+CREATE MATERIALIZED VIEW purchase_sum_by_region
 AS
     SELECT sum(purchase.amount) AS region_sum, region.id AS region_id
     FROM mysql_simple_region AS region
