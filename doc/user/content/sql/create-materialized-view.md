@@ -43,7 +43,7 @@ For more detail about how different clauses impact memory usage, check out our
 
 A brief mention on indexes: Materialize automatically creates an in-memory index
 which stores all columns in the `SELECT` query's result set; this is the crucial
-structure that the view maintains to provide low-latency access to your query's 
+structure that the view maintains to provide low-latency access to your query's
 results.
 
 Some things you might want to do with indexes...
