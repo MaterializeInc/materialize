@@ -10,14 +10,14 @@
 use lazy_static::lazy_static;
 
 use std::time::Instant;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[cfg(not(target_os = "macos"))]
 mod non_macos_imports {
     pub use jemalloc_ctl::raw;
     pub use std::ffi::CString;
     pub use std::os::unix::ffi::OsStrExt;
-    pub use std::sync::Arc;
-    pub use std::sync::Mutex;
     pub use tempfile::NamedTempFile;
 }
 #[cfg(not(target_os = "macos"))]
@@ -25,7 +25,7 @@ use non_macos_imports::*;
 
 #[derive(Copy, Clone, Debug)]
 // These constructors are dead on macOS
-#[allow(clippy::dead_code)]
+#[allow(dead_code)]
 pub enum ProfStartTime {
     Instant(Instant),
     TimeImmemorial,
