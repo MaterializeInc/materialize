@@ -746,6 +746,7 @@ impl State {
                 .unbounded_send(coord::Command::Describe {
                     name: statement_name.clone(),
                     stmt: Some(stmt),
+                    param_types: vec![],
                     session: mem::replace(&mut self.session, Session::dummy()),
                     tx,
                 })

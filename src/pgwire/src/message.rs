@@ -128,14 +128,13 @@ pub enum FrontendMessage {
         name: String,
         /// The SQL to parse.
         sql: String,
-        /// The number of parameter data types specified. It can be zero.
-        /// Note that this is not an indication of the number of parameters that
-        /// might appear in the query string, but only the number that the
-        /// frontend wants to prespecify types for.
-        parameter_data_type_count: i16,
-        /// The OID of each parameter data type. Placing a zero here is
-        /// equivalent to leaving the type unspecified.
-        parameter_data_types: Vec<i32>,
+        /// The OID of each parameter data type for which the client wants to
+        /// prespecify types. A zero OID is equivalent to leaving the type
+        /// unspecified.
+        ///
+        /// The number of specified parameter data types can be less than the
+        /// number of parameters specified in the query.
+        param_types: Vec<u32>,
     },
 
     /// Describe an existing prepared statement.

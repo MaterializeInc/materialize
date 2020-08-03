@@ -1670,6 +1670,7 @@ dependencies = [
  "predicates",
  "prometheus",
  "rdkafka-sys",
+ "repr",
  "rlimit",
  "serde_json",
  "stream-cancel",

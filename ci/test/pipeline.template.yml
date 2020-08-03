@@ -191,6 +191,16 @@ steps:
           config: test/lang/js/mzcompose.yml
           run: js
 
+  - id: lang-java
+    label: ":java: tests"
+    depends_on: build
+    timeout_in_minutes: 10
+    inputs: [test/lang/java]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          config: test/lang/java/mzcompose.yml
+          run: java-smoketest
+
   - id: deploy
     label: ":rocket: Deploy"
     depends_on:
