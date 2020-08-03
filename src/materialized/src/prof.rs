@@ -13,14 +13,31 @@ use jemalloc_ctl::raw;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::{ffi::CString, time::Instant};
+use std::time::Instant;
 use tempfile::NamedTempFile;
 
+#[cfg(not(target_os = "macos"))]
+mod non_macos_imports {
+    pub use jemalloc_ctl::raw;
+    pub use std::ffi::CString;
+    pub use std::os::unix::ffi::OsStrExt;
+    pub use std::sync::Arc;
+    pub use std::sync::Mutex;
+    pub use tempfile::NamedTempFile;
+}
+#[cfg(not(target_os = "macos"))]
+use non_macos_imports::*;
+
 #[derive(Copy, Clone, Debug)]
+#[cfg(not(target_os = "macos"))]
 pub enum ProfStartTime {
     Instant(Instant),
     TimeImmemorial,
 }
+
+#[derive(Copy, Clone, Debug)]
+#[cfg(target_os = "macos")]
+pub struct ProfStartTime;
 
 #[derive(Copy, Clone, Debug)]
 pub struct JemallocProfMetadata {
