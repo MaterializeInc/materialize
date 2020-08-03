@@ -35,7 +35,7 @@ _NOT NULL_ | Provide a `NOT NULL` constraint if a column is not nullable. All co
 ### Restrictions
 
 Tables will not persist any data that is inserted. This means that restarting a
-`materialized` instance will lose any data that was previously stored in a table.
+Materialize instance will lose any data that was previously stored in a table.
 
 Additionally, tables do not currently support:
     - Primary keys

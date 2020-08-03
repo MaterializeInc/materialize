@@ -27,7 +27,7 @@ _table&lowbar;name_ | The name of the table to drop.
 ### Restrictions
 
 Tables will not persist any data that is inserted. This means that restarting a
-`materialized` instance will lose any data that was previously stored in a table.
+Materialize instance will lose any data that was previously stored in a table.
 
 Additionally, tables do not currently support:
     - Primary keys
@@ -48,7 +48,7 @@ We can create a table `t` with the following statement:
 CREATE TABLE t (a int, b text NOT NULL);
 ```
 
-Once a table is created, we can inspect the table with various `SHOW` commands.
+Once a table is created, we can inspect it with various `SHOW` commands.
 
 ```sql
 SHOW TABLES;

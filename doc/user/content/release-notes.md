@@ -65,7 +65,7 @@ Wrap your release notes at the 80 character mark.
 
 - Support casts from [`boolean`](/sql/types/boolean) to [`int`](/sql/types/int).
 
-- Support [CREATE TABLE](sql/create-table.md), [DROP TABLE](sql/drop-table.md) and [INSERT INTO TABLE](sql/insert.md).
+- Support [CREATE TABLE](sql/create-table.md), [DROP TABLE](sql/drop-table.md) and [INSERT](sql/insert.md) statements.
 
 <span id="v0.4.0"></span>
 ## v0.4.0
