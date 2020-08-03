@@ -424,7 +424,14 @@ impl RelationExpr {
                 result
             }
             RelationExpr::TopK { input, .. } => input.typ(),
-            RelationExpr::Negate { input } => input.typ(),
+            RelationExpr::Negate { input } => {
+                // Although negate may have distinct records for each key,
+                // the multiplicity is -1 rather than 1. This breaks many
+                // of the optimization uses of "keys".
+                let mut typ = input.typ();
+                typ.keys.clear();
+                typ
+            }
             RelationExpr::Threshold { input } => input.typ(),
             RelationExpr::Union { left, right } => {
                 let left_typ = left.typ();
