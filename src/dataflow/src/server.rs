@@ -530,6 +530,7 @@ where
                         self.ts_histories.clone(),
                         self.ts_source_updates.clone(),
                         &mut self.materialized_logger,
+                        &mut self.persistence_tx,
                     );
                 }
             }

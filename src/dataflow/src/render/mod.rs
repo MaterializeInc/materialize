@@ -100,6 +100,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -108,6 +109,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::{AsCollection, Collection};
+use futures::sink::Sink;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
@@ -200,6 +202,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
     timestamp_histories: TimestampDataUpdates,
     timestamp_channel: TimestampMetadataUpdates,
     logger: &mut Option<Logger>,
+    persistence_tx: &mut Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
 ) {
     let worker_index = worker.index();
     let worker_peers = worker.peers();
@@ -263,7 +266,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     consistency,
                     max_ts_batch: _,
                     ts_frequency,
-                    persistence: _,
+                    persistence,
                 } = src.connector
                 {
                     let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
@@ -310,6 +313,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         // Assumption: worker.peers() == total number of workers in Materialize
                         worker_count: worker_peers,
                         encoding: encoding.clone(),
+                        persistence_tx: if let Some(_) = persistence {
+                            persistence_tx
+                        } else {
+                            &mut None
+                        },
                     };
 
                     let capability = if let Envelope::Upsert(key_encoding) = envelope {
