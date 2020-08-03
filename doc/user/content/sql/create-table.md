@@ -27,7 +27,7 @@ Field | Use
 ------|-----
 _table&lowbar;name_ | A name for the table.
 _col&lowbar;name_ | The name of the column to be created in the table.
-_col&lowbar;type_ | The type of the column indicated by _col_name_.
+_col&lowbar;type_ | The data type of the column indicated by _col_name_.
 _NOT NULL_ | Provide a `NOT NULL` constraint if a column is not nullable. All columns without this constraint will be nullable.
 
 ## Details

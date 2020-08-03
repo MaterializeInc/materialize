@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="541" height="195">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="74" height="32" rx="10"/>
+   <rect x="31"
+         y="1"
+         width="74"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="41" y="21">CREATE</text>
+   <rect x="127" y="3" width="64" height="32" rx="10"/>
+   <rect x="125"
+         y="1"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="135" y="21">TABLE</text>
+   <rect x="211" y="3" width="92" height="32"/>
+   <rect x="209" y="1" width="92" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="219" y="21">table_name</text>
+   <rect x="45" y="113" width="24" height="32" rx="10"/>
+   <rect x="43"
+         y="111"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="53" y="131">(</text>
+   <rect x="109" y="113" width="80" height="32"/>
+   <rect x="107" y="111" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="117" y="131">col_name</text>
+   <rect x="209" y="113" width="72" height="32"/>
+   <rect x="207" y="111" width="72" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="217" y="131">col_type</text>
+   <rect x="321" y="145" width="88" height="32" rx="10"/>
+   <rect x="319"
+         y="143"
+         width="88"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="329" y="163">NOT NULL</text>
+   <rect x="109" y="69" width="24" height="32" rx="10"/>
+   <rect x="107"
+         y="67"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="117" y="87">,</text>
+   <rect x="469" y="113" width="24" height="32" rx="10"/>
+   <rect x="467"
+         y="111"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="477" y="131">)</text>
+   <path class="line"
+         d="m19 17 h2 m0 0 h10 m74 0 h10 m0 0 h10 m64 0 h10 m0 0 h10 m92 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-322 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m24 0 h10 m20 0 h10 m80 0 h10 m0 0 h10 m72 0 h10 m20 0 h10 m0 0 h98 m-128 0 h20 m108 0 h20 m-148 0 q10 0 10 10 m128 0 q0 -10 10 -10 m-138 10 v12 m128 0 v-12 m-128 12 q0 10 10 10 m108 0 q10 0 10 -10 m-118 10 h10 m88 0 h10 m-340 -32 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m340 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-340 0 h10 m24 0 h10 m0 0 h296 m20 44 h10 m24 0 h10 m-488 0 h20 m468 0 h20 m-508 0 q10 0 10 10 m488 0 q0 -10 10 -10 m-498 10 v46 m488 0 v-46 m-488 46 q0 10 10 10 m468 0 q10 0 10 -10 m-478 10 h10 m0 0 h458 m23 -66 h-3"/>
+   <polygon points="531 127 539 123 539 131"/>
+   <polygon points="531 127 523 123 523 131"/>
+</svg>
