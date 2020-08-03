@@ -39,6 +39,7 @@ use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
     SinkConnector, SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    WorkerPersistenceData,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -131,6 +132,7 @@ where
     logging_granularity: Option<u64>,
     executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
+    persistence_rx: Option<comm::mpsc::Receiver<WorkerPersistenceData>>,
     /// The startup time of the coordinator, from which local input timstamps are generated
     /// relative to.
     start_time: Instant,
@@ -191,6 +193,14 @@ where
         let logging = config.logging;
         let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
         broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
+
+        // TODO not sure if this is the right place
+        let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
+        broadcast(
+            &mut broadcast_tx,
+            SequencedCommand::EnablePersistence(persistence_tx),
+        );
+
         let mut coord = Self {
             switchboard: config.switchboard,
             broadcast_tx,
@@ -214,6 +224,7 @@ where
             timestamp_config: config.timestamp,
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
+            persistence_rx: Some(persistence_rx),
             start_time: Instant::now(),
             closed_up_to: 1,
             read_lower_bound: 1,
@@ -421,13 +432,7 @@ where
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
 
-        // TODO not sure if this is the right place
-        let (persistence_tx, persistence_rx) = self.switchboard.mpsc();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::EnablePersistence(persistence_tx),
-        );
-        let mut persister = Persister::new(persistence_rx);
+        let mut persister = Persister::new(self.persistence_rx.take().unwrap());
         let executor = self.executor.clone();
         let _persister_thread =
             thread::spawn(move || executor.enter(|| persister.update())).join_on_drop();
