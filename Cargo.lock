@@ -3350,9 +3350,9 @@ dependencies = [
 
 [[package]]
 name = "stacker"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72dd941b456e1c006d6b9f27c526d5b69281288aeea8cba82c19d3843d8ccdd2"
+checksum = "8376bcbe35bcfba504adfbcde5aeb019ead0b43ae5c0a071e0570ee3377de5a1"
 dependencies = [
  "cc",
  "cfg-if",
