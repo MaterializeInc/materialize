@@ -312,10 +312,11 @@ impl RedundantJoin {
             }
 
             RelationExpr::Negate { input } => {
-                // Negate changes the sign on its multiplicities,
-                // which means "distinct" counts would now be -1.
-                // We set `exact` to false to inhibit the optimization,
-                // but should probably fix `.keys` instead.
+                // Negate does not guarantee that the multiplicity of
+                // each source record it at least one. This could have
+                // been a problem in `Union`, where we might report
+                // that the union of positive and negative records is
+                // "exact": cancelations would make this false.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
                     prov.exact = false;
