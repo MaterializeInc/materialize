@@ -122,6 +122,7 @@ impl Server {
                     (&Method::GET, "/") => handle_home(req).await,
                     (&Method::GET, "/metrics") => handle_prometheus(req, start_time).await,
                     (&Method::GET, "/status") => handle_status(req, start_time).await,
+                    (&Method::GET, "/favicon.ico") => handle_favicon().await,
                     (&Method::GET, "/internal/catalog") => {
                         handle_internal_catalog(req, cmdq_tx).await
                     }
@@ -132,6 +133,11 @@ impl Server {
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await
     }
+}
+
+async fn handle_favicon() -> Result<Response<Body>, anyhow::Error> {
+    let favicon_slice: &'static [u8] = include_bytes!("favicon.ico");
+    Ok(Response::new(Body::from(favicon_slice)))
 }
 
 async fn handle_home(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
