@@ -28,9 +28,8 @@ use prometheus::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::prof::JemallocProfCtl;
-use crate::prof::{JemallocProfMetadata, ProfStartTime, PROF_METADATA};
 use header::HeaderValue;
+use prof::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_METADATA};
 
 use ore::netio::SniffedStream;
 use url::form_urlencoded;

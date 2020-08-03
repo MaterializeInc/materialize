@@ -1665,7 +1665,6 @@ dependencies = [
  "getopts",
  "hyper",
  "itertools",
- "jemalloc-ctl",
  "jemallocator",
  "krb5-src",
  "lazy_static",
@@ -1680,6 +1679,7 @@ dependencies = [
  "postgres",
  "postgres-openssl",
  "predicates",
+ "prof",
  "prometheus",
  "rdkafka-sys",
  "repr",
@@ -2555,6 +2555,16 @@ dependencies = [
  "lazy_static",
  "libc",
  "libflate",
+]
+
+[[package]]
+name = "prof"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "jemalloc-ctl",
+ "lazy_static",
+ "tempfile",
 ]
 
 [[package]]

@@ -19,6 +19,7 @@ members = [
     "src/peeker",
     "src/pgrepr",
     "src/pgwire",
+    "src/prof",
     "src/repr",
     "src/sql",
     "src/sqllogictest",

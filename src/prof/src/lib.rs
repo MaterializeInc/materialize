@@ -7,21 +7,32 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use lazy_static::lazy_static;
-
 use std::time::Instant;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use lazy_static::lazy_static;
+
 #[cfg(not(target_os = "macos"))]
 mod non_macos_imports {
-    pub use jemalloc_ctl::raw;
     pub use std::ffi::CString;
     pub use std::os::unix::ffi::OsStrExt;
+
+    pub use jemalloc_ctl::raw;
     pub use tempfile::NamedTempFile;
 }
 #[cfg(not(target_os = "macos"))]
 use non_macos_imports::*;
+
+lazy_static! {
+    pub static ref PROF_METADATA: Option<Arc<Mutex<JemallocProfCtl>>> = {
+        if let Some(md) = JemallocProfCtl::get() {
+            Some(Arc::new(Mutex::new(md)))
+        } else {
+            None
+        }
+    };
+}
 
 #[derive(Copy, Clone, Debug)]
 // These constructors are dead on macOS
@@ -118,14 +129,4 @@ impl JemallocProfCtl {
         unsafe { raw::write(b"prof.dump\0", path.as_ptr()) }?;
         Ok(f.into_file())
     }
-}
-
-lazy_static! {
-    pub static ref PROF_METADATA: Option<Arc<Mutex<JemallocProfCtl>>> = {
-        if let Some(md) = JemallocProfCtl::get() {
-            Some(Arc::new(Mutex::new(md)))
-        } else {
-            None
-        }
-    };
 }
