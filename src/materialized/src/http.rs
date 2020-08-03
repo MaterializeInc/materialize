@@ -15,13 +15,13 @@ use std::{
     time::Instant,
 };
 
-use anyhow::anyhow;
-use anyhow::bail;
+
+
 use futures::channel::mpsc::UnboundedSender;
 use futures::future::TryFutureExt;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-use hyper::body::HttpBody;
+
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
 use openssl::ssl::SslAcceptor;
@@ -33,9 +33,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::prof::JemallocProfCtl;
 use crate::prof::{JemallocProfMetadata, ProfStartTime, PROF_METADATA};
 use header::HeaderValue;
-use jemalloc_ctl::raw;
+
 use ore::netio::SniffedStream;
-use url::{form_urlencoded, Url};
+use url::{form_urlencoded};
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(

@@ -14,7 +14,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::{
-    ffi::{CStr, CString},
+    ffi::{CString},
     time::Instant,
 };
 use tempfile::NamedTempFile;
