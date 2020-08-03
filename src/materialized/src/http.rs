@@ -15,8 +15,6 @@ use std::{
     time::Instant,
 };
 
-
-
 use futures::channel::mpsc::UnboundedSender;
 use futures::future::TryFutureExt;
 use futures::sink::SinkExt;
@@ -35,7 +33,7 @@ use crate::prof::{JemallocProfMetadata, ProfStartTime, PROF_METADATA};
 use header::HeaderValue;
 
 use ore::netio::SniffedStream;
-use url::{form_urlencoded};
+use url::form_urlencoded;
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
@@ -255,10 +253,10 @@ async fn handle_prof(
     prof_md: Option<JemallocProfMetadata>,
 ) -> Result<Response<Body>, anyhow::Error> {
     let (prof_status, can_activate, is_active) = match prof_md {
-        None => (format!("Jemalloc profiling disabled"), false, false),
+        None => ("Jemalloc profiling disabled".to_string(), false, false),
         Some(md) => match md.start_time {
             Some(ProfStartTime::TimeImmemorial) => (
-                format!("Jemalloc profiling active since server start"),
+                "Jemalloc profiling active since server start".to_string(),
                 false,
                 true,
             ),
@@ -271,7 +269,7 @@ async fn handle_prof(
                 true,
             ),
             None => (
-                format!("Jemalloc profiling enabled but inactive"),
+                "Jemalloc profiling enabled but inactive".to_string(),
                 true,
                 false,
             ),
