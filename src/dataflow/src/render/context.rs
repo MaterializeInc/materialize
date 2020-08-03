@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Management of arrangements while building a dataflow.
+//! Management of dataflow-local state, like arrangements, while building a
+//! dataflow.
 
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
-
-use timely::dataflow::{Scope, ScopeParent};
-use timely::progress::{timestamp::Refines, Timestamp};
+use std::rc::Rc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -21,9 +21,15 @@ use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
+use timely::dataflow::{Scope, ScopeParent};
+use timely::progress::timestamp::Refines;
+use timely::progress::{Antichain, Timestamp};
 
-use dataflow_types::DataflowError;
+use dataflow_types::{DataflowDesc, DataflowError};
 use expr::{GlobalId, ScalarExpr};
+use ore::iter::IteratorExt;
+
+use crate::source::SourceToken;
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
@@ -65,6 +71,23 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    /// The debug name of the dataflow associated with this context.
+    pub debug_name: String,
+    /// When set, `as_of` indicates a frontier that can be used to compact input
+    /// timestamps without affecting the results. We *should* apply it, to
+    /// sources and imported traces, both because it improves performance, and
+    /// because potentially incorrect results are visible in sinks.
+    pub as_of_frontier: Antichain<dataflow_types::Timestamp>,
+    /// The source tokens for all sources that have been built in this context.
+    pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
+    /// The index tokens for all indexes that have been built in this context.
+    pub index_tokens: HashMap<GlobalId, Rc<dyn Any>>,
+    /// A hacky identifier for the DataflowDesc associated with this context.
+    ///
+    /// This is stopgap measure so dropping an index and recreating one with the
+    /// same name does not result in timestamp/reading from source errors. Use
+    /// an export id to distinguish between different dataflows.
+    pub first_export_id: GlobalId,
     /// Dataflow local collections.
     pub collections: HashMap<P, (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
     /// Dataflow local arrangements.
@@ -91,8 +114,42 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Creates a new empty Context.
-    pub fn new() -> Self {
+    pub fn for_dataflow(dataflow: &DataflowDesc) -> Self {
+        let as_of_frontier = dataflow
+            .as_of
+            .clone()
+            .unwrap_or_else(|| Antichain::from_elem(0));
+
+        // TODO (materialize#1720): replace `first_export_id` by some form of
+        // dataflow identifier.
+        assert!(
+            !dataflow
+                .source_imports
+                .iter()
+                .map(|(id, _src)| id)
+                .has_duplicates(),
+            "computation of unique IDs assumes a source appears no more than once per dataflow"
+        );
+        let first_export_id = if let Some((id, _, _)) = dataflow.index_exports.first() {
+            *id
+        } else if let Some((id, _)) = dataflow.sink_exports.first() {
+            *id
+        } else if dataflow.source_imports.is_empty()
+            && dataflow.index_imports.is_empty()
+            && dataflow.objects_to_build.is_empty()
+        {
+            // Dummy dataflow, so ID doesn't matter.
+            GlobalId::System(0)
+        } else {
+            unreachable!("unable to determine dataflow ID");
+        };
+
         Self {
+            debug_name: dataflow.debug_name.clone(),
+            as_of_frontier,
+            first_export_id,
+            source_tokens: HashMap::new(),
+            index_tokens: HashMap::new(),
             collections: HashMap::new(),
             local: HashMap::new(),
             trace: HashMap::new(),
