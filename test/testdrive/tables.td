@@ -9,6 +9,9 @@
 
 > CREATE TABLE t (a int, b text NOT NULL)
 
+! CREATE TABLE s (a int DEFAULT 1)
+CREATE TABLE with column constraint: DEFAULT 1 not yet supported
+
 > SELECT * FROM t;
 
 > SHOW TABLES;
@@ -49,6 +52,8 @@ a    b
 2    "b"
 3    "c"
 
+! INSERT INTO t DEFAULT VALUES;
+INSERT DEFAULT VALUES not yet supported
 
 ! INSERT INTO t SELECT * FROM t;
 INSERT body SELECT * FROM t not yet supported
@@ -73,6 +78,8 @@ a       b
 <null>  "d"
 
 > DROP TABLE t;
+
+> DROP TABLE IF EXISTS t;
 
 ! SELECT * from t;
 unknown catalog item 't'

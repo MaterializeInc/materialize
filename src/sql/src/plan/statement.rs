@@ -38,6 +38,7 @@ use sql_parser::ast::{
     ShowStatementFilter, SqlOption, Statement, Value,
 };
 
+use crate::ast::InsertSource;
 use crate::catalog::{Catalog, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -1836,31 +1837,38 @@ fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow
             let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
                 table.desc()?.iter().collect();
 
-            if let SetExpr::Values(values) = &source.body {
-                let mut updates = Vec::with_capacity(values.0.len());
-                for to_update in &values.0 {
-                    if to_update.len() != column_info.len() {
-                        bail!(
-                            "expected to insert {} values, found {}",
-                            column_info.len(),
-                            values.0.len()
-                        );
+            match source {
+                InsertSource::Query(query) => {
+                    if let SetExpr::Values(values) = &query.body {
+                        let mut updates = Vec::with_capacity(values.0.len());
+                        for to_update in &values.0 {
+                            if to_update.len() != column_info.len() {
+                                bail!(
+                                    "expected to insert {} values, found {}",
+                                    column_info.len(),
+                                    values.0.len()
+                                );
+                            }
+                            let datums: Vec<Datum> = to_update
+                                .iter()
+                                .enumerate()
+                                .map(|(index, value)| {
+                                    generate_datum_from_value(value, column_info[index])
+                                })
+                                .collect::<Result<Vec<Datum>, anyhow::Error>>()?;
+                            updates.push((Row::pack(datums), 1));
+                        }
+                        Ok(Plan::SendDiffs {
+                            id: table.id(),
+                            updates,
+                            affected_rows: values.0.len(),
+                            kind: MutationKind::Insert,
+                        })
+                    } else {
+                        unsupported!(format!("INSERT body {}", query.body));
                     }
-                    let datums: Vec<Datum> = to_update
-                        .iter()
-                        .enumerate()
-                        .map(|(index, value)| generate_datum_from_value(value, column_info[index]))
-                        .collect::<Result<Vec<Datum>, anyhow::Error>>()?;
-                    updates.push((Row::pack(datums), 1));
                 }
-                Ok(Plan::SendDiffs {
-                    id: table.id(),
-                    updates,
-                    affected_rows: values.0.len(),
-                    kind: MutationKind::Insert,
-                })
-            } else {
-                unsupported!(format!("INSERT body {}", source.body));
+                InsertSource::DefaultValues => unsupported!("INSERT DEFAULT VALUES"),
             }
         }
         other => unreachable!(format!("{:?}", other)),

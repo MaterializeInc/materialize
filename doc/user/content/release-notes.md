@@ -62,7 +62,10 @@ Wrap your release notes at the 80 character mark.
 - Improve performance of `TopK` operator {{% gh 3758 %}}.
 
 - Handle Snappy-encoded Avro OCF files.
+
 - Support casts from [`boolean`](/sql/types/boolean) to [`int`](/sql/types/int).
+
+- Support [CREATE TABLE](sql/create-table.md), [DROP TABLE](sql/drop-table.md) and [INSERT INTO TABLE](sql/insert.md).
 
 <span id="v0.4.0"></span>
 ## v0.4.0
