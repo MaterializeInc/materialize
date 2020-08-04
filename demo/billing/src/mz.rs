@@ -211,9 +211,9 @@ pub async fn validate_sink(
 
 fn billing_agg_view(unit: &str) -> String {
     format!("CREATE MATERIALIZED VIEW billing_agg_by_{unit} AS
-SELECT date_trunc as {unit}, client_id, meter, cpu_num, memory_gb, disk_gb, sum(value)
+SELECT date_trunc('{unit}', interval_start::timestamp) AS {unit}, client_id, meter, cpu_num, memory_gb, disk_gb, sum(value)
 FROM billing_records
-GROUP BY date_trunc('{unit}', interval_start::timestamp), client_id, meter, cpu_num, memory_gb, disk_gb",
+GROUP BY {unit}, client_id, meter, cpu_num, memory_gb, disk_gb",
 unit = unit)
 }
 
