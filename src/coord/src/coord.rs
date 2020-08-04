@@ -248,7 +248,17 @@ where
                 //about how it was built. If we start building multiple sinks and/or indexes
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
+                    // TODO is there a nicer way to do this destructuring
+                    // Tell the persister that we have a new source to persist
+                    if let SourceConnector::External { persistence, .. } = &source.connector {
+                        if let Some(persistence) = &persistence {
+                            coord
+                                .persistence_metadata_tx
+                                .send(PersistenceMetadata::AddSource(*id, persistence.clone()))
+                                .expect("Failed to send CREATE SOURCE notice to persister");
+                        };
+                    };
                     coord.views.insert(*id, ViewState::new(false, vec![]));
                 }
                 CatalogItem::View(view) => {
@@ -1043,6 +1053,19 @@ where
                         dataflow,
                     );
                 }
+
+                // TODO is there a nicer way to do this destructuring
+                // Tell the persister that we have a new source to persist
+                if let SourceConnector::External { persistence, .. } = &source.connector {
+                    if let Some(persistence) = &persistence {
+                        self.persistence_metadata_tx
+                            .send(PersistenceMetadata::AddSource(
+                                source_id,
+                                persistence.clone(),
+                            ))
+                            .expect("Failed to send CREATE SOURCE notice to persister");
+                    };
+                };
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),

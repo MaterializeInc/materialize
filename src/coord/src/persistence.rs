@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use futures::executor::block_on;
+use futures::stream::StreamExt;
 use log::info;
 
 use dataflow_types::{Persistence, WorkerPersistenceData};
@@ -41,15 +42,40 @@ impl Persister {
 
     pub fn update(&mut self) {
         loop {
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(1));
             info!("persister thread awoke");
-            self.update_persistence();
+            block_on(async {
+                self.update_persistence().await;
+            });
         }
     }
 
-    fn update_persistence(&mut self) {
-        while let Ok(_) = block_on(self.data_rx.try_recv()) {
-            log::info!("received some data to be persisted");
+    async fn update_persistence(&mut self) {
+        loop {
+            match self.metadata_rx.try_recv() {
+                Ok(metadata) => match metadata {
+                    PersistenceMetadata::AddSource(_, _) => {
+                        log::info!("persister told to add a source")
+                    }
+                    PersistenceMetadata::DropSource(_) => {
+                        log::info!("persister told to drop a source")
+                    }
+                },
+                Err(e) => {
+                    log::info!("try recv returned err {:?}", e);
+                    break;
+                }
+            };
+        }
+
+        loop {
+            match tokio::time::timeout(Duration::from_secs(1), self.data_rx.next()).await {
+                Ok(None) => break,
+                Ok(Some(_)) => {
+                    log::info!("received some data to be persisted");
+                }
+                Err(tokio::time::Elapsed { .. }) => break,
+            }
         }
     }
 }
