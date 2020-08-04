@@ -10,7 +10,7 @@ menu:
 
 ## Conceptual framework
 
-`INSERT` statements inserting data into [tables](create-table.md).
+`INSERT` statements inserting data into [tables](../create-table).
 
 ## Syntax
 

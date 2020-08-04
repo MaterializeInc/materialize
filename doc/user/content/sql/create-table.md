@@ -10,7 +10,7 @@ menu:
 
 ## Conceptual framework
 
-Tables store non-streaming data that is inserted via [INSERT](insert.md) statements.
+Tables store non-streaming data that is inserted via [INSERT](../insert) statements.
 
 ### When to create a table
 

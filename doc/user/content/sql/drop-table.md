@@ -10,7 +10,7 @@ menu:
 
 ## Conceptual framework
 
-[Tables](create-table.md) store non-streaming data that is inserted via [INSERT](insert.md)
+[Tables](../create-table) store non-streaming data that is inserted via [INSERT](../insert)
 statements. `DROP TABLE` removes tables from your Materialize instance.
 
 ## Syntax
