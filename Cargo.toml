@@ -2,6 +2,7 @@
 members = [
     "demo/billing",
     "fuzz",
+    "src/alloc",
     "src/avro",
     "src/aws-util",
     "src/ccsr",
@@ -19,7 +20,6 @@ members = [
     "src/peeker",
     "src/pgrepr",
     "src/pgwire",
-    "src/prof",
     "src/repr",
     "src/sql",
     "src/sqllogictest",

@@ -13,6 +13,19 @@ use std::time::Instant;
 
 use lazy_static::lazy_static;
 
+// Disable jemalloc on macOS, as it is not well supported [0][1][2].
+// The issues present as runaway latency on load test workloads that are
+// comfortably handled by the macOS system allocator. The hypothesis is that
+// the lack of background thread support on macOS is to blame, so consider
+// re-evaluating if that ever gets fixed.
+//
+// [0]: https://github.com/jemalloc/jemalloc/issues/26
+// [1]: https://github.com/jemalloc/jemalloc/issues/843
+// [2]: https://github.com/jemalloc/jemalloc/issues/1467
+#[cfg(not(target_os = "macos"))]
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 #[cfg(not(target_os = "macos"))]
 mod non_macos_imports {
     pub use std::ffi::CString;

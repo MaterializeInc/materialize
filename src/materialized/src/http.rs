@@ -19,20 +19,18 @@ use futures::channel::mpsc::UnboundedSender;
 use futures::future::TryFutureExt;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-
-use hyper::{header, service, Body, Method, Request, Response};
+use hyper::header::{self, HeaderValue};
+use hyper::{service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
 use openssl::ssl::SslAcceptor;
 use prometheus::{
     register_gauge_vec, register_int_gauge_vec, Encoder, Gauge, GaugeVec, IntGauge, IntGaugeVec,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-
-use header::HeaderValue;
-use prof::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_CTL};
-
-use ore::netio::SniffedStream;
 use url::form_urlencoded;
+
+use alloc::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_CTL};
+use ore::netio::SniffedStream;
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(

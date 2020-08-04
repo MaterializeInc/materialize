@@ -48,6 +48,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "jemalloc-ctl",
+ "jemallocator",
+ "lazy_static",
+ "tempfile",
+]
+
+[[package]]
 name = "ansi_term"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1650,6 +1661,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "materialized"
 version = "0.4.1-dev"
 dependencies = [
+ "alloc",
  "anyhow",
  "assert_cmd",
  "async-trait",
@@ -1665,7 +1677,6 @@ dependencies = [
  "getopts",
  "hyper",
  "itertools",
- "jemallocator",
  "krb5-src",
  "lazy_static",
  "log",
@@ -1679,7 +1690,6 @@ dependencies = [
  "postgres",
  "postgres-openssl",
  "predicates",
- "prof",
  "prometheus",
  "rdkafka-sys",
  "repr",
@@ -2555,16 +2565,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "libflate",
-]
-
-[[package]]
-name = "prof"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "jemalloc-ctl",
- "lazy_static",
- "tempfile",
 ]
 
 [[package]]
