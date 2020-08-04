@@ -173,11 +173,10 @@ func_length ::=
 func_substring ::=
   'substring' '(' str ',' start_pos (',' len)? ')'
 join_expr ::=
-    select_pred 'CROSS' 'JOIN' table_ref select_post
-	| select_pred join_type? 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
-	| select_pred 'NATURAL' join_type? 'JOIN' table_ref select_post
+    select_pred ('CROSS' | 'NATURAL' join_type?) 'JOIN' table_ref select_post
+	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
 join_type ::=
-    ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' )
+    ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
 kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
@@ -219,6 +218,13 @@ show_sources ::=
   'SHOW' 'SOURCES' ('FROM' schema_name)?
 show_views ::=
   'SHOW' ('MATERIALIZED' | 'FULL')? 'VIEWS' ('FROM' schema_name)?
+table_ref ::=
+  (
+    table_name
+    | 'LATERAL'? '(' select_stmt ')'
+    | 'LATERAL'? table_func_call
+    | '(' join_expr ')'
+  ) ('AS'? table_alias ('(' col_alias (',' col_alias)* ')'))?
 tail_stmt ::=
     'TAIL' object_name
     ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
