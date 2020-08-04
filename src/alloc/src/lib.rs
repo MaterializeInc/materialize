@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use lazy_static::lazy_static;
+
+#[cfg(not(target_os = "macos"))]
+use {jemalloc_ctl::raw, std::ffi::CString, std::os::unix::ffi::OsStrExt, tempfile::NamedTempFile};
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -26,17 +28,6 @@ use lazy_static::lazy_static;
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-#[cfg(not(target_os = "macos"))]
-mod non_macos_imports {
-    pub use std::ffi::CString;
-    pub use std::os::unix::ffi::OsStrExt;
-
-    pub use jemalloc_ctl::raw;
-    pub use tempfile::NamedTempFile;
-}
-#[cfg(not(target_os = "macos"))]
-use non_macos_imports::*;
-
 lazy_static! {
     pub static ref PROF_CTL: Option<Arc<Mutex<JemallocProfCtl>>> = {
         if let Some(ctl) = JemallocProfCtl::get() {
@@ -48,8 +39,6 @@ lazy_static! {
 }
 
 #[derive(Copy, Clone, Debug)]
-// These constructors are dead on macOS
-#[allow(dead_code)]
 pub enum ProfStartTime {
     Instant(Instant),
     TimeImmemorial,
@@ -63,6 +52,7 @@ pub struct JemallocProfMetadata {
 #[derive(Debug)]
 // Per-process singleton object allowing control of jemalloc profiling facilities.
 pub struct JemallocProfCtl {
+    #[cfg(not(target_os = "macos"))]
     md: JemallocProfMetadata,
 }
 
@@ -71,6 +61,7 @@ impl JemallocProfCtl {
     fn get() -> Option<Self> {
         None
     }
+
     pub fn get_md(&self) -> JemallocProfMetadata {
         unreachable!()
     }
