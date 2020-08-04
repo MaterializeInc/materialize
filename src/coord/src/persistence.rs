@@ -42,7 +42,6 @@ impl Persister {
     pub fn update(&mut self) {
         loop {
             thread::sleep(Duration::from_secs(1));
-            info!("persister thread awoke");
             block_on(async {
                 self.update_persistence().await;
             });
@@ -50,20 +49,10 @@ impl Persister {
     }
 
     async fn update_persistence(&mut self) {
-        loop {
-            match self.metadata_rx.try_recv() {
-                Ok(metadata) => match metadata {
-                    PersistenceMetadata::AddSource(_, _) => {
-                        log::info!("persister told to add a source")
-                    }
-                    PersistenceMetadata::DropSource(_) => {
-                        log::info!("persister told to drop a source")
-                    }
-                },
-                Err(e) => {
-                    log::info!("try recv returned err {:?}", e);
-                    break;
-                }
+        while let Ok(metadata) = self.metadata_rx.try_recv() {
+            match metadata {
+                PersistenceMetadata::AddSource(_, _) => info!("persister told to add a source"),
+                PersistenceMetadata::DropSource(_) => info!("persister told to drop a source"),
             };
         }
 
@@ -71,7 +60,7 @@ impl Persister {
             match tokio::time::timeout(Duration::from_secs(1), self.data_rx.next()).await {
                 Ok(None) => break,
                 Ok(Some(_)) => {
-                    log::info!("received some data to be persisted");
+                    info!("received some data to be persisted");
                 }
                 Err(tokio::time::Elapsed { .. }) => break,
             }
