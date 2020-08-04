@@ -664,11 +664,7 @@ fn plan_view_select_intrusive(
         for sql_function in aggregates {
             agg_exprs.push(plan_aggregate(ecx, sql_function)?);
             group_scope.items.push(ScopeItem {
-                names: vec![ScopeItemName {
-                    table_name: None,
-                    column_name: Some(sql_function.name.to_string().into()),
-                    priority: false,
-                }],
+                names: vec![],
                 expr: Some(Expr::Function(sql_function.clone())),
                 nameable: true,
             });
