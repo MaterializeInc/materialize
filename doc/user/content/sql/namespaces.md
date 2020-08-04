@@ -1,7 +1,7 @@
 ---
 title: "Namespaces"
 description: "SQL namespaces let you create a taxonomy of objects in your Materialize instances."
-weight: 12
+weight: 14
 menu:
   main:
     parent: 'sql'

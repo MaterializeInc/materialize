@@ -82,6 +82,9 @@ Wrap your release notes at the 80 character mark.
   ```sql
   SELECT a, sum(b) FROM ... GROUP BY 1
   ```
+- Add support for [`LATERAL` subqueries](/sql/join#lateral-subqueries) in joins.
+  `LATERAL` subqueries can be used to express [Top-K by group
+  queries](/sql/idioms/#top-k-by-group)
 
 <span id="v0.4.0"></span>
 ## v0.4.0
