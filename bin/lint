@@ -69,7 +69,7 @@ copyright_files=$(grep -vE \
     -e '^rustfmt\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
-    -e '\.(md|json|asc|png|jpe?g|svg|avro|pb)$' \
+    -e '\.(md|json|asc|png|jpe?g|svg|avro|pb|ico)$' \
     -e '^doc/user/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool.defconfig)$' \
     -e '^ci/www/public/_redirects$' \

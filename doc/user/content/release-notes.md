@@ -66,6 +66,9 @@ Wrap your release notes at the 80 character mark.
 - Support casts from [`boolean`](/sql/types/boolean) to [`int`](/sql/types/int).
 
 - Add UI at `materialized:6875/prof` HTTP endpoint for creating heap dumps.
+- Add support for [`LATERAL` subqueries](/sql/join#lateral-subqueries) in joins.
+  `LATERAL` subqueries can be used to express [Top-K by group
+  queries](/sql/idioms/#top-k-by-group)
 
 <span id="v0.4.0"></span>
 ## v0.4.0

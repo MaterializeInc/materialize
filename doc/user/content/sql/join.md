@@ -29,13 +29,20 @@ expect.
 
 {{< diagram "join-type.svg" >}}
 
+### table_ref
+
+{{< diagram "table-ref.svg" >}}
+
 Field | Use
 ------|-----
 _select&lowbar;pred_ | The predicating [`SELECT`](../select) clauses you want to use, e.g. `SELECT col_ref FROM table_ref...`. The _table&lowbar;ref_ from the _select&lowbar;pred_ is the left-hand table.
 **NATURAL** | Join table expressions on all columns with the same names in both tables. This is similar to the `USING` clause naming all identically named columns in both tables.
-_join&lowbar;type_ | The type of `JOIN` you want to use _(`INNER` is implied default)_.
-_table&lowbar;ref_ | The table expression you want to join, i.e. the right-hand table.
-**USING (** _col&lowbar;ref..._ **)** | If the join condition does not require table-level qualification (i.e. joining tables on columns with the same name), the columns to join the tables on. For example, `USING (customer_id)`.
+**LATERAL** | Indicates that the following subquery or table function call can refer to columns from the left-hand side of the join. See [`LATERAL` subqueries](#lateral-subqueries) below.
+_join\_type_ | The type of `JOIN` you want to use _(`INNER` is implied default)_.
+_select_stmt_ | A [`SELECT` statement](/sql/select).
+_table\_ref_ | The table expression you want to join, i.e. the right-hand table.
+_table\_func\_call_ | A call to a [table function](/sql/functions/#table-func).
+**USING (** _col\_ref..._ **)** | If the join condition does not require table-level qualification (i.e. joining tables on columns with the same name), the columns to join the tables on. For example, `USING (customer_id)`.
 **ON** _expression_ | The condition on which to join the tables. For example `ON purchase.customer_id = customer.id`.
 _select&lowbar;pred_ | The remaining [`SELECT`](../select) clauses you want to use, e.g. `...WHERE expr GROUP BY col_ref HAVING expr`.
 
@@ -52,6 +59,45 @@ any, restrictions. For example, Materialize:
 Instead, `JOIN`s work over the available history of both streams, which
 ultimately provides an experience more similar to an RDBMS than other streaming
 platforms.
+
+### `LATERAL` subqueries
+
+When a subquery appears on the right-hand side of a join, it can optionally be
+preceded by the `LATERAL` keyword. This permits the subquery to refer to columns
+defined by the left-hand side of the join. Normally, a subquery only has access
+to the columns within its own context.
+
+Table functions may also be preceded by the `LATERAL` keyword, although in this
+case the keyword is optional. Table function invocations always have implicit
+access to the columns defined by the left-hand side of the join.
+
+When `LATERAL` behavior is active, the right-hand relation is recomputed for
+each row in the left-hand relation. For example, the following query counts from
+1 to `x` for all the values of `x` in `xs`.
+
+```sql
+SELECT * FROM
+  (VALUES (1), (3)) xs (x)
+  CROSS JOIN LATERAL generate_series(1, x) y;
+```
+```nofmt
+ x | y
+---+---
+ 1 | 1
+ 3 | 1
+ 3 | 2
+ 3 | 3
+```
+
+For a real-world example of a `LATERAL` subquery, see the [Top-K by group
+idiom](/sql/idioms/#top-k-by-group).
+
+{{< warning >}}
+`LATERAL` subqueries can be very expensive to compute. For best results, do not
+materialize a view containing a `LATERAL` subquery without first inspecting the
+plan via the [`EXPLAIN`](../explain/) statement. In many common patterns
+involving `LATERAL` joins, Materialize can optimize away the join entirely.
+{{< /warning >}}
 
 ## Examples
 
