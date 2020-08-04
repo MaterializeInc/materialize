@@ -9,10 +9,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
+use std::future::Future;
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
-use futures::future::TryFutureExt;
+use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
@@ -117,178 +118,216 @@ impl Server {
     where
         A: AsyncRead + AsyncWrite + Unpin + 'static,
     {
-        let svc = service::service_fn(move |req: Request<Body>| {
-            let cmdq_tx = (self.cmdq_tx).clone();
-            let start_time = self.start_time;
-            async move {
-                match (req.method(), req.uri().path()) {
-                    (&Method::GET, "/") => handle_home(req).await,
-                    (&Method::GET, "/metrics") => handle_prometheus(req, start_time).await,
-                    (&Method::GET, "/status") => handle_status(req, start_time).await,
-                    (&Method::GET, "/favicon.ico") => handle_favicon().await,
-                    (&Method::GET, "/prof") => handle_prof(req).await,
-                    (&Method::POST, "/prof") => handle_prof(req).await,
-                    (&Method::GET, "/internal/catalog") => {
-                        handle_internal_catalog(req, cmdq_tx).await
-                    }
-                    _ => handle_unknown(req).await,
-                }
-            }
+        let svc = service::service_fn(move |req| match (req.method(), req.uri().path()) {
+            (&Method::GET, "/") => self.handle_home(req).boxed(),
+            (&Method::GET, "/metrics") => self.handle_prometheus(req).boxed(),
+            (&Method::GET, "/status") => self.handle_status(req).boxed(),
+            (&Method::GET, "/prof") => self.handle_prof(req).boxed(),
+            (&Method::POST, "/prof") => self.handle_prof(req).boxed(),
+            (&Method::GET, "/internal/catalog") => self.handle_internal_catalog(req).boxed(),
+            (&Method::GET, "/favicon.ico") => self.handle_favicon(req).boxed(),
+            _ => self.handle_unknown(req).boxed(),
         });
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await
     }
-}
 
-async fn handle_favicon() -> Result<Response<Body>, anyhow::Error> {
-    let favicon_slice: &'static [u8] = include_bytes!("favicon.ico");
-    Ok(Response::new(Body::from(favicon_slice)))
-}
-
-async fn handle_home(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
-    Ok(Response::new(Body::from(format!(
-        r#"<!DOCTYPE html>
+    fn handle_home(
+        &self,
+        _: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        future::ok(Response::new(Body::from(format!(
+            r#"<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>materialized {version}</title>
-  </head>
-  <body>
-    <p>materialized {version} (built at {build_time} from <code>{build_sha}</code>)</p>
-    <ul>
-      <li><a href="/status">server status</a></li>
-      <li><a href="/metrics">prometheus metrics</a></li>
-      <li><a href="/prof">profiling functions</a></li>
-    </ul>
-  </body>
-</html>
-"#,
-        version = crate::VERSION,
-        build_sha = crate::BUILD_SHA,
-        build_time = crate::BUILD_TIME,
-    ))))
-}
+<head>
+  <meta charset="utf-8">
+  <title>materialized {version}</title>
+</head>
+<body>
+  <p>materialized {version} (built at {build_time} from <code>{build_sha}</code>)</p>
+  <ul>
+    <li><a href="/status">server status</a></li>
+    <li><a href="/metrics">prometheus metrics</a></li>
+    <li><a href="/prof">profiling functions</a></li>
+  </ul>
+</body>
+</html>"#,
+            version = crate::VERSION,
+            build_sha = crate::BUILD_SHA,
+            build_time = crate::BUILD_TIME,
+        ))))
+    }
 
-#[cfg(target_os = "macos")]
-async fn handle_prof(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
-    Ok(Response::builder().status(501).body(Body::from(
-        "Profiling is not supported on macOS (HINT: run on Linux with _RJEM_MALLOC_CONF=prof:true)",
-    ))?)
-}
+    #[cfg(target_os = "macos")]
+    fn handle_prof(
+        &self,
+        _: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        future::ok(Response::builder().status(501).body(Body::from(
+            "Profiling is not supported on macOS (HINT: run on Linux with _RJEM_MALLOC_CONF=prof:true)",
+        ))?)
+    }
 
-#[cfg(not(target_os = "macos"))]
-async fn handle_prof(req: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
-    prof::handle(req).await
-}
+    #[cfg(not(target_os = "macos"))]
+    fn handle_prof(
+        &self,
+        req: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        prof::handle(req)
+    }
 
-async fn handle_prometheus(
-    _: Request<Body>,
-    start_time: Instant,
-) -> Result<Response<Body>, anyhow::Error> {
-    let metric_families = load_prom_metrics(start_time);
-    let encoder = prometheus::TextEncoder::new();
-    let mut buffer = Vec::new();
+    fn handle_prometheus(
+        &self,
+        _: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        let metric_families = load_prom_metrics(self.start_time);
+        async move {
+            let encoder = prometheus::TextEncoder::new();
+            let mut buffer = Vec::new();
 
-    let start = Instant::now();
-    encoder.encode(&metric_families, &mut buffer)?;
-    REQUEST_METRICS_ENCODE.set(Instant::now().duration_since(start).as_micros() as i64);
+            let start = Instant::now();
+            encoder.encode(&metric_families, &mut buffer)?;
+            REQUEST_METRICS_ENCODE.set(Instant::now().duration_since(start).as_micros() as i64);
 
-    Ok(Response::new(Body::from(buffer)))
-}
+            Ok(Response::new(Body::from(buffer)))
+        }
+    }
 
-async fn handle_status(
-    _: Request<Body>,
-    start_time: Instant,
-) -> Result<Response<Body>, anyhow::Error> {
-    let metric_families = load_prom_metrics(start_time);
+    fn handle_status(
+        &self,
+        _: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        let metric_families = load_prom_metrics(self.start_time);
 
-    let desired_metrics = {
-        let mut s = BTreeSet::new();
-        s.insert("mz_dataflow_events_read_total");
-        s.insert("mz_bytes_read_total");
-        s.insert("mz_worker_command_queue_size");
-        s.insert("mz_command_durations");
-        s
-    };
+        let desired_metrics = {
+            let mut s = BTreeSet::new();
+            s.insert("mz_dataflow_events_read_total");
+            s.insert("mz_bytes_read_total");
+            s.insert("mz_worker_command_queue_size");
+            s.insert("mz_command_durations");
+            s
+        };
 
-    let mut metrics = BTreeMap::new();
-    for metric in &metric_families {
-        let converted = PromMetric::from_metric_family(metric);
-        match converted {
-            Ok(m) => {
-                for m in m {
-                    match m {
-                        PromMetric::Counter { name, .. } => {
-                            if desired_metrics.contains(name) {
-                                metrics.insert(name.to_string(), m);
+        let mut metrics = BTreeMap::new();
+        for metric in &metric_families {
+            let converted = PromMetric::from_metric_family(metric);
+            match converted {
+                Ok(m) => {
+                    for m in m {
+                        match m {
+                            PromMetric::Counter { name, .. } => {
+                                if desired_metrics.contains(name) {
+                                    metrics.insert(name.to_string(), m);
+                                }
                             }
-                        }
-                        PromMetric::Gauge { name, .. } => {
-                            if desired_metrics.contains(name) {
-                                metrics.insert(name.to_string(), m);
+                            PromMetric::Gauge { name, .. } => {
+                                if desired_metrics.contains(name) {
+                                    metrics.insert(name.to_string(), m);
+                                }
                             }
-                        }
-                        PromMetric::Histogram {
-                            name, ref labels, ..
-                        } => {
-                            if desired_metrics.contains(name) {
-                                metrics.insert(
-                                    format!("{}:{}", name, labels.get("command").unwrap_or(&"")),
-                                    m,
-                                );
+                            PromMetric::Histogram {
+                                name, ref labels, ..
+                            } => {
+                                if desired_metrics.contains(name) {
+                                    metrics.insert(
+                                        format!(
+                                            "{}:{}",
+                                            name,
+                                            labels.get("command").unwrap_or(&"")
+                                        ),
+                                        m,
+                                    );
+                                }
                             }
                         }
                     }
                 }
-            }
-            Err(_) => continue,
-        };
-    }
-    let mut query_count = metrics
-        .get("mz_command_durations:query")
-        .map(|m| {
-            if let PromMetric::Histogram { count, .. } = m {
-                *count
-            } else {
-                0
-            }
-        })
-        .unwrap_or(0);
-    query_count += metrics
-        .get("mz_command_durations:execute")
-        .map(|m| {
-            if let PromMetric::Histogram { count, .. } = m {
-                *count
-            } else {
-                0
-            }
-        })
-        .unwrap_or(0);
+                Err(_) => continue,
+            };
+        }
+        let mut query_count = metrics
+            .get("mz_command_durations:query")
+            .map(|m| {
+                if let PromMetric::Histogram { count, .. } = m {
+                    *count
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0);
+        query_count += metrics
+            .get("mz_command_durations:execute")
+            .map(|m| {
+                if let PromMetric::Histogram { count, .. } = m {
+                    *count
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0);
 
-    let mut out = format!(
-        r#"<!DOCTYPE html>
+        let mut out = format!(
+            r#"<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>materialized {version}</title>
-  </head>
-  <body>
-    <p>materialized OK.<br/>
-    handled {queries} queries so far.<br/>
-    up for {dur:?}
-    </p>
-    <pre>
-"#,
-        version = crate::VERSION,
-        queries = query_count,
-        dur = Instant::now() - start_time
-    );
-    for metric in metrics.values() {
-        write!(out, "{}", metric).expect("can write to string");
-    }
-    out += "    </pre>\n  </body>\n</html>\n";
+<head>
+  <meta charset="utf-8">
+  <title>materialized {version}</title>
+</head>
+<body>
+  <p>
+  materialized OK.<br/>
+  handled {queries} queries so far.<br/>
+  up for {dur:?}
+  </p>
+  <pre>
+    "#,
+            version = crate::VERSION,
+            queries = query_count,
+            dur = Instant::now() - self.start_time
+        );
+        for metric in metrics.values() {
+            write!(out, "{}", metric).expect("can write to string");
+        }
+        out += "  </pre>\n</body>\n</html>\n";
 
-    Ok(Response::new(Body::from(out)))
+        future::ok(Response::new(Body::from(out)))
+    }
+
+    fn handle_internal_catalog(
+        &self,
+        _: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let mut cmdq_tx = self.cmdq_tx.clone();
+        async move {
+            cmdq_tx.send(coord::Command::DumpCatalog { tx }).await?;
+            let dump = rx.await?;
+            Ok(Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(dump))
+                .unwrap())
+        }
+    }
+
+    fn handle_favicon(
+        &self,
+        _: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        let favicon_slice: &'static [u8] = include_bytes!("favicon.ico");
+        future::ok(Response::new(Body::from(favicon_slice)))
+    }
+
+    fn handle_unknown(
+        &self,
+        _: Request<Body>,
+    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+        future::ok(
+            Response::builder()
+                .status(403)
+                .body(Body::from("bad request"))
+                .unwrap(),
+        )
+    }
 }
 
 /// Call [`prometheus::gather`], ensuring that all our metrics are up to date
@@ -392,24 +431,4 @@ impl PromMetric<'_> {
             })
             .collect()
     }
-}
-
-async fn handle_internal_catalog(
-    _: Request<Body>,
-    mut cmdq_tx: UnboundedSender<coord::Command>,
-) -> Result<Response<Body>, anyhow::Error> {
-    let (tx, rx) = futures::channel::oneshot::channel();
-    cmdq_tx.send(coord::Command::DumpCatalog { tx }).await?;
-    let dump = rx.await?;
-    Ok(Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(dump))
-        .unwrap())
-}
-
-async fn handle_unknown(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
-    Ok(Response::builder()
-        .status(403)
-        .body(Body::from("bad request"))
-        .unwrap())
 }
