@@ -65,7 +65,7 @@ expected to insert 2 values, found 1
 trying to insert NULL value into non-nullable column b
 
 ! INSERT INTO t VALUES ('d', 4);
-value 'd' is not compatible with type Int32
+expected type string for column b, found i32
 
 > INSERT INTO t VALUES (NULL, 'd');
 

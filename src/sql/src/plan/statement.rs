@@ -18,7 +18,6 @@ use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use ordered_float::OrderedFloat;
 use regex::Regex;
 use rusoto_core::Region;
 use url::Url;
@@ -31,7 +30,6 @@ use dataflow_types::{
 use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
-use repr::adt::decimal::Significand;
 use repr::{strconv, ColumnName};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
@@ -48,7 +46,7 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, Index, MutationKind, Params, Plan, PlanContext, Sink, Source, View,
+    query, scalar_type_from_sql, Index, Params, Plan, PlanContext, Sink, Source, View,
 };
 use crate::pure::Schema;
 
@@ -1804,103 +1802,71 @@ fn handle_drop_item(
     Ok(Some(catalog_entry.id()))
 }
 
-fn generate_datum_from_value<'a>(
-    value: &'a Expr,
-    column_info: (Option<&ColumnName>, &ColumnType),
-) -> Result<Datum<'a>, anyhow::Error> {
-    let datum = if let Expr::Value(value) = value {
-        match (value, &column_info.1.scalar_type) {
-            (Value::Number(n), ScalarType::Int32) => Datum::Int32(strconv::parse_int32(n)?),
-            (Value::Number(n), ScalarType::Int64) => Datum::Int64(strconv::parse_int64(n)?),
-            (Value::Number(n), ScalarType::Float32) => {
-                Datum::Float32(OrderedFloat(strconv::parse_float32(n)?))
-            }
-            (Value::Number(n), ScalarType::Float64) => {
-                Datum::Float64(OrderedFloat(strconv::parse_float64(n)?))
-            }
-            (Value::Number(n), ScalarType::Decimal(_, _)) => {
-                Datum::Decimal(Significand::new(strconv::parse_decimal(n)?.significand()))
-            }
-            (Value::String(s), ScalarType::String) => Datum::String(s),
-            (Value::String(s), ScalarType::Bytes) => Datum::Bytes(s.as_bytes()),
-            (Value::HexString(s), ScalarType::String) => Datum::String(s),
-            (Value::Boolean(true), ScalarType::Bool) => Datum::True,
-            (Value::Boolean(false), ScalarType::Bool) => Datum::False,
-            (Value::Interval(i), ScalarType::Interval) => {
-                Datum::Interval(strconv::parse_interval(&i.value)?)
-            }
-            (Value::Null, _) => {
-                if column_info.1.nullable {
-                    Datum::Null
-                } else {
-                    bail!(format!(
-                        "trying to insert NULL value into non-nullable column {}",
-                        column_info
-                            .0
-                            .unwrap_or(&ColumnName::from("unnammed column"))
-                    ));
-                }
-            }
-            (value, typ) => bail!(format!(
-                "value {} is not compatible with type {:#?}",
-                value, typ
-            )),
-        }
-    } else {
-        unsupported!(format!(
-            "expected to find value to insert, found {:?}",
-            value
-        ))
-    };
-
-    Ok(datum)
-}
-
 fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow::Error> {
     match &stmt {
         Statement::Insert {
             table_name,
             columns: _,
             source,
-        } => {
-            let table = scx.catalog.get_item(&scx.resolve_item(table_name.clone())?);
-            let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
-                table.desc()?.iter().collect();
+        } => match source {
+            InsertSource::Query(query) => {
+                if let SetExpr::Values(values) = &query.body {
+                    let table = scx.catalog.get_item(&scx.resolve_item(table_name.clone())?);
+                    let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
+                        table.desc()?.iter().collect();
 
-            match source {
-                InsertSource::Query(query) => {
-                    if let SetExpr::Values(values) = &query.body {
-                        let mut updates = Vec::with_capacity(values.0.len());
-                        for to_update in &values.0 {
-                            if to_update.len() != column_info.len() {
-                                bail!(
-                                    "expected to insert {} values, found {}",
-                                    column_info.len(),
-                                    values.0.len()
-                                );
-                            }
-                            let datums: Vec<Datum> = to_update
-                                .iter()
-                                .enumerate()
-                                .map(|(index, value)| {
-                                    generate_datum_from_value(value, column_info[index])
-                                })
-                                .collect::<Result<Vec<Datum>, anyhow::Error>>()?;
-                            updates.push((Row::pack(datums), 1));
+                    for expr in &values.0 {
+                        if expr.len() != column_info.len() {
+                            bail!(format!(
+                                "expected to insert {} values, found {}: {:#?}",
+                                column_info.len(),
+                                expr.len(),
+                                expr
+                            ));
                         }
-                        Ok(Plan::SendDiffs {
-                            id: table.id(),
-                            updates,
-                            affected_rows: values.0.len(),
-                            kind: MutationKind::Insert,
-                        })
-                    } else {
-                        unsupported!(format!("INSERT body {}", query.body));
+                        for (index, value) in expr.iter().enumerate() {
+                            if let Expr::Value(Value::Null) = value {
+                                if !column_info[index].1.nullable {
+                                    bail!(format!(
+                                        "trying to insert NULL value into non-nullable column {}",
+                                        column_info[index]
+                                            .0
+                                            .unwrap_or(&ColumnName::from("unnamed column"))
+                                    ));
+                                }
+                            }
+                        }
                     }
+
+                    let relation_expr = query::plan_insert_query(
+                        scx,
+                        values,
+                        Some(table.desc()?.iter_types().collect()),
+                    )?
+                    .decorrelate();
+                    for (index, typ) in relation_expr.typ().column_types.iter().enumerate() {
+                        if typ.scalar_type != column_info[index].1.scalar_type {
+                            bail!(format!(
+                                "expected type {} for column {}, found {}",
+                                column_info[index].1,
+                                column_info[index]
+                                    .0
+                                    .unwrap_or(&ColumnName::from("unnamed column")),
+                                typ
+                            ))
+                        }
+                    }
+
+                    Ok(Plan::Insert {
+                        id: table.id(),
+                        values: relation_expr,
+                    })
+                } else {
+                    unsupported!(format!("INSERT body {}", query.body));
                 }
-                InsertSource::DefaultValues => unsupported!("INSERT DEFAULT VALUES"),
             }
-        }
+            InsertSource::DefaultValues => unsupported!("INSERT DEFAULT VALUES"),
+        },
         other => unreachable!(format!("{:?}", other)),
     }
 }

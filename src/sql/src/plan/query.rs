@@ -422,71 +422,92 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
 
             Ok((relation_expr, scope))
         }
-        SetExpr::Values(Values(values)) => {
-            ensure!(
-                !values.is_empty(),
-                "Can't infer a type for empty VALUES expression"
-            );
-            let ecx = &ExprContext {
-                qcx,
-                name: "values",
-                scope: &Scope::empty(Some(qcx.outer_scope.clone())),
-                relation_type: &RelationType::empty(),
-                allow_aggregates: false,
-                allow_subqueries: true,
-            };
-
-            let ncols = values[0].len();
-            let nrows = values.len();
-
-            // Arrange input expressions by columns, not rows, so that we can
-            // call `plan_homogeneous_exprs` on each column.
-            let mut cols = vec![vec![]; ncols];
-            for row in values {
-                if row.len() != ncols {
-                    bail!(
-                        "VALUES expression has varying number of columns: {} vs {}",
-                        row.len(),
-                        ncols
-                    );
-                }
-                for (i, v) in row.iter().enumerate() {
-                    cols[i].push(v);
-                }
-            }
-
-            // Plan each column.
-            let mut col_iters = Vec::with_capacity(ncols);
-            let mut col_types = Vec::with_capacity(ncols);
-            for col in cols {
-                let col = plan_homogeneous_exprs("VALUES", ecx, &col)?;
-                col_types.push(ecx.column_type(&col[0]));
-                col_iters.push(col.into_iter());
-            }
-
-            // Build constant relation.
-            let typ = RelationType::new(col_types);
-            let mut out = RelationExpr::constant(vec![], typ);
-            for _ in 0..nrows {
-                let row: Vec<_> = (0..ncols).map(|i| col_iters[i].next().unwrap()).collect();
-                let empty = RelationExpr::constant(vec![vec![]], RelationType::new(vec![]));
-                out = out.union(empty.map(row));
-            }
-
-            // Build column names.
-            let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
-            for i in 0..ncols {
-                let name = Some(format!("column{}", i + 1).into());
-                scope.items.push(ScopeItem::from_column_name(name));
-            }
-
-            Ok((out, scope))
-        }
+        SetExpr::Values(Values(values)) => plan_values(qcx, values, None),
         SetExpr::Query(query) => {
             let (expr, scope) = plan_subquery(qcx, query)?;
             Ok((expr, scope))
         }
     }
+}
+
+fn plan_values(
+    qcx: &QueryContext,
+    values: &[Vec<Expr>],
+    type_hints: Option<Vec<&ColumnType>>,
+) -> Result<(RelationExpr, Scope), anyhow::Error> {
+    ensure!(
+        !values.is_empty(),
+        "Can't infer a type for empty VALUES expression"
+    );
+    let ecx = &ExprContext {
+        qcx,
+        name: "values",
+        scope: &Scope::empty(Some(qcx.outer_scope.clone())),
+        relation_type: &RelationType::empty(),
+        allow_aggregates: false,
+        allow_subqueries: true,
+    };
+
+    let ncols = values[0].len();
+    let nrows = values.len();
+
+    // Arrange input expressions by columns, not rows, so that we can
+    // call `plan_homogeneous_exprs` on each column.
+    let mut cols = vec![vec![]; ncols];
+    for row in values {
+        if row.len() != ncols {
+            bail!(
+                "VALUES expression has varying number of columns: {} vs {}",
+                row.len(),
+                ncols
+            );
+        }
+        for (i, v) in row.iter().enumerate() {
+            cols[i].push(v);
+        }
+    }
+
+    // Plan each column.
+    let mut col_iters = Vec::with_capacity(ncols);
+    let mut col_types = Vec::with_capacity(ncols);
+    for (index, col) in cols.iter().enumerate() {
+        let type_hint = if let Some(type_hints) = &type_hints {
+            Some(type_hints[index].scalar_type.clone())
+        } else {
+            None
+        };
+
+        let col = plan_homogeneous_exprs("VALUES", ecx, &col, type_hint)?;
+        col_types.push(ecx.column_type(&col[0]));
+        col_iters.push(col.into_iter());
+    }
+
+    // Build constant relation.
+    let typ = RelationType::new(col_types);
+    let mut out = RelationExpr::constant(vec![], typ);
+    for _ in 0..nrows {
+        let row: Vec<_> = (0..ncols).map(|i| col_iters[i].next().unwrap()).collect();
+        let empty = RelationExpr::constant(vec![vec![]], RelationType::new(vec![]));
+        out = out.union(empty.map(row));
+    }
+
+    // Build column names.
+    let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
+    for i in 0..ncols {
+        let name = Some(format!("column{}", i + 1).into());
+        scope.items.push(ScopeItem::from_column_name(name));
+    }
+
+    Ok((out, scope))
+}
+
+pub fn plan_insert_query(
+    scx: &StatementContext,
+    values: &Values,
+    type_hints: Option<Vec<&ColumnType>>,
+) -> Result<RelationExpr, anyhow::Error> {
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    Ok(plan_values(&qcx, &values.0, type_hints)?.0)
 }
 
 fn plan_join_identity(qcx: &QueryContext) -> (RelationExpr, Scope) {
@@ -1538,7 +1559,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
             let expr = ScalarExpr::CallVariadic {
                 func: VariadicFunc::Coalesce,
-                exprs: plan_homogeneous_exprs("coalesce", ecx, exprs)?,
+                exprs: plan_homogeneous_exprs("coalesce", ecx, exprs, None)?,
             };
             expr.into()
         }
@@ -1685,6 +1706,7 @@ pub fn plan_homogeneous_exprs(
     name: &str,
     ecx: &ExprContext,
     exprs: &[impl std::borrow::Borrow<Expr>],
+    type_hint: Option<ScalarType>,
 ) -> Result<Vec<ScalarExpr>, anyhow::Error> {
     assert!(!exprs.is_empty());
 
@@ -1699,7 +1721,7 @@ pub fn plan_homogeneous_exprs(
         .map(|e| ecx.column_type(e).map(|t| t.scalar_type))
         .collect();
 
-    let target = match typeconv::guess_best_common_type(&types) {
+    let target = match typeconv::guess_best_common_type(&types, type_hint) {
         Some(t) => t,
         None => bail!("Cannot determine homogenous type for arguments to {}", name),
     };
@@ -1952,7 +1974,7 @@ fn plan_case<'a>(
         Some(else_result) => else_result,
         None => &Expr::Value(Value::Null),
     });
-    let mut result_exprs = plan_homogeneous_exprs("CASE", ecx, &result_exprs)?;
+    let mut result_exprs = plan_homogeneous_exprs("CASE", ecx, &result_exprs, None)?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
     for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {

@@ -857,6 +857,8 @@ where
                 session,
             ),
 
+            Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values), session),
+
             Plan::ShowViews {
                 ids,
                 full,
@@ -1548,6 +1550,24 @@ where
             MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
             MutationKind::Update => ExecuteResponse::Updated(affected_rows),
         })
+    }
+
+    fn sequence_insert(
+        &mut self,
+        id: GlobalId,
+        values: expr::RelationExpr,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        match self
+            .optimizer
+            .optimize(values, self.catalog.indexes())?
+            .into_inner()
+        {
+            RelationExpr::Constant { rows, typ: _ } => {
+                let affected_rows = rows.len();
+                self.sequence_send_diffs(id, rows, affected_rows, MutationKind::Insert)
+            }
+            other => bail!(format!("expected to insert values, found {:?}", other)),
+        }
     }
 
     fn sequence_show_views(
