@@ -104,7 +104,7 @@ id::bigint
 parse-scalar roundtrip
 id::double precision
 ----
-id::double
+id::double precision
 
 parse-scalar roundtrip
 id::timestamp with time zone
@@ -114,7 +114,7 @@ id::timestamp with time zone
 parse-scalar roundtrip
 (id::timestamp with time zone::timestamp without time zone  )  ::  double precision::text
 ----
-(id::timestamp with time zone::timestamp)::double::text
+(id::timestamp with time zone::timestamp)::double precision::text
 
 parse-scalar roundtrip
 CAST(c::jsonb->>'f' AS timestamptz)

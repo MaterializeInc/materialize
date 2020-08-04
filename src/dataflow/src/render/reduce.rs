@@ -437,7 +437,7 @@ where
                     // Below this point, anything with only nulls should be null.
                     (_, 0) => Datum::Null,
                     // If any non-nulls, just report the aggregate.
-                    (AggregateFunc::SumInt32, _) => Datum::Int32(agg1 as i32),
+                    (AggregateFunc::SumInt32, _) => Datum::Int64(agg1 as i64),
                     (AggregateFunc::SumInt64, _) => Datum::Int64(agg1 as i64),
                     (AggregateFunc::SumFloat32, _) => {
                         Datum::Float32((((agg1 as f64) / float_scale) as f32).into())

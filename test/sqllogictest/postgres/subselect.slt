@@ -1,0 +1,853 @@
+# Copyright 1994, Regents of the University of California.
+# Copyright 1996-2019 PostgreSQL Global Development Group.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the regression test suite in PostgreSQL.
+# The original file was retrieved on July 25, 2020 from:
+#
+#     https://github.com/postgres/postgres/blob/15e441972276e95639f8c3d9f5f66c2318fe9348/src/test/regress/expected/subselect.out
+#
+# The original source code is subject to the terms of the PostgreSQL
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+statement ok
+CREATE SOURCE onek_src FROM FILE 'test/sqllogictest/postgres/testdata/onek.data'
+FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
+
+statement ok
+CREATE MATERIALIZED VIEW onek AS SELECT
+  column1::int4 AS unique1,
+  column2::int4 AS unique2,
+  column3::int4 AS two,
+  column4::int4 AS four,
+  column5::int4 AS ten,
+  column6::int4 AS twenty,
+  column7::int4 AS hundred,
+  column8::int4 AS thousand,
+  column9::int4 AS twothousand,
+  column10::int4 AS fivethous,
+  column11::int4 AS tenthous,
+  column12::int4 AS odd,
+  column13::int4 AS even,
+  column14::text AS stringu1,
+  column15::text AS stringu2,
+  column16::text AS string4
+  FROM onek_src
+
+statement ok
+CREATE SOURCE tenk1_src FROM FILE 'test/sqllogictest/postgres/testdata/tenk.data'
+FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
+
+statement ok
+CREATE MATERIALIZED VIEW tenk1 AS SELECT
+  column1::int4 AS unique1,
+  column2::int4 AS unique2,
+  column3::int4 AS two,
+  column4::int4 AS four,
+  column5::int4 AS ten,
+  column6::int4 AS twenty,
+  column7::int4 AS hundred,
+  column8::int4 AS thousand,
+  column9::int4 AS twothousand,
+  column10::int4 AS fivethous,
+  column11::int4 AS tenthous,
+  column12::int4 AS odd,
+  column13::int4 AS even,
+  column14::text AS stringu1,
+  column15::text AS stringu2,
+  column16::text AS string4
+  FROM tenk1_src
+
+# Wait for asynchronous ingestion to complete.
+query TI rowsort
+SELECT 'onek', count(*) FROM onek
+UNION ALL
+SELECT 'tenk1', count(*) FROM tenk1
+AS OF 1
+----
+onek 1000
+tenk1 10000
+
+statement ok
+CREATE TABLE int4_tbl (f1 int)
+
+statement ok
+INSERT INTO int4_tbl (f1) VALUES (0), (123456), (-123456), (2147483647), (-2147483647)
+
+statement ok
+CREATE TABLE int8_tbl (q1 bigint, q2 bigint)
+
+statement ok
+INSERT INTO int8_tbl VALUES
+    (123, 456),
+    (123, 4567890123456789),
+    (4567890123456789, 123),
+    (4567890123456789, 4567890123456789),
+    (4567890123456789, -4567890123456789)
+
+query I colnames
+SELECT 1 AS one WHERE 1 IN (SELECT 1)
+----
+one
+1
+
+query I colnames
+SELECT 1 AS zero WHERE 1 NOT IN (SELECT 1)
+----
+zero
+
+query I colnames
+SELECT 1 AS zero WHERE 1 IN (SELECT 2)
+----
+zero
+
+# Check grammar's handling of extra parens in assorted contexts
+query I colnames
+SELECT * FROM (SELECT 1 AS x) ss
+----
+x
+1
+
+query I colnames
+SELECT * FROM ((SELECT 1 AS x)) ss
+----
+x
+1
+
+query I colnames
+(SELECT 2) UNION SELECT 2
+----
+?column?
+2
+
+query I colnames
+((SELECT 2)) UNION SELECT 2
+----
+?column?
+2
+
+# TODO(benesch): fix parsing.
+#
+# query I colnames
+# SELECT ((SELECT 2) UNION SELECT 2)
+# ?column?
+# ----
+# 2
+#
+# query I colnames
+# SELECT (((SELECT 2)) UNION SELECT 2);
+# ?column?
+# ----
+# 2
+
+# TODO(benesch): array support.
+#
+# SELECT (SELECT ARRAY[1,2,3])[1];
+#  array
+# -------
+#      1
+# (1 row)
+#
+# SELECT ((SELECT ARRAY[1,2,3]))[2];
+#  array
+# -------
+#      2
+# (1 row)
+#
+# SELECT (((SELECT ARRAY[1,2,3])))[3];
+#  array
+# -------
+#      3
+# (1 row)
+
+# Set up some simple test tables
+statement ok
+CREATE TABLE SUBSELECT_TBL (
+  f1 integer,
+  f2 integer,
+  f3 float
+)
+
+statement ok
+INSERT INTO SUBSELECT_TBL VALUES
+    (1, 2, 3), (2, 3, 4), (3, 4, 5), (1, 1, 1),
+    (2, 2, 2), (3, 3, 3), (6, 7, 8), (8, 9, NULL)
+
+query III colnames,rowsort
+SELECT * FROM SUBSELECT_TBL
+----
+f1  f2  f3
+1  2  3
+2  3  4
+3  4  5
+1  1  1
+2  2  2
+3  3  3
+6  7  8
+8  9  NULL
+
+
+# Uncorrelated subselects
+query I colnames
+SELECT f1 AS "Constant Select" FROM SUBSELECT_TBL
+  WHERE f1 IN (SELECT 1)
+----
+Constant␠Select
+1
+1
+
+query I colnames,rowsort
+SELECT f1 AS "Uncorrelated Field" FROM SUBSELECT_TBL
+  WHERE f1 IN (SELECT f2 FROM SUBSELECT_TBL)
+----
+Uncorrelated␠Field
+1
+2
+3
+1
+2
+3
+
+query I colnames,rowsort
+SELECT f1 AS "Uncorrelated Field" FROM SUBSELECT_TBL
+  WHERE f1 IN (SELECT f2 FROM SUBSELECT_TBL WHERE
+    f2 IN (SELECT f1 FROM SUBSELECT_TBL))
+----
+Uncorrelated␠Field
+1
+2
+3
+1
+2
+3
+
+query II colnames,rowsort
+SELECT f1, f2
+  FROM SUBSELECT_TBL
+  WHERE (f1, f2) NOT IN (SELECT f2, CAST(f3 AS int4) FROM SUBSELECT_TBL
+                         WHERE f3 IS NOT NULL)
+----
+f1  f2
+1  2
+6  7
+8  9
+
+# Correlated subselects
+query II colnames,rowsort
+SELECT f1 AS "Correlated Field", f2 AS "Second Field"
+  FROM SUBSELECT_TBL upper
+  WHERE f1 IN (SELECT f2 FROM SUBSELECT_TBL WHERE f1 = upper.f1)
+----
+Correlated␠Field  Second␠Field
+1  2
+2  3
+3  4
+1  1
+2  2
+3  3
+
+query II colnames,rowsort
+SELECT f1 AS "Correlated Field", f3 AS "Second Field"
+  FROM SUBSELECT_TBL upper
+  WHERE f1 IN
+    (SELECT f2 FROM SUBSELECT_TBL WHERE CAST(upper.f2 AS float) = f3)
+----
+Correlated␠Field  Second␠Field
+2  4
+3  5
+1  1
+2  2
+3  3
+
+query II colnames,rowsort
+SELECT f1 AS "Correlated Field", f3 AS "Second Field"
+  FROM SUBSELECT_TBL upper
+  WHERE f3 IN (SELECT upper.f1 + f2 FROM SUBSELECT_TBL
+               WHERE f2 = CAST(f3 AS integer))
+----
+Correlated␠Field  Second␠Field
+1  3
+2  4
+3  5
+6  8
+
+query I colnames,rowsort
+SELECT f1 AS "Correlated Field"
+  FROM SUBSELECT_TBL
+  WHERE (f1, f2) IN (SELECT f2, CAST(f3 AS int4) FROM SUBSELECT_TBL
+                     WHERE f3 IS NOT NULL)
+----
+Correlated␠Field
+2
+3
+1
+2
+3
+
+# Use some existing tables in the regression test
+
+query II colnames,rowsort
+SELECT ss.f1 AS "Correlated Field", ss.f3 AS "Second Field"
+  FROM SUBSELECT_TBL ss
+  WHERE f1 NOT IN (SELECT f1+1 FROM INT4_TBL
+                   WHERE f1 != ss.f1 AND f1 < 2147483647)
+----
+Correlated␠Field  Second␠Field
+2  4
+3  5
+2  2
+3  3
+6  8
+8  NULL
+
+query IR colnames,rowsort
+select q1, count(*)::float8 / (select count(*) from int8_tbl)
+from int8_tbl group by q1 order by q1
+----
+q1  ?column?
+123  0.4
+4567890123456789  0.6
+
+# Unspecified-type literals in output columns should resolve as text
+#
+# TODO(benesch): support pg_typeof.
+# query IT colnames
+# SELECT *, pg_typeof(f1) FROM
+#   (SELECT 'foo' AS f1 FROM generate_series(1,3)) ss ORDER BY 1
+# ----
+# f1  pg_typeof
+# foo  text
+# foo  text
+# foo  text
+
+query T colnames
+select 1 = all (select (select 1))
+----
+?column?
+true
+
+# Test cases to catch unpleasant interactions between IN-join processing
+# and subquery pullup.
+
+# query I colnames
+# select count(*) from
+#   (select 1 from tenk1 a
+#    where unique1 IN (select hundred from tenk1 b)) ss
+# ----
+# count
+# 100
+#
+# select count(distinct ss.ten) from
+#   (select ten from tenk1 a
+#    where unique1 IN (select hundred from tenk1 b)) ss;
+#  count
+# -------
+#     10
+# (1 row)
+#
+# select count(*) from
+#   (select 1 from tenk1 a
+#    where unique1 IN (select distinct hundred from tenk1 b)) ss;
+#  count
+# -------
+#    100
+# (1 row)
+#
+# select count(distinct ss.ten) from
+#   (select ten from tenk1 a
+#    where unique1 IN (select distinct hundred from tenk1 b)) ss;
+#  count
+# -------
+#     10
+# (1 row)
+
+# Test cases to check for overenthusiastic optimization of
+# "IN (SELECT DISTINCT ...)" and related cases.  Per example from
+# Luca Pireddu and Michael Fuhr.
+
+statement ok
+CREATE TABLE foo (id integer)
+
+statement ok
+CREATE TABLE bar (id1 integer, id2 integer);
+
+statement ok
+INSERT INTO foo VALUES (1);
+
+statement ok
+INSERT INTO bar VALUES (1, 1), (2, 2), (3, 1)
+
+# These cases require an extra level of distinct-ing above subquery s
+query I colnames
+SELECT * FROM foo WHERE id IN
+    (SELECT id2 FROM (SELECT DISTINCT id1, id2 FROM bar) AS s)
+----
+id
+1
+
+query I colnames
+SELECT * FROM foo WHERE id IN
+    (SELECT id2 FROM (SELECT id1,id2 FROM bar GROUP BY id1,id2) AS s)
+----
+id
+1
+
+query I colnames
+SELECT * FROM foo WHERE id IN
+    (SELECT id2 FROM (SELECT id1, id2 FROM bar UNION
+                      SELECT id1, id2 FROM bar) AS s)
+----
+id
+1
+
+# These cases do not
+#
+# TODO(benesch): DISTINCT ON not supported.
+# query I colnames
+# SELECT * FROM foo WHERE id IN
+#     (SELECT id2 FROM (SELECT DISTINCT ON (id2) id1, id2 FROM bar) AS s)
+# ----
+# id
+# 1
+
+query I colnames
+SELECT * FROM foo WHERE id IN
+    (SELECT id2 FROM (SELECT id2 FROM bar GROUP BY id2) AS s)
+----
+id
+1
+
+query I colnames
+SELECT * FROM foo WHERE id IN
+    (SELECT id2 FROM (SELECT id2 FROM bar UNION
+                      SELECT id2 FROM bar) AS s)
+----
+id
+1
+
+# Test case to catch problems with multiply nested sub-SELECTs not getting
+# recalculated properly.  Per bug report from Didier Moens.
+
+statement ok
+CREATE TABLE orderstest (
+    approver_ref integer,
+    po_ref integer,
+    ordercanceled boolean
+)
+
+statement ok
+INSERT INTO orderstest VALUES
+    (1, 1, false), (66, 5, false), (66, 6, false),
+    (66, 7, false), (66, 1, true), (66, 8, false),
+    (66, 1, false), (77, 1, false), (1, 1, false),
+    (66, 1, false), (1, 1, false)
+
+statement ok
+CREATE VIEW orders_view AS
+SELECT *,
+(SELECT CASE
+   WHEN ord.approver_ref=1 THEN '---' ELSE 'Approved'
+ END) AS "Approved",
+(SELECT CASE
+ WHEN ord.ordercanceled
+ THEN 'Canceled'
+ ELSE
+  (SELECT CASE
+		WHEN ord.po_ref=1
+		THEN
+		 (SELECT CASE
+				WHEN ord.approver_ref=1
+				THEN '---'
+				ELSE 'Approved'
+			END)
+		ELSE 'PO'
+	END)
+END) AS "Status",
+(CASE
+ WHEN ord.ordercanceled
+ THEN 'Canceled'
+ ELSE
+  (CASE
+		WHEN ord.po_ref=1
+		THEN
+		 (CASE
+				WHEN ord.approver_ref=1
+				THEN '---'
+				ELSE 'Approved'
+			END)
+		ELSE 'PO'
+	END)
+END) AS "Status_OK"
+FROM orderstest ord
+
+query IITTTT colnames,rowsort
+SELECT * FROM orders_view
+----
+approver_ref  po_ref  ordercanceled  Approved  Status  Status_OK
+ 1  1  false  ---  ---  ---
+66  5  false  Approved  PO  PO
+66  6  false  Approved  PO  PO
+66  7  false  Approved  PO  PO
+66  1  true  Approved  Canceled  Canceled
+66  8  false  Approved  PO  PO
+66  1  false  Approved  Approved  Approved
+77  1  false  Approved  Approved  Approved
+1  1  false  ---  ---  ---
+66  1  false  Approved  Approved  Approved
+1  1  false  ---  ---  ---
+
+statement ok
+DROP TABLE orderstest CASCADE
+
+query II colnames,rowsort
+select f1, ss1 as relabel from
+    (select *, (select sum(f1) from int4_tbl b where f1 >= a.f1) as ss1
+     from int4_tbl a) ss
+----
+f1  relabel
+0  2147607103
+123456  2147607103
+-123456  2147483647
+2147483647  2147483647
+-2147483647  0
+
+# Test cases involving PARAM_EXEC parameters and min/max index optimizations.
+# Per bug report from David Sanchez i Gregori.
+query I colnames
+select * from (
+  select max(unique1) from tenk1 as a
+  where exists (select 1 from tenk1 as b where b.thousand = a.unique2)
+) ss
+----
+max
+9997
+
+query I colnames
+select * from (
+  select min(unique1) from tenk1 as a
+  where not exists (select 1 from tenk1 as b where b.unique2 = 10000)
+) ss
+----
+min
+0
+
+# --
+# -- Test case for bug #4290: bogus calculation of subplan param sets
+# --
+# create temp table ta (id int primary key, val int);
+# insert into ta values(1,1);
+# insert into ta values(2,2);
+# create temp table tb (id int primary key, aval int);
+# insert into tb values(1,1);
+# insert into tb values(2,1);
+# insert into tb values(3,2);
+# insert into tb values(4,2);
+# create temp table tc (id int primary key, aid int);
+# insert into tc values(1,1);
+# insert into tc values(2,2);
+# select
+#   ( select min(tb.id) from tb
+#     where tb.aval = (select ta.val from ta where ta.id = tc.aid) ) as min_tb_id
+# from tc;
+#  min_tb_id
+# -----------
+#          1
+#          3
+# (2 rows)
+
+# Test case for 8.3 "failed to locate grouping columns" bug
+
+statement ok
+create table t1 (f1 numeric(14,0), f2 varchar(30))
+
+query III colnames
+select * from
+  (select distinct f1, f2, (select f2 from t1 x where x.f1 = up.f1) as fs
+   from t1 up) ss
+group by f1,f2,fs
+----
+f1  f2  fs
+
+# Test case for bug #5514 (mishandling of whole-row Vars in subselects)
+statement ok
+create table table_a (id integer)
+
+statement ok
+insert into table_a values (42)
+
+statement ok
+create view view_a as select * from table_a
+
+query T colnames
+select view_a from view_a
+----
+view_a
+(42)
+
+# TODO(benesch): broken scoping here.
+#
+# query T colnames
+# select (select view_a) from view_a
+# ----
+# view_a
+# (42)
+#
+# query T colnames
+# select (select (select view_a)) from view_a
+# ----
+# view_a
+# (42)
+#
+# query T colnames
+# select (select (a.*)::text) from view_a a
+# ----
+# a
+# (42)
+
+# Check that whole-row Vars reading the result of a subselect don't include
+#  any junk columns therein
+query T colnames,rowsort
+select q from (select max(f1) from int4_tbl group by f1 order by f1) q
+----
+q
+(-2147483647)
+(-123456)
+(0)
+(123456)
+(2147483647)
+
+# TODO(benesch): CTEs.
+#
+# with q as (select max(f1) from int4_tbl group by f1 order by f1)
+#   select q from q;
+#        q
+# ---------------
+#  (-2147483647)
+#  (-123456)
+#  (0)
+#  (123456)
+#  (2147483647)
+# (5 rows)
+
+# Test case for sublinks pushed down into subselects via join alias expansion
+query I colnames
+select
+  (select sq1) as qq1
+from
+  (select exists(select 1 from int4_tbl where f1 = q2) as sq1, 42 as dummy
+   from int8_tbl) sq0
+  join
+  int4_tbl i4 on dummy = i4.f1
+----
+qq1
+
+# Test case for cross-type partial matching in hashed subplan (bug #7597)
+statement ok
+create table outer_7597 (f1 int4, f2 int4)
+
+statement ok
+insert into outer_7597 values (0, 0), (1, 0), (0, null), (1, null)
+
+statement ok
+create table inner_7597(c1 int8, c2 int8)
+
+statement ok
+insert into inner_7597 values(0, null)
+
+query II colnames,rowsort
+select * from outer_7597 where (f1, f2) not in (select * from inner_7597)
+----
+f1  f2
+1  0
+1  NULL
+
+# Test case for planner bug with nested EXISTS handling
+query I colnames
+select a.thousand from tenk1 a, tenk1 b
+where a.thousand = b.thousand
+  and exists ( select 1 from tenk1 c where b.hundred = c.hundred
+                   and not exists ( select 1 from tenk1 d
+                                    where a.thousand = d.thousand ) )
+----
+thousand
+
+# TODO(benesch): LATERAL joins.
+#
+# query I colnames
+# select sum(ss.tst::int) from
+#   onek o cross join lateral (
+#   select i.ten in (select f1 from int4_tbl where f1 <= o.hundred) as tst,
+#          random() as r
+#   from onek i where i.unique1 = o.unique1 ) ss
+# where o.ten = 0
+# ----
+# sum
+# 100
+#
+# # Test rescan of a SetOp node
+# query I colnames
+# select count(*) from
+#   onek o cross join lateral (
+#     select * from onek i1 where i1.unique1 = o.unique1
+#     except
+#     select * from onek i2 where i2.unique1 = o.unique2
+#   ) ss
+# where o.ten = 1
+# ----
+# count
+# 100
+
+# TODO(benesch): WITH RECURSIVE.
+#
+# # Test rescan of a RecursiveUnion node
+# select sum(o.four), sum(ss.a) from
+#   onek o cross join lateral (
+#     with recursive x(a) as
+#       (select o.four as a
+#        union
+#        select a + 1 from x
+#        where a < 10)
+#     select * from x
+#   ) ss
+# where o.ten = 1;
+#  sum  | sum
+# ------+------
+#  1700 | 5350
+# (1 row)
+
+# Check we don't misoptimize a NOT IN where the subquery returns no rows.
+statement ok
+create table notinouter (a int)
+
+statement ok
+create table notininner (b int not null)
+
+statement ok
+insert into notinouter values (null), (1)
+
+query I colnames,rowsort
+select * from notinouter where a not in (select b from notininner)
+----
+a
+NULL
+1
+
+# Check we behave sanely in corner case of empty SELECT list (bug #8648)
+statement ok
+create table nocolumns()
+
+query T colnames
+select exists(select * from nocolumns)
+----
+exists
+false
+
+# TODO(benesch): LATERAL joins.
+#
+# Check behavior with a SubPlan in VALUES (bug #14924)
+# query I colnames, rowsort
+# select val.x
+#   from generate_series(1,10) as s(i),
+#   lateral (
+#     values ((select s.i + 1)), (s.i + 101)
+#   ) as val(x)
+# where s.i < 10 and (select val.x) < 110
+# ----
+# x
+# 2
+# 102
+# 3
+# 103
+# 4
+# 104
+# 5
+# 105
+# 6
+# 106
+# 7
+# 107
+# 8
+# 108
+# 9
+# 109
+# 10
+
+# another variant of that (bug #16213)
+query T colnames,rowsort
+select * from
+(values
+  (3 not in (select * from (values (1), (2)) ss1)),
+  (false)
+) ss;
+----
+column1
+true
+false
+
+# Check sane behavior with nested IN SubLinks
+query I colnames
+select * from int4_tbl where
+  (case when f1 in (select unique1 from tenk1 a) then f1 else null end) in
+  (select ten from tenk1 b)
+----
+f1
+0
+
+# TODO(benesch): SRF in scalar position.
+#
+# # Check for incorrect optimization when IN subquery contains a SRF
+# query I colnames
+# select * from int4_tbl o where (f1, f1) in
+#   (select f1, generate_series(1,50) / 10 g from int4_tbl i group by f1);
+# ----
+# f1
+# 0
+
+# check for over-optimization of whole-row Var referencing an Append plan
+query T colnames,rowsort
+select (select q from
+         (select 1,2,3.0 where f1 > 0
+          union all
+          select 4,5,6.0 where f1 <= 0
+         ) q )
+from int4_tbl
+----
+q
+(4,5,6.0)
+(1,2,3.0)
+(4,5,6.0)
+(1,2,3.0)
+(4,5,6.0)
+
+# TODO(benesch): LATERAL joins.
+#
+# # Check for sane handling of a lateral reference in a subquery's quals
+# # (most of the complication here is to prevent the test case from being
+# # flattened too much)
+# query III colnames
+# select * from
+#     int4_tbl i4,
+#     lateral (
+#         select i4.f1 > 1 as b, 1 as id
+#         from (select random() order by 1) as t1
+#       union all
+#         select true as b, 2 as id
+#     ) as t2
+# where b and f1 >= 0
+# ----
+# f1  b  id
+# 0   t  2
+# 123456   t  1
+# 123456   t  2
+# 2147483647   t  1
+# 2147483647   t  2

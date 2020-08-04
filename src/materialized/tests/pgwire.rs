@@ -255,7 +255,7 @@ fn test_multiple_statements() -> Result<(), Box<dyn Error>> {
     );
 
     assert_eq!(
-        client.query_one("SELECT * FROM v3", &[])?.get::<_, i32>(0),
+        client.query_one("SELECT * FROM v3", &[])?.get::<_, i64>(0),
         3,
     );
 

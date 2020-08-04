@@ -664,11 +664,7 @@ fn plan_view_select_intrusive(
         for sql_function in aggregates {
             agg_exprs.push(plan_aggregate(ecx, sql_function)?);
             group_scope.items.push(ScopeItem {
-                names: vec![ScopeItemName {
-                    table_name: None,
-                    column_name: Some(sql_function.name.to_string().into()),
-                    priority: false,
-                }],
+                names: vec![],
                 expr: Some(Expr::Function(sql_function.clone())),
                 nameable: true,
             });
@@ -1079,11 +1075,11 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
 fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
-        Expr::Function(func) => func
-            .name
-            .0
-            .last()
-            .map(|n| normalize::column_name(n.clone())),
+        Expr::Function(func) => match func.name.0.last() {
+            None => None,
+            Some(name) if name.as_str().starts_with("internal_") => None,
+            Some(name) => Some(normalize::column_name(name.clone())),
+        },
         Expr::Coalesce { .. } => Some("coalesce".into()),
         Expr::List { .. } => Some("list".into()),
         Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
@@ -1100,7 +1096,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr) -> Option<ScopeItemName> {
                 .and_then(|item| item.names.first())
                 .and_then(|name| name.column_name.clone())
         }
-        _ => return None,
+        _ => None,
     };
     name.map(|n| ScopeItemName {
         table_name: None,
@@ -1781,9 +1777,9 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     let mut seen_outer = false;
     let mut seen_inner = false;
     expr.visit_columns(0, &mut |depth, col| {
-        if col.level - depth == 0 {
+        if depth == 0 && col.level == 0 {
             seen_inner = true;
-        } else {
+        } else if col.level > depth {
             seen_outer = true;
         }
     });

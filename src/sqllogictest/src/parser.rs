@@ -254,7 +254,7 @@ impl<'a> Parser<'a> {
                 split_at(&mut output_str, &LINE_REGEX)?
                     .split(' ')
                     .filter(|s| !s.is_empty())
-                    .map(ColumnName::from)
+                    .map(|s| ColumnName::from(s.replace("␠", " ")))
                     .collect(),
             )
         } else {

@@ -2089,10 +2089,11 @@ impl Parser {
                 "BOOL" | "BOOLEAN" => DataType::Boolean,
                 "FLOAT" | "FLOAT4" => DataType::Float(self.parse_optional_precision()?),
                 "REAL" => DataType::Real,
-                "DOUBLE" | "FLOAT8" => {
+                "DOUBLE" => {
                     let _ = self.parse_keyword("PRECISION");
                     DataType::Double
                 }
+                "FLOAT8" => DataType::Double,
                 "SMALLINT" => DataType::SmallInt,
                 "INT" | "INTEGER" | "INT4" => DataType::Int,
                 "INT8" | "BIGINT" => DataType::BigInt,
