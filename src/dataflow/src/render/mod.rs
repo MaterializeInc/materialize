@@ -276,11 +276,8 @@ where
         src_id: SourceInstanceId,
         mut src: SourceDesc,
     ) {
-        if let Some(operator) = &mut src.operators {
-            // if src.operator is trivial, convert it to None
-            if operator.predicates.is_empty()
-                && operator.projection == (0..src.desc.typ().arity()).collect::<Vec<_>>()
-            {
+        if let Some(operator) = &src.operators {
+            if operator.is_trivial(src.arity()) {
                 src.operators = None;
             }
         }
