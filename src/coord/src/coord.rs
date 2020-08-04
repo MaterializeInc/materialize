@@ -1275,7 +1275,14 @@ where
         self.catalog_transact(ops)?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
-            ObjectType::Source => ExecuteResponse::DroppedSource,
+            ObjectType::Source => {
+                for id in items.iter() {
+                    self.persistence_metadata_tx
+                        .send(PersistenceMetadata::DropSource(*id))
+                        .expect("Failed to send DROP SOURCE notice to persister");
+                }
+                ExecuteResponse::DroppedSource
+            }
             ObjectType::View => ExecuteResponse::DroppedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,

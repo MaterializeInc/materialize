@@ -16,7 +16,6 @@ use log::info;
 
 use dataflow_types::{Persistence, WorkerPersistenceData};
 use expr::GlobalId;
-use ore::future::OreTryStreamExt;
 
 #[derive(Debug)]
 pub enum PersistenceMetadata {
