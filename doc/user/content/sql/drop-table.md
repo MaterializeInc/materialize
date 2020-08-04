@@ -65,5 +65,5 @@ b          NO        text
 
 ## Related pages
 
-- [`CREATE TABLE`](create-table.md)
-- [`INSERT`](insert.md)
+- [`CREATE TABLE`](../create-table)
+- [`INSERT`](../insert)

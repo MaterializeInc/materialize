@@ -73,5 +73,5 @@ b          NO        text
 
 ## Related pages
 
-- [`INSERT`](insert.md)
-- [`DROP TABLE`](drop-table.md)
+- [`INSERT`](../insert)
+- [`DROP TABLE`](../drop-table)

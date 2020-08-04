@@ -51,5 +51,5 @@ is nullable. `NULL` values may not be inserted into column `b`, which is not nul
 
 ## Related pages
 
-- [`CREATE TABLE`](create-table.md)
-- [`DROP TABLE`](drop-table.md)
+- [`CREATE TABLE`](../create-table)
+- [`DROP TABLE`](../drop-table)
