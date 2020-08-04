@@ -159,22 +159,51 @@ SELECT NOT FALSE OR FALSE
 ----
 true
 
-### int64 to bool ###
+### int4 to bool ###
 
 query B
-SELECT 99::bool
+SELECT 99::int::bool
 ----
 true
 
 query B
-SELECT 0::bool
+SELECT 0::int::bool
 ----
 false
 
 query B
-SELECT NOT 0::bool
+SELECT NOT 0::int::bool
 ----
 true
+
+### int8 to bool ###
+
+query B
+SELECT 99::bigint::bool
+----
+true
+
+query B
+SELECT 0::bigint::bool
+----
+false
+
+query B
+SELECT NOT 0::bigint::bool
+----
+true
+
+### bool to int4 ###
+
+query I
+SELECT true::int
+----
+1
+
+query I
+SELECT false::int
+----
+0
 
 statement ok
 CREATE TABLE x (a int, u int, j jsonb, b bool)

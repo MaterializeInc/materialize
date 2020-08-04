@@ -66,6 +66,21 @@ Wrap your release notes at the 80 character mark.
   SELECT a, sum(b) FROM ... GROUP BY 1
   ```
 
+- Expose [monitoring metrics](/ops/monitoring) for per-thread CPU usage {{% gh 3733 %}}.
+
+- Ensure correlated subqueries in CASE statement branches that are not taken
+  do not trigger errors {{% gh 3736 %}}.
+
+- Reduce memory overhead of the built-in logging views {{% gh 3752 %}}.
+
+- Improve performance of `TopK` operator {{% gh 3758 %}}.
+
+- Handle Snappy-encoded Avro OCF files.
+
+- Support casts from [`boolean`](/sql/types/boolean) to [`int`](/sql/types/int).
+
+- Add UI at `materialized:6875/prof` HTTP endpoint for creating heap dumps.
+
 <span id="v0.4.0"></span>
 ## v0.4.0
 

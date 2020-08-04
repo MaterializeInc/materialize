@@ -25,7 +25,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::iter;
 use std::mem;
-use std::rc::Rc;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use sql_parser::ast::visit::{self, Visit};
@@ -67,7 +66,7 @@ pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query,
     lifetime: QueryLifetime,
-) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), anyhow::Error> {
+) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     transform_ast::transform_query(&mut query)?;
     let qcx = QueryContext::root(scx, lifetime);
     let (mut expr, scope, mut finishing) = plan_query(&qcx, &query)?;
@@ -102,16 +101,9 @@ pub fn plan_root_query(
             .map(|i| typ.column_types[*i].clone())
             .collect(),
     );
-
     let desc = RelationDesc::new(typ, scope.column_names());
-    let mut param_types = vec![];
-    for (i, (n, typ)) in qcx.unwrap_param_types().into_iter().enumerate() {
-        if n != i + 1 {
-            bail!("unable to infer type for parameter ${}", i + 1);
-        }
-        param_types.push(typ);
-    }
-    Ok((expr, desc, finishing, param_types))
+
+    Ok((expr, desc, finishing))
 }
 
 /// Plans a SHOW statement that might have a WHERE or LIKE clause attached to it. A LIKE clause is
@@ -1502,7 +1494,7 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
             if *n == 0 || *n > 65536 {
                 bail!("there is no parameter ${}", n);
             }
-            if ecx.qcx.param_types.borrow().contains_key(n) {
+            if ecx.param_types().borrow().contains_key(n) {
                 ScalarExpr::Parameter(*n).into()
             } else {
                 CoercibleScalarExpr::Parameter(*n)
@@ -2093,6 +2085,29 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, anyhow::
     })
 }
 
+pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Error> {
+    match ty {
+        pgrepr::Type::Bool => Ok(ScalarType::Bool),
+        pgrepr::Type::Int4 => Ok(ScalarType::Int32),
+        pgrepr::Type::Int8 => Ok(ScalarType::Int64),
+        pgrepr::Type::Float4 => Ok(ScalarType::Float32),
+        pgrepr::Type::Float8 => Ok(ScalarType::Float64),
+        pgrepr::Type::Numeric => Ok(ScalarType::Decimal(0, 0)),
+        pgrepr::Type::Date => Ok(ScalarType::Date),
+        pgrepr::Type::Time => Ok(ScalarType::Time),
+        pgrepr::Type::Timestamp => Ok(ScalarType::Timestamp),
+        pgrepr::Type::TimestampTz => Ok(ScalarType::TimestampTz),
+        pgrepr::Type::Interval => Ok(ScalarType::Interval),
+        pgrepr::Type::Bytea => Ok(ScalarType::Bytes),
+        pgrepr::Type::Text => Ok(ScalarType::String),
+        pgrepr::Type::Jsonb => Ok(ScalarType::Jsonb),
+        pgrepr::Type::List(l) => Ok(ScalarType::List(Box::new(scalar_type_from_pg(l)?))),
+        pgrepr::Type::Record(_) => {
+            bail!("internal error: can't convert from pg record to materialize record")
+        }
+    }
+}
+
 /// This is used to collect aggregates from within an `Expr`.
 /// See the explanation of aggregate handling at the top of the file for more details.
 struct AggregateFuncVisitor<'ast> {
@@ -2183,9 +2198,6 @@ pub struct QueryContext<'a> {
     pub outer_scope: Scope,
     /// The type of the outer relation expressions.
     pub outer_relation_types: Vec<RelationType>,
-    /// The types of the parameters in the query. This is filled in as planning
-    /// occurs.
-    pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -2195,16 +2207,11 @@ impl<'a> QueryContext<'a> {
             lifetime,
             outer_scope: Scope::empty(None),
             outer_relation_types: vec![],
-            param_types: Rc::new(RefCell::new(BTreeMap::new())),
         }
     }
 
-    fn unwrap_param_types(self) -> BTreeMap<usize, ScalarType> {
-        Rc::try_unwrap(self.param_types).unwrap().into_inner()
-    }
-
     fn relation_type(&self, expr: &RelationExpr) -> RelationType {
-        expr.typ(&self.outer_relation_types, &self.param_types.borrow())
+        expr.typ(&self.outer_relation_types, &self.scx.param_types.borrow())
     }
 
     fn derived_context(&self, scope: Scope, relation_type: &RelationType) -> QueryContext<'a> {
@@ -2218,7 +2225,6 @@ impl<'a> QueryContext<'a> {
                 .chain(std::iter::once(relation_type))
                 .cloned()
                 .collect(),
-            param_types: self.param_types.clone(),
         }
     }
 }
@@ -2255,7 +2261,7 @@ impl<'a> ExprContext<'a> {
         expr.typ(
             &self.qcx.outer_relation_types,
             &self.relation_type,
-            &self.qcx.param_types.borrow(),
+            &self.qcx.scx.param_types.borrow(),
         )
     }
 
@@ -2286,5 +2292,9 @@ impl<'a> ExprContext<'a> {
         } else {
             Ok(())
         }
+    }
+
+    pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {
+        &self.qcx.scx.param_types
     }
 }

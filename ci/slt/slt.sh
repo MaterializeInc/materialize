@@ -32,12 +32,12 @@ mkdir -p target
 sqllogictest \
     -v --json-summary-file=target/slt-summary.json --no-fail "$@" \
     test/sqllogictest/cockroach/*.slt \
+    test/sqllogictest/postgres/*.slt \
     | tee target/slt.log
 
 sqllogictest \
     -v \
     test/sqllogictest/*.slt \
-    test/sqllogictest/postgres/*.slt \
     test/sqllogictest/sqlite/test \
     test/sqllogictest/transform/*.slt \
     | tee -a target/slt.log

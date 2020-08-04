@@ -251,6 +251,7 @@ impl Default for Optimizer {
             Box::new(crate::reduction_pushdown::ReductionPushdown),
             Box::new(crate::cse::map::Map),
             Box::new(crate::projection_lifting::ProjectionLifting),
+            Box::new(crate::join_implementation::JoinImplementation),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::reduction::FoldConstants),
         ];

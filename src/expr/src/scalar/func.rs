@@ -127,6 +127,13 @@ fn cast_bool_to_string_implicit<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::String(strconv::format_bool_static(a.unwrap_bool()))
 }
 
+fn cast_bool_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a.unwrap_bool() {
+        true => Datum::Int32(1),
+        false => Datum::Int32(0),
+    }
+}
+
 fn cast_int32_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() != 0)
 }
@@ -2248,6 +2255,7 @@ pub enum UnaryFunc {
     AbsDecimal,
     CastBoolToStringExplicit,
     CastBoolToStringImplicit,
+    CastBoolToInt32,
     CastInt32ToBool,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
@@ -2364,6 +2372,7 @@ impl UnaryFunc {
             UnaryFunc::AbsDecimal => Ok(abs_decimal(a)),
             UnaryFunc::CastBoolToStringExplicit => Ok(cast_bool_to_string_explicit(a)),
             UnaryFunc::CastBoolToStringImplicit => Ok(cast_bool_to_string_implicit(a)),
+            UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
             UnaryFunc::CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
@@ -2493,6 +2502,8 @@ impl UnaryFunc {
             CastStringToInterval | CastTimeToInterval => {
                 ColumnType::new(ScalarType::Interval, true)
             }
+
+            CastBoolToInt32 => ColumnType::new(ScalarType::Int32, in_nullable),
 
             CastBoolToStringExplicit
             | CastBoolToStringImplicit
@@ -2660,6 +2671,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
             UnaryFunc::CastBoolToStringExplicit => f.write_str("booltostrex"),
             UnaryFunc::CastBoolToStringImplicit => f.write_str("booltostrim"),
+            UnaryFunc::CastBoolToInt32 => f.write_str("booltoi32"),
             UnaryFunc::CastInt32ToBool => f.write_str("i32tobool"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
             UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),

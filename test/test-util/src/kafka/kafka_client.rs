@@ -7,21 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![allow(dead_code)]
-
 //! Kafka topic management
 
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
-use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::error::KafkaError;
+use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 
 pub struct KafkaClient {
     producer: FutureProducer<DefaultClientContext>,
-    messages: i64,
     kafka_url: String,
     topic: String,
 }
@@ -44,7 +42,6 @@ impl KafkaClient {
 
         Ok(KafkaClient {
             producer,
-            messages: 0,
             kafka_url: kafka_url.to_string(),
             topic: topic.to_string(),
         })
@@ -60,92 +57,36 @@ impl KafkaClient {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &self.kafka_url);
 
+        let client = config
+            .create::<AdminClient<_>>()
+            .expect("creating admin kafka client failed");
+
+        let admin_opts = AdminOptions::new().request_timeout(timeout);
+
         let mut topic = NewTopic::new(
             &self.topic,
             partitions,
             TopicReplication::Fixed(replication),
         );
-
         for (key, val) in configs {
             topic = topic.set(key, val);
         }
 
-        let res = config
-            .create::<AdminClient<_>>()
-            .expect("creating admin kafka client failed")
-            .create_topics(&[topic], &AdminOptions::new().request_timeout(timeout))
+        kafka_util::admin::create_topic(&client, &admin_opts, &topic)
             .await
             .context(format!("creating Kafka topic: {}", &self.topic))?;
 
-        if res.len() != 1 {
-            bail!(
-                "error creating topic {}: \
-             kafka topic creation returned {} results, but exactly one result was expected",
-                self.topic,
-                res.len()
-            );
-        }
-
-        if let Err((_, e)) = res[0] {
-            bail!("error creating topic {}: {}", self.topic, e);
-        }
-
-        // Topic creation is asynchronous, and if we don't wait for it to
-        // complete, we might produce a message (below) that causes it to
-        // get automatically created with multiple partitions. (Since
-        // multiple partitions have no ordering guarantees, this violates
-        // many assumptions that our tests make.)
-        ore::retry::retry_for(Duration::from_secs(8), |_| async {
-            let metadata = self
-                .producer
-                .client()
-                // N.B. It is extremely important not to ask specifically
-                // about the topic here, even though the API supports it!
-                // Asking about the topic will create it automatically...
-                // with the wrong number of partitions. Yes, this is
-                // unbelievably horrible.
-                .fetch_metadata(None, Some(Duration::from_secs(1)))?;
-            if metadata.topics().is_empty() {
-                bail!("metadata fetch returned no topics");
-            }
-            let topic = match metadata.topics().iter().find(|t| t.name() == self.topic) {
-                Some(topic) => topic,
-                None => bail!("metadata fetch did not return topic {}", self.topic,),
-            };
-            if topic.partitions().is_empty() {
-                bail!("metadata fetch returned a topic with no partitions");
-            } else if topic.partitions().len() as i32 != partitions {
-                bail!(
-                    "topic {} was created with {} partitions when exactly {} was expected",
-                    self.topic,
-                    topic.partitions().len(),
-                    partitions
-                );
-            }
-            Ok(())
-        })
-        .await?;
-
         Ok(())
     }
 
-    pub async fn send(&mut self, message: &[u8]) -> Result<(), anyhow::Error> {
-        self.messages += 1;
+    pub fn send(&self, message: &[u8]) -> Result<DeliveryFuture, KafkaError> {
         let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic)
             .payload(message)
             .timestamp(chrono::Utc::now().timestamp_millis());
-        if let Err((e, _message)) = self.producer.send(record, Duration::from_millis(500)).await {
-            return Err(e.into());
-        }
-
-        Ok(())
+        self.producer.send_result(record).map_err(|(e, _message)| e)
     }
 
-    pub fn send_key_value(
-        &self,
-        key: &[u8],
-        message: &[u8],
-    ) -> std::result::Result<rdkafka::producer::DeliveryFuture, rdkafka::error::KafkaError> {
+    pub fn send_key_value(&self, key: &[u8], message: &[u8]) -> Result<DeliveryFuture, KafkaError> {
         let record: FutureRecord<_, _> = FutureRecord::to(&self.topic)
             .key(key)
             .payload(message)

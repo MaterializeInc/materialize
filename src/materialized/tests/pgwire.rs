@@ -14,12 +14,14 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use pgrepr::Record;
+use pgrepr::{Numeric, Record};
+use repr::adt::decimal::Significand;
 
 use futures::stream::{self, StreamExt, TryStreamExt};
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
+use postgres::types::Type;
 use postgres_openssl::MakeTlsConnector;
 use tokio::runtime::Runtime;
 
@@ -62,6 +64,28 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 
     // Just ensure it does not panic (see #2498).
     client.query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])?;
+
+    // Ensure that a type hint provided by the client is respected.
+    {
+        let stmt = client.prepare_typed("SELECT $1", &[Type::INT4])?;
+        let val: i32 = client.query_one(&stmt, &[&42_i32])?.get(0);
+        assert_eq!(val, 42);
+    }
+
+    // Ensure that unspecified type hints are inferred.
+    {
+        let stmt = client.prepare_typed("SELECT $1 + $2", &[Type::INT4])?;
+        let val: i32 = client.query_one(&stmt, &[&1, &2])?.get(0);
+        assert_eq!(val, 3);
+    }
+
+    // Ensure that the fractional component of a decimal is not lost.
+    {
+        let num = Numeric(Significand::new(123).with_scale(2));
+        let stmt = client.prepare_typed("SELECT $1 + 1.23", &[Type::NUMERIC])?;
+        let val: Numeric = client.query_one(&stmt, &[&num])?.get(0);
+        assert_eq!(val.to_string(), "2.46");
+    }
 
     Ok(())
 }

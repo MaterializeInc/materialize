@@ -10,7 +10,6 @@
 use chrono::format::ParseResult;
 use chrono::prelude::*;
 use chrono::DateTime;
-use std::time::Duration;
 
 use structopt::StructOpt;
 
@@ -44,9 +43,9 @@ pub struct Args {
     #[structopt(long, default_value = "1000000")]
     pub message_count: usize,
 
-    /// Amount of time to sleep between messages, e.g. 2ms
-    #[structopt(long, parse(try_from_str = parse_duration::parse))]
-    pub message_sleep: Option<Duration>,
+    /// Number of messages to send per second
+    #[structopt(long, default_value = "8000")]
+    pub messages_per_second: usize,
 
     /// The kafka host
     #[structopt(long, default_value = "localhost")]
@@ -83,13 +82,6 @@ pub struct Args {
     #[structopt(long, parse(try_from_str = parse_utc_datetime_from_str))]
     pub start_time: Option<DateTime<Utc>>,
 
-    /// How many partitions to create source topic with. If this parameter is specified
-    /// the billing demo will try to create a new instance of the topic with the specified
-    /// number of partitions using the Kafka Admin API. Otherwise, it uses the auto create
-    /// functionality
-    #[structopt(long)]
-    pub partitions: Option<i32>,
-
     /// Whether or not to validate the sink matches its input view
     #[structopt(long)]
     pub check_sink: bool,
@@ -98,16 +90,43 @@ pub struct Args {
     /// The maximum batch size to associate with this source. If none is supplied, Materialize,
     /// Materialize will create a source with no upper bound on batch size
     pub batch_size: Option<u64>,
+
+    /// Whether or not the billing demo should create a new source topic.
+    #[structopt(
+        long,
+        requires_all(&["replication-factor", "partitions"])
+    )]
+    pub create_topic: bool,
+
+    /// Number of partitions for the source topic. Has to be specified if --create-topic is true.
+    #[structopt(long, requires("create-topic"))]
+    partitions: Option<i32>,
+
+    /// Replication factor for the source topic. Has to be specified if --create-topic is true.
+    #[structopt(long, requires("create-topic"))]
+    replication_factor: Option<i32>,
 }
 
 impl Args {
     pub(crate) fn kafka_config(&self) -> KafkaConfig {
+        let create_topic = if self.create_topic {
+            Some(CreateTopicConfig {
+                partitions: self
+                    .partitions
+                    .expect("have to specify partitions when creating topic"),
+                replication_factor: self
+                    .replication_factor
+                    .expect("have to specify replication factor when creating topic"),
+            })
+        } else {
+            None
+        };
         KafkaConfig {
             url: self.kafka_url(),
             group_id: "materialize.billing".into(),
             topic: self.kafka_topic.clone(),
             message_count: self.message_count,
-            message_sleep: self.message_sleep,
+            messages_per_second: self.messages_per_second,
             seed: self.seed,
             start_time: match self.start_time {
                 Some(start_time) => start_time,
@@ -120,7 +139,7 @@ impl Args {
                     )
                 }
             },
-            partitions: self.partitions,
+            create_topic,
         }
     }
 
@@ -146,15 +165,21 @@ impl Args {
 }
 
 #[derive(Debug)]
+pub struct CreateTopicConfig {
+    pub partitions: i32,
+    pub replication_factor: i32,
+}
+
+#[derive(Debug)]
 pub struct KafkaConfig {
     pub url: String,
     pub group_id: String,
     pub topic: String,
     pub message_count: usize,
-    pub message_sleep: Option<Duration>,
+    pub messages_per_second: usize,
     pub seed: u64,
     pub start_time: DateTime<Utc>,
-    pub partitions: Option<i32>,
+    pub create_topic: Option<CreateTopicConfig>,
 }
 
 #[derive(Debug)]

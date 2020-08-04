@@ -193,6 +193,7 @@ lazy_static! {
         casts! {
             // BOOL
             (Bool, Explicit(String)) => CastBoolToStringExplicit,
+            (Bool, Explicit(Int32)) => CastBoolToInt32,
             (Bool, JsonbAny) => CastJsonbOrNullToJsonb,
 
             //INT32
@@ -583,7 +584,7 @@ pub fn plan_coerce<'a>(
                 CoerceTo::Plain(typ) => typ,
                 CoerceTo::JsonbAny => ScalarType::Jsonb,
             };
-            let prev = ecx.qcx.param_types.borrow_mut().insert(n, typ);
+            let prev = ecx.param_types().borrow_mut().insert(n, typ);
             assert!(prev.is_none());
             ScalarExpr::Parameter(n)
         }

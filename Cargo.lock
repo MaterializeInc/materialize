@@ -347,9 +347,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "2.33.0"
+version = "2.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5067f5bb2d80ef5d68b4c87db81601f0b75bca627bc2ef76b141d7b846a3c6d9"
+checksum = "bdfa80d47f954d53a35a64987ca1422f495b8d6483c0fe9f7117b36c2a792129"
 dependencies = [
  "ansi_term",
  "atty",
@@ -1436,6 +1436,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipnet"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47be2f14c678be2fdcab04ab1171db51b2762ce6f0a8ee87c8dd4a04ed216135"
+
+[[package]]
 name = "itertools"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1449,6 +1455,17 @@ name = "itoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "501266b7edd0174f8530248f87f99c88fbe60ca4ef3dd486835b8d8d53136f7f"
+
+[[package]]
+name = "jemalloc-ctl"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c502a5ff9dd2924f1ed32ba96e3b65735d837b4bfd978d3161b1702e66aca4b7"
+dependencies = [
+ "jemalloc-sys",
+ "libc",
+ "paste",
+]
 
 [[package]]
 name = "jemalloc-sys"
@@ -1486,6 +1503,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ore",
  "rand",
  "rdkafka",
  "serde",
@@ -1525,9 +1543,9 @@ checksum = "b294d6fa9ee409a054354afc4352b0b9ef7ca222c69b8812cbea9e7d2bf3783f"
 
 [[package]]
 name = "libc"
-version = "0.2.73"
+version = "0.2.74"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd7d4bd64732af4bf3a67f367c27df8520ad7e230c5817b8ff485864d80242b9"
+checksum = "a2f02823cf78b754822df5f7f268fb59822e7296276d3e069d8e8cb26a14bd10"
 
 [[package]]
 name = "libflate"
@@ -1661,8 +1679,10 @@ dependencies = [
  "postgres",
  "postgres-openssl",
  "predicates",
+ "prof",
  "prometheus",
  "rdkafka-sys",
+ "repr",
  "rlimit",
  "serde_json",
  "stream-cancel",
@@ -1673,6 +1693,7 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -2162,6 +2183,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45ca20c77d80be666aef2b45486da86238fabe33e38306bd3118fe4af33fa880"
+dependencies = [
+ "paste-impl",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "paste-impl"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d95a7db200b97ef370c8e6de0088252f7e0dfff7d047a28528e47456c0fc98b6"
+dependencies = [
+ "proc-macro-hack",
+]
+
+[[package]]
 name = "pdqselect"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2349,9 +2389,9 @@ dependencies = [
 
 [[package]]
 name = "postgres"
-version = "0.17.3"
+version = "0.17.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a08e48317fe57088aa1ff4a84a88a8401aee565f4ae5c201aa18d11c573ce350"
+checksum = "14d864cf6c2eabf1323afe4145ff273aad1898e4f2a3bcb30347715df8624a07"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -2515,6 +2555,16 @@ dependencies = [
  "lazy_static",
  "libc",
  "libflate",
+]
+
+[[package]]
+name = "prof"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "jemalloc-ctl",
+ "lazy_static",
+ "tempfile",
 ]
 
 [[package]]
@@ -2688,7 +2738,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.24.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#770ac7419f9c2d0b8607a5614efc978dd1c6182b"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#9a713e35b6063983db546bcc09bd155206a4c3d1"
 dependencies = [
  "futures",
  "libc",
@@ -2703,7 +2753,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "2.1.0+1.5.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#770ac7419f9c2d0b8607a5614efc978dd1c6182b"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#9a713e35b6063983db546bcc09bd155206a4c3d1"
 dependencies = [
  "cmake",
  "libc",
@@ -2791,9 +2841,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.10.6"
+version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b82c9238b305f26f53443e3a4bc8528d64b8d0bee408ec949eb7bf5635ec680"
+checksum = "12427a5577082c24419c9c417db35cfeb65962efc7675bb6b0d5f1f9d315bfe6"
 dependencies = [
  "base64 0.12.3",
  "bytes",
@@ -2804,6 +2854,7 @@ dependencies = [
  "http-body",
  "hyper",
  "hyper-tls",
+ "ipnet",
  "js-sys",
  "lazy_static",
  "log",
@@ -3342,9 +3393,9 @@ dependencies = [
 
 [[package]]
 name = "stacker"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72dd941b456e1c006d6b9f27c526d5b69281288aeea8cba82c19d3843d8ccdd2"
+checksum = "8376bcbe35bcfba504adfbcde5aeb019ead0b43ae5c0a071e0570ee3377de5a1"
 dependencies = [
  "cc",
  "cfg-if",
@@ -3596,6 +3647,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "kafka-util",
  "log",
  "ore",
  "rand",
@@ -3621,6 +3673,7 @@ dependencies = [
  "getopts",
  "interchange",
  "itertools",
+ "kafka-util",
  "krb5-src",
  "lazy_static",
  "md-5",
@@ -3914,9 +3967,9 @@ checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
 
 [[package]]
 name = "tracing"
-version = "0.1.16"
+version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2e2a2de6b0d5cbb13fc21193a2296888eaab62b6044479aafb3c54c01c29fcd"
+checksum = "f0aae59226cf195d8e74d4b34beae1859257efb4e5fed3f147d2dc2c7d372178"
 dependencies = [
  "cfg-if",
  "log",
@@ -3937,9 +3990,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94ae75f0d28ae10786f3b1895c55fe72e79928fd5ccdebb5438c75e93fec178f"
+checksum = "b2734b5a028fa697686f16c6d18c2c6a3c7e41513f9a213abb6754c4acb3c8d7"
 dependencies = [
  "lazy_static",
 ]

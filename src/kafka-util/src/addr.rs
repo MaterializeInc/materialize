@@ -44,8 +44,10 @@ impl fmt::Display for KafkaAddr {
     }
 }
 
+/// An error while parsing a Kafka address.
 #[derive(Clone, Debug)]
 pub enum KafkaAddrParseError {
+    /// The Kafka address contained an invalid port.
     InvalidPort(ParseIntError),
 }
 

@@ -33,6 +33,7 @@ pub enum Command {
     Describe {
         name: String,
         stmt: Option<Statement>,
+        param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<()>>,
     },

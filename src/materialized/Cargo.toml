@@ -13,6 +13,7 @@ license = "proprietary"
 anyhow = "1.0.32"
 async-trait = "0.1.36"
 backtrace = { version = "0.3.50" }
+chrono = "0.4.13"
 comm = { path = "../comm" }
 compile-time-run = "0.2.11"
 coord = { path = "../coord" }
@@ -21,7 +22,7 @@ dataflow-types = { path = "../dataflow-types" }
 futures = "0.3"
 getopts = "0.2"
 hyper = "0.13.7"
-jemallocator = { version = "0.3.0", features = ["profiling"] }
+jemallocator = { version = "0.3", features = ["profiling"] }
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 log = "0.4.11"
@@ -31,6 +32,7 @@ openssl-sys = { version = "0.9.58", features = ["vendored"] }
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
 postgres-openssl = "0.3.0"
+prof = { path = "../prof" }
 pgwire = { path = "../pgwire" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
@@ -40,9 +42,9 @@ sysctl = "0.4.0"
 tempfile = "3.1"
 tokio = "0.2"
 tokio-openssl = "0.4.0"
-tracing = "0.1.16"
+tracing = "0.1.18"
 tracing-subscriber = "0.2.7"
-chrono = "0.4.13"
+url = "2"
 
 [dev-dependencies]
 assert_cmd = "1.0.1"
@@ -52,6 +54,7 @@ itertools = "0.9"
 pgrepr = { path = "../pgrepr" }
 postgres = { version = "0.17", features = ["with-chrono-0_4"] }
 predicates = "1.0.5"
+repr = { path = "../repr" }
 serde_json = "1"
 tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
 

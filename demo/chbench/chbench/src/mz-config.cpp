@@ -23,23 +23,24 @@ const mz::Config& mz::defaultConfig() {
     using chRandom::int_distribution;
     static Config singleton {
         .expectedSources = {
-            "mysql_tpcch_customer",
-            "mysql_tpcch_history",
-            "mysql_tpcch_district",
-            "mysql_tpcch_neworder",
-            "mysql_tpcch_order",
-            "mysql_tpcch_orderline",
-            "mysql_tpcch_warehouse",
-            "mysql_tpcch_item",
-            "mysql_tpcch_stock",
-            "mysql_tpcch_nation",
-            "mysql_tpcch_region",
-            "mysql_tpcch_supplier"
+            "debezium_tpcch_customer",
+            "debezium_tpcch_history",
+            "debezium_tpcch_district",
+            "debezium_tpcch_neworder",
+            "debezium_tpcch_order",
+            "debezium_tpcch_orderline",
+            "debezium_tpcch_warehouse",
+            "debezium_tpcch_item",
+            "debezium_tpcch_stock",
+            "debezium_tpcch_nation",
+            "debezium_tpcch_region",
+            "debezium_tpcch_supplier"
         },
-        .viewPattern = "mysql.tpcch.%",
+        .viewPattern = "debezium.tpcch.%",
         .materializedUrl = "postgresql://materialized:6875/materialize?sslmode=disable",
         .kafkaUrl = "kafka:9092",
         .schemaRegistryUrl = "http://schema-registry:8081",
+        .consistencySource = "",
         .hQueries = {},
         .dialect = new MySqlDialect(),
         .hist_date_offset_millis =  static_cast<inner_type>(std::uniform_int_distribution<int64_t>(946684800,1704067200)), //  2010-2024

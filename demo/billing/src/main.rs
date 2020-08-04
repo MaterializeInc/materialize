@@ -19,6 +19,7 @@
 #![deny(missing_debug_implementations, missing_docs)]
 
 use std::process;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -88,35 +89,57 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
         last_time: config.start_time,
     };
 
-    let mut k_client =
-        kafka_client::KafkaClient::new(&config.url, &config.group_id, &config.topic, &[])?;
+    let k_client = Arc::new(kafka_client::KafkaClient::new(
+        &config.url,
+        &config.group_id,
+        &config.topic,
+        &[],
+    )?);
 
-    if let Some(partitions) = config.partitions {
+    if let Some(create_topic) = &config.create_topic {
         k_client
-            .create_topic(partitions, 1, &[], Some(Duration::from_secs(5)))
-            .await?
+            .create_topic(
+                create_topic.partitions,
+                create_topic.replication_factor,
+                &[],
+                None,
+            )
+            .await?;
     }
 
     let mut buf = vec![];
-    let mut interval = config.message_sleep.map(tokio::time::interval);
-    let mut total_size = 0;
-    for i in 0..config.message_count {
-        if let Some(int) = interval.as_mut() {
-            int.tick().await;
+    let mut total_messages_sent = 0;
+    loop {
+        let mut bytes_sent = 0;
+        let backoff = tokio::time::delay_for(Duration::from_secs(1));
+        for _ in 0..config.messages_per_second {
+            let m = randomizer::random_batch(rng, &mut recordstate);
+            m.write_to_vec(&mut buf)?;
+            log::trace!("sending: {:?}", m);
+            let res = k_client.send(&buf);
+            match res {
+                Ok(fut) => {
+                    tokio::spawn(fut);
+                }
+                Err(e) => {
+                    log::error!("failed to produce message: {}", e);
+                    tokio::time::delay_for(Duration::from_millis(100)).await;
+                }
+            };
+            bytes_sent += buf.len();
+            buf.clear();
         }
-        let m = randomizer::random_batch(rng, &mut recordstate);
-        m.write_to_vec(&mut buf)?;
-        log::trace!("sending: {:?}", m);
-        k_client.send(&buf).await?;
-        total_size += buf.len();
-        buf.clear();
-        if i % (config.message_count / 100).max(5) == 0 {
-            log::info!(
-                "sent message {} average message size: {}B",
-                i,
-                total_size / i.max(1)
-            );
+        log::info!(
+            "produced {} records ({} bytes / record)",
+            config.messages_per_second,
+            bytes_sent / config.messages_per_second
+        );
+        total_messages_sent += config.messages_per_second;
+
+        if total_messages_sent >= config.message_count {
+            break;
         }
+        backoff.await;
     }
     Ok(())
 }

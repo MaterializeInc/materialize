@@ -65,6 +65,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
 
 [load-instr]: https://github.com/MaterializeInc/infra/tree/main/cloud#starting-a-load-test
 
+- [ ] Kick off a [full SQL logic test run](https://buildkite.com/materialize/sql-logic-tests)
+  and verify that it passes.
+
 - [ ] Start the load tests according to the instructions above
 
 - [ ] Find the load tests in grafana.mz , and link to them in #release, validating that
