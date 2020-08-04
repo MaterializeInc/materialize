@@ -14,6 +14,7 @@
     <form method="post">
         <button name="action" value="deactivate">Deactivate</button>
         <button name="action" value="dump_file">Download heap profile</button>
+        <button name="action" value="flamegraph">Visualize heap profile (flamegraph)</button>
     </form>
 {% when None %}
     <p>Jemalloc profiling enabled but inactive.</p>

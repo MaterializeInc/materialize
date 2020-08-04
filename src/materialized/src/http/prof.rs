@@ -52,14 +52,20 @@ mod disabled {
 
 #[cfg(not(target_os = "macos"))]
 mod enabled {
-    use std::io::Read;
-    use std::sync::{Arc, Mutex};
+    use std::io::{BufReader, Read};
+    use std::{
+        cell::RefCell,
+        sync::{Arc, Mutex},
+    };
 
     use askama::Template;
     use hyper::{header, Body, Method, Request, Response, StatusCode};
     use url::form_urlencoded;
 
-    use prof::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_CTL};
+    use prof::{
+        collate_stacks, parse_jeheap, JemallocProfCtl, JemallocProfMetadata, ProfStartTime,
+        PROF_CTL,
+    };
 
     use crate::http::util;
 
@@ -68,6 +74,12 @@ mod enabled {
     struct ProfEnabledTemplate<'a> {
         version: &'a str,
         start_time: Option<ProfStartTime>,
+    }
+
+    #[derive(Template)]
+    #[template(path = "http/templates/flamegraph.html")]
+    struct FlamegraphTemplate<'a> {
+        data_json: &'a str,
     }
 
     pub async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
@@ -129,6 +141,30 @@ mod enabled {
                     )
                     .body(Body::from(s))
                     .unwrap())
+            }
+            "flamegraph" => {
+                let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
+                let f = borrow.dump()?;
+                let r = BufReader::new(f);
+                let stacks = parse_jeheap(r)?;
+                let collated = collate_stacks(stacks);
+                let data_json = RefCell::new(String::new());
+                collated.dfs(
+                    |node| {
+                        data_json.borrow_mut().push_str(&format!(
+                            "{{\"name\": \"{}\",\"value\":{},\"children\":[",
+                            node.name, node.weight
+                        ));
+                    },
+                    |_node, is_last| {
+                        data_json.borrow_mut().push_str("]}");
+                        if !is_last {
+                            data_json.borrow_mut().push_str(",");
+                        }
+                    },
+                );
+                let data_json = &*data_json.borrow();
+                Ok(util::template_response(FlamegraphTemplate { data_json }))
             }
             x => Ok(util::error_response(
                 StatusCode::BAD_REQUEST,
