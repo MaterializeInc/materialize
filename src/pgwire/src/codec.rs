@@ -453,32 +453,16 @@ fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?;
     let sql = buf.read_cstr()?;
 
-    // A parameter data type can be left unspecified by setting it to zero, or by making
-    // the array of parameter type OIDs shorter than the number of parameter symbols ($n)
-    // used in the query string. Another special case is that a parameter's type can be
-    // specified as void (that is, the OID of the void pseudo-type). This is meant to
-    // allow parameter symbols to be used for function parameters that are actually OUT
-    // parameters. Ordinarily there is no context in which a void parameter could be
-    // used, but if such a parameter symbol appears in a function's parameter list, it is
-    // effectively ignored. For example, a function call such as foo($1,$2,$3,$4) could
-    // match a function with two IN and two OUT arguments, if $3 and $4 are specified as
-    // having type void.
-    //
-    // Oh god
-    let parameter_data_type_count = buf.read_i16()?;
-    let mut param_dts = vec![];
-    for _ in 0..parameter_data_type_count {
-        param_dts.push(buf.read_i32()?);
+    let mut param_types = vec![];
+    for _ in 0..buf.read_i16()? {
+        param_types.push(buf.read_u32()?);
     }
 
-    let msg = FrontendMessage::Parse {
+    Ok(FrontendMessage::Parse {
         name: name.into(),
         sql: sql.into(),
-        parameter_data_type_count,
-        parameter_data_types: param_dts,
-    };
-
-    Ok(msg)
+        param_types,
+    })
 }
 
 fn decode_close(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {

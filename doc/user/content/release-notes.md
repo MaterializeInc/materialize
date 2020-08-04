@@ -65,6 +65,8 @@ Wrap your release notes at the 80 character mark.
 
 - Support casts from [`boolean`](/sql/types/boolean) to [`int`](/sql/types/int).
 
+- Add UI at `materialized:6875/prof` HTTP endpoint for creating heap dumps.
+
 - Support [CREATE TABLE](sql/create-table), [DROP TABLE](sql/drop-table) and [INSERT](sql/insert) statements.
 
 <span id="v0.4.0"></span>

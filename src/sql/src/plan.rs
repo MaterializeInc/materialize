@@ -237,8 +237,9 @@ pub fn plan(
 pub fn describe(
     catalog: &dyn Catalog,
     stmt: Statement,
+    param_types: &[Option<pgrepr::Type>],
 ) -> Result<(Option<RelationDesc>, Vec<pgrepr::Type>), anyhow::Error> {
-    let (desc, types) = statement::describe_statement(catalog, stmt)?;
+    let (desc, types) = statement::describe_statement(catalog, stmt, param_types)?;
     let types = types.into_iter().map(|t| pgrepr::Type::from(&t)).collect();
     Ok((desc, types))
 }

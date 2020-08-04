@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
@@ -104,9 +106,19 @@ pub fn make_show_objects_desc(
 pub fn describe_statement(
     catalog: &dyn Catalog,
     stmt: Statement,
+    param_types_in: &[Option<pgrepr::Type>],
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), anyhow::Error> {
-    let pcx = &PlanContext::default();
-    let scx = &StatementContext { catalog, pcx };
+    let mut param_types = BTreeMap::new();
+    for (i, ty) in param_types_in.iter().enumerate() {
+        if let Some(ty) = ty {
+            param_types.insert(i + 1, query::scalar_type_from_pg(ty)?);
+        }
+    }
+    let scx = StatementContext {
+        catalog,
+        pcx: &PlanContext::default(),
+        param_types: Rc::new(RefCell::new(param_types)),
+    };
     Ok(match stmt {
         Statement::CreateDatabase { .. }
         | Statement::CreateSchema { .. }
@@ -143,6 +155,7 @@ pub fn describe_statement(
                             query: Box::new(q),
                             as_of: None,
                         },
+                        param_types_in,
                     )?
                     .1
                 }
@@ -234,8 +247,15 @@ pub fn describe_statement(
             // somewhere, so we don't have to reanalyze the whole query when
             // `handle_statement` is called. This will require a complicated
             // dance when bind parameters are implemented, so punting for now.
-            let (_relation_expr, desc, _finishing, param_types) =
-                query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
+            let (_relation_expr, desc, _finishing) =
+                query::plan_root_query(&scx, *query, QueryLifetime::OneShot)?;
+            let mut param_types = vec![];
+            for (i, (n, typ)) in scx.unwrap_param_types().into_iter().enumerate() {
+                if n != i + 1 {
+                    bail!("unable to infer type for parameter ${}", i + 1);
+                }
+                param_types.push(typ);
+            }
             (Some(desc), param_types)
         }
 
@@ -252,7 +272,17 @@ pub fn handle_statement(
     stmt: Statement,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let scx = &StatementContext { pcx, catalog };
+    let param_types = params
+        .types
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| (i + 1, ty.clone()))
+        .collect();
+    let scx = &StatementContext {
+        pcx,
+        catalog,
+        param_types: Rc::new(RefCell::new(param_types)),
+    };
     match stmt {
         Statement::Tail {
             name,
@@ -1061,7 +1091,7 @@ fn handle_create_view(
     } else {
         None
     };
-    let (mut relation_expr, mut desc, finishing, _) =
+    let (mut relation_expr, mut desc, finishing) =
         query::plan_root_query(scx, *query.clone(), QueryLifetime::Static)?;
     // TODO(jamii) can views even have parameters?
     relation_expr.bind_parameters(&params);
@@ -1927,6 +1957,7 @@ fn handle_explain(
             let scx = StatementContext {
                 pcx: entry.plan_cx(),
                 catalog: scx.catalog,
+                param_types: scx.param_types.clone(),
             };
             (scx, *query)
         }
@@ -1934,7 +1965,7 @@ fn handle_explain(
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let (mut sql_expr, desc, finishing, _param_types) =
+    let (mut sql_expr, desc, finishing) =
         query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
     let finishing = if is_view {
         // views don't use a separate finishing
@@ -1964,7 +1995,7 @@ fn handle_query(
     params: &Params,
     lifetime: QueryLifetime,
 ) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
-    let (mut expr, desc, finishing, _param_types) = query::plan_root_query(scx, query, lifetime)?;
+    let (mut expr, desc, finishing) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params);
     Ok((expr.decorrelate(), desc, finishing))
 }
@@ -2010,6 +2041,9 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 pub struct StatementContext<'a> {
     pub pcx: &'a PlanContext,
     pub catalog: &'a dyn Catalog,
+    /// The types of the parameters in the query. This is filled in as planning
+    /// occurs.
+    pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -2071,5 +2105,9 @@ impl<'a> StatementContext<'a> {
 
     pub fn experimental_mode(&self) -> bool {
         self.catalog.experimental_mode()
+    }
+
+    pub fn unwrap_param_types(self) -> BTreeMap<usize, ScalarType> {
+        Rc::try_unwrap(self.param_types).unwrap().into_inner()
     }
 }
