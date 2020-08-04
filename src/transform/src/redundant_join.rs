@@ -151,7 +151,7 @@ impl RedundantJoin {
                         } else {
                             // When we reach the removed relation, we should introduce
                             // references to the columns that are meant to replace these.
-                            // This should happen only once, and `.drain(..)` could work.
+                            // This should happen only once, and `.drain(..)` would be correct.
                             projection.extend(bindings.clone());
                         }
                     }
@@ -316,7 +316,7 @@ impl RedundantJoin {
                 // each source record it at least one. This could have
                 // been a problem in `Union`, where we might report
                 // that the union of positive and negative records is
-                // "exact": cancelations would make this false.
+                // "exact": cancellations would make this false.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
                     prov.exact = false;
@@ -376,14 +376,14 @@ impl ProvInfo {
 
 /// Attempts to find column bindings that make `input` redundant.
 ///
-/// This method attempts to find evidence that `input` may be redundant by searching
+/// This method attempts to determine that `input` may be redundant by searching
 /// the join structure for another relation `other` with provenance that contains some
 /// provenance of `input`, and keys for `input` that are equated by the join to the
 /// corresponding columns of `other` under their provenance. The `input` provenance
 /// must also have its `exact` bit set.
 ///
 /// In these circumstances, the claim is that because the key columns are equated and
-/// determine non key columns (the meaning of a key), any matches between `input` and
+/// determine non-key columns, any matches between `input` and
 /// `other` will neither introduce new information to `other`, nor restrict the rows
 /// of `other`, nor alter their multplicity.
 fn find_redundancy(
@@ -409,24 +409,29 @@ fn find_redundancy(
                             }
                         }
                     }
-                    if bindings.len() == input_arities[input] {
-                        for key in keys.iter() {
-                            if key.iter().all(|input_col| {
-                                let other_col = bindings[&input_col];
-                                equivalences.iter().any(|e| {
-                                    e.contains(&ScalarExpr::Column(
-                                        prior_arities[input] + input_col,
-                                    )) && e.contains(&ScalarExpr::Column(
+
+                    // True iff `col = binding[col]` is in `equivalences` for all `col` in `cols`.
+                    let all_columns_equated = |cols: &Vec<usize>| {
+                        cols.iter().all(|input_col| {
+                            let other_col = bindings[&input_col];
+                            equivalences.iter().any(|e| {
+                                e.contains(&ScalarExpr::Column(prior_arities[input] + input_col))
+                                    && e.contains(&ScalarExpr::Column(
                                         prior_arities[other] + other_col,
                                     ))
-                                })
-                            }) {
-                                let binding = (0..input_arities[input])
-                                    .map(|c| prior_arities[other] + bindings[&c])
-                                    .collect::<Vec<_>>();
-                                return Some(binding);
-                            }
-                        }
+                            })
+                        })
+                    };
+
+                    // If all columns of `input` are bound, and any key columns of `input` are equated,
+                    // the binding can be returned as mapping replacements for each input column.
+                    if bindings.len() == input_arities[input]
+                        && keys.iter().any(|key| all_columns_equated(key))
+                    {
+                        let binding = (0..input_arities[input])
+                            .map(|c| prior_arities[other] + bindings[&c])
+                            .collect::<Vec<_>>();
+                        return Some(binding);
                     }
                 }
             }
