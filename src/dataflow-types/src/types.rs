@@ -510,8 +510,6 @@ pub enum Consistency {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Persistence {
     pub path: PathBuf,
-    pub startup_time: u64,
-    pub nonce: u64,
     pub restart: Option<PersistenceRestart>,
 }
 
