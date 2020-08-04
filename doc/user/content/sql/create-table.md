@@ -16,8 +16,8 @@ Tables store non-streaming data that is inserted via [INSERT](../insert) stateme
 
 You might want to create a table when...
 
-- You want to manually insert rows of data into Materialize.
-- You want to test Materialize's features without setting up a data stream.
+- Manually inserting rows of data into Materialize.
+- Testing Materialize's features without setting up a data stream.
 
 ## Syntax
 
@@ -28,13 +28,13 @@ Field | Use
 _table&lowbar;name_ | A name for the table.
 _col&lowbar;name_ | The name of the column to be created in the table.
 _col&lowbar;type_ | The data type of the column indicated by _col_name_.
-_NOT NULL_ | Provide a `NOT NULL` constraint if a column is not nullable. All columns without this constraint will be nullable.
+**NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
 
 ## Details
 
 ### Restrictions
 
-Tables will not persist any data that is inserted. This means that restarting a
+Tables do not persist any data that is inserted. This means that restarting a
 Materialize instance will lose any data that was previously stored in a table.
 
 Additionally, tables do not currently support:

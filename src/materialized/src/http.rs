@@ -29,7 +29,7 @@ use prometheus::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use header::HeaderValue;
-use prof::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_METADATA};
+use prof::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_CTL};
 
 use ore::netio::SniffedStream;
 use url::form_urlencoded;
@@ -89,7 +89,7 @@ impl Server {
     ) -> Server {
         // just set this so it shows up in metrics
         WORKER_COUNT.with_label_values(&[worker_count]).set(1);
-        let mem_profiling = PROF_METADATA.clone();
+        let mem_profiling = PROF_CTL.clone();
         Server {
             tls,
             cmdq_tx,

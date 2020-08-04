@@ -22,45 +22,26 @@ Field | Use
 **IF EXISTS** | Do not return an error if the named table does not exist.
 _table&lowbar;name_ | The name of the table to drop.
 
-## Details
-
-### Restrictions
-
-Tables will not persist any data that is inserted. This means that restarting a
-Materialize instance will lose any data that was previously stored in a table.
-
-Additionally, tables do not currently support:
-    - Primary keys
-    - Unique constraints
-    - Check constraints
-    - Default column values
-    - Insert statements that use anything other than a `VALUES` clause, such as
-      `INSERT INTO ... SELECT`
-    - `UPDATE ...` and `DELETE` statements
-
 ## Examples
 
-### Creating a table
+### Dropping a table
 
-We can create a table `t` with the following statement:
+We can create a table `t` and verify that it was created with the following
+statements:
 
 ```sql
 CREATE TABLE t (a int, b text NOT NULL);
-```
 
-Once a table is created, we can inspect it with various `SHOW` commands.
-
-```sql
 SHOW TABLES;
 TABLES
 ------
 t
+```
 
-SHOW COLUMNS IN t;
-Field      Nullable  Type
--------------------------
-a          YES       int4
-b          NO        text
+We can then remove the table from the Materialize instance with a `DROP` statement.
+
+```sql
+DROP TABLE t;
 ```
 
 ## Related pages

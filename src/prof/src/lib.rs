@@ -25,9 +25,9 @@ mod non_macos_imports {
 use non_macos_imports::*;
 
 lazy_static! {
-    pub static ref PROF_METADATA: Option<Arc<Mutex<JemallocProfCtl>>> = {
-        if let Some(md) = JemallocProfCtl::get() {
-            Some(Arc::new(Mutex::new(md)))
+    pub static ref PROF_CTL: Option<Arc<Mutex<JemallocProfCtl>>> = {
+        if let Some(ctl) = JemallocProfCtl::get() {
+            Some(Arc::new(Mutex::new(ctl)))
         } else {
             None
         }
@@ -103,7 +103,7 @@ impl JemallocProfCtl {
     }
 
     pub fn activate(&mut self) -> Result<(), jemalloc_ctl::Error> {
-        // SAFETY: "prof.active" is documented as being writable and returning a bool:
+        // SAFETY: "prof.active" is documented as being writable and taking a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", true) }?;
         if self.md.start_time.is_none() {
@@ -113,7 +113,7 @@ impl JemallocProfCtl {
     }
 
     pub fn deactivate(&mut self) -> Result<(), jemalloc_ctl::Error> {
-        // SAFETY: "prof.active" is documented as being writable and returning a bool:
+        // SAFETY: "prof.active" is documented as being writable and taking a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
         unsafe { raw::write(b"prof.active\0", false) }?;
         self.md.start_time = None;

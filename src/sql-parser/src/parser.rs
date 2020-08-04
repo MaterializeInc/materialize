@@ -137,8 +137,7 @@ enum Precedence {
     Is,
     Cmp,
     Like,
-    JsonCompare,
-    JsonOp,
+    Other,
     Plus,
     Times,
     UnaryOp,
@@ -774,6 +773,10 @@ impl Parser {
             Token::Mod => Some(BinaryOperator::Modulus),
             Token::Div => Some(BinaryOperator::Divide),
             Token::Concat => Some(BinaryOperator::Concat),
+            Token::RegexMatch => Some(BinaryOperator::RegexMatch),
+            Token::RegexIMatch => Some(BinaryOperator::RegexIMatch),
+            Token::RegexNotMatch => Some(BinaryOperator::RegexNotMatch),
+            Token::RegexNotIMatch => Some(BinaryOperator::RegexNotIMatch),
             Token::JsonGet => Some(BinaryOperator::JsonGet),
             Token::JsonGetAsText => Some(BinaryOperator::JsonGetAsText),
             Token::JsonGetPath => Some(BinaryOperator::JsonGetPath),
@@ -1013,13 +1016,17 @@ impl Parser {
                 | Token::JsonContainsAnyFields
                 | Token::JsonContainsAllFields
                 | Token::JsonContainsPath
-                | Token::JsonApplyPathPredicate => Precedence::JsonCompare,
-                Token::JsonGet
+                | Token::JsonApplyPathPredicate
+                | Token::JsonGet
                 | Token::JsonGetAsText
                 | Token::JsonGetPath
                 | Token::JsonGetPathAsText
                 | Token::JsonDeletePath
-                | Token::Concat => Precedence::JsonOp,
+                | Token::Concat
+                | Token::RegexMatch
+                | Token::RegexIMatch
+                | Token::RegexNotMatch
+                | Token::RegexNotIMatch => Precedence::Other,
                 Token::Plus | Token::Minus => Precedence::Plus,
                 Token::Mult | Token::Div | Token::Mod => Precedence::Times,
                 Token::DoubleColon => Precedence::DoubleColon,

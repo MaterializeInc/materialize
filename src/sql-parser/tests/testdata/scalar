@@ -60,6 +60,35 @@ name NOT LIKE '%a' IS NULL
 ----
 IsNull { expr: BinaryOp { left: Identifier([Ident("name")]), op: NotLike, right: Value(String("%a")) }, negated: false }
 
+parse-scalar
+a ~ 'foo'
+----
+BinaryOp { left: Identifier([Ident("a")]), op: RegexMatch, right: Value(String("foo")) }
+
+parse-scalar
+a ~* 'foo'
+----
+BinaryOp { left: Identifier([Ident("a")]), op: RegexIMatch, right: Value(String("foo")) }
+
+parse-scalar
+a !~ 'foo'
+----
+BinaryOp { left: Identifier([Ident("a")]), op: RegexNotMatch, right: Value(String("foo")) }
+
+parse-scalar
+a !~* 'foo'
+----
+BinaryOp { left: Identifier([Ident("a")]), op: RegexNotIMatch, right: Value(String("foo")) }
+
+parse-scalar
+a !x 'foo'
+----
+error:
+Parse error:
+a !x 'foo'
+  ^
+Unrecognized token
+
 # Casts
 
 parse-scalar roundtrip

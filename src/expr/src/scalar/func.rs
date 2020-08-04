@@ -1210,9 +1210,26 @@ fn match_like_pattern<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalE
     Ok(Datum::from(needle.is_match(haystack)))
 }
 
-fn match_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
+fn match_cached_regex<'a>(a: Datum<'a>, needle: &regex::Regex) -> Datum<'a> {
     let haystack = a.unwrap_str();
     Datum::from(needle.is_match(haystack))
+}
+
+fn match_regex<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    case_insensitive: bool,
+) -> Result<Datum<'a>, EvalError> {
+    let haystack = a.unwrap_str();
+    let needle = build_regex(b, case_insensitive)?;
+    Ok(Datum::from(needle.is_match(haystack)))
+}
+
+pub fn build_regex(d: Datum, case_insensitive: bool) -> Result<regex::Regex, EvalError> {
+    regex::RegexBuilder::new(d.unwrap_str())
+        .case_insensitive(case_insensitive)
+        .build()
+        .map_err(|e| EvalError::InvalidRegex(e.to_string()))
 }
 
 fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1733,6 +1750,7 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     MatchLikePattern,
+    MatchRegex { case_insensitive: bool },
     ToCharTimestamp,
     ToCharTimestampTz,
     DatePartInterval,
@@ -1828,6 +1846,7 @@ impl BinaryFunc {
             BinaryFunc::Gt => Ok(eager!(gt)),
             BinaryFunc::Gte => Ok(eager!(gte)),
             BinaryFunc::MatchLikePattern => eager!(match_like_pattern),
+            BinaryFunc::MatchRegex { case_insensitive } => eager!(match_regex, *case_insensitive),
             BinaryFunc::ToCharTimestamp => Ok(eager!(to_char_timestamp, temp_storage)),
             BinaryFunc::ToCharTimestampTz => Ok(eager!(to_char_timestamptz, temp_storage)),
             BinaryFunc::DatePartInterval => {
@@ -1883,7 +1902,7 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool, in_nullable)
             }
 
-            MatchLikePattern => {
+            MatchLikePattern | MatchRegex { .. } => {
                 // The output can be null if the pattern is invalid.
                 ColumnType::new(ScalarType::Bool, true)
             }
@@ -2128,7 +2147,8 @@ impl BinaryFunc {
             | JsonbDeleteInt64
             | JsonbDeleteString
             | TextConcat
-            | ListIndex => true,
+            | ListIndex
+            | MatchRegex { .. } => true,
             MatchLikePattern
             | ToCharTimestamp
             | ToCharTimestampTz
@@ -2202,6 +2222,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
             BinaryFunc::MatchLikePattern => f.write_str("like"),
+            BinaryFunc::MatchRegex {
+                case_insensitive: false,
+            } => f.write_str("~"),
+            BinaryFunc::MatchRegex {
+                case_insensitive: true,
+            } => f.write_str("~*"),
             BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
             BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
             BinaryFunc::DatePartInterval => f.write_str("date_partiv"),
@@ -2445,7 +2471,7 @@ impl UnaryFunc {
             UnaryFunc::ByteLengthString => byte_length(a.unwrap_str()),
             UnaryFunc::ByteLengthBytes => byte_length(a.unwrap_bytes()),
             UnaryFunc::CharLength => char_length(a),
-            UnaryFunc::MatchRegex(regex) => Ok(match_regex(a, &regex)),
+            UnaryFunc::MatchRegex(regex) => Ok(match_cached_regex(a, &regex)),
             UnaryFunc::DatePartInterval(units) => {
                 date_part_interval_inner(*units, a.unwrap_interval())
             }

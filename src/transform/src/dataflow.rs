@@ -74,7 +74,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source_desc.desc.typ().arity()).collect(),
+                    projection: (0..source_desc.arity()).collect(),
                 })
             }
             // Restrict required columns by those identified as demanded.
@@ -111,7 +111,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source_desc.desc.typ().arity()).collect(),
+                    projection: (0..source_desc.arity()).collect(),
                 })
             }
             // Add any predicates that can be pushed to the source.

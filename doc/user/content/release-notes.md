@@ -62,10 +62,26 @@ Wrap your release notes at the 80 character mark.
 - Improve performance of `TopK` operator {{% gh 3758 %}}.
 
 - Handle Snappy-encoded Avro OCF files.
+- Add support for the [regular expression matching operators](/sql/functions/#string)
+  `~`, `~*`, `!~`, and `!~*`, which report whether a string does or does not
+  match a regular expression.
 
 - Support casts from [`boolean`](/sql/types/boolean) to [`int`](/sql/types/int).
 
 - Add UI at `materialized:6875/prof` HTTP endpoint for creating heap dumps.
+- Allow ordinal references in `GROUP BY` clauses to refer to items in the
+  `SELECT` list that are formed from arbitrary expressions, as in:
+
+  ```sql
+  SELECT a + 1, sum(b) FROM ... GROUP BY 1
+  ```
+
+  Previously, Materialize only handled ordinal references to items that were
+  simple column references, as in:
+
+  ```sql
+  SELECT a, sum(b) FROM ... GROUP BY 1
+  ```
 
 - Support [CREATE TABLE](/sql/create-table), [DROP TABLE](/sql/drop-table) and [INSERT](/sql/insert) statements.
 
