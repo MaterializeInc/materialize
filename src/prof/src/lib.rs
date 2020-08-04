@@ -7,22 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use jemalloc_ctl::raw;
 use lazy_static::lazy_static;
-
-#[cfg(not(target_os = "macos"))]
-mod non_macos_imports {
-    pub use std::ffi::CString;
-    pub use std::os::unix::ffi::OsStrExt;
-
-    pub use jemalloc_ctl::raw;
-    pub use tempfile::NamedTempFile;
-}
-#[cfg(not(target_os = "macos"))]
-use non_macos_imports::*;
+use tempfile::NamedTempFile;
 
 lazy_static! {
     pub static ref PROF_CTL: Option<Arc<Mutex<JemallocProfCtl>>> = {
@@ -53,29 +45,6 @@ pub struct JemallocProfCtl {
     md: JemallocProfMetadata,
 }
 
-#[cfg(target_os = "macos")]
-impl JemallocProfCtl {
-    fn get() -> Option<Self> {
-        None
-    }
-    pub fn get_md(&self) -> JemallocProfMetadata {
-        unreachable!()
-    }
-
-    pub fn activate(&mut self) -> Result<(), jemalloc_ctl::Error> {
-        unreachable!()
-    }
-
-    pub fn deactivate(&mut self) -> Result<(), jemalloc_ctl::Error> {
-        unreachable!()
-    }
-
-    pub fn dump(&mut self) -> anyhow::Result<std::fs::File> {
-        unreachable!()
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
 impl JemallocProfCtl {
     // Creates and returns the global singleton.
     fn get() -> Option<Self> {
