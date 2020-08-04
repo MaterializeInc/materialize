@@ -7,15 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
 use futures::executor::block_on;
 use futures::stream::StreamExt;
-use log::info;
+use log::{error, info};
 
 use dataflow_types::{Persistence, WorkerPersistenceData};
 use expr::GlobalId;
+
+#[derive(Debug)]
+pub struct Source {
+    id: GlobalId,
+    path: PathBuf,
+}
 
 #[derive(Debug)]
 pub enum PersistenceMetadata {
@@ -26,6 +34,7 @@ pub enum PersistenceMetadata {
 pub struct Persister {
     data_rx: comm::mpsc::Receiver<WorkerPersistenceData>,
     metadata_rx: std::sync::mpsc::Receiver<PersistenceMetadata>,
+    sources: HashMap<GlobalId, Source>,
 }
 
 impl Persister {
@@ -36,6 +45,7 @@ impl Persister {
         Persister {
             data_rx,
             metadata_rx,
+            sources: HashMap::new(),
         }
     }
 
@@ -51,8 +61,33 @@ impl Persister {
     async fn update_persistence(&mut self) {
         while let Ok(metadata) = self.metadata_rx.try_recv() {
             match metadata {
-                PersistenceMetadata::AddSource(_, _) => info!("persister told to add a source"),
-                PersistenceMetadata::DropSource(_) => info!("persister told to drop a source"),
+                PersistenceMetadata::AddSource(id, persistence) => {
+                    info!("[remove]: persister told to add a source");
+                    // Check if we already have a source
+                    if self.sources.contains_key(&id) {
+                        error!(
+                            "trying to start persisting {} but it is already persisted",
+                            id
+                        );
+                        continue;
+                    }
+                    // Allocate a new source
+                    let source = Source {
+                        id,
+                        path: persistence.path.clone(),
+                    };
+
+                    self.sources.insert(id, source);
+                }
+                PersistenceMetadata::DropSource(id) => {
+                    info!("[remove]: persister told to drop a source");
+                    if !self.sources.contains_key(&id) {
+                        error!("trying to stop persisting {} but it is not persisted", id);
+                        continue;
+                    }
+
+                    self.sources.remove(&id);
+                }
             };
         }
 
