@@ -13,14 +13,6 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-// Temporarily disable jemalloc on macOS as we have observed latency issues
-// when we run load tests with jemalloc, but not the macOS system allocator
-// todo(rkhaitan) figure out which allocator we want to use for all supported
-// platforms
-#[cfg(not(target_os = "macos"))]
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
@@ -45,6 +37,18 @@ use crate::mux::Mux;
 
 mod http;
 mod mux;
+
+// Disable jemalloc on macOS, as it is not well supported [0][1][2].
+// The issues present as runaway latency on load test workloads that are
+// comfortably handled by the macOS system allocator. Consider re-evaluating if
+// jemalloc's macOS support improves.
+//
+// [0]: https://github.com/jemalloc/jemalloc/issues/26
+// [1]: https://github.com/jemalloc/jemalloc/issues/843
+// [2]: https://github.com/jemalloc/jemalloc/issues/1467
+#[cfg(not(target_os = "macos"))]
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// The version of the crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
