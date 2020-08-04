@@ -99,7 +99,7 @@
 //! if/when the errors are retracted.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -107,13 +107,14 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
+use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
+use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use avro::types::Value;
@@ -125,17 +126,14 @@ use ore::cast::CastFrom;
 use ore::iter::IteratorExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
-use self::context::{ArrangementFlavor, Context};
-use super::sink;
-use super::source;
-use super::source::{SourceConfig, SourceToken};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_values};
-use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::{CollectionExt, StreamExt};
-use crate::server::LocalInput;
-use crate::server::{TimestampDataUpdates, TimestampMetadataUpdates};
-use crate::source::{FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
+use crate::render::context::{ArrangementFlavor, Context};
+use crate::server::{LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
+use crate::sink;
+use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
+use crate::source::{SourceConfig, SourceToken};
 
 mod arrange_by;
 mod context;
@@ -146,28 +144,48 @@ mod threshold;
 mod top_k;
 mod upsert;
 
-pub(crate) fn build_local_input<A: Allocate>(
-    manager: &mut TraceManager,
-    worker: &mut TimelyWorker<A>,
-    local_inputs: &mut HashMap<GlobalId, LocalInput>,
+/// Worker-local state used during rendering.
+pub struct RenderState {
+    /// The traces available for sharing across dataflows.
+    pub traces: TraceManager,
+    /// Handles to local inputs, keyed by ID.
+    pub local_inputs: HashMap<GlobalId, LocalInput>,
+    /// Handles to external sources, keyed by ID.
+    pub ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
+    /// Timestamp data updates for each source.
+    pub ts_histories: TimestampDataUpdates,
+    /// Communication channel for enabling/disabling timestamping on new/dropped
+    /// sources.
+    pub ts_source_updates: TimestampMetadataUpdates,
+    /// Tokens that should be dropped when a dataflow is dropped to clean up
+    /// associated state.
+    pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+}
+
+pub fn build_local_input<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    render_state: &mut RenderState,
     index_id: GlobalId,
     name: &str,
     index: IndexDesc,
     on_type: RelationType,
 ) {
-    let worker_index = worker.index();
     let name = format!("Dataflow: {}", name);
-    let worker_logging = worker.log_register().get("timely");
-    worker.dataflow_core::<Timestamp, _, _, _>(&name, worker_logging, Box::new(()), |_, scope| {
+    let worker_logging = timely_worker.log_register().get("timely");
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         scope.clone().region(|region| {
             // A local input has two parts: 1) the arrangement/index where the
             // data is being stored, identified by the index_id
             // 2) the source stream that data comes in from, which is identified
             //    by the source_id, passed into this method as index.on_id
-            let mut context = Context::<_, _, _, Timestamp>::new();
+            let mut context = Context::<_, _, _, Timestamp>::for_dataflow(&DataflowDesc::new(
+                "local-input".into(),
+            ));
             let ((handle, capability), stream) = region.new_unordered_input();
-            if worker_index == 0 {
-                local_inputs.insert(index.on_id, LocalInput { handle, capability });
+            if region.index() == 0 {
+                render_state
+                    .local_inputs
+                    .insert(index.on_id, LocalInput { handle, capability });
             }
             let get_expr = RelationExpr::global_get(index.on_id, on_type);
             let err_collection = Collection::empty(region);
@@ -180,7 +198,9 @@ pub(crate) fn build_local_input<A: Allocate>(
             );
             match context.arrangement(&get_expr, &index.keys) {
                 Some(ArrangementFlavor::Local(oks, errs)) => {
-                    manager.set(index_id, TraceBundle::new(oks.trace, errs.trace));
+                    render_state
+                        .traces
+                        .set(index_id, TraceBundle::new(oks.trace, errs.trace));
                 }
                 _ => {
                     panic!("Arrangement alarmingly absent!");
@@ -190,42 +210,21 @@ pub(crate) fn build_local_input<A: Allocate>(
     });
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_dataflow<A: Allocate>(
+pub fn build_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    render_state: &mut RenderState,
     dataflow: DataflowDesc,
-    manager: &mut TraceManager,
-    worker: &mut TimelyWorker<A>,
-    dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
-    global_source_mappings: &mut HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
-    timestamp_histories: TimestampDataUpdates,
-    timestamp_channel: TimestampMetadataUpdates,
-    logger: &mut Option<Logger>,
 ) {
-    let worker_index = worker.index();
-    let worker_peers = worker.peers();
-    let worker_logging = worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
 
-    worker.dataflow_core::<Timestamp, _, _, _>(&name, worker_logging, Box::new(()), |_, scope| {
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region(|region| {
-            let mut context = Context::<_, _, _, Timestamp>::new();
-
-            let mut source_tokens = HashMap::new();
-            // this is stopgap measure so dropping an index and recreating one with the same name
-            // does not result in timestamp/reading from source errors.
-            // use an export id to distinguish between different dataflows
-            // TODO (materialize#1720): replace `first_export_id` by some form of dataflow identifier
-            let first_export_id = if let Some((id, _, _)) = dataflow.index_exports.first() {
-                *id
-            } else if let Some((id, _)) = dataflow.sink_exports.first() {
-                *id
-            } else {
-                unreachable!()
-            };
+            let mut context = Context::for_dataflow(&dataflow);
 
             assert!(
                 !dataflow
@@ -236,482 +235,502 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 "computation of unique IDs assumes a source appears no more than once per dataflow"
             );
 
-            // When set, `as_of` indicates a frontier that can be used to compact input timestamps
-            // without affecting the results. We *should* apply it, to sources and imported traces,
-            // both because it improves performance, and because potentially incorrect results are
-            // visible in sinks.
-            let as_of_frontier = dataflow
-                .as_of
-                .clone()
-                .unwrap_or_else(|| Antichain::from_elem(0));
-
-            // Load declared sources into the rendering context.
-            for (src_id, mut src) in dataflow.source_imports.clone() {
-                if let Some(operator) = &mut src.operators {
-                    // if src.operator is trivial, convert it to None
-                    if operator.predicates.is_empty()
-                        && operator.projection == (0..src.desc.typ().arity()).collect::<Vec<_>>()
-                    {
-                        src.operators = None;
-                    }
-                }
-
-                if let SourceConnector::External {
-                    connector,
-                    encoding,
-                    envelope,
-                    consistency,
-                    max_ts_batch: _,
-                    ts_frequency,
-                } = src.connector
-                {
-                    let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
-
-                    // This uid must be unique across all different instantiations of a source
-                    let uid = SourceInstanceId {
-                        sid: src_id.sid,
-                        vid: first_export_id,
-                    };
-
-                    // TODO(benesch): we force all sources to have an empty
-                    // error stream. Likely we will want to plumb this
-                    // collection into the source connector so that sources
-                    // can produce errors.
-                    let mut err_collection = Collection::empty(region);
-
-                    let fast_forwarded = match connector {
-                        ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                            start_offset,
-                            ..
-                        }) => start_offset > 0,
-                        _ => false,
-                    };
-
-                    // All workers are responsible for reading in Kafka sources. Other sources
-                    // support single-threaded ingestion only
-                    let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
-                        true
-                    } else {
-                        (usize::cast_from(uid.hashed()) % worker_peers) == worker_index
-                    };
-
-                    let source_config = SourceConfig {
-                        name: format!("{}-{}", connector.name(), uid),
-                        id: uid,
-                        scope: region,
-                        // Distribute read responsibility among workers.
-                        active: active_read_worker,
-                        timestamp_histories: timestamp_histories.clone(),
-                        timestamp_tx: timestamp_channel.clone(),
-                        consistency,
-                        timestamp_frequency: ts_frequency,
-                        worker_id: worker_index,
-                        // Assumption: worker.peers() == total number of workers in Materialize
-                        worker_count: worker_peers,
-                        encoding: encoding.clone(),
-                    };
-
-                    let capability = if let Envelope::Upsert(key_encoding) = envelope {
-                        match connector {
-                            ExternalSourceConnector::Kafka(_) => {
-                                let (source, capability) =
-                                    source::create_source::<_, KafkaSourceInfo, _>(
-                                        source_config,
-                                        connector,
-                                    );
-
-                                let (transformed, new_err_collection) =
-                                    upsert::pre_arrange_from_upsert_transforms(
-                                        &source.0,
-                                        encoding,
-                                        key_encoding,
-                                        &dataflow.debug_name,
-                                        worker_index,
-                                        as_of_frontier.clone(),
-                                        &mut src.operators,
-                                        src.desc.typ(),
-                                    );
-
-                                let arranged = arrange_from_upsert(
-                                    &transformed,
-                                    &format!("UpsertArrange: {}", src_id.to_string()),
-                                );
-
-                                err_collection.concat(
-                                    &new_err_collection
-                                        .pass_through("upsert-linear-errors")
-                                        .as_collection(),
-                                );
-
-                                let keys = src.desc.typ().keys[0]
-                                    .iter()
-                                    .map(|k| ScalarExpr::Column(*k))
-                                    .collect::<Vec<_>>();
-                                context.set_local(
-                                    &get_expr,
-                                    &keys,
-                                    (arranged, err_collection.arrange()),
-                                );
-                                capability
-                            }
-                            _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
-                        }
-                    } else {
-                        let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) =
-                            connector.clone()
-                        {
-                            let ((source, err_source), capability) =
-                                source::create_source::<_, FileSourceInfo<Value>, Value>(
-                                    source_config,
-                                    connector,
-                                );
-                            err_collection = err_collection.concat(
-                                &err_source
-                                    .map(DataflowError::SourceError)
-                                    .pass_through("AvroOCF-errors")
-                                    .as_collection(),
-                            );
-                            let reader_schema = match &encoding {
-                                DataEncoding::AvroOcf { reader_schema } => reader_schema,
-                                _ => unreachable!(
-                                    "Internal error: \
-                                         Avro OCF schema should have already been resolved.\n\
-                                        Encoding is: {:?}",
-                                    encoding
-                                ),
-                            };
-
-                            let reader_schema = Schema::parse_str(reader_schema).unwrap();
-                            (
-                                decode_avro_values(
-                                    &source,
-                                    &envelope,
-                                    reader_schema,
-                                    &dataflow.debug_name,
-                                ),
-                                capability,
-                            )
-                        } else {
-                            let ((ok_source, err_source), capability) = match connector.clone() {
-                                ExternalSourceConnector::Kafka(_) => {
-                                    source::create_source::<_, KafkaSourceInfo, _>(
-                                        source_config,
-                                        connector,
-                                    )
-                                }
-                                ExternalSourceConnector::Kinesis(_) => {
-                                    source::create_source::<_, KinesisSourceInfo, _>(
-                                        source_config,
-                                        connector,
-                                    )
-                                }
-                                ExternalSourceConnector::File(_) => {
-                                    source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
-                                        source_config,
-                                        connector,
-                                    )
-                                }
-                                ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-                            };
-                            err_collection = err_collection.concat(
-                                &err_source
-                                    .map(DataflowError::SourceError)
-                                    .pass_through("source-errors")
-                                    .as_collection(),
-                            );
-
-                            // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
-                            // a hypothetical future avro_extract, protobuf_extract, etc.
-                            let stream = decode_values(
-                                &ok_source,
-                                encoding,
-                                &dataflow.debug_name,
-                                &envelope,
-                                &mut src.operators,
-                                fast_forwarded,
-                            );
-
-                            (stream, capability)
-                        };
-
-                        let mut collection = match envelope {
-                            Envelope::None => stream.as_collection(),
-                            Envelope::Debezium(_) => {
-                                // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
-                                stream.as_collection().explode({
-                                    let mut row_packer = repr::RowPacker::new();
-                                    move |row| {
-                                        let mut datums = row.unpack();
-                                        let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                                        Some((row_packer.pack(datums.into_iter()), diff))
-                                    }
-                                })
-                            }
-                            Envelope::Upsert(_) => unreachable!(),
-                        };
-
-                        // Implement source filtering and projection.
-                        // At the moment this is strictly optional, but we perform it anyhow
-                        // to demonstrate the intended use.
-                        if let Some(operators) = src.operators.clone() {
-                            // Determine replacement values for unused columns.
-                            let source_type = src.desc.typ();
-                            let position_or = (0..source_type.arity())
-                                .map(|col| {
-                                    if operators.projection.contains(&col) {
-                                        Some(col)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-
-                            // Evaluate the predicate on each record, noting potential errors that might result.
-                            let (collection2, errors) = collection.flat_map_fallible({
-                                let mut row_packer = repr::RowPacker::new();
-                                move |input_row| {
-                                    let temp_storage = RowArena::new();
-                                    let datums = input_row.unpack();
-                                    let pred_eval = operators
-                                        .predicates
-                                        .iter()
-                                        .map(|predicate| predicate.eval(&datums, &temp_storage))
-                                        .find(|result| result != &Ok(Datum::True));
-                                    match pred_eval {
-                                        None => Some(Ok(row_packer.pack(position_or.iter().map(
-                                            |pos_or| match pos_or {
-                                                Some(index) => datums[*index],
-                                                None => Datum::Dummy,
-                                            },
-                                        )))),
-                                        Some(Ok(Datum::False)) => None,
-                                        Some(Ok(Datum::Null)) => None,
-                                        Some(Ok(x)) => {
-                                            panic!("Predicate evaluated to invalid value: {:?}", x)
-                                        }
-                                        Some(Err(x)) => Some(Err(x.into())),
-                                    }
-                                }
-                            });
-
-                            collection = collection2;
-                            err_collection = err_collection.concat(&errors);
-                        }
-
-                        // Apply `as_of` to each timestamp.
-                        let as_of_frontier1 = as_of_frontier.clone();
-                        collection = collection
-                            .inner
-                            .map_in_place(move |(_, time, _)| {
-                                time.advance_by(as_of_frontier1.borrow())
-                            })
-                            .as_collection();
-
-                        let as_of_frontier2 = as_of_frontier.clone();
-                        err_collection = err_collection
-                            .inner
-                            .map_in_place(move |(_, time, _)| {
-                                time.advance_by(as_of_frontier2.borrow())
-                            })
-                            .as_collection();
-
-                        // Introduce the stream by name, as an unarranged collection.
-                        context.collections.insert(
-                            RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
-                            (collection, err_collection),
-                        );
-                        capability
-                    };
-                    let token = Rc::new(capability);
-                    source_tokens.insert(src_id.sid, token.clone());
-
-                    // We also need to keep track of this mapping globally to activate sources
-                    // on timestamp advancement queries
-                    let prev = global_source_mappings.insert(uid, Rc::downgrade(&token));
-                    assert!(prev.is_none());
-                }
+            // Import declared sources into the rendering context.
+            for (src_id, src) in dataflow.source_imports.clone() {
+                context.import_source(render_state, region, src_id, src);
             }
 
-            let mut index_tokens = HashMap::new();
-
-            for (id, (index_desc, typ)) in dataflow.index_imports.iter() {
-                if let Some(traces) = manager.get_mut(id) {
-                    let token = traces.to_drop().clone();
-                    let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
-                        scope,
-                        &format!("Index({}, {:?})", index_desc.on_id, index_desc.keys),
-                        as_of_frontier.clone(),
-                    );
-                    let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
-                        scope,
-                        &format!("ErrIndex({}, {:?})", index_desc.on_id, index_desc.keys),
-                        as_of_frontier.clone(),
-                    );
-                    let ok_arranged = ok_arranged.enter(region);
-                    let err_arranged = err_arranged.enter(region);
-                    let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
-                    context.set_trace(
-                        *id,
-                        &get_expr,
-                        &index_desc.keys,
-                        (ok_arranged, err_arranged),
-                    );
-                    index_tokens.insert(
-                        id,
-                        Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
-                    );
-                } else {
-                    panic!(
-                        "import of index {} failed while building dataflow {}",
-                        id, first_export_id
-                    );
-                }
+            // Import declared indexes into the rendering context.
+            for (idx_id, idx) in &dataflow.index_imports {
+                context.import_index(render_state, scope, region, *idx_id, idx);
             }
 
-            for object in dataflow.objects_to_build.clone() {
-                context.ensure_rendered(object.relation_expr.as_ref(), region, worker_index);
-                if let Some(typ) = object.typ {
-                    context.clone_from_to(
-                        &object.relation_expr.as_ref(),
-                        &RelationExpr::global_get(object.id, typ.clone()),
-                    );
-                } else {
-                    context.render_arrangeby(
-                        &object.relation_expr.as_ref(),
-                        Some(&object.id.to_string()),
-                    );
-                    // Under the premise that this is always an arrange_by aroung a global get,
-                    // this will leave behind the arrangements bound to the global get, so that
-                    // we will not tidy them up in the next pass.
-                }
-
-                // After building each object, we want to tear down all other cached collections
-                // and arrangements to avoid accidentally providing hits on local identifiers.
-                // We could relax this if we better understood which expressions are dangerous
-                // (e.g. expressions containing gets of local identifiers not covered by a let).
-                //
-                // TODO: Improve collection and arrangement re-use.
-                context.collections.retain(|e, _| {
-                    if let RelationExpr::Get {
-                        id: Id::Global(_),
-                        typ: _,
-                    } = e
-                    {
-                        true
-                    } else {
-                        false
-                    }
-                });
-                context.local.retain(|e, _| {
-                    if let RelationExpr::Get {
-                        id: Id::Global(_),
-                        typ: _,
-                    } = e
-                    {
-                        true
-                    } else {
-                        false
-                    }
-                });
-                // We do not install in `context.trace`, and can skip deleting things from it.
+            // Build declared objects.
+            for object in &dataflow.objects_to_build {
+                context.build_object(region, object);
             }
 
-            for (export_id, index_desc, typ) in &dataflow.index_exports {
-                // put together tokens that belong to the export
-                let mut needed_source_tokens = Vec::new();
-                let mut needed_index_tokens = Vec::new();
-                for import_id in dataflow.get_imports(&index_desc.on_id) {
-                    if let Some(index_token) = index_tokens.get(&import_id) {
-                        if let Some(logger) = logger {
-                            // Log the dependency.
-                            logger.log(MaterializedEvent::DataflowDependency {
-                                dataflow: *export_id,
-                                source: import_id,
-                            });
-                        }
-                        needed_index_tokens.push(index_token.clone());
-                    } else if let Some(source_token) = source_tokens.get(&import_id) {
-                        needed_source_tokens.push(source_token.clone());
-                    }
-                }
-                let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
-                let get_expr = RelationExpr::global_get(index_desc.on_id, typ.clone());
-                match context.arrangement(&get_expr, &index_desc.keys) {
-                    Some(ArrangementFlavor::Local(oks, errs)) => {
-                        manager.set(
-                            *export_id,
-                            TraceBundle::new(oks.trace.clone(), errs.trace.clone())
-                                .with_drop(tokens),
-                        );
-                    }
-                    Some(ArrangementFlavor::Trace(gid, _, _)) => {
-                        // Duplicate of existing arrangement with id `gid`, so
-                        // just create another handle to that arrangement.
-                        let trace = manager.get(&gid).unwrap().clone();
-                        manager.set(*export_id, trace);
-                    }
-                    None => {
-                        panic!("Arrangement alarmingly absent!");
-                    }
-                };
+            // Export declared indexes.
+            for (idx_id, idx, typ) in &dataflow.index_exports {
+                let imports = dataflow.get_imports(&idx.on_id);
+                context.export_index(render_state, imports, *idx_id, idx, typ);
             }
 
-            for (sink_id, sink) in dataflow.sink_exports.clone() {
-                // put together tokens that belong to the export
-                let mut needed_source_tokens = Vec::new();
-                let mut needed_index_tokens = Vec::new();
-                let mut needed_sink_tokens = Vec::new();
-                for import_id in dataflow.get_imports(&sink.from.0) {
-                    if let Some(index_token) = index_tokens.get(&import_id) {
-                        needed_index_tokens.push(index_token.clone());
-                    } else if let Some(source_token) = source_tokens.get(&import_id) {
-                        needed_source_tokens.push(source_token.clone());
-                    }
-                }
-                let (collection, _err_collection) = context
-                    .collection(&RelationExpr::global_get(
-                        sink.from.0,
-                        sink.from.1.typ().clone(),
-                    ))
-                    .expect("Sink source collection not loaded");
-
-                // TODO(frank): consolidation is only required for a collection,
-                // not for arrangements. We can perform a more complicated match
-                // here to determine which case we are in to avoid this call.
-                use differential_dataflow::operators::consolidate::Consolidate;
-                let collection = collection.consolidate();
-
-                // TODO(benesch): errors should stream out through the sink,
-                // if we figure out a protocol for that.
-
-                let sink_shutdown = match sink.connector {
-                    SinkConnector::Kafka(c) => {
-                        let button = sink::kafka(&collection.inner, sink_id, c, sink.from.1);
-                        Some(button)
-                    }
-                    SinkConnector::Tail(c) => {
-                        sink::tail(&collection.inner, sink_id, c);
-                        None
-                    }
-                    SinkConnector::AvroOcf(c) => {
-                        sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1);
-                        None
-                    }
-                };
-
-                if let Some(sink_token) = sink_shutdown {
-                    needed_sink_tokens.push(sink_token.press_on_drop());
-                }
-
-                let tokens = Rc::new((
-                    needed_sink_tokens,
-                    needed_source_tokens,
-                    needed_index_tokens,
-                ));
-                dataflow_drops.insert(sink_id, Box::new(tokens));
+            // Export declared sinks.
+            for (sink_id, sink) in &dataflow.sink_exports {
+                let imports = dataflow.get_imports(&sink.from.0);
+                context.export_sink(render_state, imports, *sink_id, sink);
             }
         });
     })
+}
+
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, RelationExpr, Row, Timestamp>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    fn import_source(
+        &mut self,
+        render_state: &mut RenderState,
+        scope: &mut Child<'g, G, G::Timestamp>,
+        src_id: SourceInstanceId,
+        mut src: SourceDesc,
+    ) {
+        if let Some(operator) = &mut src.operators {
+            // if src.operator is trivial, convert it to None
+            if operator.predicates.is_empty()
+                && operator.projection == (0..src.desc.typ().arity()).collect::<Vec<_>>()
+            {
+                src.operators = None;
+            }
+        }
+
+        if let SourceConnector::External {
+            connector,
+            encoding,
+            envelope,
+            consistency,
+            max_ts_batch: _,
+            ts_frequency,
+        } = src.connector
+        {
+            let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
+
+            // This uid must be unique across all different instantiations of a source
+            let uid = SourceInstanceId {
+                sid: src_id.sid,
+                vid: self.first_export_id,
+            };
+
+            // TODO(benesch): we force all sources to have an empty
+            // error stream. Likely we will want to plumb this
+            // collection into the source connector so that sources
+            // can produce errors.
+            let mut err_collection = Collection::empty(scope);
+
+            let fast_forwarded = match connector {
+                ExternalSourceConnector::Kafka(KafkaSourceConnector { start_offset, .. }) => {
+                    start_offset > 0
+                }
+                _ => false,
+            };
+
+            // All workers are responsible for reading in Kafka sources. Other sources
+            // support single-threaded ingestion only
+            let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
+                true
+            } else {
+                (usize::cast_from(uid.hashed()) % scope.peers()) == scope.index()
+            };
+
+            let source_config = SourceConfig {
+                name: format!("{}-{}", connector.name(), uid),
+                id: uid,
+                scope,
+                // Distribute read responsibility among workers.
+                active: active_read_worker,
+                timestamp_histories: render_state.ts_histories.clone(),
+                timestamp_tx: render_state.ts_source_updates.clone(),
+                consistency,
+                timestamp_frequency: ts_frequency,
+                worker_id: scope.index(),
+                worker_count: scope.peers(),
+                encoding: encoding.clone(),
+            };
+
+            let capability = if let Envelope::Upsert(key_encoding) = envelope {
+                match connector {
+                    ExternalSourceConnector::Kafka(_) => {
+                        let (source, capability) = source::create_source::<_, KafkaSourceInfo, _>(
+                            source_config,
+                            connector,
+                        );
+
+                        let (transformed, new_err_collection) =
+                            upsert::pre_arrange_from_upsert_transforms(
+                                &source.0,
+                                encoding,
+                                key_encoding,
+                                &self.debug_name,
+                                scope.index(),
+                                self.as_of_frontier.clone(),
+                                &mut src.operators,
+                                src.desc.typ(),
+                            );
+
+                        let arranged = arrange_from_upsert(
+                            &transformed,
+                            &format!("UpsertArrange: {}", src_id.to_string()),
+                        );
+
+                        err_collection.concat(
+                            &new_err_collection
+                                .pass_through("upsert-linear-errors")
+                                .as_collection(),
+                        );
+
+                        let keys = src.desc.typ().keys[0]
+                            .iter()
+                            .map(|k| ScalarExpr::Column(*k))
+                            .collect::<Vec<_>>();
+                        self.set_local(&get_expr, &keys, (arranged, err_collection.arrange()));
+                        capability
+                    }
+                    _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
+                }
+            } else {
+                let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) = connector {
+                    let ((source, err_source), capability) =
+                        source::create_source::<_, FileSourceInfo<Value>, Value>(
+                            source_config,
+                            connector,
+                        );
+                    err_collection = err_collection.concat(
+                        &err_source
+                            .map(DataflowError::SourceError)
+                            .pass_through("AvroOCF-errors")
+                            .as_collection(),
+                    );
+                    let reader_schema = match &encoding {
+                        DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                        _ => unreachable!(
+                            "Internal error: \
+                                 Avro OCF schema should have already been resolved.\n\
+                                Encoding is: {:?}",
+                            encoding
+                        ),
+                    };
+
+                    let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                    (
+                        decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
+                        capability,
+                    )
+                } else {
+                    let ((ok_source, err_source), capability) = match connector {
+                        ExternalSourceConnector::Kafka(_) => {
+                            source::create_source::<_, KafkaSourceInfo, _>(source_config, connector)
+                        }
+                        ExternalSourceConnector::Kinesis(_) => {
+                            source::create_source::<_, KinesisSourceInfo, _>(
+                                source_config,
+                                connector,
+                            )
+                        }
+                        ExternalSourceConnector::File(_) => {
+                            source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
+                                source_config,
+                                connector,
+                            )
+                        }
+                        ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                    };
+                    err_collection = err_collection.concat(
+                        &err_source
+                            .map(DataflowError::SourceError)
+                            .pass_through("source-errors")
+                            .as_collection(),
+                    );
+
+                    // TODO(brennan) -- this should just be a RelationExpr::FlatMap using regexp_extract, csv_extract,
+                    // a hypothetical future avro_extract, protobuf_extract, etc.
+                    let stream = decode_values(
+                        &ok_source,
+                        encoding,
+                        &self.debug_name,
+                        &envelope,
+                        &mut src.operators,
+                        fast_forwarded,
+                    );
+
+                    (stream, capability)
+                };
+
+                let mut collection = match envelope {
+                    Envelope::None => stream.as_collection(),
+                    Envelope::Debezium(_) => {
+                        // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
+                        stream.as_collection().explode({
+                            let mut row_packer = repr::RowPacker::new();
+                            move |row| {
+                                let mut datums = row.unpack();
+                                let diff = datums.pop().unwrap().unwrap_int64() as isize;
+                                Some((row_packer.pack(datums.into_iter()), diff))
+                            }
+                        })
+                    }
+                    Envelope::Upsert(_) => unreachable!(),
+                };
+
+                // Implement source filtering and projection.
+                // At the moment this is strictly optional, but we perform it anyhow
+                // to demonstrate the intended use.
+                if let Some(operators) = src.operators.clone() {
+                    // Determine replacement values for unused columns.
+                    let source_type = src.desc.typ();
+                    let position_or = (0..source_type.arity())
+                        .map(|col| {
+                            if operators.projection.contains(&col) {
+                                Some(col)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    // Evaluate the predicate on each record, noting potential errors that might result.
+                    let (collection2, errors) =
+                        collection.flat_map_fallible({
+                            let mut row_packer = repr::RowPacker::new();
+                            move |input_row| {
+                                let temp_storage = RowArena::new();
+                                let datums = input_row.unpack();
+                                let pred_eval = operators
+                                    .predicates
+                                    .iter()
+                                    .map(|predicate| predicate.eval(&datums, &temp_storage))
+                                    .find(|result| result != &Ok(Datum::True));
+                                match pred_eval {
+                                    None => Some(Ok(row_packer.pack(position_or.iter().map(
+                                        |pos_or| match pos_or {
+                                            Some(index) => datums[*index],
+                                            None => Datum::Dummy,
+                                        },
+                                    )))),
+                                    Some(Ok(Datum::False)) => None,
+                                    Some(Ok(Datum::Null)) => None,
+                                    Some(Ok(x)) => {
+                                        panic!("Predicate evaluated to invalid value: {:?}", x)
+                                    }
+                                    Some(Err(x)) => Some(Err(x.into())),
+                                }
+                            }
+                        });
+
+                    collection = collection2;
+                    err_collection = err_collection.concat(&errors);
+                }
+
+                // Apply `as_of` to each timestamp.
+                let as_of_frontier1 = self.as_of_frontier.clone();
+                collection = collection
+                    .inner
+                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
+                    .as_collection();
+
+                let as_of_frontier2 = self.as_of_frontier.clone();
+                err_collection = err_collection
+                    .inner
+                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
+                    .as_collection();
+
+                // Introduce the stream by name, as an unarranged collection.
+                self.collections.insert(
+                    RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
+                    (collection, err_collection),
+                );
+                capability
+            };
+            let token = Rc::new(capability);
+            self.source_tokens.insert(src_id.sid, token.clone());
+
+            // We also need to keep track of this mapping globally to activate sources
+            // on timestamp advancement queries
+            let prev = render_state
+                .ts_source_mapping
+                .insert(uid, Rc::downgrade(&token));
+            assert!(prev.is_none());
+        }
+    }
+
+    fn import_index(
+        &mut self,
+        render_state: &mut RenderState,
+        scope: &mut G,
+        region: &mut Child<'g, G, G::Timestamp>,
+        idx_id: GlobalId,
+        (idx, typ): &(IndexDesc, RelationType),
+    ) {
+        if let Some(traces) = render_state.traces.get_mut(&idx_id) {
+            let token = traces.to_drop().clone();
+            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
+                scope,
+                &format!("Index({}, {:?})", idx.on_id, idx.keys),
+                self.as_of_frontier.clone(),
+            );
+            let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
+                scope,
+                &format!("ErrIndex({}, {:?})", idx.on_id, idx.keys),
+                self.as_of_frontier.clone(),
+            );
+            let ok_arranged = ok_arranged.enter(region);
+            let err_arranged = err_arranged.enter(region);
+            let get_expr = RelationExpr::global_get(idx.on_id, typ.clone());
+            self.set_trace(idx_id, &get_expr, &idx.keys, (ok_arranged, err_arranged));
+            self.index_tokens.insert(
+                idx_id,
+                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+            );
+        } else {
+            panic!(
+                "import of index {} failed while building dataflow {}",
+                idx_id, self.first_export_id
+            );
+        }
+    }
+
+    fn build_object(&mut self, scope: &mut Child<'g, G, G::Timestamp>, object: &BuildDesc) {
+        self.ensure_rendered(object.relation_expr.as_ref(), scope, scope.index());
+        if let Some(typ) = &object.typ {
+            self.clone_from_to(
+                &object.relation_expr.as_ref(),
+                &RelationExpr::global_get(object.id, typ.clone()),
+            );
+        } else {
+            self.render_arrangeby(&object.relation_expr.as_ref(), Some(&object.id.to_string()));
+            // Under the premise that this is always an arrange_by aroung a global get,
+            // this will leave behind the arrangements bound to the global get, so that
+            // we will not tidy them up in the next pass.
+        }
+
+        // After building each object, we want to tear down all other cached collections
+        // and arrangements to avoid accidentally providing hits on local identifiers.
+        // We could relax this if we better understood which expressions are dangerous
+        // (e.g. expressions containing gets of local identifiers not covered by a let).
+        //
+        // TODO: Improve collection and arrangement re-use.
+        self.collections.retain(|e, _| {
+            if let RelationExpr::Get {
+                id: Id::Global(_),
+                typ: _,
+            } = e
+            {
+                true
+            } else {
+                false
+            }
+        });
+        self.local.retain(|e, _| {
+            if let RelationExpr::Get {
+                id: Id::Global(_),
+                typ: _,
+            } = e
+            {
+                true
+            } else {
+                false
+            }
+        });
+        // We do not install in `context.trace`, and can skip deleting things from it.
+    }
+
+    fn export_index(
+        &mut self,
+        render_state: &mut RenderState,
+        import_ids: HashSet<GlobalId>,
+        idx_id: GlobalId,
+        idx: &IndexDesc,
+        typ: &RelationType,
+    ) {
+        // put together tokens that belong to the export
+        let mut needed_source_tokens = Vec::new();
+        let mut needed_index_tokens = Vec::new();
+        for import_id in import_ids {
+            if let Some(index_token) = self.index_tokens.get(&import_id) {
+                // if let Some(logger) = &mut materialized_logging {
+                //     // Log the dependency.
+                //     logger.log(MaterializedEvent::DataflowDependency {
+                //         dataflow: idx_id,
+                //         source: import_id,
+                //     });
+                // }
+                needed_index_tokens.push(index_token.clone());
+            } else if let Some(source_token) = self.source_tokens.get(&import_id) {
+                needed_source_tokens.push(source_token.clone());
+            }
+        }
+        let tokens = Rc::new((needed_source_tokens, needed_index_tokens));
+        let get_expr = RelationExpr::global_get(idx.on_id, typ.clone());
+        match self.arrangement(&get_expr, &idx.keys) {
+            Some(ArrangementFlavor::Local(oks, errs)) => {
+                render_state.traces.set(
+                    idx_id,
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(tokens),
+                );
+            }
+            Some(ArrangementFlavor::Trace(gid, _, _)) => {
+                // Duplicate of existing arrangement with id `gid`, so
+                // just create another handle to that arrangement.
+                let trace = render_state.traces.get(&gid).unwrap().clone();
+                render_state.traces.set(idx_id, trace);
+            }
+            None => {
+                panic!("Arrangement alarmingly absent!");
+            }
+        };
+    }
+
+    fn export_sink(
+        &mut self,
+        render_state: &mut RenderState,
+        import_ids: HashSet<GlobalId>,
+        sink_id: GlobalId,
+        sink: &SinkDesc,
+    ) {
+        // put together tokens that belong to the export
+        let mut needed_source_tokens = Vec::new();
+        let mut needed_index_tokens = Vec::new();
+        let mut needed_sink_tokens = Vec::new();
+        for import_id in import_ids {
+            if let Some(index_token) = self.index_tokens.get(&import_id) {
+                needed_index_tokens.push(index_token.clone());
+            } else if let Some(source_token) = self.source_tokens.get(&import_id) {
+                needed_source_tokens.push(source_token.clone());
+            }
+        }
+        let (collection, _err_collection) = self
+            .collection(&RelationExpr::global_get(
+                sink.from.0,
+                sink.from.1.typ().clone(),
+            ))
+            .expect("Sink source collection not loaded");
+
+        // TODO(benesch): errors should stream out through the sink,
+        // if we figure out a protocol for that.
+
+        // TODO(frank): consolidation is only required for a collection,
+        // not for arrangements. We can perform a more complicated match
+        // here to determine which case we are in to avoid this call.
+        let collection = collection.consolidate();
+
+        let sink_shutdown = match sink.connector.clone() {
+            SinkConnector::Kafka(c) => {
+                let button = sink::kafka(&collection.inner, sink_id, c, sink.from.1.clone());
+                Some(button)
+            }
+            SinkConnector::Tail(c) => {
+                sink::tail(&collection.inner, sink_id, c);
+                None
+            }
+            SinkConnector::AvroOcf(c) => {
+                sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1.clone());
+                None
+            }
+        };
+
+        if let Some(sink_token) = sink_shutdown {
+            needed_sink_tokens.push(sink_token.press_on_drop());
+        }
+
+        let tokens = Rc::new((
+            needed_sink_tokens,
+            needed_source_tokens,
+            needed_index_tokens,
+        ));
+        render_state
+            .dataflow_tokens
+            .insert(sink_id, Box::new(tokens));
+    }
 }
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
