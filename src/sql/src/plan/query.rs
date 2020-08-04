@@ -1781,9 +1781,9 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
     let mut seen_outer = false;
     let mut seen_inner = false;
     expr.visit_columns(0, &mut |depth, col| {
-        if col.level - depth == 0 {
+        if depth == 0 && col.level == 0 {
             seen_inner = true;
-        } else {
+        } else if col.level > depth {
             seen_outer = true;
         }
     });
