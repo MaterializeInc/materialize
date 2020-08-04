@@ -9,17 +9,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
-use std::io::Read;
-use std::{
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use futures::future::TryFutureExt;
 use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
-
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
 use openssl::ssl::SslAcceptor;
@@ -28,11 +22,10 @@ use prometheus::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use header::HeaderValue;
-use prof::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_CTL};
-
 use ore::netio::SniffedStream;
-use url::form_urlencoded;
+
+#[cfg(not(target_os = "macos"))]
+mod prof;
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
@@ -77,7 +70,6 @@ pub struct Server {
     cmdq_tx: UnboundedSender<coord::Command>,
     /// When this server started
     start_time: Instant,
-    mem_profiling: Option<Arc<Mutex<JemallocProfCtl>>>,
 }
 
 impl Server {
@@ -89,12 +81,10 @@ impl Server {
     ) -> Server {
         // just set this so it shows up in metrics
         WORKER_COUNT.with_label_values(&[worker_count]).set(1);
-        let mem_profiling = PROF_CTL.clone();
         Server {
             tls,
             cmdq_tx,
             start_time,
-            mem_profiling,
         }
     }
 
@@ -130,18 +120,14 @@ impl Server {
         let svc = service::service_fn(move |req: Request<Body>| {
             let cmdq_tx = (self.cmdq_tx).clone();
             let start_time = self.start_time;
-            let prof_ctl = self.mem_profiling.clone();
-            let prof_md = prof_ctl
-                .as_ref()
-                .map(|arc_mtx| arc_mtx.lock().expect("Profiler lock poisoned!").get_md());
             async move {
                 match (req.method(), req.uri().path()) {
                     (&Method::GET, "/") => handle_home(req).await,
                     (&Method::GET, "/metrics") => handle_prometheus(req, start_time).await,
                     (&Method::GET, "/status") => handle_status(req, start_time).await,
                     (&Method::GET, "/favicon.ico") => handle_favicon().await,
-                    (&Method::GET, "/prof") => handle_prof(prof_md).await,
-                    (&Method::POST, "/prof") => handle_prof_action(req, prof_ctl).await,
+                    (&Method::GET, "/prof") => handle_prof(req).await,
+                    (&Method::POST, "/prof") => handle_prof(req).await,
                     (&Method::GET, "/internal/catalog") => {
                         handle_internal_catalog(req, cmdq_tx).await
                     }
@@ -183,138 +169,16 @@ async fn handle_home(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> 
     ))))
 }
 
-async fn handle_prof_action(
-    body: Request<Body>,
-    prof_ctl: Option<Arc<Mutex<JemallocProfCtl>>>,
-) -> Result<Response<Body>, anyhow::Error> {
-    let prof_ctl = if let Some(prof_ctl) = prof_ctl {
-        prof_ctl
-    } else {
-        return Ok(Response::builder()
-            .status(400)
-            .body(Body::from("Profiling is not enabled."))?);
-    };
-    let body = body
-        .into_body()
-        .try_fold(vec![], |mut v, b| async move {
-            v.extend(b);
-            Ok(v)
-        })
-        .await?;
-    let action = match form_urlencoded::parse(&body)
-        .find(|(k, _v)| &**k == "action")
-        .map(|(_k, v)| v)
-    {
-        Some(action) => action,
-        None => {
-            return Ok(Response::builder()
-                .status(400)
-                .body(Body::from("Expected `action` parameter"))?)
-        }
-    };
-    match action.as_ref() {
-        "activate" => {
-            let md = {
-                let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
-                borrow.activate()?;
-                Some(borrow.get_md())
-            };
-            handle_prof(md).await
-        }
-        "deactivate" => {
-            let md = {
-                let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
-                borrow.deactivate()?;
-                Some(borrow.get_md())
-            };
-            handle_prof(md).await
-        }
-        "dump_file" => {
-            let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
-            let mut f = borrow.dump()?;
-            let mut s = String::new();
-            f.read_to_string(&mut s)?;
-            let body = Body::from(s);
-            let mut response = Response::new(body);
-            response.headers_mut().append(
-                "Content-Disposition",
-                HeaderValue::from_static("attachment; filename=\"jeprof.heap\""),
-            );
-            Ok(response)
-        }
-        x => Ok(Response::builder().status(400).body(Body::from(format!(
-            "Unrecognized `action` parameter: {}",
-            x
-        )))?),
-    }
+#[cfg(target_os = "macos")]
+async fn handle_prof(_: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
+    Ok(Response::builder().status(501).body(Body::from(
+        "Profiling is not supported on macOS (HINT: run on Linux with _RJEM_MALLOC_CONF=prof:true)",
+    ))?)
 }
 
-async fn handle_prof(
-    prof_md: Option<JemallocProfMetadata>,
-) -> Result<Response<Body>, anyhow::Error> {
-    let (prof_status, can_activate, is_active) = match prof_md {
-        None => (
-            "Jemalloc profiling disabled (HINT: run on Linux with _RJEM_MALLOC_CONF=prof:true)"
-                .to_string(),
-            false,
-            false,
-        ),
-        Some(md) => match md.start_time {
-            Some(ProfStartTime::TimeImmemorial) => (
-                "Jemalloc profiling active since server start".to_string(),
-                false,
-                true,
-            ),
-            Some(ProfStartTime::Instant(when)) => (
-                format!(
-                    "Jemalloc profiling active since {:?}",
-                    Instant::now() - when,
-                ),
-                false,
-                true,
-            ),
-            None => (
-                "Jemalloc profiling enabled but inactive".to_string(),
-                true,
-                false,
-            ),
-        },
-    };
-    let activate_link = if can_activate {
-        r#"<form action="/prof" method="POST"><button type="submit" name="action" value="activate">Activate</button></form>"#
-    } else {
-        ""
-    };
-    let deactivate_link = if is_active {
-        r#"<form action="/prof" method="POST"><button type="submit" name="action" value="deactivate">Deactivate</button></form>"#
-    } else {
-        ""
-    };
-    let dump_file_link = if is_active {
-        r#"<form action="/prof" method="POST"><button type="submit" name="action" value="dump_file">Download heap profile</button></form>"#
-    } else {
-        ""
-    };
-    Ok(Response::new(Body::from(format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>materialized profiling functions</title>
-  </head>
-  <body>
-    <p>{prof_status}</p>
-    {activate_link}
-    {deactivate_link}
-    {dump_file_link}
-  </body>
-</html>
-"#,
-        prof_status = prof_status,
-        activate_link = activate_link,
-        deactivate_link = deactivate_link,
-        dump_file_link = dump_file_link,
-    ))))
+#[cfg(not(target_os = "macos"))]
+async fn handle_prof(req: Request<Body>) -> Result<Response<Body>, anyhow::Error> {
+    prof::handle(req).await
 }
 
 async fn handle_prometheus(

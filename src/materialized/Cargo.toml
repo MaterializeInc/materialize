@@ -22,7 +22,6 @@ dataflow-types = { path = "../dataflow-types" }
 futures = "0.3"
 getopts = "0.2"
 hyper = "0.13.7"
-jemallocator = { version = "0.3", features = ["profiling"] }
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 log = "0.4.11"
@@ -32,7 +31,6 @@ openssl-sys = { version = "0.9.58", features = ["vendored"] }
 ore = { path = "../ore" }
 parse_duration = "2.1.0"
 postgres-openssl = "0.3.0"
-prof = { path = "../prof" }
 pgwire = { path = "../pgwire" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
@@ -57,6 +55,17 @@ predicates = "1.0.5"
 repr = { path = "../repr" }
 serde_json = "1"
 tokio-postgres = { version = "0.5.5", features = ["with-chrono-0_4"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+jemallocator = { version = "0.3", features = ["profiling"] }
+# NOTE(benesch): when target-specific features are stabilized [0], we will want
+# to put the jemalloc-specific bits of the prof crate behind a "jemalloc"
+# feature flag so that we can enable the non-jemalloc bits on macOS. At the
+# moment the entire prof crate is entirely jemalloc-dependent, so the
+# distinction is moot.
+#
+# [0]: https://github.com/rust-lang/cargo/issues/1197
+prof = { path = "../prof" }
 
 [package.metadata.deb]
 depends = "$auto"
