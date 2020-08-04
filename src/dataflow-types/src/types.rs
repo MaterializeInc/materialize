@@ -263,6 +263,26 @@ impl DataflowDesc {
         result.retain(|id| self.dependent_objects.get(id).is_none());
         result
     }
+
+    /// The number of columns associated with an identifier in the dataflow.
+    pub fn arity_of(&self, id: &GlobalId) -> usize {
+        for (source, desc) in self.source_imports.iter() {
+            if &source.sid == id {
+                return desc.desc.typ().arity();
+            }
+        }
+        for (_index_id, (desc, typ)) in self.index_imports.iter() {
+            if &desc.on_id == id {
+                return typ.arity();
+            }
+        }
+        for desc in self.objects_to_build.iter() {
+            if &desc.id == id {
+                return desc.relation_expr.as_ref().arity();
+            }
+        }
+        panic!("GlobalId {} not found in DataflowDesc", id);
+    }
 }
 
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
@@ -705,27 +725,5 @@ impl LinearOperator {
     /// input of the specified arity.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
-    }
-}
-
-impl DataflowDesc {
-    /// The number of columns associated with an identifier in the dataflow.
-    pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source, desc) in self.source_imports.iter() {
-            if &source.sid == id {
-                return desc.desc.typ().arity();
-            }
-        }
-        for (_index_id, (desc, typ)) in self.index_imports.iter() {
-            if &desc.on_id == id {
-                return typ.arity();
-            }
-        }
-        for desc in self.objects_to_build.iter() {
-            if &desc.id == id {
-                return desc.relation_expr.as_ref().arity();
-            }
-        }
-        panic!("GlobalId {} not found in DataflowDesc", id);
     }
 }
