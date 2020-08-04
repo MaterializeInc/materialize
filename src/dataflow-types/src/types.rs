@@ -417,9 +417,17 @@ pub struct ProtobufEncoding {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
     pub connector: SourceConnector,
-    /// Optionally, filtering and projection to optionally apply.
+    /// Optionally, filtering and projection that may optimistically be applied
+    /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub desc: RelationDesc,
+}
+
+impl SourceDesc {
+    /// Computes the arity of this source.
+    pub fn arity(&self) -> usize {
+        self.desc.arity()
+    }
 }
 
 /// A sink for updates to a relational collection.
@@ -691,6 +699,14 @@ pub struct LinearOperator {
     /// Columns not present in `projection` may be replaced with
     /// default values.
     pub projection: Vec<usize>,
+}
+
+impl LinearOperator {
+    /// Reports whether this linear operator is trivial when applied to an
+    /// input of the specified arity.
+    pub fn is_trivial(&self, arity: usize) -> bool {
+        self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
+    }
 }
 
 impl DataflowDesc {
