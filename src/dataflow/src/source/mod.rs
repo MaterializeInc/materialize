@@ -311,7 +311,6 @@ pub trait SourceInfo<Out> {
         _timestamp: Timestamp,
     ) {
         // Default implementation is to do nothing
-        ()
     }
 }
 

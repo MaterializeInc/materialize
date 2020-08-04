@@ -315,7 +315,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             // Assumption: worker.peers() == total number of workers in Materialize
                             worker_count: worker_peers,
                             encoding: encoding.clone(),
-                            persistence_tx: if let Some(_) = persistence {
+                            persistence_tx: if persistence.is_some() {
                                 let persistence_tx: Option<
                                     Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>,
                                 > =

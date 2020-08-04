@@ -358,7 +358,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 source_id: self.source_global_id,
                 partition: partition_id,
                 offset: message.offset.offset,
-                timestamp: timestamp,
+                timestamp,
                 data,
             };
 
