@@ -29,6 +29,7 @@ pub struct Source {
 pub enum PersistenceMetadata {
     AddSource(GlobalId, Persistence),
     DropSource(GlobalId),
+    Shutdown,
 }
 
 pub struct Persister {
@@ -52,13 +53,15 @@ impl Persister {
     pub fn update(&mut self) {
         loop {
             thread::sleep(Duration::from_secs(1));
-            block_on(async {
-                self.update_persistence().await;
-            });
+            let shutdown = block_on(async { self.update_persistence().await });
+
+            if shutdown {
+                break;
+            }
         }
     }
 
-    async fn update_persistence(&mut self) {
+    async fn update_persistence(&mut self) -> bool {
         while let Ok(metadata) = self.metadata_rx.try_recv() {
             match metadata {
                 PersistenceMetadata::AddSource(id, persistence) => {
@@ -88,6 +91,10 @@ impl Persister {
 
                     self.sources.remove(&id);
                 }
+                PersistenceMetadata::Shutdown => {
+                    // TODO more robust cleanup
+                    return true;
+                }
             };
         }
 
@@ -100,5 +107,7 @@ impl Persister {
                 Err(tokio::time::Elapsed { .. }) => break,
             }
         }
+
+        false
     }
 }

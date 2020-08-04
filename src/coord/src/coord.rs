@@ -634,6 +634,9 @@ where
                 }
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
+                    self.persistence_metadata_tx
+                        .send(PersistenceMetadata::Shutdown)
+                        .unwrap();
                     self.shutdown();
                     break;
                 }
