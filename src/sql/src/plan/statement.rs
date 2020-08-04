@@ -1316,7 +1316,6 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                             Some(Persistence {
                                 // TODO clean this up
                                 path: PathBuf::from("mzdata/persistence-raw/"),
-                                restart: None,
                             })
                         }
                         Some(_) => bail!("persistence must be a bool!"),
@@ -1331,6 +1330,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         config_options,
                         start_offsets,
                         group_id_prefix,
+                        persisted_files: None,
                     });
                     let encoding = get_encoding(format)?;
                     (connector, encoding)

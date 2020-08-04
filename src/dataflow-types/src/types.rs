@@ -510,13 +510,6 @@ pub enum Consistency {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Persistence {
     pub path: PathBuf,
-    pub restart: Option<PersistenceRestart>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistenceRestart {
-    pub offset: i64,
-    pub files: Vec<PathBuf>,
 }
 
 /// Universal language for describing message positions in Materialize, in a source independent
@@ -582,6 +575,7 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
+    pub persisted_files: Option<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
