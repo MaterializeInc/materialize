@@ -23,3 +23,51 @@ asdfjkl asdf NULL
 jkl NULL jkl
 
 # TODO - Test that the columns have the correct nullability, once they actually do (#1685)
+
+# Standard regex matching.
+query TTT
+SELECT 'foo' ~ 'foo?', 'fo' ~ 'foo?', 'f' ~ 'foo?'
+----
+true  true  false
+
+# Standard regex not-matching.
+query TTT
+SELECT 'foo' !~ 'foo?', 'fo' !~ 'foo?', 'f' !~ 'foo?'
+----
+false  false  true
+
+# Case-insensitive matching.
+query TT
+SELECT 'Foo' ~ 'foo', 'Foo' ~* 'foo'
+----
+false  true
+
+# Case-insensitive not-matching.
+query TT
+SELECT 'Foo' !~ 'foo', 'Foo' !~* 'foo'
+----
+true  false
+
+mode standard
+
+# Check that literal regexes are pre-compiled...
+query T multiline
+EXPLAIN PLAN FOR SELECT input ~ 'foo?' FROM data
+----
+%0 =
+| Get materialize.public.data (u1)
+| Map "foo?" ~(#0)
+| Project (#1)
+
+EOF
+
+# ...but not variable regexes.
+query T multiline
+EXPLAIN PLAN FOR SELECT input ~ input FROM data
+----
+%0 =
+| Get materialize.public.data (u1)
+| Map (#0 ~ #0)
+| Project (#1)
+
+EOF

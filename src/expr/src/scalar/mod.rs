@@ -319,6 +319,15 @@ impl ScalarExpr {
                         Ok(regex) => expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex))),
                         Err(_) => ScalarExpr::literal_null(e.typ(&relation_type)),
                     };
+                } else if let BinaryFunc::MatchRegex { case_insensitive } = func {
+                    if let ScalarExpr::Literal(Ok(row), _) = &**expr2 {
+                        *e = match func::build_regex(row.unpack_first(), *case_insensitive) {
+                            Ok(regex) => {
+                                expr1.take().call_unary(UnaryFunc::MatchRegex(Regex(regex)))
+                            }
+                            Err(err) => ScalarExpr::literal(Err(err), e.typ(&relation_type)),
+                        };
+                    }
                 } else if *func == BinaryFunc::DatePartInterval && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
                     *e = match units.parse::<DateTimeUnits>() {
@@ -558,6 +567,7 @@ pub enum EvalError {
         byte_sequence: String,
         encoding_name: String,
     },
+    InvalidRegex(String),
     NegSqrt,
     UnknownUnits(String),
     UnsupportedDateTimeUnits(DateTimeUnits),
@@ -588,6 +598,7 @@ impl std::fmt::Display for EvalError {
                 byte_sequence, encoding_name
             ),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
+            EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
             EvalError::UnknownUnits(units) => write!(f, "unknown units '{}'", units),
             EvalError::UnsupportedDateTimeUnits(units) => {
                 write!(f, "unsupported timestamp units '{}'", units)

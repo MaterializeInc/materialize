@@ -76,6 +76,14 @@ pub enum Token {
     Mod,
     /// Concat operator '||'
     Concat,
+    /// Regex match operator `~`
+    RegexMatch,
+    /// Regex case-insensitive match operator `~*`
+    RegexIMatch,
+    /// Regex does-not-match operator `!~`
+    RegexNotMatch,
+    /// Regex case-insensitive does-not-match operator `!~*`
+    RegexNotIMatch,
     // Json functions are documented at https://www.postgresql.org/docs/current/functions-json.html
     /// Get json field operator '->'
     JsonGet,
@@ -150,6 +158,10 @@ impl fmt::Display for Token {
             Token::Div => f.write_str("/"),
             Token::Mod => f.write_str("%"),
             Token::Concat => f.write_str("||"),
+            Token::RegexMatch => f.write_str("~"),
+            Token::RegexIMatch => f.write_str("~*"),
+            Token::RegexNotMatch => f.write_str("!~"),
+            Token::RegexNotIMatch => f.write_str("!~*"),
             Token::JsonGet => f.write_str("->"),
             Token::JsonGetAsText => f.write_str("->>"),
             Token::JsonGetPath => f.write_str("#>"),
@@ -488,6 +500,13 @@ impl Tokenizer {
                         _ => Err("Unrecognized token".to_string()),
                     }
                 }
+                '~' => {
+                    chars.next(); // consume '~'
+                    match chars.peek() {
+                        Some('*') => self.consume_and_return(chars, Token::RegexIMatch),
+                        _ => Ok(Some(Token::RegexMatch)),
+                    }
+                }
                 '=' => self.consume_and_return(chars, Token::Eq),
                 '.' => {
                     chars.next(); // consume '.'
@@ -499,6 +518,13 @@ impl Tokenizer {
                 '!' => {
                     chars.next(); // consume
                     match chars.peek() {
+                        Some('~') => {
+                            chars.next(); // consume '~'
+                            match chars.peek() {
+                                Some('*') => self.consume_and_return(chars, Token::RegexNotIMatch),
+                                _ => Ok(Some(Token::RegexNotMatch)),
+                            }
+                        }
                         Some('=') => self.consume_and_return(chars, Token::Neq),
                         _ => Err("Unrecognized token".to_string()),
                     }
