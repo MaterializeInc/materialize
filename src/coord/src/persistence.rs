@@ -131,7 +131,8 @@ impl Source {
                     self.id,
                     partition_id,
                     start_offset.unwrap(),
-                    end_offset + 1
+                    // TODO everything around indexing with these offsets is terrible
+                    end_offset
                 );
                 let mut path = self.path.clone();
                 path.push(format!("{}-tmp", filename));
@@ -218,7 +219,6 @@ impl Persister {
             match tokio::time::timeout(Duration::from_secs(1), self.data_rx.next()).await {
                 Ok(None) => break,
                 Ok(Some(Ok(data))) => {
-                    info!("received some data to be persisted");
                     if !self.sources.contains_key(&data.source_id) {
                         error!(
                             "received some data for source {} that we are not currently tracking.",

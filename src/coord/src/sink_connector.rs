@@ -182,6 +182,7 @@ pub async fn handle_persistence(
     connector: SourceConnector,
     id: GlobalId,
 ) -> Result<Option<SourceConnector>, anyhow::Error> {
+    log::info!(" in handle_persistence {}", id);
     match connector {
         SourceConnector::External {
             connector,
@@ -193,6 +194,7 @@ pub async fn handle_persistence(
             persistence,
         } => {
             if persistence.is_none() {
+                log::info!("no persistence for  {}", id);
                 // There's nothing to handle
                 Ok(None)
             } else {
@@ -200,6 +202,7 @@ pub async fn handle_persistence(
                 let connector = handle_persistence_inner(connector, &persistence, id).await?;
 
                 if let Some(connector) = connector {
+                    log::info!("updated connector for {}", id);
                     Ok(Some(SourceConnector::External {
                         connector,
                         encoding,
@@ -210,6 +213,7 @@ pub async fn handle_persistence(
                         persistence: Some(persistence),
                     }))
                 } else {
+                    log::info!("did not update connector for {}", id);
                     Ok(None)
                 }
             }
@@ -229,7 +233,8 @@ async fn handle_persistence_inner(
             // files we have, if any
             let files =
                 std::fs::read_dir(&persistence.path).expect("reading directory cannot fail");
-            let file_prefix = format!("materialized-source-{}", id);
+            // TODO fix this string literal situation
+            let file_prefix = format!("materialize-source-{}", id);
             let mut read_offsets: HashMap<i32, i64> = HashMap::new();
             let mut paths = Vec::new();
 
@@ -237,6 +242,7 @@ async fn handle_persistence_inner(
                 // TODO there has to be a better way
                 let path = f.expect("file known to exist").path();
                 let filename = path.file_name().unwrap().to_str().unwrap().to_owned();
+                log::info!("found file {} in path {}", filename, path.display());
                 if filename.starts_with(&file_prefix) {
                     let parts: Vec<_> = filename.split('-').collect();
 
@@ -246,7 +252,7 @@ async fn handle_persistence_inner(
                     }
 
                     let partition_id = parts[3].parse::<i32>().unwrap();
-                    let end_offset = parts[4].parse::<i64>().unwrap();
+                    let end_offset = parts[5].parse::<i64>().unwrap();
                     paths.push(path);
                     // TODO this is lazy and incomplete
                     match read_offsets.get(&partition_id) {
@@ -263,6 +269,11 @@ async fn handle_persistence_inner(
             }
 
             if paths.len() > 0 {
+                log::info!(
+                    "updated kafka connector offsets {:?} paths {:?}",
+                    read_offsets,
+                    paths
+                );
                 k.start_offsets = read_offsets;
                 k.persisted_files = Some(paths);
             } else {
