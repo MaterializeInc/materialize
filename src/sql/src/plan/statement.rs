@@ -1307,11 +1307,14 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         bail!("`start_offset` is not yet implemented for BYO consistency sources.")
                     }
 
+                    let mut start_offsets = HashMap::new();
+                    start_offsets.insert(0, start_offset);
+
                     let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                         addr: broker.parse()?,
                         topic: topic.clone(),
                         config_options,
-                        start_offset,
+                        start_offsets,
                         group_id_prefix,
                     });
                     let encoding = get_encoding(format)?;

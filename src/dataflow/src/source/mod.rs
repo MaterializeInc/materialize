@@ -337,7 +337,7 @@ pub struct ConsistencyInfo {
     /// and the last closed timestamp
     pub partition_metadata: HashMap<PartitionId, ConsInfo>,
     /// Optional: Materialize Offset from which source should start reading (default is 0)
-    start_offset: MzOffset,
+    start_offsets: HashMap<PartitionId, MzOffset>,
     /// Source Type (Real-time or BYO)
     source_type: Consistency,
     /// Per-source Prometheus metrics.
@@ -355,18 +355,26 @@ impl ConsistencyInfo {
         timestamp_frequency: Duration,
         connector: &ExternalSourceConnector,
     ) -> ConsistencyInfo {
-        let start_offset = match connector {
-            ExternalSourceConnector::Kafka(kc) => MzOffset {
-                offset: kc.start_offset,
-            },
-            _ => MzOffset { offset: 0 },
+        let start_offsets = match connector {
+            ExternalSourceConnector::Kafka(kc) => {
+                let mut start_offsets = HashMap::new();
+
+                for (partition, offset) in kc.start_offsets.iter() {
+                    start_offsets
+                        .insert(PartitionId::Kafka(*partition), MzOffset { offset: *offset });
+                }
+
+                start_offsets
+            }
+            _ => HashMap::new(),
         };
+
         ConsistencyInfo {
             last_closed_ts: 0,
             // Safe conversion: statement.rs checks that value specified fits in u64
             downgrade_capability_frequency: timestamp_frequency.as_millis().try_into().unwrap(),
             partition_metadata: HashMap::new(),
-            start_offset,
+            start_offsets,
             source_type: consistency,
             source_metrics: SourceMetrics::new(
                 &source_name,
@@ -389,13 +397,18 @@ impl ConsistencyInfo {
     /// They are guaranteed to only receive timestamp update greater than last_closed_ts (this
     /// is enforced in [coord::timestamp::is_ts_valid]
     pub fn update_partition_metadata(&mut self, pid: PartitionId) {
-        self.partition_metadata.insert(
-            pid,
-            ConsInfo {
-                offset: self.start_offset,
-                ts: self.last_closed_ts,
-            },
-        );
+        let cons_info = ConsInfo {
+            offset: self.get_partition_start_offset(&pid),
+            ts: self.last_closed_ts,
+        };
+        self.partition_metadata.insert(pid, cons_info);
+    }
+
+    fn get_partition_start_offset(&self, pid: &PartitionId) -> MzOffset {
+        self.start_offsets
+            .get(pid)
+            .unwrap_or(&MzOffset { offset: 0 })
+            .clone()
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
@@ -470,10 +483,11 @@ impl ConsistencyInfo {
 
                             // Check whether timestamps can be closed on this partition
                             while let Some((partition_count, ts, offset)) = entries.front() {
+                                let partition_start_offset = self.get_partition_start_offset(pid);
                                 assert!(
-                                    *offset >= self.start_offset,
+                                    *offset >= partition_start_offset,
                                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
-                                    offset, self.start_offset
+                                    offset, partition_start_offset
                                 );
 
                                 assert!(

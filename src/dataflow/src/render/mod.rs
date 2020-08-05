@@ -305,9 +305,9 @@ where
             // can produce errors.
             let mut err_collection = Collection::empty(scope);
 
-            let fast_forwarded = match connector {
-                ExternalSourceConnector::Kafka(KafkaSourceConnector { start_offset, .. }) => {
-                    start_offset > 0
+            let fast_forwarded = match &connector {
+                ExternalSourceConnector::Kafka(KafkaSourceConnector { start_offsets, .. }) => {
+                    start_offsets.values().any(|&val| val > 0)
                 }
                 _ => false,
             };
