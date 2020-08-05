@@ -1994,8 +1994,8 @@ where
             catalog::Op::DropItem(id),
             catalog::Op::CreateItem {
                 id,
-                name: name.clone(),
-                item: CatalogItem::Source(source.clone()),
+                name,
+                item: CatalogItem::Source(source),
             },
         ];
         self.catalog

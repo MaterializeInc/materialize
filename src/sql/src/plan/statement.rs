@@ -1315,7 +1315,7 @@ fn handle_create_source(scx: &StatementContext, stmt: Statement) -> Result<Plan,
                         Some(Value::Boolean(true)) => {
                             Some(Persistence {
                                 // TODO clean this up
-                                path: PathBuf::from("mzdata/persistence-raw/"),
+                                path: PathBuf::from("mzdata/persistence/"),
                             })
                         }
                         Some(_) => bail!("persistence must be a bool!"),
