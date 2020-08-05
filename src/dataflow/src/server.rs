@@ -136,8 +136,6 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
-    /// Append a new event to the log stream.
-    AppendLog(MaterializedEvent),
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
@@ -361,6 +359,12 @@ where
                     .trace
             });
 
+            let logger = self
+                .timely_worker
+                .log_register()
+                .get("materialized")
+                .unwrap();
+
             // Install traces as maintained indexes
             for (log, (_, trace)) in t_traces {
                 self.render_state
@@ -368,6 +372,7 @@ where
                     .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
+                logger.log(MaterializedEvent::Frontier(log.index_id(), 0, 1));
             }
             for (log, (_, trace)) in d_traces {
                 self.render_state
@@ -375,6 +380,7 @@ where
                     .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
+                logger.log(MaterializedEvent::Frontier(log.index_id(), 0, 1));
             }
             for (log, (_, trace)) in m_traces {
                 self.render_state
@@ -382,9 +388,10 @@ where
                     .set(log.index_id(), TraceBundle::new(trace, errs.clone()));
                 self.reported_frontiers
                     .insert(log.index_id(), Antichain::from_elem(0));
+                logger.log(MaterializedEvent::Frontier(log.index_id(), 0, 1));
             }
 
-            self.materialized_logger = self.timely_worker.log_register().get("materialized");
+            self.materialized_logger = Some(logger);
         }
     }
 
@@ -511,6 +518,13 @@ where
                     }
                 }
             }
+            if let Some(logger) = self.materialized_logger.as_mut() {
+                for (id, changes) in &mut progress {
+                    for (time, diff) in changes.iter() {
+                        logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
+                    }
+                }
+            }
             if !progress.is_empty() {
                 block_on(feedback_tx.send(WorkerFeedbackWithMeta {
                     worker_id: self.timely_worker.index(),
@@ -530,6 +544,7 @@ where
                             .insert(*idx_id, Antichain::from_elem(0));
                         if let Some(logger) = self.materialized_logger.as_mut() {
                             logger.log(MaterializedEvent::Dataflow(*idx_id, true));
+                            logger.log(MaterializedEvent::Frontier(*idx_id, 0, 1));
                             for import_id in dataflow.get_imports(&idx.on_id) {
                                 logger.log(MaterializedEvent::DataflowDependency {
                                     dataflow: *idx_id,
@@ -556,12 +571,16 @@ where
             SequencedCommand::DropIndexes(ids) => {
                 for id in ids {
                     self.render_state.traces.del_trace(&id);
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        logger.log(MaterializedEvent::Dataflow(id, false));
-                    }
-                    self.reported_frontiers
+                    let frontier = self
+                        .reported_frontiers
                         .remove(&id)
                         .expect("Dropped index with no frontier");
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        logger.log(MaterializedEvent::Dataflow(id, false));
+                        for time in frontier.elements().iter() {
+                            logger.log(MaterializedEvent::Frontier(id, *time, -1));
+                        }
+                    }
                 }
             }
 
@@ -658,6 +677,9 @@ where
                 );
                 self.reported_frontiers
                     .insert(index_id, Antichain::from_elem(0));
+                if let Some(logger) = self.materialized_logger.as_mut() {
+                    logger.log(MaterializedEvent::Frontier(index_id, 0, 1));
+                }
             }
 
             SequencedCommand::Insert { id, updates } => {
@@ -675,14 +697,6 @@ where
                     self.render_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
-                }
-            }
-
-            SequencedCommand::AppendLog(event) => {
-                if self.timely_worker.index() == 0 {
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        logger.log(event);
-                    }
                 }
             }
 
