@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+! INSERT INTO t VALUES (1, 'a');
+unknown catalog item 't'
+
 > CREATE TABLE t (a int, b text NOT NULL)
 
 ! CREATE TABLE s (a int DEFAULT 1)

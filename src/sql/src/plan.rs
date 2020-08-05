@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use ::expr::{GlobalId, RowSetFinishing};
 use dataflow_types::{PeekWhen, SinkConnectorBuilder, SourceConnector, Timestamp};
-use repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
+use repr::{ColumnName, RelationDesc, Row, ScalarType};
 
 use crate::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use crate::catalog::Catalog;
@@ -148,7 +148,6 @@ pub enum Plan {
     Insert {
         id: GlobalId,
         values: ::expr::RelationExpr,
-        column_info: Vec<(Option<ColumnName>, ColumnType)>,
     },
     ShowViews {
         ids: Vec<(String, GlobalId)>,

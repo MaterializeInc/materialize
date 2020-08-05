@@ -1849,7 +1849,6 @@ fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow
                     Ok(Plan::Insert {
                         id: table.id(),
                         values: relation_expr,
-                        column_info: table.desc()?.clone().into_iter().collect(),
                     })
                 } else {
                     unsupported!(format!("INSERT body {}", query.body));
