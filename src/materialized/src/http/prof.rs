@@ -77,7 +77,7 @@ mod enabled {
     }
 
     #[derive(Template)]
-    #[template(path = "http/templates/flamegraph.html")]
+    #[template(path = "http/templates/flamegraph.html", escape = "none")]
     struct FlamegraphTemplate<'a> {
         data_json: &'a str,
     }
