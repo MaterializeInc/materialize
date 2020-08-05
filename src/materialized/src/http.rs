@@ -17,6 +17,7 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use hyper::{header, service, Body, Method, Request, Response};
 use lazy_static::lazy_static;
+use include_dir::{Dir, include_dir};
 use openssl::ssl::SslAcceptor;
 use prometheus::{
     register_gauge_vec, register_int_gauge_vec, Encoder, Gauge, GaugeVec, IntGauge, IntGaugeVec,
@@ -27,6 +28,8 @@ use ore::netio::SniffedStream;
 
 #[cfg(not(target_os = "macos"))]
 mod prof;
+
+const STATIC_DIR: Dir = include_dir!("src/http/static");
 
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
@@ -125,8 +128,7 @@ impl Server {
             (&Method::GET, "/prof") => self.handle_prof(req).boxed(),
             (&Method::POST, "/prof") => self.handle_prof(req).boxed(),
             (&Method::GET, "/internal/catalog") => self.handle_internal_catalog(req).boxed(),
-            (&Method::GET, "/favicon.ico") => self.handle_favicon(req).boxed(),
-            _ => self.handle_unknown(req).boxed(),
+            _ => self.handle_static(req).boxed(),
         });
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await
@@ -309,24 +311,28 @@ impl Server {
         }
     }
 
-    fn handle_favicon(
+    fn handle_static(
         &self,
-        _: Request<Body>,
+        req: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        let favicon_slice: &'static [u8] = include_bytes!("favicon.ico");
-        future::ok(Response::new(Body::from(favicon_slice)))
-    }
-
-    fn handle_unknown(
-        &self,
-        _: Request<Body>,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        future::ok(
-            Response::builder()
-                .status(403)
-                .body(Body::from("bad request"))
-                .unwrap(),
-        )
+        if req.method() == &Method::GET {
+            let path = req.uri().path();
+            let path = path.strip_prefix("/").unwrap_or(path);
+            future::ok(match STATIC_DIR.get_file(path) {
+                Some(file) => Response::new(Body::from(file.contents())),
+                None => Response::builder()
+                    .status(404)
+                    .body(Body::from("not found"))
+                    .unwrap(),
+            })
+        } else {
+            future::ok(
+                Response::builder()
+                    .status(403)
+                    .body(Body::from("bad request"))
+                    .unwrap(),
+            )
+        }
     }
 }
 
