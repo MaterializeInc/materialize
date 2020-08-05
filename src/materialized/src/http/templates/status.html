@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Status{% endblock %}
+
+{% block content %}
+<p>
+    materialized OK.<br/>
+    handled {{ query_count }} queries so far.<br/>
+    up for {{ start_time.elapsed()|fmt("{:?}") }}
+</p>
+
+<pre>
+{% for metric in metrics %}
+{{ metric }}
+{% endfor %}
+</pre>
+{% endblock %}
