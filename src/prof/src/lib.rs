@@ -199,7 +199,6 @@ pub fn collate_stacks(stacks: Vec<WeightedStack>) -> WeightedSymbolTrie {
     trie
 }
 
-#[cfg(not(target_os = "macos"))]
 impl JemallocProfCtl {
     // Creates and returns the global singleton.
     fn get() -> Option<Self> {
