@@ -13,12 +13,11 @@
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
 
-use std::future::Future;
 use std::time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use futures::future::{FutureExt, TryFutureExt};
-use hyper::{service, Body, Method, Request, Response};
+use hyper::{service, Method};
 use openssl::ssl::SslAcceptor;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -26,7 +25,6 @@ use ore::netio::SniffedStream;
 
 mod catalog;
 mod metrics;
-#[cfg(not(target_os = "macos"))]
 mod prof;
 mod root;
 mod util;
@@ -115,22 +113,4 @@ impl Server {
     //
     // If you add a new handler, please add it to the most appropriate
     // submodule, or create a new submodule if necessary. Don't add it here!
-
-    #[cfg(target_os = "macos")]
-    fn handle_prof(
-        &self,
-        _: Request<Body>,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        future::ok(Response::builder().status(501).body(Body::from(
-            "Profiling is not supported on macOS (HINT: run on Linux with _RJEM_MALLOC_CONF=prof:true)",
-        ))?)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn handle_prof(
-        &self,
-        req: Request<Body>,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        prof::handle(req)
-    }
 }

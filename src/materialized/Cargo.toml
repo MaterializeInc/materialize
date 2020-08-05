@@ -14,6 +14,7 @@ anyhow = "1.0.32"
 askama = "0.10.3"
 async-trait = "0.1.36"
 backtrace = { version = "0.3.50" }
+cfg-if = "0.1.10"
 chrono = "0.4.13"
 comm = { path = "../comm" }
 compile-time-run = "0.2.11"

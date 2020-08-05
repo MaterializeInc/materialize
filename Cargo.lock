@@ -1738,6 +1738,7 @@ dependencies = [
  "assert_cmd",
  "async-trait",
  "backtrace",
+ "cfg-if",
  "chrono",
  "comm",
  "compile-time-run",
