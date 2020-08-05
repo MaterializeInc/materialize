@@ -19,7 +19,7 @@ use std::time::Duration;
 
 /// A message in the CDC V2 protocol.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-enum Message<D, T, R> {
+pub enum Message<D, T, R> {
     /// A batch of updates that are certain to occur.
     ///
     /// Each triple is an irrevocable statement about a change that occurs.
@@ -37,7 +37,7 @@ enum Message<D, T, R> {
 /// distinct updates that occur at that time.
 /// Times not present in `counts` have a count of zero.
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-struct Progress<T> {
+pub struct Progress<T> {
     /// The lower bound of times contained in this statement.
     pub lower: Vec<T>,
     /// The upper bound of times contained in this statement.
@@ -261,31 +261,34 @@ pub mod iterator {
 /// Methods for recovering update streams from binary bundles.
 pub mod source {
 
-    use super::{BytesSource, Message, Progress};
+    use super::{Message, Progress};
     use dataflow_types::Timestamp as Time;
     use expr::Diff;
-    use expr::GlobalId;
     use repr::Row;
     use std::cell::RefCell;
-    use std::rc::{Rc, Weak};
-    use timely::dataflow::operators::Capability;
+    use std::rc::Rc;
+    use timely::dataflow::operators::{Capability, CapabilitySet};
     use timely::dataflow::{Scope, Stream};
 
+    /// Constructs a stream of updates from a source of messages.
+    ///
+    /// The stream is built in the supplied `scope` and continues to run until
+    /// the returned `Box<Any>` token is dropped.
     pub fn build<G, I>(
         scope: G,
-        source: I,
-    ) -> (Rc<RefCell<Capability<Time>>>, Stream<G, (Row, Time, Diff)>)
+        mut source: I,
+    ) -> (Box<dyn std::any::Any>, Stream<G, (Row, Time, Diff)>)
     where
         G: Scope<Timestamp = Time>,
-        I: Iterator<Item = Message<Row, Time, Diff>>,
+        I: Iterator<Item = Message<Row, Time, Diff>> + 'static,
     {
         // Read messages are either updates or progress messages.
         // Each may contain duplicates, and we must take care to deduplicate information before introducing it to an accumulation.
         // This includes both emitting updates, and setting expectations for update counts.
-
+        //
         // Updates need to be deduplicated by (data, time), and we should exchange them by such.
         // Progress needs to be deduplicated by time, and we should exchange them by such.
-
+        //
         // The first cut of this is a dataflow graph that looks like (flowing downward)
         //
         // 1. MESSAGES:
@@ -317,48 +320,58 @@ pub mod source {
 
         // Some message distribution logic depends on the number of workers.
         let workers = scope.peers();
-        let mut shared_capability: Option<Rc<RefCell<Capability<Time>>>> = None;
+        // Shared vector of capabilities (one for updates stream, one for progress stream).
+        let shared_capability: Rc<RefCell<[CapabilitySet<Time>; 2]>> =
+            Rc::new(RefCell::new([CapabilitySet::new(), CapabilitySet::new()]));
+        let shared_capability1 = Rc::downgrade(&shared_capability);
+        let shared_capability2 = Rc::downgrade(&shared_capability);
 
         // Step 1: The MESSAGES operator.
         let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope.clone());
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
-        messages_op.build(move |capability| {
+        messages_op.build(move |capabilities| {
             // Read messages from some source; shuffle them to UPDATES and PROGRESS; share capability with FEEDBACK.
-            shared_capability = Some(Rc::new(RefCell::new(capability)));
-            let local_capability = Rc::downgrade(shared_capability.as_ref().unwrap());
-            move |frontiers| {
-                if let Some(capability) = local_capability.upgrade() {
-                    let capability = &*capability.borrow();
+            shared_capability1.upgrade().unwrap().borrow_mut()[0].insert(capabilities[0].clone());
+            shared_capability1.upgrade().unwrap().borrow_mut()[1].insert(capabilities[1].clone());
+            move |_frontiers| {
+                // First check to ensure that we haven't been terminated by someone dropping our token.
+                if let Some(capabilities) = shared_capability1.upgrade() {
+                    let capabilities = &*capabilities.borrow();
+                    // Next check to see if we have been terminated by the source being complete.
+                    if !capabilities[0].is_empty() && !capabilities[1].is_empty() {
+                        let mut updates = updates_out.activate();
+                        let mut progress = progress_out.activate();
 
-                    let mut updates = updates_out.activate();
-                    let mut progress = progress_out.activate();
+                        // TODO(frank): this is a moment where multi-temporal capabilities need to be fixed up.
+                        // Specifically, there may not be one capability valid for all updates.
+                        let mut updates_session = updates.session(&capabilities[0][0]);
+                        let mut progress_session = progress.session(&capabilities[1][0]);
 
-                    let mut updates_session = updates.session(&capability);
-                    let mut progress_session = progress.session(&capability);
-
-                    // We presume the iterator will yield if appropriate.
-                    while let Some(message) = source.next() {
-                        match message {
-                            Message::Updates(updates) => {
-                                updates_session.give_vec(&mut updates);
-                            }
-                            Message::Progress(progress) => {
-                                // Need to send a copy of each progress message to all workers,
-                                // but can partition the counts across the workers by timestamp.
-                                let to_worker = vec![Vec::new(); workers];
-                                for (time, count) in progress.counts {
-                                    to_worker[(time.hashed() as usize) % workers].push((time, count));
+                        // We presume the iterator will yield if appropriate.
+                        while let Some(message) = source.next() {
+                            match message {
+                                Message::Updates(mut updates) => {
+                                    updates_session.give_vec(&mut updates);
                                 }
-                                for (worker, counts) in to_worker.into_iter().enumerate() {
-                                    progress_session.give((
-                                        worker,
-                                        Progress {
-                                            lower: progress.lower.clone(),
-                                            upper: progress.upper.clone(),
-                                            counts,
-                                        },
-                                    ));
+                                Message::Progress(progress) => {
+                                    // Need to send a copy of each progress message to all workers,
+                                    // but can partition the counts across the workers by timestamp.
+                                    let mut to_worker = vec![Vec::new(); workers];
+                                    for (time, count) in progress.counts {
+                                        to_worker[(time.hashed() as usize) % workers]
+                                            .push((time, count));
+                                    }
+                                    for (worker, counts) in to_worker.into_iter().enumerate() {
+                                        progress_session.give((
+                                            worker,
+                                            Progress {
+                                                lower: progress.lower.clone(),
+                                                upper: progress.upper.clone(),
+                                                counts,
+                                            },
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -374,41 +387,172 @@ pub mod source {
         let (mut changes_out, changes) = updates_op.new_output();
         let (mut counts_out, counts) = updates_op.new_output();
         updates_op.build(move |_capability| {
-            // Receive updates and deduplicate them. Ship and drop updates when input frontier advances.
+            // Deduplicates updates, and ships novel updates and the counts for each time.
+            // For simplicity, this operator ships updates as they are discovered to be new.
+            // This has the defect that on load we may have two copies of the data (shipped,
+            // and here for deduplication).
+            //
+            //
+            //
+            // Filters may be pushed ahead of this operator, but because of deduplication we
+            // may not push projections ahead of this operator (at least, not without fields
+            // that are known to form keys, and even then only carefully).
+            let mut pending = std::collections::HashSet::new();
+            let mut change_batch = ChangeBatch::<Time>::new();
             move |frontiers| {
+                // Thin out deduplication buffer.
+                // This is the moment in a more advanced implementation where we might send
+                // the data for the first time, maintaining only one copy of each update live
+                // at a time in the system.
+                pending.retain(|(_row, time, _diff)| frontiers[0].less_equal(time));
+
+                // Deduplicate newly received updates, sending new updates and timestamp counts.
                 let mut changes = changes_out.activate();
                 let mut counts = counts_out.activate();
-                unimplemented!()
+                while let Some((capability, updates)) = input.next() {
+                    let mut changes_session = changes.session(&capability);
+                    let mut counts_session = counts.session(&capability);
+                    for update in updates.iter() {
+                        if frontiers[0].less_equal(&update.1) {
+                            if !pending.insert(update.clone()) {
+                                change_batch.update((update.1).clone(), 1);
+                                changes_session.give(update.clone());
+                            }
+                        }
+                    }
+                    if !change_batch.is_empty() {
+                        counts_session.give_iterator(change_batch.drain());
+                    }
+                }
             }
         });
 
         // Step 3: The PROGRESS operator.
         let mut progress_op = OperatorBuilder::new("CDCV2_Progress".to_string(), scope.clone());
-        let mut input =
-            progress_op.new_input(&progress, Exchange::new(|x: &(usize, Progress<Time>)| x.0 as u64));
+        let mut input = progress_op.new_input(
+            &progress,
+            Exchange::new(|x: &(usize, Progress<Time>)| x.0 as u64),
+        );
         let mut counts =
-            progress_op.new_input(&counts, Exchange::new(|x: &(Time, usize)| (x.0).hashed()));
+            progress_op.new_input(&counts, Exchange::new(|x: &(Time, i64)| (x.0).hashed()));
         let (mut frontier_out, frontier) = progress_op.new_output();
         progress_op.build(move |_capability| {
             // Receive progress statements, deduplicated counts. Track lower frontier of both and broadcast changes.
-            move |frontiers| {
+
+            use timely::order::PartialOrder;
+            use timely::progress::{frontier::AntichainRef, Antichain};
+
+            let mut progress_queue = Vec::new();
+            let mut progress_frontier = Antichain::new();
+            let mut updates_frontier = MutableAntichain::new();
+            let mut reported_frontier = Antichain::new();
+
+            move |_frontiers| {
                 let mut frontier = frontier_out.activate();
-                unimplemented!()
+
+                // If the frontier changes we need a capability to express that.
+                // Any capability should work; the downstream listener doesn't care.
+                let mut capability: Option<Capability<Time>> = None;
+
+                // Drain all relevant update counts in to the mutable antichain tracking its frontier.
+                while let Some((cap, counts)) = counts.next() {
+                    updates_frontier.update_iter(counts.iter().cloned());
+                    capability = Some(cap.retain());
+                }
+                // Drain all progress statements into the queue out of which we will work.
+                while let Some((cap, progress)) = input.next() {
+                    progress_queue.extend(progress.iter().map(|x| (x.1).clone()));
+                    capability = Some(cap.retain());
+                }
+
+                // Extract and act on actionable progress messages.
+                // A progress message is actionable if `self.progress_frontier` is beyond the message's lower bound.
+                while let Some(position) = progress_queue.iter().position(|p| {
+                    <_ as PartialOrder>::less_equal(
+                        &AntichainRef::new(&p.lower),
+                        &progress_frontier.borrow(),
+                    )
+                }) {
+                    // Extract progress statement.
+                    let mut progress = progress_queue.remove(position);
+                    // Discard counts that have already been incorporated.
+                    progress
+                        .counts
+                        .retain(|(time, _count)| progress_frontier.less_equal(time));
+                    // Record any new reports of expected counts.
+                    updates_frontier
+                        .update_iter(progress.counts.drain(..).map(|(t, c)| (t, c as i64)));
+                    // Extend self.progress_frontier by progress.upper.
+                    let mut new_frontier = Antichain::new();
+                    for time1 in progress.upper {
+                        for time2 in progress_frontier.elements() {
+                            use differential_dataflow::lattice::Lattice;
+                            new_frontier.insert(time1.join(time2));
+                        }
+                    }
+                    progress_frontier = new_frontier;
+                }
+
+                // Determine if the lower bound of frontiers have advanced, and transmit updates if so.
+                let mut lower_bound = progress_frontier.clone();
+                lower_bound.extend(updates_frontier.frontier().iter().cloned());
+                if lower_bound != reported_frontier {
+                    let capability =
+                        capability.expect("Changes occurred, without surfacing a capability");
+                    let mut changes = ChangeBatch::new();
+                    changes.extend(lower_bound.elements().iter().map(|t| (t.clone(), 1)));
+                    changes.extend(reported_frontier.elements().iter().map(|t| (t.clone(), -1)));
+                    let mut frontier_session = frontier.session(&capability);
+                    for peer in 0..workers {
+                        frontier_session.give((peer, changes.clone()));
+                    }
+                    reported_frontier = lower_bound.clone();
+                }
             }
         });
 
         // Step 4: The FEEDBACK operator.
         let mut feedback_op = OperatorBuilder::new("CDCV2_Feedback".to_string(), scope.clone());
-        let mut input =
-            feedback_op.new_input(&frontier, Exchange::new(|x: &(u64, ChangeBatch<Time>)| x.0));
+        let mut input = feedback_op.new_input(
+            &frontier,
+            Exchange::new(|x: &(usize, ChangeBatch<Time>)| x.0 as u64),
+        );
         feedback_op.build(move |_capability| {
+            let mut changes = ChangeBatch::new();
             let mut resolved = MutableAntichain::new();
             resolved.update_iter(Some((Time::minimum(), workers as i64)));
             // Receive frontier changes and forcibly update capabilities shared with MESSAGES.
-            move |frontiers| unimplemented!()
+            move |_frontiers| {
+                while let Some((_cap, frontier_changes)) = input.next() {
+                    for (_self, input_changes) in frontier_changes.iter() {
+                        // consoidate all inbound updates.
+                        changes.extend(resolved.update_iter(
+                            input_changes.unstable_internal_updates().iter().cloned(),
+                        ));
+                    }
+                }
+                if !changes.is_empty() {
+                    if let Some(capabilities) = shared_capability2.upgrade() {
+                        let mut capabilities = capabilities.borrow_mut();
+                        // drain changes and apply them to both coordinates of `shared_capability2`.
+                        // We should get by creating the positive values and ignoring the negative values,
+                        // which will just be dropped (all counts are zero or one, is the reason why).
+                        let mut capset_u = CapabilitySet::new();
+                        let mut capset_p = CapabilitySet::new();
+                        for (time, diff) in changes.drain() {
+                            if diff > 0 {
+                                capset_u.insert(capabilities[0].delayed(&time));
+                                capset_p.insert(capabilities[1].delayed(&time));
+                            }
+                        }
+                        capabilities[0] = capset_u;
+                        capabilities[1] = capset_p;
+                    }
+                }
+            }
         });
 
-        (shared_capability.unwrap(), changes)
+        (Box::new(shared_capability), changes)
     }
 }
 
