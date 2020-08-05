@@ -8,16 +8,17 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{self, Write};
+use std::fmt;
 use std::future::Future;
 use std::time::Instant;
 
+use askama::Template;
 use futures::channel::mpsc::UnboundedSender;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::sink::SinkExt;
 use hyper::{header, service, Body, Method, Request, Response};
+use include_dir::{include_dir, Dir};
 use lazy_static::lazy_static;
-use include_dir::{Dir, include_dir};
 use openssl::ssl::SslAcceptor;
 use prometheus::{
     register_gauge_vec, register_int_gauge_vec, Encoder, Gauge, GaugeVec, IntGauge, IntGaugeVec,
@@ -28,6 +29,24 @@ use ore::netio::SniffedStream;
 
 #[cfg(not(target_os = "macos"))]
 mod prof;
+mod util;
+
+#[derive(Template)]
+#[template(path = "http/templates/home.html")]
+struct HomeTemplate<'a> {
+    version: &'a str,
+    build_time: &'a str,
+    build_sha: &'static str,
+}
+
+#[derive(Template)]
+#[template(path = "http/templates/status.html")]
+struct StatusTemplate<'a> {
+    version: &'a str,
+    query_count: u64,
+    start_time: Instant,
+    metrics: Vec<&'a PromMetric<'a>>,
+}
 
 const STATIC_DIR: Dir = include_dir!("src/http/static");
 
@@ -138,26 +157,11 @@ impl Server {
         &self,
         _: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        future::ok(Response::new(Body::from(format!(
-            r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>materialized {version}</title>
-</head>
-<body>
-  <p>materialized {version} (built at {build_time} from <code>{build_sha}</code>)</p>
-  <ul>
-    <li><a href="/status">server status</a></li>
-    <li><a href="/metrics">prometheus metrics</a></li>
-    <li><a href="/prof">profiling functions</a></li>
-  </ul>
-</body>
-</html>"#,
-            version = crate::VERSION,
-            build_sha = crate::BUILD_SHA,
-            build_time = crate::BUILD_TIME,
-        ))))
+        future::ok(util::template_response(HomeTemplate {
+            version: crate::VERSION,
+            build_time: crate::BUILD_TIME,
+            build_sha: crate::BUILD_SHA,
+        }))
     }
 
     #[cfg(target_os = "macos")]
@@ -268,31 +272,12 @@ impl Server {
             })
             .unwrap_or(0);
 
-        let mut out = format!(
-            r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>materialized {version}</title>
-</head>
-<body>
-  <p>
-  materialized OK.<br/>
-  handled {queries} queries so far.<br/>
-  up for {dur:?}
-  </p>
-  <pre>
-    "#,
-            version = crate::VERSION,
-            queries = query_count,
-            dur = Instant::now() - self.start_time
-        );
-        for metric in metrics.values() {
-            write!(out, "{}", metric).expect("can write to string");
-        }
-        out += "  </pre>\n</body>\n</html>\n";
-
-        future::ok(Response::new(Body::from(out)))
+        future::ok(util::template_response(StatusTemplate {
+            version: crate::VERSION,
+            query_count,
+            start_time: self.start_time,
+            metrics: metrics.values().collect(),
+        }))
     }
 
     fn handle_internal_catalog(
