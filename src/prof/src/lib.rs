@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//!
+//! Various profiling utilities:
+//!
+//! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
+//! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap` and `collate_stacks`)
+
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -58,6 +64,7 @@ pub struct WeightedStack {
     weight: usize,
 }
 
+/// Parse a jemalloc profile file, producing a vector of stack traces along with their weights.
 pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<Vec<WeightedStack>> {
     let mut cur_stack = None;
     let mut result = vec![];
@@ -158,6 +165,20 @@ impl WeightedSymbolTrie {
     }
 }
 
+/// Given some stack traces along with their weights,
+/// collate them into a tree structure by function name.
+///
+/// For example: given the following stacks and weights:
+/// ([0x1234, 0xabcd], 100)
+/// ([0x123a, 0xabff, 0x1234], 200)
+/// ([0x1234, 0xffcc], 50)
+/// and assuming that 0x1234 and 0x123a come from the function `f`,
+/// 0xabcd and 0xabff come from `g`, and 0xffcc from `h`, this will produce:
+///
+/// "f" (350) -> "g" 200
+///  |
+///  v
+/// "h" (50)
 pub fn collate_stacks(stacks: Vec<WeightedStack>) -> WeightedSymbolTrie {
     let mut all_addrs = stacks
         .iter()

@@ -52,6 +52,7 @@ mod disabled {
 
 #[cfg(not(target_os = "macos"))]
 mod enabled {
+    use std::fmt::Write;
     use std::io::{BufReader, Read};
     use std::{
         cell::RefCell,
@@ -151,10 +152,13 @@ mod enabled {
                 let data_json = RefCell::new(String::new());
                 collated.dfs(
                     |node| {
-                        data_json.borrow_mut().push_str(&format!(
+                        write!(
+                            data_json.borrow_mut(),
                             "{{\"name\": \"{}\",\"value\":{},\"children\":[",
-                            node.name, node.weight
-                        ));
+                            node.name,
+                            node.weight
+                        )
+                        .unwrap(); // String's `std::fmt::Write` implementation never fails
                     },
                     |_node, is_last| {
                         data_json.borrow_mut().push_str("]}");
