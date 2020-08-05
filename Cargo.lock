@@ -2658,6 +2658,7 @@ name = "prof"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "backtrace",
  "jemalloc-ctl",
  "lazy_static",
  "tempfile",

@@ -6,6 +6,7 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = "1.0.32"
+backtrace = "0.3"
 jemalloc-ctl = { version = "0.3", features = ["use_std"] }
 lazy_static = "1.4.0"
 tempfile = "3.1"
