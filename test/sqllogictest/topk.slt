@@ -54,29 +54,39 @@ EXPLAIN PLAN FOR SELECT state, name FROM
 ----
 %0 =
 | Get materialize.public.cities (u1)
-| Distinct group=(#1)
+| TopK group=(#1) order=(#2 desc) limit=3 offset=0
+| Project (#1, #0)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp
+    LEFT JOIN LATERAL (SELECT name, pop FROM cities  where cities.state = grp.state ORDER BY pop DESC LIMIT 3) ON true
+----
+%0 =
+| Get materialize.public.cities (u1)
+| TopK group=(#1) order=(#2 desc) limit=3 offset=0
 
 %1 =
 | Get %0
-| ArrangeBy (#0)
+| Project (#1, #0, #2)
 
 %2 =
 | Get %0
-| ArrangeBy (#0)
+| Distinct group=(#1)
+| Negate
 
 %3 =
 | Get materialize.public.cities (u1)
+| Distinct group=(#1)
 
 %4 =
-| Join %2 %3 (= #0 #2)
-| | implementation = Differential %3 %2.(#0)
-| | demand = (#0, #1, #3)
-| TopK group=(#0) order=(#3 desc) limit=3 offset=0
+| Union %2 %3
+| Map null, null
 
 %5 =
-| Join %1 %4 (= #0 #1)
-| | implementation = Differential %4 %1.(#0)
-| | demand = (#0, #2)
-| Project (#0, #2)
+| Union %1 %4
+| Project (#0, #1)
 
 EOF

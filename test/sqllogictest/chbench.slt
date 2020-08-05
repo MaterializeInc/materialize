@@ -912,20 +912,10 @@ ORDER BY custdist DESC, c_count DESC
 
 %6 =
 | Union %4 %5
+| Map null, null, null, null, null, null, null, null
 
 %7 =
-| Get materialize.public.customer (u6)
-| ArrangeBy (#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21)
-
-%8 =
-| Join %6 %7 (= #0 #22) (= #1 #23) (= #2 #24) (= #3 #25) (= #4 #26) (= #5 #27) (= #6 #28) (= #7 #29) (= #8 #30) (= #9 #31) (= #10 #32) (= #11 #33) (= #12 #34) (= #13 #35) (= #14 #36) (= #15 #37) (= #16 #38) (= #17 #39) (= #18 #40) (= #19 #41) (= #20 #42) (= #21 #43)
-| | implementation = Differential %6 %7.(#0, #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #19, #20, #21)
-| | demand = (#0)
-| Map null, null, null, null, null, null, null, null
-| Project (#0..#21, #44..#51)
-
-%9 =
-| Union %3 %8
+| Union %3 %6
 | Reduce group=(#0) count(#22)
 | Reduce group=(#1) countall(true)
 
@@ -1122,12 +1112,8 @@ ORDER BY supplier_cnt DESC
 | Union %7 %8
 
 %10 =
-| Get %3
-| ArrangeBy (#0)
-
-%11 =
-| Join %4 %9 %10 (= #17 #23 #24)
-| | implementation = Differential %9 %10.(#0) %4.(#17)
+| Join %4 %9 (= #17 #23)
+| | implementation = Differential %9 %4.(#17)
 | | demand = (#17, #20..#22)
 | Reduce group=(#20, substr(#22, 1, 3), #21) count(distinct #17)
 
@@ -1338,41 +1324,27 @@ ORDER BY su_name
 
 %3 =
 | Get %2
-| ArrangeBy ()
 
 %4 =
-| Get materialize.public.stock (u26)
+| Get %2
+| ArrangeBy ()
 
 %5 =
+| Get materialize.public.stock (u26)
+
+%6 =
 | Get materialize.public.orderline (u19)
 | ArrangeBy (#4)
 
-%6 =
-| Join %3 %4 %5 (= #11 #33)
-| | implementation = Differential %4 %5.(#4) %3.()
-| | demand = (#0, #11..#13, #35, #36)
-| Filter (datetots(#35) > 2010-05-23 12:00:00)
-
 %7 =
-| Get %2
-
-%8 =
-| Get %6
-
-%9 =
-| Get %6
-| Distinct group=(#11)
-| ArrangeBy (#0)
-
-%10 =
 | Get materialize.public.item (u24)
 | ArrangeBy (#0)
 
-%11 =
-| Join %8 %9 %10 (= #11 #39 #40)
-| | implementation = Differential %8 %9.(#0) %10.(#0)
-| | demand = (#0, #11..#13, #36, #44)
-| Filter "^co.*$" ~(#44)
+%8 =
+| Join %4 %5 %6 %7 (= #11 #33 #39)
+| | implementation = Differential %5 %7.(#0) %6.(#4) %4.()
+| | demand = (#0, #11..#13, #35, #36, #43)
+| Filter "^co.*$" ~(#43), (datetots(#35) > 2010-05-23 12:00:00)
 | Reduce group=(#0, #11, #12, #13) sum(#36)
 | Filter (i32toi64((2 * #3)) > #4)
 | Map ((#1 * #2) % 10000)
@@ -1380,9 +1352,9 @@ ORDER BY su_name
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%12 =
-| Join %7 %11 (= #0 #11)
-| | implementation = Differential %7 %11.(#0)
+%9 =
+| Join %3 %8 (= #0 #11)
+| | implementation = Differential %3 %8.(#0)
 | | demand = (#1, #2)
 | Project (#1, #2)
 
@@ -1472,12 +1444,8 @@ ORDER BY numwait DESC, su_name
 | Union %10 %11
 
 %13 =
-| Get %6
-| ArrangeBy (#0, #1, #2, #3)
-
-%14 =
-| Join %7 %12 %13 (= #7 #47 #51) (= #8 #48 #52) (= #9 #49 #53) (= #13 #50 #54)
-| | implementation = Differential %12 %13.(#0, #1, #2, #3) %7.(#7, #8, #9, #13)
+| Join %7 %12 (= #7 #47) (= #8 #48) (= #9 #49) (= #13 #50)
+| | implementation = Differential %12 %7.(#7, #8, #9, #13)
 | | demand = (#1)
 | Reduce group=(#1) countall(true)
 

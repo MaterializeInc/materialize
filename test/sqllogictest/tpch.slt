@@ -966,20 +966,10 @@ ORDER BY
 
 %6 =
 | Union %4 %5
+| Map null, null, null, null, null, null, null, null, null
 
 %7 =
-| Get materialize.public.customer (u15)
-| ArrangeBy (#0, #1, #2, #3, #4, #5, #6, #7)
-
-%8 =
-| Join %6 %7 (= #0 #8) (= #1 #9) (= #2 #10) (= #3 #11) (= #4 #12) (= #5 #13) (= #6 #14) (= #7 #15)
-| | implementation = Differential %6 %7.(#0, #1, #2, #3, #4, #5, #6, #7)
-| | demand = (#0)
-| Map null, null, null, null, null, null, null, null, null
-| Project (#0..#7, #16..#24)
-
-%9 =
-| Union %3 %8
+| Union %3 %6
 | Reduce group=(#0) count(#8)
 | Reduce group=(#1) countall(true)
 
@@ -1183,12 +1173,8 @@ ORDER BY
 | Union %7 %8
 
 %10 =
-| Get %3
-| ArrangeBy (#0)
-
-%11 =
-| Join %4 %9 %10 (= #1 #14 #15)
-| | implementation = Differential %9 %10.(#0) %4.(#1)
+| Join %4 %9 (= #1 #14)
+| | implementation = Differential %9 %4.(#1)
 | | demand = (#1, #8..#10)
 | Reduce group=(#8, #9, #10) count(distinct #1)
 
@@ -1501,64 +1487,51 @@ ORDER BY
 | Get materialize.public.partsupp (u11)
 
 %5 =
-| Join %3 %4
-| | implementation = Differential %4 %3.()
-| | demand = (#0, #11..#13)
-
-%6 =
-| Get %5
-
-%7 =
-| Get %5
-| Distinct group=(#11)
-| ArrangeBy (#0)
-
-%8 =
 | Get materialize.public.part (u6)
 | ArrangeBy (#0)
 
-%9 =
-| Join %6 %7 %8 (= #11 #16 #17)
-| | implementation = Differential %6 %7.(#0) %8.(#0)
-| | demand = (#0, #11..#13, #18)
-| Filter "^forest.*$" ~(#18)
+%6 =
+| Join %3 %4 %5 (= #11 #16)
+| | implementation = Differential %4 %5.(#0) %3.()
+| | demand = (#0, #11..#13, #17)
+| Filter "^forest.*$" ~(#17)
 
-%10 =
+%7 =
 | Get %2
 
-%11 =
-| Get %9
+%8 =
+| Get %6
 | Filter (#0 = #12)
 
-%12 =
-| Get %9
+%9 =
+| Get %6
 | Distinct group=(#11, #12)
 | ArrangeBy (#0, #1)
 
-%13 =
+%10 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#1, #2)
 
-%14 =
-| Join %12 %13 (= #1 #4) (= #0 #3)
-| | implementation = DeltaQuery %12 %13.(#1, #2) | %13 %12.(#0, #1)
+%11 =
+| Join %9 %10 (= #1 #4) (= #0 #3)
+| | implementation = DeltaQuery %9 %10.(#1, #2) | %10 %9.(#0, #1)
 | | demand = (#0, #1, #6, #12)
 | Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
 | Reduce group=(#0, #1) sum(#6)
 | Map (5dec * #2)
 | ArrangeBy (#0, #1)
 
-%15 =
-| Join %11 %14 (= #11 #26) (= #12 #27)
-| | implementation = Differential %11 %14.(#0, #1)
-| | demand = (#0, #13, #29)
-| Filter ((i32todec(#13) * 1000dec) > #29)
+%12 =
+| Join %8 %11 (= #11 #25) (= #12 #26)
+| | implementation = Differential %8 %11.(#0, #1)
+| | demand = (#0, #13, #28)
+| Filter ((i32todec(#13) * 1000dec) > #28)
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%16 =
-| Join %10 %15 (= #0 #11)
-| | implementation = Differential %10 %15.(#0)
+%13 =
+| Join %7 %12 (= #0 #11)
+| | implementation = Differential %7 %12.(#0)
 | | demand = (#1, #2)
 | Project (#1, #2)
 
@@ -1685,12 +1658,8 @@ ORDER BY
 | Union %14 %15
 
 %17 =
-| Get %10
-| ArrangeBy (#0, #1)
-
-%18 =
-| Join %11 %16 %17 (= #0 #39 #41) (= #7 #38 #40)
-| | implementation = Differential %16 %17.(#0, #1) %11.(#0, #7)
+| Join %11 %16 (= #0 #39) (= #7 #38)
+| | implementation = Differential %16 %11.(#0, #7)
 | | demand = (#1)
 | Reduce group=(#1) countall(true)
 
