@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 // The V2 CDC representation is an unordered stream of a mix of "update" and "progress" messages.
-// Each "update" statement indicates a triple `(Row, Time, Diff)` that is certain to occur.
+// Each "update" statement indicates a triple `(Data, Time, Diff)` that is certain to occur.
 // Each "progress" statement identifies the number of distinct update statements at each `Time` that lies between a specified `lower` and `upper` frontier.
 //
 // The structure of the sink is that each worker writes its received updates to a stream as updates, and transmits the number at each time to a downstream operator.
@@ -262,25 +262,28 @@ pub mod iterator {
 pub mod source {
 
     use super::{Message, Progress};
-    use dataflow_types::Timestamp as Time;
-    use expr::Diff;
-    use repr::Row;
+    use differential_dataflow::{lattice::Lattice, ExchangeData};
     use std::cell::RefCell;
+    use std::hash::Hash;
     use std::rc::Rc;
     use timely::dataflow::operators::{Capability, CapabilitySet};
     use timely::dataflow::{Scope, Stream};
+    use timely::progress::Timestamp;
 
     /// Constructs a stream of updates from a source of messages.
     ///
     /// The stream is built in the supplied `scope` and continues to run until
     /// the returned `Box<Any>` token is dropped.
-    pub fn build<G, I>(
+    pub fn build<G, I, D, T, R>(
         scope: G,
         mut source: I,
-    ) -> (Box<dyn std::any::Any>, Stream<G, (Row, Time, Diff)>)
+    ) -> (Box<dyn std::any::Any>, Stream<G, (D, T, R)>)
     where
-        G: Scope<Timestamp = Time>,
-        I: Iterator<Item = Message<Row, Time, Diff>> + 'static,
+        G: Scope<Timestamp = T>,
+        I: Iterator<Item = Message<D, T, R>> + 'static,
+        D: ExchangeData + Hash,
+        T: ExchangeData + Hash + Timestamp + Lattice,
+        R: ExchangeData + Hash,
     {
         // Read messages are either updates or progress messages.
         // Each may contain duplicates, and we must take care to deduplicate information before introducing it to an accumulation.
@@ -315,13 +318,12 @@ pub mod source {
         use timely::dataflow::channels::pact::Exchange;
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
         use timely::progress::frontier::MutableAntichain;
-        use timely::progress::timestamp::Timestamp;
         use timely::progress::ChangeBatch;
 
         // Some message distribution logic depends on the number of workers.
         let workers = scope.peers();
         // Shared vector of capabilities (one for updates stream, one for progress stream).
-        let shared_capability: Rc<RefCell<[CapabilitySet<Time>; 2]>> =
+        let shared_capability: Rc<RefCell<[CapabilitySet<T>; 2]>> =
             Rc::new(RefCell::new([CapabilitySet::new(), CapabilitySet::new()]));
         let shared_capability1 = Rc::downgrade(&shared_capability);
         let shared_capability2 = Rc::downgrade(&shared_capability);
@@ -382,8 +384,7 @@ pub mod source {
 
         // Step 2: The UPDATES operator.
         let mut updates_op = OperatorBuilder::new("CDCV2_Updates".to_string(), scope.clone());
-        let mut input =
-            updates_op.new_input(&updates, Exchange::new(|x: &(Row, Time, Diff)| x.hashed()));
+        let mut input = updates_op.new_input(&updates, Exchange::new(|x: &(D, T, R)| x.hashed()));
         let (mut changes_out, changes) = updates_op.new_output();
         let (mut counts_out, counts) = updates_op.new_output();
         updates_op.build(move |_capability| {
@@ -392,13 +393,11 @@ pub mod source {
             // This has the defect that on load we may have two copies of the data (shipped,
             // and here for deduplication).
             //
-            //
-            //
             // Filters may be pushed ahead of this operator, but because of deduplication we
             // may not push projections ahead of this operator (at least, not without fields
             // that are known to form keys, and even then only carefully).
             let mut pending = std::collections::HashSet::new();
-            let mut change_batch = ChangeBatch::<Time>::new();
+            let mut change_batch = ChangeBatch::<T>::new();
             move |frontiers| {
                 // Thin out deduplication buffer.
                 // This is the moment in a more advanced implementation where we might send
@@ -431,10 +430,10 @@ pub mod source {
         let mut progress_op = OperatorBuilder::new("CDCV2_Progress".to_string(), scope.clone());
         let mut input = progress_op.new_input(
             &progress,
-            Exchange::new(|x: &(usize, Progress<Time>)| x.0 as u64),
+            Exchange::new(|x: &(usize, Progress<T>)| x.0 as u64),
         );
         let mut counts =
-            progress_op.new_input(&counts, Exchange::new(|x: &(Time, i64)| (x.0).hashed()));
+            progress_op.new_input(&counts, Exchange::new(|x: &(T, i64)| (x.0).hashed()));
         let (mut frontier_out, frontier) = progress_op.new_output();
         progress_op.build(move |_capability| {
             // Receive progress statements, deduplicated counts. Track lower frontier of both and broadcast changes.
@@ -452,7 +451,7 @@ pub mod source {
 
                 // If the frontier changes we need a capability to express that.
                 // Any capability should work; the downstream listener doesn't care.
-                let mut capability: Option<Capability<Time>> = None;
+                let mut capability: Option<Capability<T>> = None;
 
                 // Drain all relevant update counts in to the mutable antichain tracking its frontier.
                 while let Some((cap, counts)) = counts.next() {
@@ -486,7 +485,6 @@ pub mod source {
                     let mut new_frontier = Antichain::new();
                     for time1 in progress.upper {
                         for time2 in progress_frontier.elements() {
-                            use differential_dataflow::lattice::Lattice;
                             new_frontier.insert(time1.join(time2));
                         }
                     }
@@ -515,12 +513,12 @@ pub mod source {
         let mut feedback_op = OperatorBuilder::new("CDCV2_Feedback".to_string(), scope.clone());
         let mut input = feedback_op.new_input(
             &frontier,
-            Exchange::new(|x: &(usize, ChangeBatch<Time>)| x.0 as u64),
+            Exchange::new(|x: &(usize, ChangeBatch<T>)| x.0 as u64),
         );
         feedback_op.build(move |_capability| {
             let mut changes = ChangeBatch::new();
             let mut resolved = MutableAntichain::new();
-            resolved.update_iter(Some((Time::minimum(), workers as i64)));
+            resolved.update_iter(Some((T::minimum(), workers as i64)));
             // Receive frontier changes and forcibly update capabilities shared with MESSAGES.
             move |_frontiers| {
                 while let Some((_cap, frontier_changes)) = input.next() {
@@ -559,11 +557,13 @@ pub mod source {
 /// Methods for recording update streams to binary bundles.
 pub mod sink {
 
+    use serde::{Deserialize, Serialize};
+    use std::hash::Hash;
+
+    use differential_dataflow::{lattice::Lattice, ExchangeData};
+    use timely::progress::Timestamp;
+
     use super::{BytesSink, Message, Progress};
-    use dataflow_types::Timestamp as TStamp;
-    use expr::Diff;
-    use expr::GlobalId;
-    use repr::Row;
     use std::cell::RefCell;
     use std::rc::Weak;
     use timely::dataflow::operators::generic::operator::Operator;
@@ -571,14 +571,17 @@ pub mod sink {
     use timely::progress::Antichain;
     use timely::progress::ChangeBatch;
 
-    pub fn build<G, BS>(
-        stream: &Stream<G, (Row, TStamp, Diff)>,
-        id: GlobalId,
+    pub fn build<G, BS, D, T, R>(
+        stream: &Stream<G, (D, T, R)>,
+        sink_hash: u64,
         updates_sink: Weak<RefCell<BS>>,
         progress_sink: Weak<RefCell<BS>>,
     ) where
-        G: Scope<Timestamp = TStamp>,
+        G: Scope<Timestamp = T>,
         BS: BytesSink + 'static,
+        D: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
+        T: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a> + Timestamp + Lattice,
+        R: ExchangeData + Hash + Serialize + for<'a> Deserialize<'a>,
     {
         // First we record the updates that stream in.
         // We can simply record all updates, under the presumption that the have been consolidated and so any record we see is in fact guaranteed to happen.
@@ -587,13 +590,13 @@ pub mod sink {
             "UpdateWriter",
             move |_cap, _info| {
                 // Track the number of updates at each timestamp.
-                let mut timestamps: ChangeBatch<TStamp> = timely::progress::ChangeBatch::new();
+                let mut timestamps: ChangeBatch<T> = timely::progress::ChangeBatch::new();
                 let mut bytes_queue = std::collections::VecDeque::new();
                 move |input, output| {
                     // We want to drain inputs always...
                     input.for_each(|capability, updates| {
                         // Write each update out, and record the timestamp.
-                        for (_row, time, _diff) in updates.iter() {
+                        for (_data, time, _diff) in updates.iter() {
                             timestamps.update(time.clone(), 1);
                         }
 
@@ -627,12 +630,8 @@ pub mod sink {
         );
 
         // We now record the numbers of updates at each timestamp between lower and upper bounds.
-        use differential_dataflow::hashable::Hashable;
-        let sink_hash = id.hashed();
         // Track the advancing frontier, to know when to produce utterances.
-        use timely::progress::timestamp::Timestamp;
-        let mut frontier: Antichain<TStamp> =
-            timely::progress::Antichain::from_elem(TStamp::minimum());
+        let mut frontier: Antichain<T> = timely::progress::Antichain::from_elem(T::minimum());
         // Track accumulated counts for timestamps.
         let mut timestamps = timely::progress::ChangeBatch::new();
         // Stash for serialized data yet to send.
@@ -677,7 +676,7 @@ pub mod sink {
                             upper: new_frontier.to_vec(),
                             counts: announce,
                         };
-                        let message = Message::<Row, _, Diff>::Progress(progress);
+                        let message = Message::<D, T, R>::Progress(progress);
                         let bytes = bincode::serialize(&message).unwrap();
                         bytes_queue.push_back(bytes);
 
