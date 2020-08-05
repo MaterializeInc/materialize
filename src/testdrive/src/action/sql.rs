@@ -22,7 +22,10 @@ use tokio_postgres::types::Type;
 use ore::collections::CollectionExt;
 use ore::retry;
 use pgrepr::{Interval, Jsonb, Numeric};
-use sql_parser::ast::Statement;
+use sql_parser::ast::{
+    CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, Statement,
+};
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
@@ -54,35 +57,35 @@ pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, St
 impl Action for SqlAction {
     async fn undo(&self, state: &mut State) -> Result<(), String> {
         match &self.stmt {
-            Statement::CreateDatabase { name, .. } => {
+            Statement::CreateDatabase(CreateDatabaseStatement { name, .. }) => {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP DATABASE IF EXISTS {}", name.to_string()),
                 )
                 .await
             }
-            Statement::CreateSchema { name, .. } => {
+            Statement::CreateSchema(CreateSchemaStatement { name, .. }) => {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP SCHEMA IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
-            Statement::CreateSource { name, .. } => {
+            Statement::CreateSource(CreateSourceStatement { name, .. }) => {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP SOURCE IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
-            Statement::CreateView { name, .. } => {
+            Statement::CreateView(CreateViewStatement { name, .. }) => {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP VIEW IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
-            Statement::CreateTable { name, .. } => {
+            Statement::CreateTable(CreateTableStatement { name, .. }) => {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP TABLE IF EXISTS {} CASCADE", name),

@@ -14,8 +14,9 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption, Statement, TableFactor,
-    Value,
+    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, ObjectName, SqlOption,
+    Statement, TableFactor, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -166,7 +167,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
     // check that it does not need to be normalized according to the rules
     // above.
     match &mut stmt {
-        Statement::CreateSource {
+        Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
             connector: _,
@@ -175,24 +176,24 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             envelope: _,
             if_not_exists,
             materialized,
-        } => {
+        }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
         }
 
-        Statement::CreateTable {
+        Statement::CreateTable(CreateTableStatement {
             name,
             columns: _,
             constraints: _,
             with_options: _,
             if_not_exists,
-        } => {
+        }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
         }
 
-        Statement::CreateSink {
+        Statement::CreateSink(CreateSinkStatement {
             name,
             from,
             connector: _,
@@ -201,13 +202,13 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             with_snapshot: _,
             as_of: _,
             if_not_exists,
-        } => {
+        }) => {
             *name = allocate_name(name)?;
             *from = resolve_item(from)?;
             *if_not_exists = false;
         }
 
-        Statement::CreateView {
+        Statement::CreateView(CreateViewStatement {
             name,
             columns: _,
             query,
@@ -215,7 +216,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             materialized,
             if_exists,
             with_options: _,
-        } => {
+        }) => {
             *name = if *temporary {
                 allocate_temporary_name(name)?
             } else {
@@ -232,12 +233,12 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             *if_exists = IfExistsBehavior::Error;
         }
 
-        Statement::CreateIndex {
+        Statement::CreateIndex(CreateIndexStatement {
             name: _,
             on_name,
             key_parts,
             if_not_exists,
-        } => {
+        }) => {
             *on_name = resolve_item(on_name)?;
             let mut normalizer = QueryNormalizer { scx, err: None };
             if let Some(key_parts) = key_parts {
