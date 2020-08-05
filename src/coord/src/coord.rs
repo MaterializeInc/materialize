@@ -259,6 +259,19 @@ where
                                 .expect("Failed to send CREATE SOURCE notice to persister");
                         };
                     };
+
+                    // See if we have any previously persisted data that we need to capture
+                    // TODO this part is kind of a mess rn and does not play well with the
+                    // persister
+                    let connector = block_on(sink_connector::handle_persistence(
+                        source.connector.clone(),
+                        *id,
+                    ))
+                    .with_context(|| format!("recreating source {}", name))?;
+
+                    if let Some(connector) = connector {
+                        coord.handle_source_connector_persistence(*id, connector);
+                    }
                     coord.views.insert(*id, ViewState::new(false, vec![]));
                 }
                 CatalogItem::View(view) => {
@@ -1965,6 +1978,29 @@ where
             .typ()
             .clone();
         self.build_arrangement(&id, index, on_type, dataflow);
+    }
+
+    fn handle_source_connector_persistence(&mut self, id: GlobalId, connector: SourceConnector) {
+        // Update catalog entry with sink connector.
+        let entry = self.catalog.get_by_id(&id);
+        let name = entry.name().clone();
+        let mut source = match entry.item() {
+            CatalogItem::Source(source) => source.clone(),
+            _ => unreachable!(),
+        };
+
+        source.connector = connector;
+        let ops = vec![
+            catalog::Op::DropItem(id),
+            catalog::Op::CreateItem {
+                id,
+                name: name.clone(),
+                item: CatalogItem::Source(source.clone()),
+            },
+        ];
+        self.catalog
+            .transact(ops)
+            .expect("replacing a source cannot fail");
     }
 
     fn handle_sink_connector_ready(&mut self, id: GlobalId, connector: SinkConnector) {

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::time::Duration;
 
@@ -16,9 +17,9 @@ use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 
 use dataflow_types::{
-    AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, KafkaSinkConnector,
-    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, SinkConnector, SinkConnectorBuilder,
-    Timestamp,
+    AvroOcfSinkConnector, AvroOcfSinkConnectorBuilder, ExternalSourceConnector, KafkaSinkConnector,
+    KafkaSinkConnectorBuilder, KafkaSinkConsistencyConnector, Persistence, SinkConnector,
+    SinkConnectorBuilder, SourceConnector, Timestamp,
 };
 use expr::GlobalId;
 use ore::collections::CollectionExt;
@@ -176,4 +177,100 @@ fn build_avro_ocf(
         frontier,
         strict: !with_snapshot,
     }))
+}
+pub async fn handle_persistence(
+    connector: SourceConnector,
+    id: GlobalId,
+) -> Result<Option<SourceConnector>, anyhow::Error> {
+    match connector {
+        SourceConnector::External {
+            connector,
+            encoding,
+            envelope,
+            consistency,
+            max_ts_batch,
+            ts_frequency,
+            persistence,
+        } => {
+            if persistence.is_none() {
+                // There's nothing to handle
+                Ok(None)
+            } else {
+                let persistence = persistence.expect("persistence known to exist");
+                let connector = handle_persistence_inner(connector, &persistence, id).await?;
+
+                if let Some(connector) = connector {
+                    Ok(Some(SourceConnector::External {
+                        connector,
+                        encoding,
+                        envelope,
+                        consistency,
+                        max_ts_batch,
+                        ts_frequency,
+                        persistence: Some(persistence),
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+        SourceConnector::Local => Ok(None),
+    }
+}
+
+async fn handle_persistence_inner(
+    mut connector: ExternalSourceConnector,
+    persistence: &Persistence,
+    id: GlobalId,
+) -> Result<Option<ExternalSourceConnector>, anyhow::Error> {
+    match &mut connector {
+        ExternalSourceConnector::Kafka(k) => {
+            // First let's read the finalized files directory to figure out what persistence
+            // files we have, if any
+            let files =
+                std::fs::read_dir(&persistence.path).expect("reading directory cannot fail");
+            let file_prefix = format!("materialized-source-{}", id);
+            let mut read_offsets: HashMap<i32, i64> = HashMap::new();
+            let mut paths = Vec::new();
+
+            for f in files {
+                // TODO there has to be a better way
+                let path = f.expect("file known to exist").path();
+                let filename = path.file_name().unwrap().to_str().unwrap().to_owned();
+                if filename.starts_with(&file_prefix) {
+                    let parts: Vec<_> = filename.split('-').collect();
+
+                    if parts.len() != 6 {
+                        eprintln!("Found unexpected file {}", filename);
+                        continue;
+                    }
+
+                    let partition_id = parts[3].parse::<i32>().unwrap();
+                    let end_offset = parts[4].parse::<i64>().unwrap();
+                    paths.push(path);
+                    // TODO this is lazy and incomplete
+                    match read_offsets.get(&partition_id) {
+                        None => {
+                            read_offsets.insert(partition_id, end_offset);
+                        }
+                        Some(o) => {
+                            if end_offset > *o {
+                                read_offsets.insert(partition_id, end_offset);
+                            }
+                        }
+                    };
+                }
+            }
+
+            if paths.len() > 0 {
+                k.start_offsets = read_offsets;
+                k.persisted_files = Some(paths);
+            } else {
+                return Ok(None);
+            }
+        }
+        _ => bail!("persistence only enabled for Kafka sources at this time"),
+    }
+
+    Ok(Some(connector))
 }
