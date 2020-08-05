@@ -622,12 +622,12 @@ where
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id: _,
-                    message: WorkerFeedback::CreateSource(source_id),
+                    message: WorkerFeedback::CreateSource(src_instance_id),
                 }) => {
-                    if let Some(entry) = self.catalog.try_get_by_id(source_id.sid) {
+                    if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
                         if let CatalogItem::Source(s) = entry.item() {
                             ts_tx
-                                .send(TimestampMessage::Add(source_id, s.connector.clone()))
+                                .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
                                 .expect("Failed to send CREATE Instance notice to timestamper");
                         } else {
                             panic!("A non-source is re-using the same source ID");

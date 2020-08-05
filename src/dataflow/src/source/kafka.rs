@@ -390,7 +390,7 @@ impl KafkaSourceInfo {
         } = kc;
         let kafka_config =
             create_kafka_config(&source_name, &addr, group_id_prefix, &config_options);
-        let source_global_id = source_id.sid;
+        let source_global_id = source_id.source_id;
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
