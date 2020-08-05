@@ -13,7 +13,7 @@ use std::future::Future;
 
 use askama::Template;
 use futures::future;
-use hyper::{Body, Method, Request, Response};
+use hyper::{Body, Method, Request, Response, StatusCode};
 use include_dir::{include_dir, Dir};
 
 use crate::http::{util, Server};
@@ -49,18 +49,10 @@ impl Server {
             let path = path.strip_prefix("/").unwrap_or(path);
             future::ok(match STATIC_DIR.get_file(path) {
                 Some(file) => Response::new(Body::from(file.contents())),
-                None => Response::builder()
-                    .status(404)
-                    .body(Body::from("not found"))
-                    .unwrap(),
+                None => util::error_response(StatusCode::NOT_FOUND, "not found"),
             })
         } else {
-            future::ok(
-                Response::builder()
-                    .status(403)
-                    .body(Body::from("bad request"))
-                    .unwrap(),
-            )
+            future::ok(util::error_response(StatusCode::FORBIDDEN, "bad request"))
         }
     }
 }

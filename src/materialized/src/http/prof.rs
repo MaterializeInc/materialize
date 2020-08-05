@@ -56,7 +56,7 @@ mod enabled {
     use std::sync::{Arc, Mutex};
 
     use askama::Template;
-    use hyper::{header, Body, Method, Request, Response};
+    use hyper::{header, Body, Method, Request, Response, StatusCode};
     use url::form_urlencoded;
 
     use prof::{JemallocProfCtl, JemallocProfMetadata, ProfStartTime, PROF_CTL};
@@ -94,9 +94,10 @@ mod enabled {
         {
             Some(action) => action,
             None => {
-                return Ok(Response::builder()
-                    .status(400)
-                    .body(Body::from("Expected `action` parameter"))?)
+                return Ok(util::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "expected `action` parameter",
+                ))
             }
         };
         match action.as_ref() {
@@ -129,10 +130,10 @@ mod enabled {
                     .body(Body::from(s))
                     .unwrap())
             }
-            x => Ok(Response::builder().status(400).body(Body::from(format!(
-                "Unrecognized `action` parameter: {}",
-                x
-            )))?),
+            x => Ok(util::error_response(
+                StatusCode::BAD_REQUEST,
+                format!("unrecognized `action` parameter: {}", x),
+            )),
         }
     }
 
