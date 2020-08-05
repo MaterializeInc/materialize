@@ -1,4 +1,4 @@
-[![Build status](https://badge.buildkite.com/97d6604e015bf633d1c2a12d166bb46f3b43a927d3952c999a.svg?branch=master)](https://buildkite.com/materialize/tests)
+[![Build status](https://badge.buildkite.com/97d6604e015bf633d1c2a12d166bb46f3b43a927d3952c999a.svg?branch=main)](https://buildkite.com/materialize/tests)
 [![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.io/docs)
 [![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://join.slack.com/t/materializecommunity/shared_invite/zt-fpfvczj5-efOE_8qvM4fWpHSvMxpKbA)
 
