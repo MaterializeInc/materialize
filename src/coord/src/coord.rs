@@ -854,6 +854,8 @@ where
                 session,
             ),
 
+            Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values), session),
+
             Plan::ShowViews {
                 ids,
                 full,
@@ -1545,6 +1547,36 @@ where
             MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
             MutationKind::Update => ExecuteResponse::Updated(affected_rows),
         })
+    }
+
+    fn sequence_insert(
+        &mut self,
+        id: GlobalId,
+        values: expr::RelationExpr,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        match self
+            .optimizer
+            .optimize(values, self.catalog.indexes())?
+            .into_inner()
+        {
+            RelationExpr::Constant { rows, typ: _ } => {
+                let desc = self.catalog.get_by_id(&id).desc()?;
+                for (row, _) in &rows {
+                    for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
+                        if datum == &Datum::Null && !typ.nullable {
+                            bail!(
+                                "NULL value in column {} violates not-null constraint",
+                                name.unwrap_or(&ColumnName::from("unnamed column"))
+                            )
+                        }
+                    }
+                }
+
+                let affected_rows = rows.len();
+                self.sequence_send_diffs(id, rows, affected_rows, MutationKind::Insert)
+            }
+            other => bail!("INSERT statement expected values, found {:?}", other),
+        }
     }
 
     fn sequence_show_views(
@@ -2395,14 +2427,19 @@ where
     ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
         let pcx = PlanContext::default();
 
-        // When symbiosis mode is enabled, default to the symbiosis planning of CREATE
-        // TABLE and DROP TABLE. Symbiosis stores table information locally, which is
-        // required for other statements to be executed correctly.
+        // When symbiosis mode is enabled, use symbiosis planning for:
+        //  - CREATE TABLE
+        //  - DROP TABLE
+        //  - INSERT
+        // When these statements are routed through symbiosis, table information
+        // is created and maintained locally, which is required for other statements
+        // to be executed correctly.
         if let Statement::CreateTable { .. }
         | Statement::DropObjects {
             object_type: ObjectType::Table,
             ..
-        } = &stmt
+        }
+        | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
                 let plan =

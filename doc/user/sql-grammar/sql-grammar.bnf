@@ -125,6 +125,12 @@ create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
+create_table ::=
+  'CREATE' 'TABLE' table_name
+  ('(' (col_name col_type ('NOT NULL')?) ( ( ',' col_name col_type ('NOT NULL')?) )* ')')?
+insert ::=
+  'INSERT' 'INTO' table_name 'VALUES'
+  ( ('(' (col_value) ( ( ',' col_value ) )* ')') ( ( ',' ('(' (col_value) ( ( ',' col_value ) )* ')') )* ) )
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=
@@ -137,6 +143,8 @@ drop_source ::=
   'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
 drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
+drop_table ::=
+  'DROP' 'TABLE' ('IF' 'EXISTS')? table_name
 explain ::=
   'EXPLAIN'
   'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?

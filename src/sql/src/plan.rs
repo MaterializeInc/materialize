@@ -145,6 +145,10 @@ pub enum Plan {
         affected_rows: usize,
         kind: MutationKind,
     },
+    Insert {
+        id: GlobalId,
+        values: ::expr::RelationExpr,
+    },
     ShowViews {
         ids: Vec<(String, GlobalId)>,
         full: bool,

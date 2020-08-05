@@ -30,14 +30,15 @@ use dataflow_types::{
 use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use ore::collections::CollectionExt;
-use repr::strconv;
+use repr::{strconv, ColumnName};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use sql_parser::ast::{
     AvroSchema, ColumnOption, Connector, ExplainOptions, ExplainStage, Explainee, Expr, Format,
-    Ident, IfExistsBehavior, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
-    SqlOption, Statement, Value,
+    Ident, IfExistsBehavior, ObjectName, ObjectType, Query, SetExpr, SetVariableValue,
+    ShowStatementFilter, SqlOption, Statement, Value,
 };
 
+use crate::ast::InsertSource;
 use crate::catalog::{Catalog, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -130,7 +131,8 @@ pub fn describe_statement(
         | Statement::StartTransaction { .. }
         | Statement::Rollback { .. }
         | Statement::Commit { .. }
-        | Statement::AlterObjectRename { .. } => (None, vec![]),
+        | Statement::AlterObjectRename { .. }
+        | Statement::Insert { .. } => (None, vec![]),
 
         Statement::Explain {
             stage, explainee, ..
@@ -255,7 +257,6 @@ pub fn describe_statement(
             (Some(desc), param_types)
         }
 
-        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
@@ -315,6 +316,7 @@ pub fn handle_statement(
             names,
             cascade,
         } => handle_drop_objects(scx, object_type, if_exists, names, cascade),
+        Statement::Insert { .. } => handle_insert(scx, stmt),
         Statement::Select { query, as_of } => handle_select(scx, *query, as_of, params),
         Statement::SetVariable {
             local,
@@ -352,7 +354,6 @@ pub fn handle_statement(
             options,
         } => handle_explain(scx, stage, explainee, options, params),
 
-        Statement::Insert { .. } => bail!("INSERT statements are not supported"),
         Statement::Update { .. } => bail!("UPDATE statements are not supported"),
         Statement::Delete { .. } => bail!("DELETE statements are not supported"),
         Statement::Copy { .. } => bail!("COPY statements are not supported"),
@@ -1802,6 +1803,64 @@ fn handle_drop_item(
         }
     }
     Ok(Some(catalog_entry.id()))
+}
+
+fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow::Error> {
+    match &stmt {
+        Statement::Insert {
+            table_name,
+            columns: _,
+            source,
+        } => match source {
+            InsertSource::Query(query) => {
+                if let SetExpr::Values(values) = &query.body {
+                    let table = scx.catalog.get_item(&scx.resolve_item(table_name.clone())?);
+                    let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
+                        table.desc()?.iter().collect();
+                    let relation_expr = query::plan_insert_query(
+                        scx,
+                        values,
+                        Some(
+                            table
+                                .desc()?
+                                .iter_types()
+                                .map(|typ| &typ.scalar_type)
+                                .collect(),
+                        ),
+                    )?
+                    .decorrelate();
+
+                    let column_types = relation_expr.typ().column_types;
+                    if column_types.len() != column_info.len() {
+                        bail!(
+                            "INSERT statement specifies {} columns, but table has {} columns",
+                            column_info.len(),
+                            column_types.len()
+                        );
+                    }
+                    for ((name, exp_typ), typ) in column_info.iter().zip(&column_types) {
+                        if typ.scalar_type != exp_typ.scalar_type {
+                            bail!(
+                                "expected type {} for column {}, found {}",
+                                exp_typ.scalar_type,
+                                name.unwrap_or(&ColumnName::from("unnamed column")),
+                                typ,
+                            );
+                        }
+                    }
+
+                    Ok(Plan::Insert {
+                        id: table.id(),
+                        values: relation_expr,
+                    })
+                } else {
+                    unsupported!(format!("INSERT body {}", query.body));
+                }
+            }
+            InsertSource::DefaultValues => unsupported!("INSERT DEFAULT VALUES"),
+        },
+        other => unreachable!(format!("{:?}", other)),
+    }
 }
 
 fn handle_select(

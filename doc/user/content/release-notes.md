@@ -86,6 +86,8 @@ Wrap your release notes at the 80 character mark.
   `LATERAL` subqueries can be used to express [Top-K by group
   queries](/sql/idioms/#top-k-by-group)
 
+- Support [CREATE TABLE](/sql/create-table), [DROP TABLE](/sql/drop-table) and [INSERT](/sql/insert) statements.
+
 <span id="v0.4.0"></span>
 ## v0.4.0
 

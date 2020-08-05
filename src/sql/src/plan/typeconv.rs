@@ -422,14 +422,15 @@ fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
 /// can be cast to. Returns `None` if a common type cannot be deduced.
 ///
 /// The returned type is not guaranteed to be accurate because we ignore type
-/// categories, e.g. on input `[SclarType::Date, ScalarType::Int32]`, will guess
+/// categories, e.g. on input `[ScalarType::Date, ScalarType::Int32]`, will guess
 /// that `Date` is the common type.
 ///
 /// However, if there _is_ a common type among the input, it will correctly
 /// determine it, i.e. returns false positives but never false negatives.
 ///
 /// The `types` parameter is meant to represent the types inferred from a
-/// `Vec<CoercibleScalarExpr>`.
+/// `Vec<CoercibleScalarExpr>`. If no known types are present in the `types`
+/// parameter, it will try to use a provided type hint, instead.
 ///
 /// Note that this function implements the type-determination components of
 /// Postgres' ["`UNION`, `CASE`, and Related Constructs"][union-type-conv] type
@@ -437,11 +438,17 @@ fn guess_compatible_cast_type(types: &[ScalarType]) -> Option<&ScalarType> {
 ///
 /// [union-type-conv]:
 /// https://www.postgresql.org/docs/12/typeconv-union-case.html
-pub fn guess_best_common_type(types: &[Option<ScalarType>]) -> Option<ScalarType> {
+pub fn guess_best_common_type(
+    types: &[Option<ScalarType>],
+    type_hint: Option<ScalarType>,
+) -> Option<ScalarType> {
     // Remove unknown types.
     let known_types: Vec<_> = types.iter().filter_map(|t| t.as_ref()).cloned().collect();
 
     if known_types.is_empty() {
+        if type_hint.is_some() {
+            return type_hint;
+        }
         return Some(ScalarType::String);
     }
 
