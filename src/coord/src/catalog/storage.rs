@@ -251,13 +251,14 @@ impl Connection {
     }
 
     pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, Error> {
+        // Order user views by their GlobalId
         self.inner
             .prepare(
                 "SELECT items.gid, databases.name, schemas.name, items.name, items.definition
                 FROM items
                 JOIN schemas ON items.schema_id = schemas.id
                 JOIN databases ON schemas.database_id = databases.id
-                ORDER BY items.rowid",
+                ORDER BY json_extract(items.gid, '$.User')",
             )?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: SqlVal<GlobalId> = row.get(0)?;
