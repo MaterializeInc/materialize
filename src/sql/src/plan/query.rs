@@ -433,7 +433,7 @@ fn plan_set_expr(qcx: &QueryContext, q: &SetExpr) -> Result<(RelationExpr, Scope
 fn plan_values(
     qcx: &QueryContext,
     values: &[Vec<Expr>],
-    type_hints: Option<Vec<&ColumnType>>,
+    type_hints: Option<Vec<&ScalarType>>,
 ) -> Result<(RelationExpr, Scope), anyhow::Error> {
     ensure!(
         !values.is_empty(),
@@ -472,7 +472,7 @@ fn plan_values(
     let mut col_types = Vec::with_capacity(ncols);
     for (index, col) in cols.iter().enumerate() {
         let type_hint = if let Some(type_hints) = &type_hints {
-            Some(type_hints[index].scalar_type.clone())
+            Some(type_hints[index].clone())
         } else {
             None
         };
@@ -504,7 +504,7 @@ fn plan_values(
 pub fn plan_insert_query(
     scx: &StatementContext,
     values: &Values,
-    type_hints: Option<Vec<&ColumnType>>,
+    type_hints: Option<Vec<&ScalarType>>,
 ) -> Result<RelationExpr, anyhow::Error> {
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     Ok(plan_values(&qcx, &values.0, type_hints)?.0)

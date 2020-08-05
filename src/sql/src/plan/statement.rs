@@ -1814,52 +1814,42 @@ fn handle_insert(scx: &StatementContext, stmt: Statement) -> Result<Plan, anyhow
                     let table = scx.catalog.get_item(&scx.resolve_item(table_name.clone())?);
                     let column_info: Vec<(Option<&ColumnName>, &ColumnType)> =
                         table.desc()?.iter().collect();
-
-                    for expr in &values.0 {
-                        if expr.len() != column_info.len() {
-                            bail!(format!(
-                                "expected to insert {} values, found {}: {:#?}",
-                                column_info.len(),
-                                expr.len(),
-                                expr
-                            ));
-                        }
-                        for (index, value) in expr.iter().enumerate() {
-                            if let Expr::Value(Value::Null) = value {
-                                if !column_info[index].1.nullable {
-                                    bail!(format!(
-                                        "trying to insert NULL value into non-nullable column {}",
-                                        column_info[index]
-                                            .0
-                                            .unwrap_or(&ColumnName::from("unnamed column"))
-                                    ));
-                                }
-                            }
-                        }
-                    }
-
                     let relation_expr = query::plan_insert_query(
                         scx,
                         values,
-                        Some(table.desc()?.iter_types().collect()),
+                        Some(
+                            table
+                                .desc()?
+                                .iter_types()
+                                .map(|typ| &typ.scalar_type)
+                                .collect(),
+                        ),
                     )?
                     .decorrelate();
-                    for (index, typ) in relation_expr.typ().column_types.iter().enumerate() {
-                        if typ.scalar_type != column_info[index].1.scalar_type {
-                            bail!(format!(
+
+                    let column_types = relation_expr.typ().column_types;
+                    if column_types.len() != column_info.len() {
+                        bail!(
+                            "INSERT statement specifies {} columns, but table has {} columns",
+                            column_info.len(),
+                            column_types.len()
+                        );
+                    }
+                    for ((name, exp_typ), typ) in column_info.iter().zip(&column_types) {
+                        if typ.scalar_type != exp_typ.scalar_type {
+                            bail!(
                                 "expected type {} for column {}, found {}",
-                                column_info[index].1,
-                                column_info[index]
-                                    .0
-                                    .unwrap_or(&ColumnName::from("unnamed column")),
-                                typ
-                            ))
+                                exp_typ.scalar_type,
+                                name.unwrap_or(&ColumnName::from("unnamed column")),
+                                typ,
+                            );
                         }
                     }
 
                     Ok(Plan::Insert {
                         id: table.id(),
                         values: relation_expr,
+                        column_info: table.desc()?.clone().into_iter().collect(),
                     })
                 } else {
                     unsupported!(format!("INSERT body {}", query.body));

@@ -46,7 +46,7 @@ use expr::{
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
+use repr::{ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker};
 use sql::ast::display::AstDisplay;
 use sql::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use sql::catalog::Catalog as _;
@@ -857,7 +857,11 @@ where
                 session,
             ),
 
-            Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values), session),
+            Plan::Insert {
+                id,
+                values,
+                column_info,
+            } => tx.send(self.sequence_insert(id, values, column_info), session),
 
             Plan::ShowViews {
                 ids,
@@ -1556,6 +1560,7 @@ where
         &mut self,
         id: GlobalId,
         values: expr::RelationExpr,
+        column_info: Vec<(Option<ColumnName>, ColumnType)>,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         match self
             .optimizer
@@ -1563,10 +1568,21 @@ where
             .into_inner()
         {
             RelationExpr::Constant { rows, typ: _ } => {
+                for (row, _) in &rows {
+                    for (datum, (name, typ)) in row.unpack().iter().zip(&column_info) {
+                        if datum == &Datum::Null && !typ.nullable {
+                            bail!(
+                                "NULL value in column {} violates not-null constraint",
+                                name.as_ref().unwrap_or(&ColumnName::from("unnamed column"))
+                            )
+                        }
+                    }
+                }
+
                 let affected_rows = rows.len();
                 self.sequence_send_diffs(id, rows, affected_rows, MutationKind::Insert)
             }
-            other => bail!(format!("expected to insert values, found {:?}", other)),
+            other => bail!("INSERT statement expected values, found {:?}", other),
         }
     }
 
