@@ -257,7 +257,7 @@ impl Connection {
                 FROM items
                 JOIN schemas ON items.schema_id = schemas.id
                 JOIN databases ON schemas.database_id = databases.id
-                ORDER BY items.rowid",
+                ORDER BY items.gid",
             )?
             .query_and_then(params![], |row| -> Result<_, Error> {
                 let id: SqlVal<GlobalId> = row.get(0)?;
