@@ -278,7 +278,7 @@ where
         &mut self,
         render_state: &mut RenderState,
         scope: &mut Child<'g, G, G::Timestamp>,
-        src_id: SourceInstanceId,
+        src_id: GlobalId,
         mut src: SourceDesc,
     ) {
         if let Some(operator) = &src.operators {
@@ -296,11 +296,11 @@ where
             ts_frequency,
         } = src.connector
         {
-            let get_expr = RelationExpr::global_get(src_id.sid, src.desc.typ().clone());
+            let get_expr = RelationExpr::global_get(src_id, src.desc.typ().clone());
 
             // This uid must be unique across all different instantiations of a source
             let uid = SourceInstanceId {
-                sid: src_id.sid,
+                sid: src_id,
                 vid: self.first_export_id,
             };
 
@@ -538,13 +538,13 @@ where
 
                 // Introduce the stream by name, as an unarranged collection.
                 self.collections.insert(
-                    RelationExpr::global_get(src_id.sid, src.desc.typ().clone()),
+                    RelationExpr::global_get(src_id, src.desc.typ().clone()),
                     (collection, err_collection),
                 );
                 capability
             };
             let token = Rc::new(capability);
-            self.source_tokens.insert(src_id.sid, token.clone());
+            self.source_tokens.insert(src_id, token.clone());
 
             // We also need to keep track of this mapping globally to activate sources
             // on timestamp advancement queries

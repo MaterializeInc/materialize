@@ -69,7 +69,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
 
     // Push demand information into the SourceDesc.
     for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
-        if let Some(columns) = demand.get(&Id::Global(source_id.sid)).clone() {
+        if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
             // Install no-op demand information if none exists.
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
@@ -106,7 +106,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 
     // Push predicate information into the SourceDesc.
     for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
-        if let Some(list) = predicates.get(&Id::Global(source_id.sid)).clone() {
+        if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
             // Install no-op predicate information if none exists.
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
