@@ -101,18 +101,19 @@ impl fmt::Display for GlobalId {
     }
 }
 
-/// Unique identifier used for each *instance* of a source in a dataflow
+/// Unique identifier for an instantiation of a source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct SourceInstanceId {
-    // Global Source Id
-    pub sid: GlobalId,
-    // Id of the view with which this source is instantiated
-    pub vid: GlobalId,
+    // The ID of the source.
+    pub source_id: GlobalId,
+    // The ID of the timely dataflow containing this instantiation of this
+    // source.
+    pub dataflow_id: usize,
 }
 
 impl fmt::Display for SourceInstanceId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}/{}", self.sid, self.vid)
+        write!(f, "{}/{}", self.source_id, self.dataflow_id)
     }
 }
 

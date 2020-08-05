@@ -123,6 +123,7 @@ use dataflow_types::Timestamp;
 use dataflow_types::*;
 use expr::{GlobalId, Id, RelationExpr, ScalarExpr, SourceInstanceId};
 use ore::cast::CastFrom;
+use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
 use repr::{Datum, RelationType, Row, RowArena};
 
@@ -178,9 +179,10 @@ pub fn build_local_input<A: Allocate>(
             // data is being stored, identified by the index_id
             // 2) the source stream that data comes in from, which is identified
             //    by the source_id, passed into this method as index.on_id
-            let mut context = Context::<_, _, _, Timestamp>::for_dataflow(&DataflowDesc::new(
-                "local-input".into(),
-            ));
+            let mut context = Context::<_, _, _, Timestamp>::for_dataflow(
+                &DataflowDesc::new("local-input".into()),
+                scope.addr().into_element(),
+            );
             let ((handle, capability), stream) = region.new_unordered_input();
             if region.index() == 0 {
                 render_state
@@ -224,7 +226,7 @@ pub fn build_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region(|region| {
-            let mut context = Context::for_dataflow(&dataflow);
+            let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
 
             assert!(
                 !dataflow
@@ -295,8 +297,8 @@ where
 
             // This uid must be unique across all different instantiations of a source
             let uid = SourceInstanceId {
-                sid: src_id,
-                vid: self.first_export_id,
+                source_id: src_id,
+                dataflow_id: self.dataflow_id,
             };
 
             // TODO(benesch): we force all sources to have an empty
@@ -571,7 +573,7 @@ where
         } else {
             panic!(
                 "import of index {} failed while building dataflow {}",
-                idx_id, self.first_export_id
+                idx_id, self.dataflow_id
             );
         }
     }
