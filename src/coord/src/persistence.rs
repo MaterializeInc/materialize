@@ -18,6 +18,7 @@ use log::{error, info};
 
 use dataflow_types::{Persistence, Timestamp, WorkerPersistenceData};
 use expr::GlobalId;
+use repr::{Datum, Row};
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PersistedRecord {
@@ -82,8 +83,13 @@ impl Source {
 
             let mut prev = partition.last_persisted_offset;
             let mut prefix_length = 0;
+            let mut start_offset = None;
 
             for p in partition.pending.iter() {
+                if start_offset.is_none() {
+                    start_offset = Some(p.offset);
+                }
+
                 match prev {
                     None => {
                         prefix_length += 1;
@@ -99,10 +105,42 @@ impl Source {
                     }
                 }
             }
+
+            let end_offset = prev.expect("known to exist");
             info!(
                 "partition {} found a prefix of {:?}",
                 partition_id, prefix_length
             );
+
+            // TODO make this configurable
+            if prefix_length > 10 {
+                let mut buf = Vec::new();
+                // We have a "large enough" prefix. Lets write it to a file
+                for record in partition.pending.drain(..prefix_length) {
+                    let row = Row::pack(&[
+                        Datum::Int64(record.offset),
+                        Datum::Int64(record.timestamp as i64),
+                        Datum::Bytes(&record.data),
+                    ]);
+
+                    row.encode(&mut buf);
+                }
+
+                let filename = format!(
+                    "materialize-source-{}-{}-{}-{}",
+                    self.id,
+                    partition_id,
+                    start_offset.unwrap(),
+                    end_offset + 1
+                );
+                let mut path = self.path.clone();
+                path.push(format!("{}-tmp", filename));
+                // TODO fix this
+                std::fs::write(&path, buf).expect("file writes expected to work");
+                let final_path = path.with_file_name(filename);
+                std::fs::rename(path, final_path).expect("file renames expected to work");
+                partition.last_persisted_offset = Some(end_offset);
+            }
         }
     }
 }
