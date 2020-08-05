@@ -266,6 +266,11 @@ fn run() -> Result<(), anyhow::Error> {
     let symbiosis_url = popts.opt_str("symbiosis");
     fs::create_dir_all(&data_directory).context("creating data directory")?;
 
+    // TODO terrible hack remove later
+    let mut persistence_directory = data_directory.clone();
+    persistence_directory.push("persistence/");
+    fs::create_dir_all(&persistence_directory).context("creating persistence directory")?;
+
     // Configure tracing.
     {
         let filter = EnvFilter::try_from_env("MZ_LOG")
