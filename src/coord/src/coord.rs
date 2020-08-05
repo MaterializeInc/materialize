@@ -1018,7 +1018,7 @@ where
                 self.views.insert(source_id, ViewState::new(false, vec![]));
                 if materialized {
                     let mut dataflow = DataflowDesc::new(name.to_string());
-                    self.import_source_or_view(&source_id, &source_id, &mut dataflow);
+                    self.import_source_or_view(&source_id, &mut dataflow);
                     self.build_arrangement(
                         &index_id.unwrap(),
                         index.unwrap(),
@@ -1747,14 +1747,9 @@ where
         Ok(())
     }
 
-    fn import_source_or_view(
-        &self,
-        orig_id: &GlobalId,
-        id: &GlobalId,
-        dataflow: &mut DataflowDesc,
-    ) {
+    fn import_source_or_view(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
         if dataflow.objects_to_build.iter().any(|bd| &bd.id == id)
-            || dataflow.source_imports.iter().any(|(i, _)| &i.sid == id)
+            || dataflow.source_imports.iter().any(|(i, _)| i == id)
         {
             return;
         }
@@ -1780,17 +1775,7 @@ where
         } else {
             match self.catalog.get_by_id(id).item() {
                 CatalogItem::Source(source) => {
-                    // A source is being imported as part of a new view. We have to notify the timestamping
-                    // thread that a source instance is being created for this view
-                    let instance_id = SourceInstanceId {
-                        sid: *id,
-                        vid: *orig_id,
-                    };
-                    dataflow.add_source_import(
-                        instance_id,
-                        source.connector.clone(),
-                        source.desc.clone(),
-                    );
+                    dataflow.add_source_import(*id, source.connector.clone(), source.desc.clone());
                 }
                 CatalogItem::View(view) => {
                     self.build_view_collection(id, &view, dataflow);
@@ -1813,7 +1798,7 @@ where
                 typ: _,
             } = e
             {
-                self.import_source_or_view(view_id, &id, dataflow);
+                self.import_source_or_view(&id, dataflow);
                 dataflow.add_dependency(*view_id, *id)
             }
         });
@@ -1861,7 +1846,7 @@ where
         on_type: RelationType,
         mut dataflow: DataflowDesc,
     ) {
-        self.import_source_or_view(id, &index.on, &mut dataflow);
+        self.import_source_or_view(&index.on, &mut dataflow);
         dataflow.add_index_to_build(*id, index.on.clone(), on_type.clone(), index.keys.clone());
         dataflow.add_index_export(*id, index.on, on_type, index.keys.clone());
         self.insert_index(*id, &index, self.logical_compaction_window_ms);
@@ -2019,7 +2004,7 @@ where
         }
         let mut dataflow = DataflowDesc::new(name);
         dataflow.set_as_of(connector.get_frontier());
-        self.import_source_or_view(&id, &from, &mut dataflow);
+        self.import_source_or_view(&from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector);
         self.validate_dataflow(&mut dataflow);
