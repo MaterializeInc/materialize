@@ -161,7 +161,7 @@ ORDER BY
 %0 =
 | Get materialize.public.lineitem (u21)
 | Filter (#10 <= 1998-12-01)
-| Reduce group=(#8, #9) sum(#4) sum(#5) sum((#5 * (100dec - #6))) sum(((#5 * (100dec - #6)) * (100dec + #7))) countall(null) countall(null) sum(#6) countall(null) countall(true)
+| Reduce group=(#8, #9) sum(#4) sum(#5) sum((#5 * (100dec - #6))) sum(((#5 * (100dec - #6)) * (100dec + #7))) count(#4) count(#5) sum(#6) count(#6) count(true)
 | Map (((#2 * 10000000dec) / i64todec(if (#6 = 0) then {null} else {#6})) / 10dec), (((#3 * 10000000dec) / i64todec(if (#7 = 0) then {null} else {#7})) / 10dec), (((#8 * 10000000dec) / i64todec(if (#9 = 0) then {null} else {#9})) / 10dec)
 | Project (#0..#5, #11..#13, #10)
 
@@ -377,7 +377,7 @@ ORDER BY
 | Join %1 %4 (= #0 #9)
 | | implementation = Differential %1 %4.(#0)
 | | demand = (#5)
-| Reduce group=(#5) countall(true)
+| Reduce group=(#5) count(true)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
 
@@ -971,7 +971,7 @@ ORDER BY
 %7 =
 | Union %3 %6
 | Reduce group=(#0) count(#8)
-| Reduce group=(#1) countall(true)
+| Reduce group=(#1) count(true)
 
 Finish order_by=(#1 desc, #0 desc) limit=none offset=0 project=(#0, #1)
 
@@ -1233,7 +1233,7 @@ WHERE
 | Join %4 %5 (= #0 #2)
 | | implementation = DeltaQuery %4 %5.(#1) | %5 %4.(#0)
 | | demand = (#0, #5)
-| Reduce group=(#0) sum(#5) countall(null)
+| Reduce group=(#0) sum(#5) count(#5)
 | Map (2dec * (((#1 * 10000000dec) / i64todec(if (#2 = 0) then {null} else {#2})) / 10dec))
 | ArrangeBy (#0)
 
@@ -1661,7 +1661,7 @@ ORDER BY
 | Join %11 %16 (= #0 #39) (= #7 #38)
 | | implementation = Differential %16 %11.(#0, #7)
 | | demand = (#1)
-| Reduce group=(#1) countall(true)
+| Reduce group=(#1) count(true)
 
 Finish order_by=(#1 desc, #0 asc) limit=none offset=0 project=(#0, #1)
 
@@ -1725,7 +1725,7 @@ ORDER BY
 %1 =
 | Get materialize.public.customer (u15)
 | Filter (((((((substr(#4, 1, 2) = "13") || (substr(#4, 1, 2) = "31")) || (substr(#4, 1, 2) = "23")) || (substr(#4, 1, 2) = "29")) || (substr(#4, 1, 2) = "30")) || (substr(#4, 1, 2) = "18")) || (substr(#4, 1, 2) = "17")), (#5 > 0dec)
-| Reduce group=() sum(#5) countall(null)
+| Reduce group=() sum(#5) count(#5)
 | Map (((#0 * 10000000dec) / i64todec(if (#1 = 0) then {null} else {#1})) / 10dec)
 | ArrangeBy ()
 
@@ -1765,7 +1765,7 @@ ORDER BY
 | Join %3 %8 (= #0 #11)
 | | implementation = Differential %8 %3.(#0)
 | | demand = (#4, #5)
-| Reduce group=(substr(#4, 1, 2)) countall(true) sum(#5)
+| Reduce group=(substr(#4, 1, 2)) count(true) sum(#5)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
 

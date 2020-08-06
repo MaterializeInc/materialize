@@ -342,10 +342,6 @@ where
             move |(key, row)| {
                 let datum = row.unpack_first();
                 let (aggs, nonnulls) = match aggr {
-                    AggregateFunc::CountAll => {
-                        // Nothing beyond the accumulated count is needed.
-                        (0i128, 0i128)
-                    }
                     AggregateFunc::Count => {
                         // Count needs to distinguish nulls from zero.
                         (1, if datum.is_null() { 0 } else { 1 })
@@ -412,7 +408,6 @@ where
                 // The finished value depends on the aggregation function in a variety of ways.
                 let value = match (&aggr, agg2) {
                     (AggregateFunc::Count, _) => Datum::Int64(agg2 as i64),
-                    (AggregateFunc::CountAll, _) => Datum::Int64(tot as i64),
                     (AggregateFunc::All, _) => {
                         // If any false, else if all true, else must be no false and some nulls.
                         if agg2 > 0 {
@@ -544,7 +539,6 @@ fn accumulable_hierarchical(func: &AggregateFunc) -> (bool, bool) {
         | AggregateFunc::SumFloat64
         | AggregateFunc::SumDecimal
         | AggregateFunc::Count
-        | AggregateFunc::CountAll
         | AggregateFunc::Any
         | AggregateFunc::All
         | AggregateFunc::Dummy => (true, false),

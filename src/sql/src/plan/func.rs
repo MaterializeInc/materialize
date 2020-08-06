@@ -1492,14 +1492,8 @@ lazy_static! {
         impls! {
             "count" => {
                 params!() => nullary_op(|_ecx| {
-                    // We have to return *some* expr, even though `CountAll`'s
-                    // implementation won't look at it, so we just provide
-                    // a literal `true`.
-                    //
-                    // TODO(benesch): it would be nice if `CountAll` didn't
-                    // exist, and `count(true)` was physically optimized to be
-                    // as efficient as the current `CountALl` implementation.
-                    Ok((ScalarExpr::literal_true(), AggregateFunc::CountAll))
+                    // COUNT(*) is equivalent to COUNT(true).
+                    Ok((ScalarExpr::literal_true(), AggregateFunc::Count))
                 }),
                 params!(Any) => AggregateFunc::Count
             },
@@ -1534,7 +1528,19 @@ lazy_static! {
                 params!(TimestampTz) => AggregateFunc::MinTimestampTz
             },
             "jsonb_agg" => {
-                params!(JsonbAny) => AggregateFunc::JsonbAgg
+                params!(JsonbAny) => unary_op(|_ecx, e| {
+                    // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
+                    // needs to have *some* identity input), but the semantics
+                    // of the SQL function require that `Datum::Null` is treated
+                    // as `Datum::JsonbNull`. This call to `coalesce` converts
+                    // between the two semantics.
+                    let json_null = ScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
+                    let e = ScalarExpr::CallVariadic {
+                        func: VariadicFunc::Coalesce,
+                        exprs: vec![e, json_null],
+                    };
+                    Ok((e, AggregateFunc::JsonbAgg))
+                })
             },
             "sum" => {
                 params!(Int32) => AggregateFunc::SumInt32,

@@ -15,7 +15,7 @@
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
 use crate::TransformArgs;
-use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr, UnaryFunc};
+use expr::{AggregateFunc, RelationExpr, ScalarExpr, UnaryFunc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 /// Harvests information about non-nullability of columns from sources.
@@ -73,7 +73,6 @@ impl NonNullable {
                     let metadata = input.typ();
                     for aggregate in aggregates.iter_mut() {
                         scalar_nonnullable(&mut aggregate.expr, &metadata);
-                        aggregate_nonnullable(aggregate, &metadata);
                     }
                 }
             }
@@ -116,15 +115,4 @@ fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
             }
         }
     })
-}
-
-/// Transformations to aggregation functions, based on nonnullability of columns.
-fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
-    // An aggregate that is a count of non-nullable data can be replaced by a countall.
-    if let (AggregateFunc::Count, ScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
-        if !metadata.column_types[*c].nullable && !expr.distinct {
-            expr.func = AggregateFunc::CountAll;
-            expr.expr = ScalarExpr::literal_null(ColumnType::new(ScalarType::Bool, true));
-        }
-    }
 }

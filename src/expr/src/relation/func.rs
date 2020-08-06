@@ -345,14 +345,6 @@ where
     Datum::from(x)
 }
 
-fn count_all<'a, I>(datums: I) -> Datum<'a>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let x: i64 = datums.into_iter().count() as i64;
-    Datum::from(x)
-}
-
 fn any<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -384,7 +376,7 @@ where
     I: IntoIterator<Item = Datum<'a>>,
 {
     let datum = temp_storage.make_datum(|packer| {
-        packer.push_list(datums.into_iter());
+        packer.push_list(datums.into_iter().filter(|d| !d.is_null()));
     });
     Datum::List(datum.unwrap_list())
 }
@@ -417,9 +409,13 @@ pub enum AggregateFunc {
     SumFloat64,
     SumDecimal,
     Count,
-    CountAll, // COUNT(*) counts nulls too
     Any,
     All,
+    /// Accumulates JSON-typed `Datum`s into a JSON list.
+    ///
+    /// WARNING: Unlike the `jsonb_agg` function that is exposed by the SQL
+    /// layer, this function filters out `Datum::Null`, for consistency with
+    /// the other aggregate functions.
     JsonbAgg,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
@@ -460,7 +456,6 @@ impl AggregateFunc {
             AggregateFunc::SumFloat64 => sum_float64(datums),
             AggregateFunc::SumDecimal => sum_decimal(datums),
             AggregateFunc::Count => count(datums),
-            AggregateFunc::CountAll => count_all(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
@@ -468,9 +463,22 @@ impl AggregateFunc {
         }
     }
 
+    /// Returns the output of the aggregation function when applied on an empty
+    /// input relation.
     pub fn default(&self) -> Datum<'static> {
         match self {
-            AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
+            AggregateFunc::Count => Datum::Int64(0),
+            AggregateFunc::Any => Datum::False,
+            AggregateFunc::All => Datum::True,
+            AggregateFunc::Dummy => Datum::Dummy,
+            _ => Datum::Null,
+        }
+    }
+
+    /// Returns a datum whose inclusion in the aggregation will not change its
+    /// result.
+    pub fn identity_datum(&self) -> Datum<'static> {
+        match self {
             AggregateFunc::Any => Datum::False,
             AggregateFunc::All => Datum::True,
             AggregateFunc::Dummy => Datum::Dummy,
@@ -486,7 +494,6 @@ impl AggregateFunc {
     pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
         let scalar_type = match self {
             AggregateFunc::Count => ScalarType::Int64,
-            AggregateFunc::CountAll => ScalarType::Int64,
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
@@ -494,7 +501,7 @@ impl AggregateFunc {
             _ => input_type.scalar_type,
         };
         let nullable = match self {
-            AggregateFunc::Count | AggregateFunc::CountAll => false,
+            AggregateFunc::Count => false,
             // max/min/sum return null on empty sets
             _ => true,
         };
@@ -607,7 +614,6 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::SumFloat64 => f.write_str("sum"),
             AggregateFunc::SumDecimal => f.write_str("sum"),
             AggregateFunc::Count => f.write_str("count"),
-            AggregateFunc::CountAll => f.write_str("countall"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
             AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
