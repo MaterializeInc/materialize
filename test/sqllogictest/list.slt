@@ -262,8 +262,8 @@ SELECT LIST [[1, 2, 3], [4, 5]][1:2][2][2:2][1]
 5
 
 # 🔬 list list list
-# 🔬🔬 list list list indexes
 
+# 🔬🔬 list list list indexes
 query T
 SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1]
 ----
@@ -378,7 +378,6 @@ query error cannot slice on 4 dimensions; list only has 3 dimensions
 SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][:, :, :, :];
 
 # 🔬🔬 list list list slices + index
-
 query T
 SELECT LIST [[[1, 2], [3, 4, 5]], [[6]], [[7, 8], [9]]][1:2][1];
 ----
@@ -657,6 +656,108 @@ SELECT LIST [[1, 2, 3], [4, 5]][1:TIMESTAMP '2001-01-01']
 
 # 🔬 Built-in functions
 
+# 🔬🔬 list_append
+
+# 🔬🔬🔬 list + element
+query T
+SELECT list_append(LIST[1, 2], 3)
+----
+{1,2,3}
+
+# 🔬🔬🔬 list list + list (list + element)
+query T
+SELECT list_append(LIST[[1], [2]], LIST[3])
+----
+{{1},{2},{3}}
+
+# 🔬🔬🔬 NULL elements
+
+# 🔬🔬🔬🔬 list + element
+query T
+SELECT list_append(LIST[1], NULL::INT)
+----
+{1,NULL}
+
+query T
+SELECT list_append(NULL::INT LIST, 1)
+----
+{1}
+
+query T
+SELECT list_append(NULL::INT LIST, NULL::INT)
+----
+{NULL}
+
+# 🔬🔬🔬🔬 list list + list (list + element)
+query T
+SELECT list_append(LIST[[1]], NULL::INT LIST)
+----
+{{1},NULL}
+
+query T
+SELECT list_append(NULL::INT LIST LIST, LIST[1])
+----
+{{1}}
+
+query T
+SELECT list_append(NULL::INT LIST LIST, NULL::INT LIST)
+----
+{NULL}
+
+# 🔬🔬🔬 errors
+query error
+SELECT list_append(LIST[1], NULL)
+
+query error
+SELECT list_append(LIST[1], 'a');
+
+query error
+SELECT list_append(LIST[1], LIST[2])
+
+query error
+SELECT list_append(1, LIST[1])
+
+# 🔬🔬 list_cat
+
+# 🔬🔬🔬 list + list
+query T
+SELECT list_cat(LIST[1, 2], LIST[3, 4])
+----
+{1,2,3,4}
+
+query T
+SELECT list_cat(LIST[[1]], LIST[[2]])
+----
+{{1},{2}}
+
+# 🔬🔬🔬 NULL elements
+
+# 🔬🔬🔬🔬 list + list
+query T
+SELECT list_cat(LIST[1], NULL::INT LIST)
+----
+{1}
+
+query T
+SELECT list_cat(NULL::INT LIST, LIST[1])
+----
+{1}
+
+query T
+SELECT list_cat(NULL::INT LIST, NULL::INT LIST)
+----
+NULL
+
+# 🔬🔬🔬 errors
+query error
+SELECT list_cat(LIST[1], NULL)
+
+query error
+SELECT list_cat('a', LIST[1])
+
+query error
+SELECT list_cat(LIST[1], LIST[[2]])
+
 # 🔬🔬 list_ndims
 query R
 SELECT list_ndims(LIST [1, 2, 3])
@@ -679,7 +780,6 @@ SELECT list_ndims(LIST [[[1], [1]], [[1]]])
 3
 
 # 🔬🔬🔬 slices
-
 query R
 SELECT list_ndims(LIST[[1],[1]][1:1])
 ----
@@ -707,7 +807,6 @@ SELECT list_ndims(LIST [[[1], [1]], [[1]]][1][1])
 1
 
 # 🔬🔬🔬 NULL elements
-
 query R
 SELECT list_ndims(LIST[NULL]::INT LIST)
 ----
@@ -729,7 +828,6 @@ SELECT list_ndims((LIST[[1],NULL]::INT LIST LIST)[2])
 1
 
 # 🔬🔬 list_length
-
 query R
 SELECT list_length(LIST [1])
 ----
@@ -756,7 +854,6 @@ SELECT list_length(LIST []::INT LIST)
 0
 
 # 🔬🔬🔬 slices
-
 query R
 SELECT list_length(LIST[[1],[1]][1:1])
 ----
@@ -779,7 +876,6 @@ SELECT list_length(LIST [[[1], [1]], [[1]]][1][1])
 1
 
 # 🔬🔬🔬 NULL elements
-
 query R
 SELECT list_length(LIST[1, NULL]::INT LIST)
 ----
@@ -832,7 +928,6 @@ SELECT list_length_max(LIST [[]]::INT LIST LIST, 2)
 0
 
 # 🔬🔬🔬 slices
-
 query R
 SELECT list_length_max(LIST[[1], [2]][1:1], 1)
 ----
@@ -880,7 +975,6 @@ SELECT list_length_max(LIST [[[1, 2, 3], [4]], [[5]]][1][2], 1)
 1
 
 # 🔬🔬🔬 NULL elements
-
 query R
 SELECT list_length_max(NULL::INT LIST, 1);
 ----
@@ -924,3 +1018,211 @@ SELECT list_length_max((LIST[1]::INT LIST), -1)
 
 query error invalid dimension: -1; must use value within \[1, 1\]
 SELECT list_length_max((LIST[1]::INT LIST), LIST[-1][1])
+
+# 🔬🔬 list_prepend
+
+# 🔬🔬🔬 element + list
+query T
+SELECT list_prepend(1, LIST[2, 3])
+----
+{1,2,3}
+
+# 🔬🔬🔬 list + list list (element + list)
+query T
+SELECT list_prepend(LIST[1], LIST[[2], [3]])
+----
+{{1},{2},{3}}
+
+# 🔬🔬🔬 NULL elements
+
+# 🔬🔬🔬🔬 element + list
+query T
+SELECT list_prepend(NULL::INT, LIST[1])
+----
+{NULL,1}
+
+query T
+SELECT list_prepend(1, NULL::INT LIST)
+----
+{1}
+
+query T
+SELECT list_prepend(NULL::INT, NULL::INT LIST)
+----
+{NULL}
+
+# 🔬🔬🔬🔬 list + list list (element + list)
+query T
+SELECT list_prepend(NULL::INT LIST, LIST[[1]])
+----
+{NULL,{1}}
+
+query T
+SELECT list_prepend(LIST[1], NULL::INT LIST LIST)
+----
+{{1}}
+
+query T
+SELECT list_prepend(NULL::INT LIST, NULL::INT LIST LIST)
+----
+{NULL}
+
+# 🔬🔬🔬 errors
+query error
+SELECT list_prepend(NULL, LIST[1])
+
+query error
+SELECT list_prepend('a', LIST[1])
+
+query error
+SELECT list_prepend(LIST[1], LIST[2])
+
+query error
+SELECT list_prepend(LIST[1], 1)
+
+# 🔬 Built-in operations
+
+# 🔬🔬concatenation (||)
+
+# 🔬🔬🔬 list + list
+query T
+SELECT LIST[1, 2] || LIST[3, 4]
+----
+{1,2,3,4}
+
+query T
+SELECT LIST[[1], [2]] || LIST[[3], [4]]
+----
+{{1},{2},{3},{4}}
+
+# 🔬🔬🔬 list + element
+query T
+SELECT LIST[1, 2] || 3
+----
+{1,2,3}
+
+# 🔬🔬🔬 element + list
+query T
+SELECT 1 || LIST[2, 3]
+----
+{1,2,3}
+
+# 🔬🔬🔬 list list + list (list + element)
+query T
+SELECT LIST[[1], [2]] || LIST[3]
+----
+{{1},{2},{3}}
+
+# 🔬🔬🔬 list + list list (element + list)
+query T
+SELECT LIST[1] || LIST[[2], [3]]
+----
+{{1},{2},{3}}
+
+# 🔬🔬🔬 NULL elements
+
+# 🔬🔬🔬🔬 list + list
+query T
+SELECT LIST[1] || NULL::INT LIST
+----
+{1}
+
+query T
+SELECT  NULL::INT LIST || LIST[1]
+----
+{1}
+
+query T
+SELECT NULL::INT LIST || NULL::INT LIST
+----
+NULL
+
+# 🔬🔬🔬🔬 list + element
+query T
+SELECT LIST[1] || NULL::INT
+----
+{1,NULL}
+
+query T
+SELECT NULL::INT LIST || 1
+----
+{1}
+
+query T
+SELECT NULL::INT LIST || NULL::INT
+----
+{NULL}
+
+query T
+SELECT LIST[1] || NULL
+----
+{1}
+
+query T
+SELECT NULL || LIST[1]
+----
+{1}
+
+# 🔬🔬🔬🔬 element + list
+query T
+SELECT NULL::INT || LIST[1]
+----
+{NULL,1}
+
+query T
+SELECT 1 || NULL::INT LIST
+----
+{1}
+
+query T
+SELECT NULL::INT || NULL::INT LIST
+----
+{NULL}
+
+# 🔬🔬🔬🔬 list list + list (list + element)
+query T
+SELECT LIST[[1]] || NULL::INT LIST
+----
+{{1},NULL}
+
+query T
+SELECT NULL::INT LIST LIST || LIST[1]
+----
+{{1}}
+
+query T
+SELECT NULL::INT LIST LIST || NULL::INT LIST
+----
+{NULL}
+
+# 🔬🔬🔬🔬 list + list list (element + list)
+query T
+SELECT NULL::INT LIST || LIST[[1]]
+----
+{NULL,{1}}
+
+query T
+SELECT LIST[1] || NULL::INT LIST LIST
+----
+{{1}}
+
+query T
+SELECT NULL::INT LIST || NULL::INT LIST LIST
+----
+{NULL}
+
+# 🔬🔬🔬 errors
+query error no overload for i32 list || unknown: Cannot concatenate i32 list and string list
+SELECT LIST[1] || LIST['a']
+
+query error  no overload for i32 list || unknown: Cannot concatenate i32 list and string
+SELECT LIST[1] || 'a'
+
+query error no overload for unknown || i32 list: Cannot concatenate string list and i32 list
+SELECT LIST[NULL] || LIST[1]
+
+query error no overload for unknown || i32 list: Cannot concatenate string list list and i32 list
+SELECT LIST[[NULL]] || LIST[1]
+
+query error no overload for i32 list list list || i32 list: Cannot concatenate i32 list list list and i32 list
+SELECT LIST[[[1]]] || LIST[2]
