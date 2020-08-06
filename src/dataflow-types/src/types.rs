@@ -522,6 +522,14 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
         }
     }
+
+    /// Returns whether or not persistence is enabled for this connector
+    pub fn enable_persistence(&self) -> bool {
+        match self {
+            ExternalSourceConnector::Kafka(k) => k.enable_persistence,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -593,6 +601,7 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
+    pub enable_persistence: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -682,6 +691,18 @@ pub struct KafkaSinkConnectorBuilder {
     pub replication_factor: u32,
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Data that gets sent to the persistence thread to place in persistent storage.
+/// TODO currently fairly Kafka input-centric.
+pub struct WorkerPersistenceData {
+    pub source_id: GlobalId,
+    pub partition: i32,
+    pub offset: i64,
+    pub timestamp: Timestamp,
+    pub key: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

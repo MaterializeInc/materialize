@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -23,8 +24,10 @@ use timely::dataflow::{
 
 use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
+    WorkerPersistenceData,
 };
 use expr::{PartitionId, SourceInstanceId};
+use futures::sink::Sink;
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -82,6 +85,8 @@ pub struct SourceConfig<'a, G> {
     pub active: bool,
     /// Data encoding
     pub encoding: DataEncoding,
+    /// Channel to send persistence information to persister thread
+    pub persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -296,6 +301,16 @@ pub trait SourceInfo<Out> {
 
     /// Buffer a message that cannot get timestamped
     fn buffer_message(&mut self, message: SourceMessage<Out>);
+
+    /// Persist a message
+    fn persist_message(
+        &self,
+        _persistence_tx: &mut Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+        _message: &SourceMessage<Out>,
+        _timestamp: Timestamp,
+    ) {
+        // Default implementation is to do nothing
+    }
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
@@ -731,6 +746,7 @@ where
         timestamp_frequency,
         active,
         encoding,
+        mut persistence_tx,
         ..
     } = config;
 
@@ -831,6 +847,7 @@ where
                                     return SourceStatus::Alive;
                                 }
                                 Some(ts) => {
+                                    source_info.persist_message(&mut persistence_tx, &message, ts);
                                     // Note: empty and null payload/keys are currently
                                     // treated as the same thing.
                                     let key = message.key.unwrap_or_default();
@@ -846,6 +863,7 @@ where
                                     bytes_read += key.len() as i64;
                                     bytes_read += out.len().unwrap_or(0) as i64;
                                     let ts_cap = cap.delayed(&ts);
+
                                     output.session(&ts_cap).give(Ok(SourceOutput::new(
                                         key,
                                         out,

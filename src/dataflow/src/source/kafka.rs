@@ -10,9 +10,12 @@
 use std::cmp;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::executor::block_on;
+use futures::sink::{Sink, SinkExt};
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
@@ -21,9 +24,10 @@ use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionLi
 use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
+    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
+    MzOffset, Timestamp, WorkerPersistenceData,
 };
-use expr::{PartitionId, SourceInstanceId};
+use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddr;
 use log::{error, info, log_enabled, warn};
 
@@ -42,6 +46,8 @@ pub struct KafkaSourceInfo {
     source_name: String,
     /// Source instance ID (stored as a string for logging)
     source_id: String,
+    /// Source global id (for persistence)
+    source_global_id: GlobalId,
     /// Kafka consumer for this source
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
@@ -327,6 +333,36 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         // Mark the partition has buffered
         self.buffered_metadata.insert(consumer.pid);
     }
+
+    fn persist_message(
+        &self,
+        persistence_tx: &mut Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+        message: &SourceMessage<Vec<u8>>,
+        timestamp: Timestamp,
+    ) {
+        // Send this record to be persisted
+        if let Some(persistence_tx) = persistence_tx {
+            let partition_id = match message.partition {
+                PartitionId::Kafka(p) => p,
+                _ => unreachable!(),
+            };
+
+            let key = message.key.clone().unwrap_or_default();
+            let payload = message.payload.clone().unwrap_or_default();
+
+            let persistence_data = WorkerPersistenceData {
+                source_id: self.source_global_id,
+                partition: partition_id,
+                offset: message.offset.offset,
+                timestamp,
+                key,
+                payload,
+            };
+
+            let mut connector = persistence_tx.as_mut();
+            block_on(connector.send(persistence_data)).unwrap();
+        }
+    }
 }
 
 impl KafkaSourceInfo {
@@ -348,6 +384,7 @@ impl KafkaSourceInfo {
         } = kc;
         let kafka_config =
             create_kafka_config(&source_name, &addr, group_id_prefix, &config_options);
+        let source_global_id = source_id.sid;
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
@@ -357,6 +394,7 @@ impl KafkaSourceInfo {
             topic_name: topic,
             source_name,
             source_id,
+            source_global_id,
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
             consumer: Arc::new(consumer),

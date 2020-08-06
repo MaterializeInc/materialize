@@ -113,6 +113,12 @@ pub struct Config {
     pub logical_compaction_window: Option<Duration>,
     /// The interval at which sources should be timestamped.
     pub timestamp_frequency: Duration,
+    /// The minimum number of records that need to be ingested from a source partition
+    /// before they are flushed to persistent storage.
+    pub persistence_min_threshold: usize,
+    /// The minimum interval before which Materialize checks to see if any sources
+    /// have enough records to flush to persistent storage.
+    pub persistence_flush_interval: Duration,
 
     // === Connection options. ===
     /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
@@ -124,6 +130,8 @@ pub struct Config {
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
     pub data_directory: Option<PathBuf>,
+    /// The subdirectory where `materialized` should store source persistence information.
+    pub persistence_directory: Option<PathBuf>,
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
@@ -277,6 +285,16 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
     // dataflow workers, as booting the coordinator can involve sending enough
     // data to workers to fill up a `comm` channel buffer (#3280).
     let coord_thread = if is_primary {
+        let persistence = if let Some(persistence_directory) = &config.persistence_directory {
+            Some(coord::PersistenceConfig {
+                flush_min_records: config.persistence_min_threshold,
+                flush_interval: config.persistence_flush_interval,
+                path: persistence_directory.into(),
+            })
+        } else {
+            None
+        };
+
         let mut coord = coord::Coordinator::new(coord::Config {
             switchboard,
             num_timely_workers,
@@ -287,6 +305,7 @@ pub fn serve(mut config: Config) -> Result<Server, anyhow::Error> {
             timestamp: coord::TimestampConfig {
                 frequency: config.timestamp_frequency,
             },
+            persistence,
             logical_compaction_window: config.logical_compaction_window,
             executor: &executor,
             experimental_mode: config.experimental_mode,

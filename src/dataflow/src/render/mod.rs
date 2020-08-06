@@ -100,6 +100,7 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -109,6 +110,8 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
+use futures::executor::block_on;
+use futures::sink::{Sink, SinkExt};
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
@@ -160,6 +163,8 @@ pub struct RenderState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    /// Sender to give data to be persisted.
+    pub persistence_tx: Option<comm::mpsc::Sender<WorkerPersistenceData>>,
 }
 
 pub fn build_local_input<A: Allocate>(
@@ -320,6 +325,17 @@ where
                 (usize::cast_from(uid.hashed()) % scope.peers()) == scope.index()
             };
 
+            let enable_persistence = connector.enable_persistence();
+            let persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>> =
+                if enable_persistence && render_state.persistence_tx.is_some() {
+                    let tx = render_state.persistence_tx.as_ref().cloned().unwrap();
+                    Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
+                        |err| panic!("error enabling dataflow worker persistence: {}", err),
+                    )))
+                } else {
+                    None
+                };
+
             let source_config = SourceConfig {
                 name: format!("{}-{}", connector.name(), uid),
                 id: uid,
@@ -333,6 +349,7 @@ where
                 worker_id: scope.index(),
                 worker_count: scope.peers(),
                 encoding: encoding.clone(),
+                persistence_tx,
             };
 
             let capability = if let Envelope::Upsert(key_encoding) = envelope {
