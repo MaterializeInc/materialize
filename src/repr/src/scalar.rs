@@ -667,6 +667,15 @@ impl<'a> ScalarType {
             _ => self.clone(),
         }
     }
+
+    /// Derives a column type from this scalar type with the specified
+    /// nullability.
+    pub fn nullable(self, nullable: bool) -> ColumnType {
+        ColumnType {
+            nullable,
+            scalar_type: self,
+        }
+    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can

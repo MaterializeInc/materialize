@@ -57,11 +57,11 @@ impl ReduceElision {
                             a.expr.clone().call_unary(UnaryFunc::IsNull).if_then_else(
                                 ScalarExpr::literal_ok(
                                     Datum::Int64(0),
-                                    column_type.clone().nullable(false),
+                                    column_type.scalar_type.clone().nullable(false),
                                 ),
                                 ScalarExpr::literal_ok(
                                     Datum::Int64(1),
-                                    column_type.nullable(false),
+                                    column_type.scalar_type.nullable(false),
                                 ),
                             )
                         }

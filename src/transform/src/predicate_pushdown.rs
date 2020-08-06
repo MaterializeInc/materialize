@@ -19,13 +19,13 @@
 //! use transform::predicate_pushdown::PredicatePushdown;
 //!
 //! let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool, false),
+//!     ScalarType::Bool.nullable(false),
 //! ]));
 //! let input2 = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool, false),
+//!     ScalarType::Bool.nullable(false),
 //! ]));
 //! let input3 = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool, false),
+//!     ScalarType::Bool.nullable(false),
 //! ]));
 //! let join = RelationExpr::join(
 //!     vec![input1.clone(), input2.clone(), input3.clone()],
@@ -35,7 +35,7 @@
 //! let predicate0 = ScalarExpr::column(0);
 //! let predicate1 = ScalarExpr::column(1);
 //! let predicate01 = ScalarExpr::column(0).call_binary(ScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = ScalarExpr::literal_ok(Datum::False, ColumnType::new(ScalarType::Bool, false));
+//! let predicate012 = ScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
 //!
 //! let mut expr = join.filter(
 //!    vec![
@@ -56,7 +56,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
 use expr::{AggregateFunc, Id, RelationExpr, ScalarExpr};
-use repr::{ColumnType, Datum, ScalarType};
+use repr::{Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -330,7 +330,7 @@ impl PredicatePushdown {
                                 push_down.push(aggregates[0].expr.clone());
                                 aggregates[0].expr = ScalarExpr::literal_ok(
                                     Datum::True,
-                                    ColumnType::new(ScalarType::Bool, false),
+                                    ScalarType::Bool.nullable(false),
                                 );
                             } else {
                                 retain.push(predicate);

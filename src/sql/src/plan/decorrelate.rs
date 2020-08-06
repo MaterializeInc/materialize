@@ -561,7 +561,7 @@ impl ScalarExpr {
                                 expr1: Box::new(cond_expr.clone()),
                                 expr2: Box::new(SS::literal_ok(
                                     Datum::False,
-                                    ColumnType::new(ScalarType::Bool, false),
+                                    ScalarType::Bool.nullable(false),
                                 )),
                             }),
                             expr2: Box::new(SS::CallUnary {
@@ -613,11 +613,10 @@ impl ScalarExpr {
                             // optimizer.
                             .product(expr::RelationExpr::constant(
                                 vec![vec![Datum::True]],
-                                RelationType::new(vec![ColumnType::new(ScalarType::Bool, false)]),
+                                RelationType::new(vec![ScalarType::Bool.nullable(false)]),
                             ));
                         // append False to anything that didn't return any rows
-                        let default =
-                            vec![(Datum::False, ColumnType::new(ScalarType::Bool, false))];
+                        let default = vec![(Datum::False, ScalarType::Bool.nullable(false))];
                         get_inner.lookup(id_gen, exists, default)
                     },
                 );

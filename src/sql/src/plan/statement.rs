@@ -59,31 +59,18 @@ use crate::pure::Schema;
 
 lazy_static! {
     static ref SHOW_DATABASES_DESC: RelationDesc =
-        RelationDesc::empty().with_nonnull_column("Database", ScalarType::String);
-    static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::new(
-        RelationType::new(vec![
-            ColumnType::new(ScalarType::String, false),
-            ColumnType::new(ScalarType::String, false),
-            ColumnType::new(ScalarType::String, true),
-            ColumnType::new(ScalarType::String, true),
-            ColumnType::new(ScalarType::Bool, false),
-            ColumnType::new(ScalarType::Int64, false),
-        ]),
-        vec![
-            "Source_or_view",
-            "Key_name",
-            "Column_name",
-            "Expression",
-            "Null",
-            "Seq_in_index",
-        ]
-        .into_iter()
-        .map(Some),
-    );
+        RelationDesc::empty().with_column("Database", ScalarType::String.nullable(false));
+    static ref SHOW_INDEXES_DESC: RelationDesc = RelationDesc::empty()
+        .with_column("Source_or_view", ScalarType::String.nullable(false))
+        .with_column("Key_name", ScalarType::String.nullable(false))
+        .with_column("Column_name", ScalarType::String.nullable(true))
+        .with_column("Expression", ScalarType::String.nullable(true))
+        .with_column("Null", ScalarType::Bool.nullable(false))
+        .with_column("Seq_in_index", ScalarType::Int64.nullable(false));
     static ref SHOW_COLUMNS_DESC: RelationDesc = RelationDesc::empty()
-        .with_nonnull_column("Field", ScalarType::String)
-        .with_nonnull_column("Nullable", ScalarType::String)
-        .with_nonnull_column("Type", ScalarType::String);
+        .with_column("Field", ScalarType::String.nullable(false))
+        .with_column("Nullable", ScalarType::String.nullable(false))
+        .with_column("Type", ScalarType::String.nullable(false));
 }
 
 pub fn make_show_objects_desc(
@@ -94,17 +81,19 @@ pub fn make_show_objects_desc(
     let col_name = object_type_as_plural_str(object_type);
     if full {
         let mut relation_desc = RelationDesc::empty()
-            .with_nonnull_column(col_name, ScalarType::String)
-            .with_nonnull_column("TYPE", ScalarType::String);
+            .with_column(col_name, ScalarType::String.nullable(false))
+            .with_column("TYPE", ScalarType::String.nullable(false));
         if ObjectType::View == object_type {
-            relation_desc = relation_desc.with_nonnull_column("QUERYABLE", ScalarType::Bool);
+            relation_desc =
+                relation_desc.with_column("QUERYABLE", ScalarType::Bool.nullable(false));
         }
         if !materialized && (ObjectType::View == object_type || ObjectType::Source == object_type) {
-            relation_desc = relation_desc.with_nonnull_column("MATERIALIZED", ScalarType::Bool);
+            relation_desc =
+                relation_desc.with_column("MATERIALIZED", ScalarType::Bool.nullable(false));
         }
         relation_desc
     } else {
-        RelationDesc::empty().with_nonnull_column(col_name, ScalarType::String)
+        RelationDesc::empty().with_column(col_name, ScalarType::String.nullable(false))
     }
 }
 
@@ -144,13 +133,13 @@ pub fn describe_statement(
         Statement::Explain(ExplainStatement {
             stage, explainee, ..
         }) => (
-            Some(RelationDesc::empty().with_nonnull_column(
+            Some(RelationDesc::empty().with_column(
                 match stage {
                     ExplainStage::RawPlan => "Raw Plan",
                     ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
                     ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
                 },
-                ScalarType::String,
+                ScalarType::String.nullable(false),
             )),
             match explainee {
                 Explainee::Query(q) => {
@@ -171,8 +160,8 @@ pub fn describe_statement(
         Statement::ShowCreateView(_) => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("View", ScalarType::String)
-                    .with_nonnull_column("Create View", ScalarType::String),
+                    .with_column("View", ScalarType::String.nullable(false))
+                    .with_column("Create View", ScalarType::String.nullable(false)),
             ),
             vec![],
         ),
@@ -180,8 +169,8 @@ pub fn describe_statement(
         Statement::ShowCreateSource(_) => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("Source", ScalarType::String)
-                    .with_nonnull_column("Create Source", ScalarType::String),
+                    .with_column("Source", ScalarType::String.nullable(false))
+                    .with_column("Create Source", ScalarType::String.nullable(false)),
             ),
             vec![],
         ),
@@ -189,8 +178,8 @@ pub fn describe_statement(
         Statement::ShowCreateTable(_) => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("Table", ScalarType::String)
-                    .with_nonnull_column("Create Table", ScalarType::String),
+                    .with_column("Table", ScalarType::String.nullable(false))
+                    .with_column("Create Table", ScalarType::String.nullable(false)),
             ),
             vec![],
         ),
@@ -198,8 +187,8 @@ pub fn describe_statement(
         Statement::ShowCreateSink(_) => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("Sink", ScalarType::String)
-                    .with_nonnull_column("Create Sink", ScalarType::String),
+                    .with_column("Sink", ScalarType::String.nullable(false))
+                    .with_column("Create Sink", ScalarType::String.nullable(false)),
             ),
             vec![],
         ),
@@ -207,8 +196,8 @@ pub fn describe_statement(
         Statement::ShowCreateIndex(_) => (
             Some(
                 RelationDesc::empty()
-                    .with_nonnull_column("Index", ScalarType::String)
-                    .with_nonnull_column("Create Index", ScalarType::String),
+                    .with_column("Index", ScalarType::String.nullable(false))
+                    .with_column("Create Index", ScalarType::String.nullable(false)),
             ),
             vec![],
         ),
@@ -234,9 +223,9 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .with_nonnull_column("name", ScalarType::String)
-                            .with_nonnull_column("setting", ScalarType::String)
-                            .with_nonnull_column("description", ScalarType::String),
+                            .with_column("name", ScalarType::String.nullable(false))
+                            .with_column("setting", ScalarType::String.nullable(false))
+                            .with_column("description", ScalarType::String.nullable(false)),
                     ),
                     vec![],
                 )
@@ -244,7 +233,7 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .with_nonnull_column(variable.as_str(), ScalarType::String),
+                            .with_column(variable.as_str(), ScalarType::String.nullable(false)),
                     ),
                     vec![],
                 )
@@ -1597,7 +1586,7 @@ fn handle_create_table(
                         }
                     }
                 }
-                Ok(ColumnType::new(ty, nullable))
+                Ok(ty.nullable(nullable))
             })
             .collect::<Result<Vec<_>, anyhow::Error>>()?,
     );

@@ -223,20 +223,20 @@ impl CatalogView {
         match self {
             // Paths for Avro OCF sinks.
             CatalogView::MzAvroOcfSinks => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("path", ScalarType::Bytes)
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("path", ScalarType::Bytes.nullable(false))
                 .with_key(vec![0]),
 
             // Name -> global ID mapping.
             CatalogView::MzCatalogNames => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("name", ScalarType::String)
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("name", ScalarType::String.nullable(false))
                 .with_key(vec![0]),
 
             // Topics for Kafka sinks.
             CatalogView::MzKafkaSinks => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("topic", ScalarType::String)
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("topic", ScalarType::String.nullable(false))
                 .with_key(vec![0]),
 
             // Foreign key relationship: child, parent, then pairs of child and
@@ -245,18 +245,18 @@ impl CatalogView {
             // relationships from one child relation to the same parent
             // relation.
             CatalogView::MzViewForeignKeys => RelationDesc::empty()
-                .with_nonnull_column("child_id", ScalarType::String)
-                .with_nonnull_column("child_column", ScalarType::Int64)
-                .with_nonnull_column("parent_id", ScalarType::String)
-                .with_nonnull_column("parent_column", ScalarType::Int64)
-                .with_nonnull_column("key_group", ScalarType::Int64)
+                .with_column("child_id", ScalarType::String.nullable(false))
+                .with_column("child_column", ScalarType::Int64.nullable(false))
+                .with_column("parent_id", ScalarType::String.nullable(false))
+                .with_column("parent_column", ScalarType::Int64.nullable(false))
+                .with_column("key_group", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 4]),
 
             // Primary key relations.
             CatalogView::MzViewKeys => RelationDesc::empty()
-                .with_nonnull_column("global_id", ScalarType::String)
-                .with_nonnull_column("column", ScalarType::Int64)
-                .with_nonnull_column("key_group", ScalarType::Int64),
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("column", ScalarType::Int64.nullable(false))
+                .with_column("key_group", ScalarType::Int64.nullable(false)),
         }
     }
 }
