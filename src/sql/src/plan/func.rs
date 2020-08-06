@@ -19,7 +19,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use repr::{ColumnName, ColumnType, Datum, ScalarType};
+use repr::{ColumnName, Datum, ScalarType};
 use sql_parser::ast::{BinaryOperator, Expr, UnaryOperator};
 
 use super::expr::{
@@ -799,7 +799,7 @@ lazy_static! {
                 params!(List(Box::new(String))) => unary_op(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
                     let d = ecx.scalar_type(&e).unwrap_list_n_dims();
-                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ColumnType::new(ScalarType::Int32, false)))
+                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
                 })
             },
             "list_length" => {
@@ -895,7 +895,7 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, a
     match ecx.qcx.lifetime {
         QueryLifetime::OneShot => Ok(ScalarExpr::literal(
             Datum::from(ecx.qcx.scx.pcx.wall_time),
-            ColumnType::new(ScalarType::TimestampTz, false),
+            ScalarType::TimestampTz,
         )),
         QueryLifetime::Static => bail!("{} cannot be used in static queries", name),
     }

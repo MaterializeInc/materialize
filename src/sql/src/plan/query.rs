@@ -37,9 +37,7 @@ use sql_parser::ast::{
 use ::expr::{Id, RowSetFinishing};
 use dataflow_types::Timestamp;
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
-use repr::{
-    strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
-};
+use repr::{strconv, ColumnName, Datum, RelationDesc, RelationType, RowArena, ScalarType};
 
 use crate::names::PartialName;
 use crate::normalize;
@@ -1629,16 +1627,13 @@ pub fn plan_expr<'a>(ecx: &'a ExprContext, e: &Expr) -> Result<CoercibleScalarEx
                 let start = if let Some(start) = &p.start {
                     plan_expr(ecx, start)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
                 } else {
-                    ScalarExpr::literal(Datum::Int64(1), ColumnType::new(ScalarType::Int64, true))
+                    ScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)
                 };
 
                 let end = if let Some(end) = &p.end {
                     plan_expr(ecx, end)?.explicit_cast_to(op_str, ecx, ScalarType::Int64)?
                 } else {
-                    ScalarExpr::literal(
-                        Datum::Int64(i64::MAX - 1),
-                        ColumnType::new(ScalarType::Int64, true),
-                    )
+                    ScalarExpr::literal(Datum::Int64(i64::MAX - 1), ScalarType::Int64)
                 };
 
                 exprs.push(start);
@@ -2016,9 +2011,7 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
     };
-    let nullable = datum == Datum::Null;
-    let typ = ColumnType::new(scalar_type, nullable);
-    let expr = ScalarExpr::literal(datum, typ);
+    let expr = ScalarExpr::literal(datum, scalar_type);
     Ok(expr.into())
 }
 
