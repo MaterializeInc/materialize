@@ -78,8 +78,9 @@ mod enabled {
     }
 
     #[derive(Template)]
-    #[template(path = "http/templates/flamegraph.html", escape = "none")]
+    #[template(path = "http/templates/flamegraph.html")]
     struct FlamegraphTemplate<'a> {
+        version: &'a str,
         data_json: &'a str,
     }
 
@@ -168,7 +169,10 @@ mod enabled {
                     },
                 );
                 let data_json = &*data_json.borrow();
-                Ok(util::template_response(FlamegraphTemplate { data_json }))
+                Ok(util::template_response(FlamegraphTemplate {
+                    version: crate::VERSION,
+                    data_json,
+                }))
             }
             x => Ok(util::error_response(
                 StatusCode::BAD_REQUEST,
