@@ -17,7 +17,7 @@ comm = { path = "../comm" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 derivative = "2.1"
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = { git = "https://github.com/benesch/differential-dataflow.git", branch = "crossbeam-channels" }
 expr = { path = "../expr" }
 futures = "0.3"
 interchange = { path = "../interchange" }
@@ -37,7 +37,7 @@ serde = "1.0"
 serde_json = "1.0.57"
 sql = { path = "../sql" }
 symbiosis = { path = "../symbiosis" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/benesch/timely-dataflow", features = ["bincode"], branch = "crossbeam-channels" }
 tokio = "0.2"
 transform = { path = "../transform" }
 unicase = "2.6.0"

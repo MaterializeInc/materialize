@@ -10,7 +10,7 @@
 use std::cmp;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rdkafka::consumer::base_consumer::PartitionQueue;
@@ -350,9 +350,7 @@ impl KafkaSourceInfo {
             create_kafka_config(&source_name, &addr, group_id_prefix, &config_options);
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
-            .create_with_context(GlueConsumerContext(Arc::new(Mutex::new(
-                consumer_activator,
-            ))))
+            .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
         KafkaSourceInfo {
             buffered_metadata: HashSet::new(),
@@ -597,7 +595,7 @@ impl PartitionConsumer {
 
 /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
 /// when the message queue switches from nonempty to empty.
-struct GlueConsumerContext(Arc<Mutex<SyncActivator>>);
+struct GlueConsumerContext(SyncActivator);
 
 impl ClientContext for GlueConsumerContext {
     fn stats(&self, statistics: Statistics) {
@@ -607,8 +605,7 @@ impl ClientContext for GlueConsumerContext {
 
 impl GlueConsumerContext {
     fn activate(&self) {
-        let activator = self.0.lock().unwrap();
-        activator
+        self.0
             .activate()
             .expect("timely operator hung up while Kafka source active");
     }

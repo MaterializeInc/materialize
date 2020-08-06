@@ -18,7 +18,7 @@ repr = { path = "../repr" }
 rusoto_core = "0.45.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_regex = "1.1.0"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/benesch/timely-dataflow", features = ["bincode"], branch = "crossbeam-channels" }
 url = { version = "2.1.1", features = ["serde"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
 

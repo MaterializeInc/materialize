@@ -15,8 +15,8 @@ ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = { git = "https://github.com/benesch/differential-dataflow", branch = "crossbeam-channels" }
+dogsdogsdogs = { git = "https://github.com/benesch/differential-dataflow", branch = "crossbeam-channels" }
 expr = { path = "../expr" }
 failure = "0.1"
 futures = "0.3"
@@ -39,7 +39,7 @@ rusoto_credential = "0.45.0"
 rusoto_kinesis = "0.45.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.57"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/benesch/timely-dataflow", features = ["bincode"], branch = "crossbeam-channels" }
 tokio = { version = "0.2", features = ["blocking", "fs", "rt-threaded"] }
 tokio-util = { version = "0.3", features = ["codec"] }
 url = { version = "2.1.1", features = ["serde"] }

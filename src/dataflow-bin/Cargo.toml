@@ -7,4 +7,4 @@ publish = false
 
 [dependencies]
 getopts = "0.2"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { git = "https://github.com/benesch/timely-dataflow", features = ["bincode"], branch = "crossbeam-channels" }

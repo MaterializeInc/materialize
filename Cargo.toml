@@ -55,3 +55,6 @@ object = { opt-level = 3 }
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
 debug = 1
+
+[patch.crates-io]
+timely = { git = "https://github.com/benesch/timely-dataflow", branch = "crossbeam-channels" }

@@ -582,6 +582,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ee0cc8804d5393478d743b035099520087a5186f3b93fa58cec08fa62407b6"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -763,7 +773,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#704beeb3e078b3689ae580c03d4e23c4ff909508"
+source = "git+https://github.com/benesch/differential-dataflow.git?branch=crossbeam-channels#8494ab630f006efeea12fc25c00e2d2087cf5565"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -820,7 +830,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#704beeb3e078b3689ae580c03d4e23c4ff909508"
+source = "git+https://github.com/benesch/differential-dataflow.git?branch=crossbeam-channels#8494ab630f006efeea12fc25c00e2d2087cf5565"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3890,10 +3900,11 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/benesch/timely-dataflow?branch=crossbeam-channels#68760479a7a9baa981941f7cee6689d810e0ad1b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
+ "crossbeam-channel",
  "serde",
  "serde_derive",
  "timely_bytes",
@@ -3904,16 +3915,17 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/benesch/timely-dataflow?branch=crossbeam-channels#68760479a7a9baa981941f7cee6689d810e0ad1b"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/benesch/timely-dataflow?branch=crossbeam-channels#68760479a7a9baa981941f7cee6689d810e0ad1b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "bincode",
+ "crossbeam-channel",
  "getopts",
  "serde",
  "serde_derive",
@@ -3924,7 +3936,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/benesch/timely-dataflow?branch=crossbeam-channels#68760479a7a9baa981941f7cee6689d810e0ad1b"
 
 [[package]]
 name = "timely_sort"
