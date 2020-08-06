@@ -8,6 +8,11 @@ menu:
 
 `INSERT` inserts values into a table.
 
+{{< warning >}}
+At the moment, tables do not persist any data that is inserted. This means that restarting a
+Materialize instance will lose any data that was previously stored in a table.
+{{< /warning >}}
+
 ## Conceptual framework
 
 `INSERT` statements insert data into [tables](../create-table). You may want to `INSERT` data
