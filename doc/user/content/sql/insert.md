@@ -8,6 +8,8 @@ menu:
 
 `INSERT` inserts values into a table.
 
+**Note that INSERT is currently only available in the developer (unstable) builds**
+
 ## Conceptual framework
 
 `INSERT` statements insert data into [tables](../create-table). You may want to `INSERT` data
