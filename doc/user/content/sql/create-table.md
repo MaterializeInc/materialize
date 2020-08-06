@@ -8,6 +8,8 @@ menu:
 
 `CREATE TABLE` creates a non-streaming, in-memory data source.
 
+**Note that CREATE TABLE is currently only available in the developer (unstable) builds**
+
 ## Conceptual framework
 
 Tables store non-streaming data that is inserted via [INSERT](../insert) statements.
