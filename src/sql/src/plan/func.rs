@@ -257,27 +257,28 @@ pub enum ParamType {
 impl ParamType {
     /// Does `self` accept arguments of type `t` without casting?
     fn accepts_type_directly(&self, t: &ScalarType) -> bool {
-        match (self, t) {
-            (ParamType::Plain(s), o) => *s == o.desaturate(),
-            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
+        use ParamType::*;
+        match self {
+            Plain(s) => *s == t.desaturate(),
+            Any | StringAny | JsonbAny => true,
         }
     }
 
     /// Does `self` accept arguments of type `t` with an implicitly allowed cast?
-    fn accepts_type_implicitly(&self, from_type: &ScalarType) -> bool {
-        let cast_to = match self {
-            ParamType::Plain(s) => CastTo::Implicit(s.clone()),
-            ParamType::Any | ParamType::JsonbAny | ParamType::StringAny => return true,
-        };
-
-        typeconv::get_cast(from_type, &cast_to).is_some()
+    fn accepts_type_implicitly(&self, t: &ScalarType) -> bool {
+        use ParamType::*;
+        match self {
+            Plain(s) => typeconv::get_cast(t, &CastTo::Implicit(s.clone())).is_some(),
+            Any | JsonbAny | StringAny => true,
+        }
     }
 
     /// Does `self` accept arguments of category `c`?
     fn accepts_cat(&self, c: &TypeCategory) -> bool {
-        match (self, c) {
-            (ParamType::Plain(_), c) => TypeCategory::from_param(&self) == *c,
-            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => true,
+        use ParamType::*;
+        match self {
+            Plain(_) => TypeCategory::from_param(&self) == *c,
+            Any | StringAny | JsonbAny => true,
         }
     }
 
@@ -299,14 +300,44 @@ impl ParamType {
             false
         }
     }
+
+    /// Returns the [`CoerceTo`] value appropriate to coerce arguments to
+    /// types compatible with `self`.
+    fn get_coerce_to(&self) -> CoerceTo {
+        use ParamType::*;
+        use ScalarType::*;
+        match self {
+            Plain(s) => CoerceTo::Plain(s.clone()),
+            Any | StringAny => CoerceTo::Plain(String),
+            JsonbAny => CoerceTo::JsonbAny,
+        }
+    }
+
+    /// Determines which, if any, [`CastTo`] value is appropriate to cast
+    /// `arg_type` to a [`ScalarType`] compatible with `self`.
+    fn get_cast_to_for_type(&self, arg_type: &ScalarType) -> Result<CastTo, anyhow::Error> {
+        use ParamType::*;
+        use ScalarType::*;
+        Ok(match self {
+            Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => {
+                CastTo::Implicit(arg_type.clone())
+            }
+            Plain(s) => CastTo::Implicit(s.clone()),
+            JsonbAny => CastTo::JsonbAny,
+            StringAny => CastTo::Explicit(ScalarType::String),
+            // No `CastTo` value needed because this accepts any type.
+            Any => CastTo::Implicit(arg_type.clone()),
+        })
+    }
 }
 
 impl PartialEq<ScalarType> for ParamType {
     fn eq(&self, other: &ScalarType) -> bool {
-        match (self, other) {
-            (ParamType::Plain(s), o) => *s == o.desaturate(),
+        use ParamType::*;
+        match self {
+            Plain(s) => *s == other.desaturate(),
             // Pseudotypes do not equal concrete types.
-            (ParamType::Any, _) | (ParamType::StringAny, _) | (ParamType::JsonbAny, _) => false,
+            Any | StringAny | JsonbAny => false,
         }
     }
 }
@@ -323,13 +354,23 @@ impl From<ScalarType> for ParamType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 /// Tracks candidate implementations.
 pub struct Candidate<'a, R> {
     /// The implementation under consideration.
     fimpl: &'a FuncImpl<R>,
     exact_matches: usize,
     preferred_types: usize,
+}
+
+impl<'a, R> fmt::Debug for Candidate<'a, R> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Candidate")
+            .field("fimpl", &self.fimpl)
+            .field("exact_matches", &self.exact_matches)
+            .field("preferred_types", &self.preferred_types)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -615,25 +656,12 @@ impl<'a> ArgImplementationMatcher<'a> {
     fn coerce_arg_to_type(
         &self,
         arg: CoercibleScalarExpr,
-        typ: &ParamType,
+        param_type: &ParamType,
     ) -> Result<ScalarExpr, anyhow::Error> {
-        use ScalarType::*;
-        let coerce_to = match typ {
-            ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
-            ParamType::Any => CoerceTo::Plain(String),
-            ParamType::JsonbAny => CoerceTo::JsonbAny,
-            ParamType::StringAny => CoerceTo::Plain(String),
-        };
+        let coerce_to = param_type.get_coerce_to();
         let arg = typeconv::plan_coerce(self.ecx, arg, coerce_to)?;
         let arg_type = self.ecx.scalar_type(&arg);
-        let cast_to = match typ {
-            ParamType::Plain(Decimal(..)) if matches!(arg_type, Decimal(..)) => return Ok(arg),
-            ParamType::Plain(List(..)) if matches!(arg_type, List(..)) => return Ok(arg),
-            ParamType::Plain(s) => CastTo::Implicit(s.clone()),
-            ParamType::Any => return Ok(arg),
-            ParamType::JsonbAny => CastTo::JsonbAny,
-            ParamType::StringAny => CastTo::Explicit(String),
-        };
+        let cast_to = param_type.get_cast_to_for_type(&arg_type)?;
         typeconv::plan_cast(self.ident, self.ecx, arg, cast_to)
     }
 }
