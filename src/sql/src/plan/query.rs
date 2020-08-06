@@ -1263,7 +1263,13 @@ fn plan_join_operator(
             )
         }
         JoinOperator::CrossJoin => {
-            let join = if left.is_join_identity() {
+            // Suppress no-op joins to keep raw query plans understandable. Note
+            // that LATERAL joins introduce a new inner scope for `right`, so
+            // they can't be trivially elided. (We *could* rewrite all the
+            // column references in `right`, but it doesn't seem worth it just
+            // to make the raw query plans nicer. The optimizer doesn't have
+            // trouble with the extra join.)
+            let join = if left.is_join_identity() && !lateral {
                 right
             } else if right.is_join_identity() {
                 left
