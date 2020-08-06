@@ -125,7 +125,7 @@ fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
     if let (AggregateFunc::Count, ScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
         if !metadata.column_types[*c].nullable && !expr.distinct {
             expr.expr =
-                ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool, true));
+                ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool, false));
         }
     }
 }
