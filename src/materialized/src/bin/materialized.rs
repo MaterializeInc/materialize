@@ -113,6 +113,18 @@ fn run() -> Result<(), anyhow::Error> {
         "timestamp advancement frequency (default 10ms)",
         "DURATION",
     );
+    opts.optopt(
+        "",
+        "persistence-min-threshold",
+        "minimum number of new records that must be present on a partition before being flushed to persistent storage (default 1000)",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "persistence-flush-interval",
+        "interval between attempts to flush source data to persistent storage (default 60s)",
+        "DURATION",
+    );
 
     // Logging options.
     opts.optopt(
@@ -241,6 +253,11 @@ fn run() -> Result<(), anyhow::Error> {
         None => Duration::from_millis(10),
         Some(d) => parse_duration::parse(&d)?,
     };
+    let persistence_min_threshold = popts.opt_get_default("persistence-min-threshold", 1000)?;
+    let persistence_flush_interval = match popts.opt_str("persistence-flush-interval").as_deref() {
+        None => Duration::from_secs(60),
+        Some(d) => parse_duration::parse(&d)?,
+    };
 
     // Configure connections.
     let listen_addr = popts.opt_get("listen-addr")?;
@@ -258,7 +275,17 @@ fn run() -> Result<(), anyhow::Error> {
     // Configure storage.
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let symbiosis_url = popts.opt_str("symbiosis");
-    fs::create_dir_all(&data_directory).context("creating data directory")?;
+    fs::create_dir_all(&data_directory)
+        .with_context(|| anyhow!("creating data directory {}", data_directory.display()))?;
+
+    let mut persistence_directory = data_directory.clone();
+    persistence_directory.push("persistence/");
+    fs::create_dir_all(&persistence_directory).with_context(|| {
+        anyhow!(
+            "creating persistence directory: {}",
+            persistence_directory.display()
+        )
+    })?;
 
     // Configure tracing.
     {
@@ -327,9 +354,12 @@ environment:{}",
         logging_granularity,
         logical_compaction_window,
         timestamp_frequency,
+        persistence_min_threshold,
+        persistence_flush_interval,
         listen_addr,
         tls,
         data_directory: Some(data_directory),
+        persistence_directory: Some(persistence_directory),
         symbiosis_url,
         experimental_mode,
     })?;

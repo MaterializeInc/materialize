@@ -40,7 +40,7 @@ use timely::worker::Worker as TimelyWorker;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowError, IndexDesc, MzOffset, PeekResponse, Timestamp,
-    TimestampSourceUpdate, Update,
+    TimestampSourceUpdate, Update, WorkerPersistenceData,
 };
 use expr::{Diff, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -150,6 +150,8 @@ pub enum SequencedCommand {
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
+    /// Request that persistence data is streamed to the provided channel..
+    EnablePersistence(comm::mpsc::Sender<WorkerPersistenceData>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -228,6 +230,7 @@ where
                     ts_histories: Default::default(),
                     ts_source_updates: Default::default(),
                     dataflow_tokens: HashMap::new(),
+                    persistence_tx: None,
                 },
                 logging_config: logging_config.clone(),
                 materialized_logger: None,
@@ -705,6 +708,9 @@ where
                     Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
                         |err| panic!("error sending worker feedback: {}", err),
                     )));
+            }
+            SequencedCommand::EnablePersistence(tx) => {
+                self.render_state.persistence_tx = Some(tx);
             }
             SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually

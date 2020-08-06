@@ -1268,6 +1268,12 @@ fn handle_create_source(
                 bail!("`start_offset` is not yet implemented for BYO consistency sources.")
             }
 
+            let enable_persistence = match with_options.remove("persistence") {
+                None => false,
+                Some(Value::Boolean(b)) => b,
+                Some(_) => bail!("persistence must be a bool!"),
+            };
+
             let mut start_offsets = HashMap::new();
             start_offsets.insert(0, start_offset);
 
@@ -1277,6 +1283,7 @@ fn handle_create_source(
                 config_options,
                 start_offsets,
                 group_id_prefix,
+                enable_persistence,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)

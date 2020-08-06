@@ -57,6 +57,7 @@ use sql::plan::{MutationKind, Params, PeekWhen, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};
+use crate::persistence::{PersistenceConfig, PersistenceMetadata, Persister};
 use crate::session::{PreparedStatement, Session};
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -98,6 +99,7 @@ where
     pub data_directory: Option<&'a Path>,
     pub executor: &'a tokio::runtime::Handle,
     pub timestamp: TimestampConfig,
+    pub persistence: Option<PersistenceConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
 }
@@ -131,6 +133,12 @@ where
     logging_granularity: Option<u64>,
     executor: tokio::runtime::Handle,
     feedback_rx: Option<comm::mpsc::Receiver<WorkerFeedbackWithMeta>>,
+    // Temporary place to stash Persister thread startup data between when the coordinator thread
+    // is initialized and when the persister thread gets spawned.
+    persister: Option<Persister>,
+    // Channel to communicate source status updates and shutdown notifications to the persister
+    // thread.
+    persistence_metadata_tx: Option<std::sync::mpsc::Sender<PersistenceMetadata>>,
     /// The startup time of the coordinator, from which local input timstamps are generated
     /// relative to.
     start_time: Instant,
@@ -191,6 +199,27 @@ where
         let logging = config.logging;
         let (tx, rx) = config.switchboard.mpsc_limited(config.num_timely_workers);
         broadcast(&mut broadcast_tx, SequencedCommand::EnableFeedback(tx));
+
+        let (persister, persistence_metadata_tx) =
+            if let Some(persistence_config) = config.persistence {
+                let (persistence_tx, persistence_rx) = config.switchboard.mpsc();
+                let (persistence_metadata_tx, persistence_metadata_rx) = std::sync::mpsc::channel();
+                broadcast(
+                    &mut broadcast_tx,
+                    SequencedCommand::EnablePersistence(persistence_tx),
+                );
+                (
+                    Some(Persister::new(
+                        persistence_rx,
+                        persistence_metadata_rx,
+                        persistence_config,
+                    )),
+                    Some(persistence_metadata_tx),
+                )
+            } else {
+                (None, None)
+            };
+
         let mut coord = Self {
             switchboard: config.switchboard,
             broadcast_tx,
@@ -213,6 +242,8 @@ where
             timestamp_config: config.timestamp,
             logical_compaction_window_ms,
             feedback_rx: Some(rx),
+            persister,
+            persistence_metadata_tx,
             start_time: Instant::now(),
             closed_up_to: 1,
             read_lower_bound: 1,
@@ -233,7 +264,8 @@ where
                 //about how it was built. If we start building multiple sinks and/or indexes
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(source) => {
+                    coord.handle_source_connector_persistence(*id, &source.connector);
                     coord.views.insert(*id, ViewState::new(false, vec![]));
                 }
                 CatalogItem::View(view) => {
@@ -420,6 +452,13 @@ where
         let _timestamper_thread =
             thread::spawn(move || executor.enter(|| timestamper.update())).join_on_drop();
 
+        let persister = self.persister.take();
+
+        let executor = self.executor.clone();
+        let _persister_thread =
+            thread::spawn(move || executor.enter(|| crate::persistence::update(persister)))
+                .join_on_drop();
+
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
             // (`internal_cmd_stream` and `feedback_stream`) before processing
@@ -605,6 +644,12 @@ where
                 }
                 Message::Shutdown => {
                     ts_tx.send(TimestampMessage::Shutdown).unwrap();
+
+                    if let Some(persistence_metadata_tx) = &self.persistence_metadata_tx {
+                        persistence_metadata_tx
+                            .send(PersistenceMetadata::Shutdown)
+                            .unwrap();
+                    }
                     self.shutdown();
                     break;
                 }
@@ -1026,6 +1071,8 @@ where
                         dataflow,
                     );
                 }
+
+                self.handle_source_connector_persistence(source_id, &source.connector);
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -1235,7 +1282,16 @@ where
         self.catalog_transact(ops)?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
-            ObjectType::Source => ExecuteResponse::DroppedSource,
+            ObjectType::Source => {
+                for id in items.iter() {
+                    if let Some(persistence_metadata_tx) = &self.persistence_metadata_tx {
+                        persistence_metadata_tx
+                            .send(PersistenceMetadata::DropSource(*id))
+                            .expect("Failed to send DROP SOURCE notice to persister");
+                    }
+                }
+                ExecuteResponse::DroppedSource
+            }
             ObjectType::View => ExecuteResponse::DroppedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
@@ -1968,6 +2024,23 @@ where
             .expect("replacing a sink cannot fail");
 
         self.create_sink_dataflow(name.to_string(), id, sink.from, connector)
+    }
+
+    // Tell the persister that we have a new source to persist
+    fn handle_source_connector_persistence(
+        &mut self,
+        id: GlobalId,
+        source_connector: &SourceConnector,
+    ) {
+        if let SourceConnector::External { connector, .. } = &source_connector {
+            if connector.enable_persistence() {
+                if let Some(persistence_metadata_tx) = &self.persistence_metadata_tx {
+                    persistence_metadata_tx
+                        .send(PersistenceMetadata::AddSource(id))
+                        .expect("Failed to send CREATE SOURCE message to persister");
+                }
+            }
+        }
     }
 
     /// Insert a single row into a given catalog view.
