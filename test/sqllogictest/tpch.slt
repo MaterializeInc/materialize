@@ -161,9 +161,9 @@ ORDER BY
 %0 =
 | Get materialize.public.lineitem (u21)
 | Filter (#10 <= 1998-12-01)
-| Reduce group=(#8, #9) sum(#4) sum(#5) sum((#5 * (100dec - #6))) sum(((#5 * (100dec - #6)) * (100dec + #7))) count(true) sum(#6) count(true)
-| Map i64todec(if (#6 = 0) then {null} else {#6}), (((#2 * 10000000dec) / #9) / 10dec), (((#3 * 10000000dec) / #9) / 10dec), (((#7 * 10000000dec) / #9) / 10dec)
-| Project (#0..#5, #10..#12, #8)
+| Reduce group=(#8, #9) sum(#4) sum(#5) sum((#5 * (100dec - #6))) sum(((#5 * (100dec - #6)) * (100dec + #7))) count(true) sum(#6)
+| Map i64todec(if (#6 = 0) then {null} else {#6}), (((#2 * 10000000dec) / #8) / 10dec), (((#3 * 10000000dec) / #8) / 10dec), (((#7 * 10000000dec) / #8) / 10dec)
+| Project (#0..#5, #9..#11, #6)
 
 Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0..#9)
 
