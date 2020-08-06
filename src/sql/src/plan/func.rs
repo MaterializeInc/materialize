@@ -373,6 +373,19 @@ impl ParamType {
         }
     }
 
+    /// Returns the [`CoerceTo`] value appropriate to coerce arguments to
+    /// types compatible with `self`.
+    fn get_coerce_to(&self) -> CoerceTo {
+        use ParamType::*;
+        use ScalarType::*;
+        match self {
+            Any | StringAny => CoerceTo::Plain(String),
+            ArrayAny => CoerceTo::Plain(Array(Box::new(String))),
+            JsonbAny => CoerceTo::JsonbAny,
+            Plain(s) => CoerceTo::Plain(s.clone()),
+        }
+    }
+
     /// Determines which, if any, [`CastTo`] value is appropriate to cast
     /// `arg_type` to a [`ScalarType`] compatible with `self`.
     fn get_cast_to_for_type(&self, arg_type: &ScalarType) -> Result<CastTo, anyhow::Error> {
@@ -719,14 +732,7 @@ impl<'a> ArgImplementationMatcher<'a> {
         // arguments to the *same* array type. For now, we only have functions
         // that take a single ArrayAny as input, so we simply coerce to
         // Array(String) for ArrayAny parameters.
-        use ScalarType::*;
-        let coerce_to = match param {
-            ParamType::Plain(s) => CoerceTo::Plain(s.clone()),
-            ParamType::Any => CoerceTo::Plain(String),
-            ParamType::ArrayAny => CoerceTo::Plain(Array(Box::new(String))),
-            ParamType::JsonbAny => CoerceTo::JsonbAny,
-            ParamType::StringAny => CoerceTo::Plain(String),
-        };
+        let coerce_to = param.get_coerce_to();
         let arg = typeconv::plan_coerce(self.ecx, arg, coerce_to)?;
         let arg_type = self.ecx.scalar_type(&arg);
         let cast_to = param.get_cast_to_for_type(&arg_type)?;
