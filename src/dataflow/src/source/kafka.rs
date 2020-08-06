@@ -64,7 +64,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         _active: bool,
         worker_id: usize,
         worker_count: usize,
-        consumer_activator: Arc<Mutex<SyncActivator>>,
+        consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _: &mut ConsistencyInfo,
         _: DataEncoding,
@@ -336,7 +336,7 @@ impl KafkaSourceInfo {
         source_id: SourceInstanceId,
         worker_id: usize,
         worker_count: usize,
-        consumer_activator: Arc<Mutex<SyncActivator>>,
+        consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
     ) -> KafkaSourceInfo {
         let KafkaSourceConnector {
@@ -350,7 +350,9 @@ impl KafkaSourceInfo {
             create_kafka_config(&source_name, &addr, group_id_prefix, &config_options);
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
-            .create_with_context(GlueConsumerContext(consumer_activator))
+            .create_with_context(GlueConsumerContext(Arc::new(Mutex::new(
+                consumer_activator,
+            ))))
             .expect("Failed to create Kafka Consumer");
         KafkaSourceInfo {
             buffered_metadata: HashSet::new(),

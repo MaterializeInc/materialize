@@ -9,7 +9,6 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -83,7 +82,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
         active: bool,
         _worker_id: usize,
         _worker_count: usize,
-        _consumer_activator: Arc<Mutex<SyncActivator>>,
+        _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         _encoding: DataEncoding,
