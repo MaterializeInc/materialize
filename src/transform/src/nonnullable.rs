@@ -120,11 +120,12 @@ fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
 
 /// Transformations to aggregation functions, based on nonnullability of columns.
 fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
-    // An aggregate that is a count of non-nullable data can be replaced by a countall.
+    // An aggregate that is a count of non-nullable data can be replaced by
+    // count(true).
     if let (AggregateFunc::Count, ScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
         if !metadata.column_types[*c].nullable && !expr.distinct {
-            expr.func = AggregateFunc::CountAll;
-            expr.expr = ScalarExpr::literal_null(ColumnType::new(ScalarType::Bool, true));
+            expr.expr =
+                ScalarExpr::literal_ok(Datum::True, ColumnType::new(ScalarType::Bool, true));
         }
     }
 }

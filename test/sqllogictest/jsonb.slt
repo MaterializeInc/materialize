@@ -1851,12 +1851,32 @@ SELECT to_jsonb(TIMESTAMP '1969-06-01 10:10:10.41');
 # jsonb_agg
 
 query T
+SELECT jsonb_agg(js) FROM (SELECT '1'::jsonb AS js WHERE false)
+----
+NULL
+
+query T
 SELECT jsonb_agg(1)
 ----
 [1.0]
 
 query T
 SELECT jsonb_agg(column1) FROM (VALUES (1), (2), (3))
+----
+[1.0,2.0,3.0]
+
+query T
+SELECT jsonb_agg(column1) FROM (VALUES (1), (2), (3), (NULL))
+----
+[null,1.0,2.0,3.0]
+
+query T
+SELECT jsonb_agg(column1) FROM (VALUES ('1'::jsonb), ('2'::jsonb), ('3'::jsonb), (NULL::jsonb))
+----
+[null,2.0,3.0,1.0]
+
+query T
+SELECT jsonb_agg(column1) FILTER (WHERE column1 IS NOT NULL) FROM (VALUES (1), (2), (3), (NULL))
 ----
 [1.0,2.0,3.0]
 

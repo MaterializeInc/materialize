@@ -43,8 +43,8 @@ use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
-    AggregateExpr, AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef,
-    JoinKind, RelationExpr, ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
+    AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
+    ScalarExpr, ScalarTypeable, UnaryFunc, VariadicFunc,
 };
 use crate::plan::func;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
@@ -1761,7 +1761,7 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         }
         FunctionArgs::Args(args) => args,
     };
-    let (mut expr, mut func) = func::select_aggregate_func(ecx, &name, args)?;
+    let (mut expr, func) = func::select_aggregate_func(ecx, &name, args)?;
     if let Some(filter) = &sql_func.filter {
         // If a filter is present, as in
         //
@@ -1769,25 +1769,15 @@ fn plan_aggregate(ecx: &ExprContext, sql_func: &Function) -> Result<AggregateExp
         //
         // we plan it by essentially rewriting the expression to
         //
-        //     <agg>(CASE WHEN <cond> THEN <expr> ELSE NULL)
+        //     <agg>(CASE WHEN <cond> THEN <expr> ELSE <identity>)
         //
-        // as aggregate functions ignore NULL. The only exception is `count(*)`,
-        // which includes NULLs in its count; we handle that specially by
-        // rewriting to:
-        //
-        //     count(CASE WHEN <cond> THEN TRUE ELSE NULL)
-        //
-        // (Note the `TRUE` in in place of `<expr>`.)
+        // where <identity> is the identity input for <agg>.
         let cond = plan_expr(&ecx.with_name("FILTER"), filter)?.type_as(ecx, ScalarType::Bool)?;
-        if func == AggregateFunc::CountAll {
-            func = AggregateFunc::Count;
-            expr = ScalarExpr::literal_true();
-        }
         let expr_typ = ecx.scalar_type(&expr);
         expr = ScalarExpr::If {
             cond: Box::new(cond),
             then: Box::new(expr),
-            els: Box::new(ScalarExpr::literal_null(expr_typ)),
+            els: Box::new(ScalarExpr::literal(func.identity_datum(), expr_typ)),
         };
     }
 
