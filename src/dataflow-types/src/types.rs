@@ -468,6 +468,15 @@ pub enum ExternalSourceConnector {
     AvroOcf(FileSourceConnector),
 }
 
+pub fn persisted_files(e: &ExternalSourceConnector) -> Option<Vec<PathBuf>> {
+    match e {
+        ExternalSourceConnector::Kafka(KafkaSourceConnector {
+            persisted_files, ..
+        }) => persisted_files.clone(),
+        _ => None,
+    }
+}
+
 impl ExternalSourceConnector {
     pub fn metadata_columns(&self) -> Vec<(ColumnName, ColumnType)> {
         match self {
