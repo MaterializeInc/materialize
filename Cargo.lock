@@ -523,6 +523,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3a71ab494c0b5b860bdc8407ae08978052417070c2ced38573a9157ad75b8ac"
 
 [[package]]
+name = "cpp_demangle"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad49cad3673b9d586bc50cd92fdc0e9205ecd162d4206073d9774c4fe13a8fde"
+dependencies = [
+ "cfg-if",
+ "glob",
+]
+
+[[package]]
 name = "cpuid-bool"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -751,6 +761,15 @@ dependencies = [
  "serde_regex",
  "timely",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "debugid"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f91cf5a8c2f2097e2a32627123508635d47ce10563d999ec1a95addf08b502ba"
+dependencies = [
  "uuid",
 ]
 
@@ -1823,6 +1842,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88579771288728879b57485cc7d6b07d648c9f0141eb955f8ab7f9d45394468e"
 
 [[package]]
+name = "memmap"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6585fd95e7bb50d6cc31e20d4cf9afb4e2ba16c5846fc76793f11218da9c475b"
+dependencies = [
+ "libc",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1957,6 +1986,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "msvc-demangler"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6584cf122f02fc0396420a116cd395a9a776ec4347dffe1c5119c3fcc917c060"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "mz-avro"
 version = "0.6.5"
 dependencies = [
@@ -2005,6 +2043,19 @@ dependencies = [
  "cfg-if",
  "libc",
  "winapi 0.3.8",
+]
+
+[[package]]
+name = "nix"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50e4785f2c3b7589a0d0c1dd60285e1188adac4006e8abd6dd578e1567027363"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if",
+ "libc",
+ "void",
 ]
 
 [[package]]
@@ -2555,6 +2606,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pprof"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53d27a595ff6b6fb3682cc3cea1940860f8d99f91fb849cff82f0315384c7609"
+dependencies = [
+ "backtrace",
+ "lazy_static",
+ "libc",
+ "log",
+ "nix",
+ "parking_lot",
+ "symbolic-demangle",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2672,7 +2740,9 @@ dependencies = [
  "backtrace",
  "jemalloc-ctl",
  "lazy_static",
+ "pprof",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -3132,9 +3202,9 @@ dependencies = [
 
 [[package]]
 name = "rustc-demangle"
-version = "0.1.15"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7f4dccf6f4891ebcc0c39f9b6eb1a83b9bf5d747cb439ec6fba4f3b977038af"
+checksum = "4c691c0e608126e00913e33f0ccf3727d5fc84573623b8d65b2df340b5201783"
 
 [[package]]
 name = "rustc_version"
@@ -3500,6 +3570,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "stable_deref_trait"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
 name = "stacker"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3654,6 +3730,32 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "whoami",
+]
+
+[[package]]
+name = "symbolic-common"
+version = "7.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebdc6030725c03c26dd3a56a19962767c4f2d9a45f1bc67247db6650ef17c71e"
+dependencies = [
+ "debugid",
+ "failure",
+ "memmap",
+ "stable_deref_trait",
+ "uuid",
+]
+
+[[package]]
+name = "symbolic-demangle"
+version = "7.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b724d7ed0462fa8104f19b72535f692f6b4dd5ee9c499e6ebbfb86dd4856c16"
+dependencies = [
+ "cc",
+ "cpp_demangle",
+ "msvc-demangler",
+ "rustc-demangle",
+ "symbolic-common",
 ]
 
 [[package]]
@@ -4265,6 +4367,12 @@ name = "version_check"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "078775d0255232fb988e6fccf26ddc9d1ac274299aaedcedce21c6f72cc533ce"
+
+[[package]]
+name = "void"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
 
 [[package]]
 name = "wait-timeout"

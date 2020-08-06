@@ -11,10 +11,12 @@
 
 use std::future::Future;
 
+use askama::Template;
 use cfg_if::cfg_if;
 use hyper::{Body, Request, Response};
 
 use crate::http::Server;
+use prof::ProfStartTime;
 
 impl Server {
     pub fn handle_prof(
@@ -31,21 +33,23 @@ impl Server {
     }
 }
 
+#[derive(Template)]
+#[template(path = "http/templates/prof.html")]
+struct ProfTemplate<'a> {
+    version: &'a str,
+    mem_prof: Option<Option<ProfStartTime>>,
+}
+
 mod disabled {
-    use askama::Template;
     use hyper::{Body, Request, Response};
 
+    use super::ProfTemplate;
     use crate::http::util;
 
-    #[derive(Template)]
-    #[template(path = "http/templates/prof-disabled.html")]
-    struct ProfDisabledTemplate<'a> {
-        version: &'a str,
-    }
-
     pub async fn handle(_: Request<Body>) -> anyhow::Result<Response<Body>> {
-        Ok(util::template_response(ProfDisabledTemplate {
+        Ok(util::template_response(ProfTemplate {
             version: crate::VERSION,
+            mem_prof: None,
         }))
     }
 }
@@ -56,7 +60,9 @@ mod enabled {
     use std::io::{BufReader, Read};
     use std::{
         cell::RefCell,
+        collections::HashMap,
         sync::{Arc, Mutex},
+        time::Duration,
     };
 
     use askama::Template;
@@ -64,21 +70,15 @@ mod enabled {
     use url::form_urlencoded;
 
     use prof::{
-        collate_stacks, parse_jeheap, JemallocProfCtl, JemallocProfMetadata, ProfStartTime,
-        PROF_CTL,
+        collate_stacks, parse_jeheap, time::prof_time, JemallocProfCtl, JemallocProfMetadata,
+        StackProfile, PROF_CTL,
     };
 
+    use super::ProfTemplate;
     use crate::http::util;
 
     #[derive(Template)]
-    #[template(path = "http/templates/prof-enabled.html")]
-    struct ProfEnabledTemplate<'a> {
-        version: &'a str,
-        start_time: Option<ProfStartTime>,
-    }
-
-    #[derive(Template)]
-    #[template(path = "http/templates/flamegraph.html")]
+    #[template(path = "http/templates/flamegraph.html", escape = "none")]
     struct FlamegraphTemplate<'a> {
         version: &'a str,
         data_json: &'a str,
@@ -102,10 +102,8 @@ mod enabled {
         prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
     ) -> Result<Response<Body>, anyhow::Error> {
         let body = hyper::body::to_bytes(body).await?;
-        let action = match form_urlencoded::parse(&body)
-            .find(|(k, _v)| &**k == "action")
-            .map(|(_k, v)| v)
-        {
+        let params: HashMap<_, _> = form_urlencoded::parse(&body).collect();
+        let action = match params.get("action") {
             Some(action) => action,
             None => {
                 return Ok(util::error_response(
@@ -144,35 +142,17 @@ mod enabled {
                     .body(Body::from(s))
                     .unwrap())
             }
-            "flamegraph" => {
+            "mem_fg" => {
                 let mut borrow = prof_ctl.lock().expect("Profiler lock poisoned");
                 let f = borrow.dump()?;
                 let r = BufReader::new(f);
                 let stacks = parse_jeheap(r)?;
-                let collated = collate_stacks(stacks);
-                let data_json = RefCell::new(String::new());
-                collated.dfs(
-                    |node| {
-                        write!(
-                            data_json.borrow_mut(),
-                            "{{\"name\": \"{}\",\"value\":{},\"children\":[",
-                            node.name,
-                            node.weight
-                        )
-                        .unwrap(); // String's `std::fmt::Write` implementation never fails
-                    },
-                    |_node, is_last| {
-                        data_json.borrow_mut().push_str("]}");
-                        if !is_last {
-                            data_json.borrow_mut().push_str(",");
-                        }
-                    },
-                );
-                let data_json = &*data_json.borrow();
-                Ok(util::template_response(FlamegraphTemplate {
-                    version: crate::VERSION,
-                    data_json,
-                }))
+                flamegraph(stacks)
+            }
+            "time_fg" => {
+                let merge_threads = params.get("threads").map(AsRef::as_ref) == Some("merge");
+                let stacks = prof_time(Duration::from_secs(10), 99, merge_threads).await?;
+                flamegraph(stacks)
             }
             x => Ok(util::error_response(
                 StatusCode::BAD_REQUEST,
@@ -181,10 +161,37 @@ mod enabled {
         }
     }
 
-    pub fn handle_get(prof_md: JemallocProfMetadata) -> anyhow::Result<Response<Body>> {
-        Ok(util::template_response(ProfEnabledTemplate {
+    fn flamegraph(stacks: StackProfile) -> anyhow::Result<Response<Body>> {
+        let collated = collate_stacks(stacks);
+        let data_json = RefCell::new(String::new());
+        collated.dfs(
+            |node| {
+                write!(
+                    data_json.borrow_mut(),
+                    "{{\"name\": \"{}\",\"value\":{},\"children\":[",
+                    node.name,
+                    node.weight
+                )
+                .unwrap(); // String's `std::fmt::Write` implementation never fails
+            },
+            |_node, is_last| {
+                data_json.borrow_mut().push_str("]}");
+                if !is_last {
+                    data_json.borrow_mut().push_str(",");
+                }
+            },
+        );
+        let data_json = &*data_json.borrow();
+        Ok(util::template_response(FlamegraphTemplate {
             version: crate::VERSION,
-            start_time: prof_md.start_time,
+            data_json,
+        }))
+    }
+
+    pub fn handle_get(prof_md: JemallocProfMetadata) -> anyhow::Result<Response<Body>> {
+        Ok(util::template_response(ProfTemplate {
+            version: crate::VERSION,
+            mem_prof: Some(prof_md.start_time),
         }))
     }
 }

@@ -29,6 +29,8 @@ use tempfile::NamedTempFile;
 
 use anyhow::bail;
 
+pub mod time;
+
 lazy_static! {
     pub static ref PROF_CTL: Option<Arc<Mutex<JemallocProfCtl>>> = {
         if let Some(ctl) = JemallocProfCtl::get() {
@@ -64,8 +66,14 @@ pub struct WeightedStack {
     weight: usize,
 }
 
+pub struct StackProfile {
+    annotations: Vec<String>,
+    // The second element is the index in `annotations`, if one exists.
+    stacks: Vec<(WeightedStack, Option<usize>)>,
+}
+
 /// Parse a jemalloc profile file, producing a vector of stack traces along with their weights.
-pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<Vec<WeightedStack>> {
+pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     let mut cur_stack = None;
     let mut result = vec![];
     for line in r.lines().into_iter() {
@@ -89,14 +97,17 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<Vec<WeightedStack>> {
         if words.len() > 2 && words[0] == "t*:" {
             if let Some(addrs) = cur_stack.take() {
                 let weight = str::parse::<usize>(words[2])?;
-                result.push(WeightedStack { addrs, weight });
+                result.push((WeightedStack { addrs, weight }, None));
             }
         }
     }
     if cur_stack.is_some() {
         bail!("Stack without corresponding weight!")
     }
-    Ok(result)
+    Ok(StackProfile {
+        annotations: vec![],
+        stacks: result,
+    })
 }
 
 pub struct SymbolTrieNode {
@@ -179,11 +190,13 @@ impl WeightedSymbolTrie {
 ///  |
 ///  v
 /// "h" (50)
-pub fn collate_stacks(stacks: Vec<WeightedStack>) -> WeightedSymbolTrie {
-    let mut all_addrs = stacks
-        .iter()
-        .flat_map(|ws| ws.addrs.iter().copied())
-        .collect::<Vec<_>>();
+pub fn collate_stacks(profile: StackProfile) -> WeightedSymbolTrie {
+    let mut all_addrs = vec![];
+    let mut any_annotation = false;
+    for (stack, annotation) in profile.stacks.iter() {
+        all_addrs.extend(stack.addrs.iter().cloned());
+        any_annotation |= annotation.is_some();
+    }
     // Sort so addresses from the same images are together,
     // to avoid thrashing `backtrace::resolve`'s cache of
     // parsed images.
@@ -205,8 +218,20 @@ pub fn collate_stacks(stacks: Vec<WeightedStack>) -> WeightedSymbolTrie {
         })
         .collect::<HashMap<_, _>>();
     let mut trie = WeightedSymbolTrie::new();
-    for stack in stacks {
-        let mut cur = 0;
+    let StackProfile {
+        annotations,
+        stacks,
+    } = profile;
+    for (stack, annotation) in stacks {
+        let mut cur = if any_annotation {
+            let annotation = annotation
+                .map(|idx| annotations[idx].as_str())
+                .unwrap_or("unknown");
+            trie.node_mut(0).weight += stack.weight;
+            trie.step(0, annotation)
+        } else {
+            0
+        };
         for name in stack
             .addrs
             .into_iter()
