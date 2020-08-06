@@ -226,10 +226,6 @@ impl ColumnKnowledge {
                             // These methods propagate constant values exactly.
                             knowledge
                         }
-                        AggregateFunc::CountAll => DatumKnowledge {
-                            value: None,
-                            nullable: false,
-                        },
                         _ => {
                             // All aggregates are non-null if their inputs are non-null.
                             DatumKnowledge {
