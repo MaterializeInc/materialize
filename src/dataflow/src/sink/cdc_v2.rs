@@ -269,17 +269,20 @@ pub mod source {
     use timely::dataflow::operators::{Capability, CapabilitySet};
     use timely::dataflow::{Scope, Stream};
     use timely::progress::Timestamp;
+    use timely::scheduling::SyncActivator;
 
     /// Constructs a stream of updates from a source of messages.
     ///
     /// The stream is built in the supplied `scope` and continues to run until
-    /// the returned `Box<Any>` token is dropped.
-    pub fn build<G, I, D, T, R>(
+    /// the returned `Box<Any>` token is dropped. The `source_builder` argument
+    /// is invoked with a `SyncActivator` that will re-activate the source.
+    pub fn build<G, B, I, D, T, R>(
         scope: G,
-        mut source: I,
+        mut source_builder: B,
     ) -> (Box<dyn std::any::Any>, Stream<G, (D, T, R)>)
     where
         G: Scope<Timestamp = T>,
+        B: FnOnce(SyncActivator) -> I,
         I: Iterator<Item = Message<D, T, R>> + 'static,
         D: ExchangeData + Hash,
         T: ExchangeData + Hash + Timestamp + Lattice,
@@ -330,6 +333,8 @@ pub mod source {
 
         // Step 1: The MESSAGES operator.
         let mut messages_op = OperatorBuilder::new("CDCV2_Messages".to_string(), scope.clone());
+        let activator = scope.sync_activator_for(&messages_op.operator_info().address);
+        let mut source = source_builder(activator);
         let (mut updates_out, updates) = messages_op.new_output();
         let (mut progress_out, progress) = messages_op.new_output();
         messages_op.build(move |capabilities| {
@@ -700,48 +705,105 @@ pub mod sink {
     }
 }
 
-// A sink wrapped around a Kafka producer.
-use rdkafka::config::ClientConfig;
-use rdkafka::error::{KafkaError, RDKafkaError};
-use rdkafka::producer::DefaultProducerContext;
-use rdkafka::producer::{BaseRecord, ThreadedProducer};
+pub mod kafka {
 
-pub struct KafkaSink {
-    topic: String,
-    producer: ThreadedProducer<DefaultProducerContext>,
-}
+    use std::sync::{Arc, Mutex};
+    use timely::scheduling::SyncActivator;
+    use rdkafka::{ClientContext, config::ClientConfig};
+    use rdkafka::consumer::{BaseConsumer, ConsumerContext};
+    use rdkafka::error::{KafkaError, RDKafkaError};
+    use super::BytesSink;
 
-impl KafkaSink {
-    pub fn new(addr: &str, topic: &str) -> Self {
-        let mut config = ClientConfig::new();
-        config.set("bootstrap.servers", &addr);
-        config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
-        config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
-        config.set("queue.buffering.max.ms", &format!("{}", 10));
-        let producer = config
-            .create_with_context::<_, ThreadedProducer<_>>(DefaultProducerContext)
-            .expect("creating kafka producer for kafka sinks failed");
-        Self {
-            producer,
-            topic: topic.to_string(),
+    pub struct KafkaSource {
+        topic: String,
+        consumer: BaseConsumer<ActivationConsumerContext>,
+    }
+
+    impl KafkaSource {
+        pub fn new(addr: &str, topic: &str, group: &str, activator: SyncActivator) -> Self {
+            let mut kafka_config = ClientConfig::new();
+            // This is mostly cargo-cult'd in from `source/kafka.rs`.
+            kafka_config.set("bootstrap.servers", &addr.to_string());
+            kafka_config
+                .set("enable.auto.commit", "false")
+                .set("auto.offset.reset", "earliest");
+
+            kafka_config.set("topic.metadata.refresh.interval.ms", "30000"); // 30 seconds
+            kafka_config.set("fetch.message.max.bytes", "134217728");
+            kafka_config.set("group.id", group);
+            kafka_config.set("isolation.level", "read_committed");
+            let activator = ActivationConsumerContext(Arc::new(Mutex::new(activator)));
+            let consumer = kafka_config.create_with_context::<_, BaseConsumer<_>>(activator).unwrap();
+            Self {
+                topic: topic.to_string(),
+                consumer,
+            }
         }
     }
-}
 
-impl BytesSink for KafkaSink {
-    fn poll(&mut self, bytes: &[u8]) -> Option<Duration> {
-        let record = BaseRecord::<[u8], _>::to(&self.topic).payload(bytes);
+    /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
+    /// when the message queue switches from nonempty to empty.
+    struct ActivationConsumerContext(Arc<Mutex<SyncActivator>>);
 
-        self.producer.send(record).err().map(|(e, _)| {
-            if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
-                Duration::from_secs(1)
-            } else {
-                // TODO(frank): report this error upwards so the user knows the sink is dead.
-                Duration::from_secs(1)
+    impl ClientContext for ActivationConsumerContext { }
+
+    impl ActivationConsumerContext {
+        fn activate(&self) {
+            let activator = self.0.lock().unwrap();
+            activator
+                .activate()
+                .expect("timely operator hung up while Kafka source active");
+        }
+    }
+
+    impl ConsumerContext for ActivationConsumerContext {
+        fn message_queue_nonempty_callback(&self) {
+            self.activate();
+        }
+    }
+
+    use std::time::Duration;
+    use rdkafka::producer::DefaultProducerContext;
+    use rdkafka::producer::{BaseRecord, ThreadedProducer};
+
+    pub struct KafkaSink {
+        topic: String,
+        producer: ThreadedProducer<DefaultProducerContext>,
+    }
+
+    impl KafkaSink {
+        pub fn new(addr: &str, topic: &str) -> Self {
+            let mut config = ClientConfig::new();
+            config.set("bootstrap.servers", &addr);
+            config.set("queue.buffering.max.kbytes", &format!("{}", 16 << 20));
+            config.set("queue.buffering.max.messages", &format!("{}", 10_000_000));
+            config.set("queue.buffering.max.ms", &format!("{}", 10));
+            let producer = config
+                .create_with_context::<_, ThreadedProducer<_>>(DefaultProducerContext)
+                .expect("creating kafka producer for kafka sinks failed");
+            Self {
+                producer,
+                topic: topic.to_string(),
             }
-        })
+        }
     }
-    fn done(&self) -> bool {
-        self.producer.in_flight_count() == 0
+
+    impl BytesSink for KafkaSink {
+        fn poll(&mut self, bytes: &[u8]) -> Option<Duration> {
+            let record = BaseRecord::<[u8], _>::to(&self.topic).payload(bytes);
+
+            self.producer.send(record).err().map(|(e, _)| {
+                if let KafkaError::MessageProduction(RDKafkaError::QueueFull) = e {
+                    Duration::from_secs(1)
+                } else {
+                    // TODO(frank): report this error upwards so the user knows the sink is dead.
+                    Duration::from_secs(1)
+                }
+            })
+        }
+        fn done(&self) -> bool {
+            self.producer.in_flight_count() == 0
+        }
     }
+
 }
