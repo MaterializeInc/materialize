@@ -582,6 +582,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ee0cc8804d5393478d743b035099520087a5186f3b93fa58cec08fa62407b6"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3890,10 +3900,11 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#316a617b961b4f1c156ab4446b3a59e9b3bd27b4"
 dependencies = [
  "abomonation",
  "abomonation_derive",
+ "crossbeam-channel",
  "serde",
  "serde_derive",
  "timely_bytes",
@@ -3904,16 +3915,17 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#316a617b961b4f1c156ab4446b3a59e9b3bd27b4"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#316a617b961b4f1c156ab4446b3a59e9b3bd27b4"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "bincode",
+ "crossbeam-channel",
  "getopts",
  "serde",
  "serde_derive",
@@ -3924,7 +3936,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#76e6049ea87ba753311cbf55016f71a735dd47d1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#316a617b961b4f1c156ab4446b3a59e9b3bd27b4"
 
 [[package]]
 name = "timely_sort"

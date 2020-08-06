@@ -15,7 +15,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
@@ -203,7 +202,7 @@ pub trait SourceConstructor<Out> {
         active: bool,
         worker_id: usize,
         worker_count: usize,
-        consumer_activator: Arc<Mutex<SyncActivator>>,
+        consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
@@ -765,7 +764,7 @@ where
             active,
             worker_id,
             worker_count,
-            Arc::new(Mutex::new(scope.sync_activator_for(&info.address[..]))),
+            scope.sync_activator_for(&info.address[..]),
             source_connector.clone(),
             &mut consistency_info,
             encoding,
