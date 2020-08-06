@@ -8,6 +8,11 @@ menu:
 
 `CREATE TABLE` creates a non-streaming, in-memory data source.
 
+{{< warning >}}
+At the moment, tables do not persist any data that is inserted. This means that restarting a
+Materialize instance will lose any data that was previously stored in a table.
+{{< /warning >}}
+
 ## Conceptual framework
 
 Tables store non-streaming data that is inserted via [INSERT](../insert) statements.
