@@ -40,7 +40,7 @@ use timely::worker::Worker as TimelyWorker;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     DataflowDesc, DataflowError, IndexDesc, MzOffset, PeekResponse, Timestamp,
-    TimestampSourceUpdate, Update, WorkerPersistenceData,
+    TimestampSourceUpdate, Update,
 };
 use expr::{Diff, GlobalId, PartitionId, RowSetFinishing, SourceInstanceId};
 use ore::future::channel::mpsc::ReceiverExt;
@@ -163,6 +163,24 @@ pub struct WorkerFeedbackWithMeta {
     pub worker_id: usize,
     /// The feedback itself.
     pub message: WorkerFeedback,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Source data that gets sent to the persistence thread to place in persistent storage.
+/// TODO currently fairly Kafka input-centric.
+pub struct WorkerPersistenceData {
+    /// Global Id of the Source whose data is being persisted.
+    pub source_id: GlobalId,
+    /// Partition the record belongs to.
+    pub partition: i32,
+    /// Offset where we found the message.
+    pub offset: i64,
+    /// Timestamp assigned to the message.
+    pub timestamp: Timestamp,
+    /// The key of the message.
+    pub key: Vec<u8>,
+    /// The data of the message.
+    pub payload: Vec<u8>,
 }
 
 /// Responses the worker can provide back to the coordinator.

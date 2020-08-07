@@ -24,7 +24,6 @@ use timely::dataflow::{
 
 use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError, Timestamp,
-    WorkerPersistenceData,
 };
 use expr::{PartitionId, SourceInstanceId};
 use futures::sink::Sink;
@@ -44,6 +43,7 @@ use super::source::util::source;
 use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+    WorkerPersistenceData,
 };
 
 mod file;

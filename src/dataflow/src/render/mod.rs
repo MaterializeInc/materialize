@@ -133,7 +133,9 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
+use crate::server::{
+    LocalInput, TimestampDataUpdates, TimestampMetadataUpdates, WorkerPersistenceData,
+};
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
 use crate::source::{SourceConfig, SourceToken};
@@ -325,9 +327,9 @@ where
                 (usize::cast_from(uid.hashed()) % scope.peers()) == scope.index()
             };
 
-            let enable_persistence = connector.enable_persistence();
+            let persistence_enabled = connector.persistence_enabled();
             let persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>> =
-                if enable_persistence && render_state.persistence_tx.is_some() {
+                if persistence_enabled && render_state.persistence_tx.is_some() {
                     let tx = render_state.persistence_tx.as_ref().cloned().unwrap();
                     Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
                         |err| panic!("error enabling dataflow worker persistence: {}", err),
