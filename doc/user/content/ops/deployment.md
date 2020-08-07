@@ -18,6 +18,9 @@ are relevant for your queries, it helps to avoid materializing sources or views 
 expressed this to the system (we can avoid stashing that data, which can in some cases dramatically
 reduce the memory footprint).
 
+This is particularly important in Linux and in Docker, where swap may not be automatically
+setup for you.
+
 To minimize the chances that Materialize runs out of memory in a production environment,
 we recommend you make additional memory available to Materialize via a SSD-backed
 swap file or swap partition.
