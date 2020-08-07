@@ -2,9 +2,11 @@
 //
 // Use of this software is governed by the Apache License, Version 2.0
 
+use std::cmp;
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::io::{Read, Seek, SeekFrom};
+use std::fmt::{self, Display};
+use std::fs::File;
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::mem::transmute;
 
 use anyhow::{bail, Error};
@@ -60,7 +62,7 @@ enum TsUnit {
 }
 
 impl Display for TsUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TsUnit::Millis => write!(f, "ms"),
             TsUnit::Micros => write!(f, "us"),
@@ -86,50 +88,58 @@ fn build_ts_value(value: i64, unit: TsUnit) -> Result<Value, Error> {
     ))
 }
 
+/// A convenience trait for types that are both readable and skippable.
+///
+/// A blanket implementation is provided for all types that implement both
+/// [`Read`] and [`Skip`].
+pub trait AvroRead: Read + Skip {}
+
+impl<T> AvroRead for T where T: Read + Skip {}
+
+/// A trait that allows for efficient skipping forward while reading data.
 pub trait Skip {
-    fn skip(&mut self, len: usize) -> Result<(), Error>;
+    /// Advance the cursor by `len` bytes.
+    ///
+    /// If possible, the implementation should be more efficient than calling
+    /// [`Read::read`] and discarding the resulting bytes.
+    ///
+    /// Calling `skip` with a `len` that advances the cursor past the end of the
+    /// underlying data source is permissible. The only requirement is that the
+    /// next call to [`Read::read`] indicates EOF.
+    ///
+    /// # Errors
+    ///
+    /// Can return an error in all the same cases that [`Read::read`] can.
+    fn skip(&mut self, len: usize) -> Result<(), io::Error>;
 }
 
-impl Skip for std::fs::File {
-    fn skip(&mut self, len: usize) -> Result<(), Error> {
+impl Skip for File {
+    fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.seek(SeekFrom::Current(len as i64))?;
         Ok(())
     }
 }
 
 impl Skip for &[u8] {
-    fn skip(&mut self, len: usize) -> Result<(), Error> {
-        if len > self.len() {
-            bail!(
-                "Failed to skip {} bytes in buffer: length is {}.",
-                len,
-                self.len()
-            );
-        }
+    fn skip(&mut self, len: usize) -> Result<(), io::Error> {
+        let len = cmp::min(len, self.len());
         *self = &self[len..];
         Ok(())
     }
 }
 
 impl<S: Skip + ?Sized> Skip for Box<S> {
-    fn skip(&mut self, len: usize) -> Result<(), Error> {
+    fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.as_mut().skip(len)
     }
 }
 
-pub trait AvroRead: Read + Skip {}
-impl AvroRead for &[u8] {}
-impl AvroRead for std::fs::File {}
-impl<T: AsRef<[u8]>> Skip for std::io::Cursor<T> {
-    fn skip(&mut self, len: usize) -> Result<(), Error> {
+impl<T: AsRef<[u8]>> Skip for Cursor<T> {
+    fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.seek(SeekFrom::Current(len as i64))?;
         Ok(())
     }
 }
-
-impl<T: AsRef<[u8]>> AvroRead for std::io::Cursor<T> {}
-
-impl<R: AvroRead + ?Sized> AvroRead for Box<R> {}
 
 pub enum ValueOrReader<'a, V, R: AvroRead> {
     Value(V),
@@ -546,7 +556,7 @@ pub struct TrivialDecoder;
 impl TrivialDecoder {
     fn maybe_skip<'a, V, R: AvroRead>(self, r: ValueOrReader<'a, V, R>) -> Result<(), Error> {
         if let ValueOrReader::Reader { len, r } = r {
-            r.skip(len)
+            Ok(r.skip(len)?)
         } else {
             Ok(())
         }

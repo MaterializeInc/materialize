@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::io::{BufRead, Read};
+use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -396,12 +396,10 @@ struct ForeverTailedFile<Ev, Handle> {
 }
 
 impl<Ev, H> Skip for ForeverTailedFile<Ev, H> {
-    fn skip(&mut self, len: usize) -> Result<(), anyhow::Error> {
+    fn skip(&mut self, len: usize) -> Result<(), io::Error> {
         self.inner.skip(len)
     }
 }
-
-impl<Ev, H> AvroRead for ForeverTailedFile<Ev, H> {}
 
 impl<Ev, H> Read for ForeverTailedFile<Ev, H> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
