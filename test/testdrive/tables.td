@@ -10,7 +10,15 @@
 ! INSERT INTO t VALUES (1, 'a');
 unknown catalog item 't'
 
+! SHOW CREATE TABLE t;
+unknown catalog item 't'
+
 > CREATE TABLE t (a int, b text NOT NULL)
+
+> SHOW CREATE TABLE t;
+Table   "Create Table"
+------------------------
+materialize.public.t  "CREATE TABLE \"materialize\".\"public\".\"t\" (\"a\" int, \"b\" text NOT NULL)"
 
 ! CREATE TABLE s (a int DEFAULT 1)
 CREATE TABLE with column constraint: DEFAULT 1 not yet supported

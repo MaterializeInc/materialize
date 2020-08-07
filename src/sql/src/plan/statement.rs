@@ -40,9 +40,9 @@ use sql_parser::ast::{
     ExplainStage, ExplainStatement, Explainee, Expr, Format, Ident, IfExistsBehavior,
     InsertStatement, ObjectName, ObjectType, Query, SelectStatement, SetExpr, SetVariableStatement,
     SetVariableValue, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
-    ShowCreateSourceStatement, ShowCreateViewStatement, ShowDatabasesStatement,
-    ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter, ShowVariableStatement,
-    SqlOption, Statement, TailStatement, Value,
+    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
+    ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement, ShowStatementFilter,
+    ShowVariableStatement, SqlOption, Statement, TailStatement, Value,
 };
 
 use crate::ast::InsertSource;
@@ -186,6 +186,15 @@ pub fn describe_statement(
             vec![],
         ),
 
+        Statement::ShowCreateTable(_) => (
+            Some(
+                RelationDesc::empty()
+                    .with_nonnull_column("Table", ScalarType::String)
+                    .with_nonnull_column("Create Table", ScalarType::String),
+            ),
+            vec![],
+        ),
+
         Statement::ShowCreateSink(_) => (
             Some(
                 RelationDesc::empty()
@@ -304,6 +313,7 @@ pub fn handle_statement(
         Statement::ShowCreateIndex(stmt) => handle_show_create_index(scx, stmt),
         Statement::ShowCreateSink(stmt) => handle_show_create_sink(scx, stmt),
         Statement::ShowCreateSource(stmt) => handle_show_create_source(scx, stmt),
+        Statement::ShowCreateTable(stmt) => handle_show_create_table(scx, stmt),
         Statement::ShowCreateView(stmt) => handle_show_create_view(scx, stmt),
         Statement::ShowDatabases(stmt) => handle_show_databases(scx, stmt),
         Statement::ShowIndexes(stmt) => handle_show_indexes(scx, stmt),
@@ -692,6 +702,19 @@ fn handle_show_create_source(
     } else {
         bail!("{} is not a source", name);
     }
+}
+
+fn handle_show_create_table(
+    scx: &StatementContext,
+    ShowCreateTableStatement { table_name }: ShowCreateTableStatement,
+) -> Result<Plan, anyhow::Error> {
+    // Tables are sources, defer to handle_show_create_source().
+    handle_show_create_source(
+        scx,
+        ShowCreateSourceStatement {
+            source_name: table_name,
+        },
+    )
 }
 
 fn handle_show_create_sink(
