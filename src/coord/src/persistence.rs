@@ -52,6 +52,7 @@ struct Partition {
 
 #[derive(Debug)]
 struct Source {
+    // TODO(rkhaitan): key on SourceInstanceId.
     id: GlobalId,
     path: PathBuf,
     // TODO: in a future where persistence supports more than just Kafka this
@@ -85,11 +86,9 @@ impl Source {
         if let Some(partition) = self.partitions.get_mut(&partition_id) {
             if let Some(last_persisted_offset) = partition.last_persisted_offset {
                 if offset <= last_persisted_offset {
-                    // Note that even though the dataflow workers receive data in
-                    // order from the upstream source and they use a FIFO queue
-                    // to send that data, we can't assume that the dataflow
-                    // workers sent the data in order (for example, there may have
-                    // been a delay to resolve the timestamp at an offset).
+                    // The persister does not assume that dataflow workers will send data in
+                    // any ordering. This is a fairly low effort sanity check against obviously
+                    // bad duplication.
                     error!("Received an offset ({}) for source: {} partition: {} that was
                            lower than the most recent offset flushed to persistent storage {}. Ignoring.",
                            offset, self.id, partition_id, last_persisted_offset);
@@ -267,13 +266,14 @@ impl Persister {
 
         // We need to bound the amount of time spent reading from the data channel to ensure we
         // don't neglect our other tasks.
+        // TODO(rkhaitan): rework this loop to select from a timer and the channel(s).
         let timer = Instant::now();
         loop {
             match tokio::time::timeout(Duration::from_millis(5), self.data_rx.next()).await {
                 Ok(None) => break,
                 Ok(Some(Ok(data))) => {
                     if !self.sources.contains_key(&data.source_id) {
-                        // TODO: dropping here is not actually a correct thing to do, as
+                        // TODO(rkhaitan): dropping here is not actually a correct thing to do, as
                         // there may be a race between when we see the metadata informing
                         // us to track this source vs when we see the data itself.
                         error!(
@@ -313,6 +313,7 @@ impl Persister {
     }
 }
 
+// TODO(rkhaitan): make this a method on Persister.
 pub fn update(persister: Option<Persister>) {
     if let Some(mut persister) = persister {
         info!("Persistence thread starting with flush_interval: {:#?}, flush_min_records: {}, path: {}",

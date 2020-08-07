@@ -455,6 +455,7 @@ where
         let persister = self.persister.take();
 
         let executor = self.executor.clone();
+        // TODO(rkhaitan): use tokio::spawn here instead.
         let _persister_thread =
             thread::spawn(move || executor.enter(|| crate::persistence::update(persister)))
                 .join_on_drop();

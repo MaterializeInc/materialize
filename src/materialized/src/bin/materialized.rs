@@ -288,8 +288,11 @@ fn run() -> Result<(), anyhow::Error> {
         .with_context(|| anyhow!("creating data directory {}", data_directory.display()))?;
 
     // Configure source persistence
+    if persistence_enabled && !experimental_mode {
+        bail!("--persistence requires experimental mode. See https://materialize.io/docs/cli/#experimental-mode");
+    }
 
-    let persistence = if experimental_mode && persistence_enabled {
+    let persistence = if persistence_enabled {
         let persistence_directory = data_directory.join("persistence/");
         fs::create_dir_all(&persistence_directory).with_context(|| {
             anyhow!(
