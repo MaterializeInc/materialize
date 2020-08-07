@@ -178,12 +178,11 @@ impl Source {
                 // We'll write down the data to a file with a `-tmp` prefix to
                 // indicate a write was in progress, and then atomically rename
                 // when we are done to indicate the write is complete.
-                let mut path = self.path.clone();
-                path.push(format!("{}-tmp", filename));
+                let tmp_path = self.path.join(format!("{}-tmp", filename));
 
-                std::fs::write(&path, buf)?;
-                let final_path = path.with_file_name(filename);
-                std::fs::rename(path, final_path)?;
+                std::fs::write(&tmp_path, buf)?;
+                let final_path = self.path.join(filename);
+                std::fs::rename(tmp_path, final_path)?;
                 partition.last_persisted_offset = Some(prefix_end_offset);
             }
         }
