@@ -22,4 +22,7 @@ mod sink;
 pub mod logging;
 pub mod source;
 
-pub use server::{serve, BroadcastToken, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+pub use server::{
+    serve, BroadcastToken, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta,
+    WorkerPersistenceData,
+};

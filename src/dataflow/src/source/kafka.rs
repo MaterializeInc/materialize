@@ -13,6 +13,8 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::executor::block_on;
+use futures::sink::SinkExt;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
@@ -21,17 +23,20 @@ use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionLi
 use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
+    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
+    MzOffset, Timestamp,
 };
-use expr::{PartitionId, SourceInstanceId};
+use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddr;
 use log::{error, info, log_enabled, warn};
 
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+    WorkerPersistenceData,
 };
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+    ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
+    SourceMessage,
 };
 
 /// Contains all information necessary to ingest data from Kafka
@@ -42,6 +47,8 @@ pub struct KafkaSourceInfo {
     source_name: String,
     /// Source instance ID (stored as a string for logging)
     source_id: String,
+    /// Source global id (for persistence)
+    source_global_id: GlobalId,
     /// Kafka consumer for this source
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
@@ -327,6 +334,41 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         // Mark the partition has buffered
         self.buffered_metadata.insert(consumer.pid);
     }
+
+    fn persist_message(
+        &self,
+        persistence_tx: &mut Option<PersistenceSender>,
+        message: &SourceMessage<Vec<u8>>,
+        timestamp: Timestamp,
+    ) {
+        // Send this record to be persisted
+        if let Some(persistence_tx) = persistence_tx {
+            let partition_id = match message.partition {
+                PartitionId::Kafka(p) => p,
+                _ => unreachable!(),
+            };
+
+            // TODO(rkhaitan): let's experiment with wrapping these in a
+            // Arc so we don't have to clone.
+            let key = message.key.clone().unwrap_or_default();
+            let payload = message.payload.clone().unwrap_or_default();
+
+            let persistence_data = WorkerPersistenceData {
+                source_id: self.source_global_id,
+                partition: partition_id,
+                offset: message.offset.offset,
+                timestamp,
+                key,
+                payload,
+            };
+
+            let mut connector = persistence_tx.as_mut();
+
+            // TODO(rkhaitan): revisit whether this architecture of blocking
+            // within a dataflow operator makes sense.
+            block_on(connector.send(persistence_data)).unwrap();
+        }
+    }
 }
 
 impl KafkaSourceInfo {
@@ -348,6 +390,7 @@ impl KafkaSourceInfo {
         } = kc;
         let kafka_config =
             create_kafka_config(&source_name, &addr, group_id_prefix, &config_options);
+        let source_global_id = source_id.sid;
         let source_id = source_id.to_string();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext(consumer_activator))
@@ -357,6 +400,7 @@ impl KafkaSourceInfo {
             topic_name: topic,
             source_name,
             source_id,
+            source_global_id,
             partition_consumers: VecDeque::new(),
             known_partitions: 0,
             consumer: Arc::new(consumer),

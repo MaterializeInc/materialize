@@ -109,6 +109,7 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
+use futures::executor::block_on;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
@@ -130,7 +131,9 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
+use crate::server::{
+    LocalInput, TimestampDataUpdates, TimestampMetadataUpdates, WorkerPersistenceData,
+};
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo};
 use crate::source::{SourceConfig, SourceToken};
@@ -160,6 +163,8 @@ pub struct RenderState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
+    /// Sender to give data to be persisted.
+    pub persistence_tx: Option<comm::mpsc::Sender<WorkerPersistenceData>>,
 }
 
 pub fn build_local_input<A: Allocate>(
@@ -320,6 +325,15 @@ where
                 (usize::cast_from(uid.hashed()) % scope.peers()) == scope.index()
             };
 
+            let persistence_tx = if let (true, Some(persistence_tx)) = (
+                connector.persistence_enabled(),
+                render_state.persistence_tx.clone(),
+            ) {
+                Some(block_on(persistence_tx.connect()).expect("failed to connect persistence tx"))
+            } else {
+                None
+            };
+
             let source_config = SourceConfig {
                 name: format!("{}-{}", connector.name(), uid),
                 id: uid,
@@ -333,6 +347,7 @@ where
                 worker_id: scope.index(),
                 worker_count: scope.peers(),
                 encoding: encoding.clone(),
+                persistence_tx,
             };
 
             let capability = if let Envelope::Upsert(key_encoding) = envelope {

@@ -522,6 +522,14 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
         }
     }
+
+    /// Returns whether or not persistence is enabled for this connector
+    pub fn persistence_enabled(&self) -> bool {
+        match self {
+            ExternalSourceConnector::Kafka(k) => k.enable_persistence,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -593,6 +601,7 @@ pub struct KafkaSourceConnector {
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, i64>,
     pub group_id_prefix: Option<String>,
+    pub enable_persistence: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

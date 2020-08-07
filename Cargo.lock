@@ -471,6 +471,7 @@ dependencies = [
  "aws-util",
  "backtrace",
  "bincode",
+ "byteorder",
  "ccsr",
  "chrono",
  "comm",
