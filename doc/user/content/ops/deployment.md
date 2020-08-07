@@ -35,7 +35,7 @@ kernel scheduler allows, unless you have overridden this with the `--memory` or 
 #### Linux
 Most Linux distributions do not enable swap by default. However, you can enable it
 quite easily:
- 
+
 1. Create a swapfile:
    The general syntax is: `fallocate [-n] [-o offset] -l length filename`
 
