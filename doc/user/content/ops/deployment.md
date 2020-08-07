@@ -29,7 +29,7 @@ setup for you:
 #### Docker
 [By default](https://docs.docker.com/config/containers/resource_constraints/), a
 container has no resource constraints and can use as much of a given resource as the host’s
-kernel scheduler allows, unless you have overridden this with the `--memory` or the 
+kernel scheduler allows, unless you have overridden this with the `--memory` or the
 `--memory-swap` flags.
 
 #### Linux
@@ -50,7 +50,7 @@ quite easily:
     chmod 600 /swapfile
     ```
 
-1. Mark the file as swap space:     
+1. Mark the file as swap space:
    ```shell
    mkswap /swapfile
    ```
