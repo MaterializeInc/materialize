@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
+use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::executor::block_on;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
@@ -36,7 +37,7 @@ pub struct PersistenceConfig {
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct PersistedRecord {
+struct PersistedRecord {
     offset: i64,
     timestamp: Timestamp,
     key: Vec<u8>,
@@ -44,13 +45,13 @@ pub struct PersistedRecord {
 }
 
 #[derive(Debug)]
-pub struct Partition {
+struct Partition {
     last_persisted_offset: Option<i64>,
     pending: Vec<PersistedRecord>,
 }
 
 #[derive(Debug)]
-pub struct Source {
+struct Source {
     id: GlobalId,
     path: PathBuf,
     // TODO: in a future where persistence supports more than just Kafka this
@@ -160,7 +161,7 @@ impl Source {
                         Datum::Bytes(&record.payload),
                     ]);
 
-                    row.encode(&mut buf);
+                    encode_row(&row, &mut buf);
                 }
 
                 // The offsets we put in this filename are 1-indexed
@@ -336,4 +337,13 @@ pub fn update(persister: Option<Persister>) {
             }
         }
     }
+}
+
+/// Write a length-prefixed Row to a buffer
+fn encode_row(row: &Row, buf: &mut Vec<u8>) {
+    // TODO assert that the row is small enough for its length to fit in 4 bytes
+    let data = row.data();
+    buf.write_u32::<NetworkEndian>(data.len() as u32)
+        .expect("writes to vec cannot fail");
+    buf.extend_from_slice(data);
 }
