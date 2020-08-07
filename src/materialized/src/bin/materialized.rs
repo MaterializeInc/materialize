@@ -113,12 +113,6 @@ fn run() -> Result<(), anyhow::Error> {
         "timestamp advancement frequency (default 10ms)",
         "DURATION",
     );
-    opts.optopt(
-        "",
-        "persist-ts",
-        "persists consistency information locally and recovers from local store",
-        "true/false",
-    );
 
     // Logging options.
     opts.optopt(
