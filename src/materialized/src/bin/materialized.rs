@@ -113,9 +113,14 @@ fn run() -> Result<(), anyhow::Error> {
         "timestamp advancement frequency (default 10ms)",
         "DURATION",
     );
+    opts.optflag(
+        "",
+        "persistence",
+        "enable source persistence (currently requires --experimental as well)",
+    );
     opts.optopt(
         "",
-        "persistence-min-threshold",
+        "persistence-flush-min-records",
         "minimum number of new records that must be present on a partition before being flushed to persistent storage (default 1000)",
         "N",
     );
@@ -253,7 +258,9 @@ fn run() -> Result<(), anyhow::Error> {
         None => Duration::from_millis(10),
         Some(d) => parse_duration::parse(&d)?,
     };
-    let persistence_min_threshold = popts.opt_get_default("persistence-min-threshold", 1000)?;
+    let persistence_enabled = popts.opt_present("persistence");
+    let persistence_flush_min_records =
+        popts.opt_get_default("persistence-flush-min-records", 1000)?;
     let persistence_flush_interval = match popts.opt_str("persistence-flush-interval").as_deref() {
         None => Duration::from_secs(60),
         Some(d) => parse_duration::parse(&d)?,
@@ -272,20 +279,33 @@ fn run() -> Result<(), anyhow::Error> {
         }),
     };
 
+    let experimental_mode = popts.opt_present("experimental");
+
     // Configure storage.
     let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
     let symbiosis_url = popts.opt_str("symbiosis");
     fs::create_dir_all(&data_directory)
         .with_context(|| anyhow!("creating data directory {}", data_directory.display()))?;
 
-    let mut persistence_directory = data_directory.clone();
-    persistence_directory.push("persistence/");
-    fs::create_dir_all(&persistence_directory).with_context(|| {
-        anyhow!(
-            "creating persistence directory: {}",
-            persistence_directory.display()
-        )
-    })?;
+    // Configure source persistence
+
+    let persistence = if experimental_mode && persistence_enabled {
+        let persistence_directory = data_directory.join("persistence/");
+        fs::create_dir_all(&persistence_directory).with_context(|| {
+            anyhow!(
+                "creating persistence directory: {}",
+                persistence_directory.display()
+            )
+        })?;
+
+        Some(coord::PersistenceConfig {
+            flush_interval: persistence_flush_interval,
+            flush_min_records: persistence_flush_min_records,
+            path: persistence_directory,
+        })
+    } else {
+        None
+    };
 
     // Configure tracing.
     {
@@ -341,8 +361,6 @@ environment:{}",
     // Inform the user about what they are using, and how to contact us.
     beta_splash();
 
-    let experimental_mode = popts.opt_present("experimental");
-
     if experimental_mode {
         experimental_mode_splash();
     }
@@ -354,12 +372,10 @@ environment:{}",
         logging_granularity,
         logical_compaction_window,
         timestamp_frequency,
-        persistence_min_threshold,
-        persistence_flush_interval,
+        persistence,
         listen_addr,
         tls,
         data_directory: Some(data_directory),
-        persistence_directory: Some(persistence_directory),
         symbiosis_url,
         experimental_mode,
     })?;

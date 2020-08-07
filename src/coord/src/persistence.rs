@@ -22,6 +22,7 @@ use dataflow_types::{Timestamp, WorkerPersistenceData};
 use expr::GlobalId;
 use repr::{Datum, Row};
 
+#[derive(Clone, Debug)]
 pub struct PersistenceConfig {
     /// Amount of time persister thread will sleep between consecutive attempts
     /// to update persistent state.
