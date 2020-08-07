@@ -36,8 +36,8 @@ use timely::progress::ChangeBatch;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, PeekWhen,
-    SinkConnector, SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
+    AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
+    SourceConnector, TailSinkConnector, Timestamp, TimestampSourceUpdate, Update,
 };
 use expr::{
     GlobalId, Id, IdHumanizer, NullaryFunc, RelationExpr, RowSetFinishing, ScalarExpr,
@@ -50,7 +50,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
-use sql::plan::{MutationKind, Params, Plan, PlanContext};
+use sql::plan::{MutationKind, Params, PeekWhen, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::{self, Catalog, CatalogItem, CatalogView, SinkConnectorState, Source};

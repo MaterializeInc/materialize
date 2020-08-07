@@ -25,7 +25,7 @@ use url::Url;
 use dataflow_types::{
     AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding, Envelope,
     ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
-    KinesisSourceConnector, PeekWhen, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
+    KinesisSourceConnector, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
 };
 use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -46,7 +46,7 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::{
-    query, scalar_type_from_sql, Index, Params, Plan, PlanContext, Sink, Source, View,
+    query, scalar_type_from_sql, Index, Params, PeekWhen, Plan, PlanContext, Sink, Source, View,
 };
 use crate::pure::Schema;
 
