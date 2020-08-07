@@ -20,7 +20,9 @@ use timely::scheduling::{Activator, SyncActivator};
 
 use avro::types::Value;
 use avro::{AvroRead, Schema, Skip};
-use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
+use dataflow_types::{
+    AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
+};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::server::{
@@ -78,7 +80,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
-                    DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
                     _ => unreachable!(
                         "Internal error: \
                                          Avro OCF schema should have already been resolved.\n\

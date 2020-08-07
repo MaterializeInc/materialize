@@ -23,9 +23,10 @@ use rusoto_core::Region;
 use url::Url;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding, DataEncoding, Envelope,
-    ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder, KafkaSourceConnector,
-    KinesisSourceConnector, ProtobufEncoding, SinkConnectorBuilder, SourceConnector,
+    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
+    DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
+    KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
+    RegexEncoding, SinkConnectorBuilder, SourceConnector,
 };
 use expr::{like_pattern, GlobalId, RowSetFinishing};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -1191,7 +1192,7 @@ fn handle_create_source(
             }
             Format::Regex(regex) => {
                 let regex = Regex::new(regex)?;
-                DataEncoding::Regex { regex }
+                DataEncoding::Regex(RegexEncoding { regex })
             }
             Format::Csv {
                 header_row,
@@ -1398,7 +1399,7 @@ fn handle_create_source(
                 Value::String(s) => s,
                 _ => bail!("reader_schema option must be a string"),
             };
-            let encoding = DataEncoding::AvroOcf { reader_schema };
+            let encoding = DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema });
             (connector, encoding)
         }
     };
