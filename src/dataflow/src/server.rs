@@ -150,7 +150,7 @@ pub enum SequencedCommand {
     },
     /// Request that feedback is streamed to the provided channel.
     EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
-    /// Request that persistence data is streamed to the provided channel..
+    /// Request that persistence data is streamed to the provided channel.
     EnablePersistence(comm::mpsc::Sender<WorkerPersistenceData>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
