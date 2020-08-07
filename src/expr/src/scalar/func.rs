@@ -2850,6 +2850,38 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
+fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
+    let string = datums[0].unwrap_str();
+    let delimiter = datums[1].unwrap_str();
+
+    // Provided index value begins at 1, not 0.
+    let index = match usize::try_from(datums[2].unwrap_int64() - 1) {
+        Ok(index) => index,
+        Err(_) => {
+            return Err(EvalError::InvalidParameterValue(
+                "field position must be greater than zero".to_owned(),
+            ))
+        }
+    };
+
+    // If the provided delimiter is the empty string,
+    // PostgreSQL does not break the string into individual
+    // characters. Instead, it generates the following parts: [string].
+    if delimiter == "" {
+        if index == 0 {
+            return Ok(datums[0]);
+        } else {
+            return Ok(Datum::String(""));
+        }
+    }
+
+    // If provided index is greater than the number of split parts,
+    // return an empty string.
+    Ok(Datum::String(
+        string.split(delimiter).nth(index).unwrap_or(""),
+    ))
+}
+
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(
         temp_storage.push_string(
@@ -3144,6 +3176,7 @@ pub enum VariadicFunc {
         field_names: Vec<ColumnName>,
     },
     ListSlice,
+    SplitPart,
 }
 
 impl VariadicFunc {
@@ -3177,6 +3210,7 @@ impl VariadicFunc {
                 Ok(eager!(list_create, temp_storage))
             }
             VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
+            VariadicFunc::SplitPart => Ok(eager!(split_part)?),
         }
     }
 
@@ -3217,6 +3251,7 @@ impl VariadicFunc {
                 },
                 true,
             ),
+            SplitPart => ColumnType::new(ScalarType::String, true),
         }
     }
 
@@ -3247,6 +3282,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListSlice => f.write_str("list_slice"),
+            VariadicFunc::SplitPart => f.write_str("split_string"),
         }
     }
 }
