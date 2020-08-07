@@ -38,8 +38,8 @@ use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
     AvroOcfEncoding, Consistency, DataEncoding, Envelope, ExternalSourceConnector,
-    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, SourceConnector,
-    TimestampSourceUpdate,
+    ExternalSourceDesc, FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector,
+    MzOffset, TimestampSourceUpdate,
 };
 use expr::{PartitionId, SourceInstanceId};
 use ore::collections::CollectionExt;
@@ -118,7 +118,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, SourceConnector),
+    Add(SourceInstanceId, ExternalSourceDesc),
     DropInstance(SourceInstanceId),
     Shutdown,
 }
@@ -787,19 +787,14 @@ impl Timestamper {
         while let Ok(update) = self.rx.try_recv() {
             match update {
                 TimestampMessage::Add(id, sc) => {
-                    let (sc, enc, env, cons, max_ts_batch) = if let SourceConnector::External {
-                        connector,
-                        encoding,
-                        envelope,
-                        consistency,
+                    let ExternalSourceDesc {
+                        connector: sc,
+                        encoding: enc,
+                        envelope: env,
+                        consistency: cons,
                         max_ts_batch,
                         ts_frequency: _,
-                    } = sc
-                    {
-                        (connector, encoding, envelope, consistency, max_ts_batch)
-                    } else {
-                        panic!("A Local Source should never be timestamped");
-                    };
+                    } = sc;
                     if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
                         // Did not know about source, must update
                         match cons {

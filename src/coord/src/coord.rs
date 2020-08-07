@@ -585,15 +585,18 @@ where
                     message: WorkerFeedback::CreateSource(src_instance_id),
                 }) => {
                     if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
-                        if let CatalogItem::Source(s) = entry.item() {
+                        if let CatalogItem::Source(Source {
+                            connector: SourceConnector::External(external_desc),
+                            ..
+                        }) = entry.item()
+                        {
                             ts_tx
-                                .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
+                                .send(TimestampMessage::Add(
+                                    src_instance_id,
+                                    external_desc.clone(),
+                                ))
                                 .expect("Failed to send CREATE Instance notice to timestamper");
-                        } else {
-                            panic!("A non-source is re-using the same source ID");
                         }
-                    } else {
-                        // Someone already dropped the source
                     }
                 }
 
@@ -1774,8 +1777,12 @@ where
             }
         } else {
             match self.catalog.get_by_id(id).item() {
-                CatalogItem::Source(source) => {
-                    dataflow.add_source_import(*id, source.connector.clone(), source.desc.clone());
+                CatalogItem::Source(Source {
+                    connector: SourceConnector::External(external_desc),
+                    desc,
+                    ..
+                }) => {
+                    dataflow.add_source_import(*id, external_desc.clone(), desc.clone());
                 }
                 CatalogItem::View(view) => {
                     self.build_view_collection(id, &view, dataflow);

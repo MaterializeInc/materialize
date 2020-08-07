@@ -24,7 +24,7 @@ use url::Url;
 
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, Envelope, ExternalSourceConnector, FileSourceConnector,
+    DataEncoding, Envelope, ExternalSourceConnector, ExternalSourceDesc, FileSourceConnector,
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding,
     RegexEncoding, SinkConnectorBuilder, SourceConnector,
 };
@@ -1509,14 +1509,14 @@ fn handle_create_source(
 
     let source = Source {
         create_sql,
-        connector: SourceConnector::External {
+        connector: SourceConnector::External(ExternalSourceDesc {
             connector: external_connector,
             encoding,
             envelope,
             consistency,
             max_ts_batch,
             ts_frequency,
-        },
+        }),
         desc,
     };
     Ok(Plan::CreateSource {

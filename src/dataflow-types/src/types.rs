@@ -127,11 +127,11 @@ impl DataflowDesc {
     pub fn add_source_import(
         &mut self,
         id: GlobalId,
-        connector: SourceConnector,
+        external_desc: ExternalSourceDesc,
         desc: RelationDesc,
     ) {
         let source_description = SourceDesc {
-            connector,
+            external_desc,
             operators: None,
             desc,
         };
@@ -430,7 +430,7 @@ pub struct RegexEncoding {
 /// of the collection.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
-    pub connector: SourceConnector,
+    pub external_desc: ExternalSourceDesc,
     /// Optionally, filtering and projection that may optimistically be applied
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
@@ -470,15 +470,18 @@ impl Envelope {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
-    External {
-        connector: ExternalSourceConnector,
-        encoding: DataEncoding,
-        envelope: Envelope,
-        consistency: Consistency,
-        max_ts_batch: i64,
-        ts_frequency: Duration,
-    },
+    External(ExternalSourceDesc),
     Local,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExternalSourceDesc {
+    pub connector: ExternalSourceConnector,
+    pub encoding: DataEncoding,
+    pub envelope: Envelope,
+    pub consistency: Consistency,
+    pub max_ts_batch: i64,
+    pub ts_frequency: Duration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
