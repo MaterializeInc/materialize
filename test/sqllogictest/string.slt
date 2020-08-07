@@ -602,3 +602,40 @@ SELECT '你' || '好'
 
 query error no overload for bool \|\| bool
 SELECT true || false
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', 2)
+----
+def
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '', 1)
+----
+abc~@~def~@~ghi
+
+query T
+SELECT split_part('abc~@~def~@~ghi', '~@~', 4)
+----
+(empty)
+
+query T
+SELECT split_part('hello there', '', 1)
+----
+hello there
+
+query T
+SELECT split_part('', 'not', 1)
+----
+(empty)
+
+query error field position must be greater than zero
+SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
+
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT split_part()
+
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT split_part('one', 'two')
+
+query error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT split_part(1, 2, 3)
