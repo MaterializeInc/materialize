@@ -18,7 +18,8 @@ use futures::executor::block_on;
 use futures::stream::StreamExt;
 use log::{error, info, trace};
 
-use dataflow_types::{Timestamp, WorkerPersistenceData};
+use dataflow::WorkerPersistenceData;
+use dataflow_types::Timestamp;
 use expr::GlobalId;
 use repr::{Datum, Row};
 

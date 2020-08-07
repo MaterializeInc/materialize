@@ -25,7 +25,7 @@ use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{
     Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
-    MzOffset, Timestamp, WorkerPersistenceData,
+    MzOffset, Timestamp,
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddr;
@@ -33,6 +33,7 @@ use log::{error, info, log_enabled, warn};
 
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
+    WorkerPersistenceData,
 };
 use crate::source::{
     ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,

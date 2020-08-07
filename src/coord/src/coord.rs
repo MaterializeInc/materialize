@@ -2033,11 +2033,16 @@ where
         source_connector: &SourceConnector,
     ) {
         if let SourceConnector::External { connector, .. } = &source_connector {
-            if connector.enable_persistence() {
+            if connector.persistence_enabled() {
                 if let Some(persistence_metadata_tx) = &self.persistence_metadata_tx {
                     persistence_metadata_tx
                         .send(PersistenceMetadata::AddSource(id))
                         .expect("Failed to send CREATE SOURCE message to persister");
+                } else {
+                    log::error!(
+                        "trying to create a persistent source ({}) but persistence is disabled.",
+                        id
+                    );
                 }
             }
         }
