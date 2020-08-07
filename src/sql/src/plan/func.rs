@@ -851,6 +851,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace,
                 params!(String, String) => BinaryFunc::TrimTrailing
             },
+            "split_part" => {
+                params!(String, String, Int64) => VariadicFunc::SplitString
+            },
             "substr" => {
                 params!(String, Int64) => VariadicFunc::Substr,
                 params!(String, Int64, Int64) => VariadicFunc::Substr

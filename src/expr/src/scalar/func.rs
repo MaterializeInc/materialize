@@ -2850,6 +2850,35 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
+fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
+    let string = datums[0].unwrap_str();
+    let delimiter = datums[1].unwrap_str();
+
+    // If the provided delimiter is the empty string,
+    // PostgreSQL does not break the string into individual
+    // characters. Instead, it generates the following parts: [string].
+    let parts = if delimiter == "" {
+        vec![string]
+    } else {
+        string.split(delimiter).collect()
+    };
+
+    // Provided index value begins at 1, not 0.
+    let index = datums[2].unwrap_int64() - 1;
+    if index < 0 {
+        return Err(EvalError::IntegerOutOfRange);
+    }
+
+    // If provided index is greater than the number of split parts,
+    // return an empty string.
+    let usize_index = index as usize;
+    if usize_index >= parts.len() {
+        return Ok(Datum::String(""));
+    }
+
+    Ok(Datum::String(parts[usize_index]))
+}
+
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(
         temp_storage.push_string(
@@ -3144,6 +3173,7 @@ pub enum VariadicFunc {
         field_names: Vec<ColumnName>,
     },
     ListSlice,
+    SplitString,
 }
 
 impl VariadicFunc {
@@ -3177,6 +3207,7 @@ impl VariadicFunc {
                 Ok(eager!(list_create, temp_storage))
             }
             VariadicFunc::ListSlice => Ok(eager!(list_slice, temp_storage)),
+            VariadicFunc::SplitString => Ok(eager!(split_part)?),
         }
     }
 
@@ -3217,6 +3248,7 @@ impl VariadicFunc {
                 },
                 true,
             ),
+            SplitString => ColumnType::new(ScalarType::String, true),
         }
     }
 
@@ -3247,6 +3279,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ListCreate { .. } => f.write_str("list_create"),
             VariadicFunc::RecordCreate { .. } => f.write_str("record_create"),
             VariadicFunc::ListSlice => f.write_str("list_slice"),
+            VariadicFunc::SplitString => f.write_str("split_string"),
         }
     }
 }
