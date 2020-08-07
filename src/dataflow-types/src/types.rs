@@ -37,16 +37,6 @@ use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType};
 /// System-wide timestamp type.
 pub type Timestamp = u64;
 
-/// Specifies when a `Peek` should occur.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum PeekWhen {
-    /// The peek should occur at the latest possible timestamp that allows the
-    /// peek to complete immediately.
-    Immediately,
-    /// The peek should occur at the specified timestamp.
-    AtTimestamp(Timestamp),
-}
-
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PeekResponse {
