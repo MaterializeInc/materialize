@@ -22,7 +22,6 @@ To minimize the chances that Materialize runs out of memory in a production envi
 we recommend you make additional memory available to Materialize via a SSD-backed
 swap file or swap partition.
 
-### Examples
 This is particularly important in Linux and in Docker, where swap may not be automatically
 setup for you:
 
