@@ -38,7 +38,10 @@ use dataflow_types::SourceConnector;
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
-use sql::ast::{ColumnOption, DataType, ObjectType, Statement, TableConstraint};
+use sql::ast::{
+    ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement,
+    InsertStatement, ObjectType, Statement, TableConstraint, UpdateStatement,
+};
 use sql::catalog::Catalog;
 use sql::names::FullName;
 use sql::normalize;
@@ -134,13 +137,13 @@ END $$;
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         };
         Ok(match stmt {
-            Statement::CreateTable {
+            Statement::CreateTable(CreateTableStatement {
                 name,
                 columns,
                 constraints,
                 if_not_exists,
                 ..
-            } => {
+            }) => {
                 let sql_types: Vec<_> = columns
                     .iter()
                     .map(|column| column.data_type.clone())
@@ -221,12 +224,12 @@ END $$;
                     if_not_exists: *if_not_exists,
                 }
             }
-            Statement::DropObjects {
+            Statement::DropObjects(DropObjectsStatement {
                 names,
                 object_type: ObjectType::Table,
                 if_exists,
                 ..
-            } => {
+            }) => {
                 self.client.execute(&*stmt.to_string(), &[]).await?;
                 let mut items = vec![];
                 for name in names {
@@ -247,7 +250,7 @@ END $$;
                     ty: ObjectType::Table,
                 }
             }
-            Statement::Delete { table_name, .. } => {
+            Statement::Delete(DeleteStatement { table_name, .. }) => {
                 let mut updates = vec![];
                 let table_name = scx.resolve_item(table_name.clone())?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
@@ -262,7 +265,7 @@ END $$;
                     kind: MutationKind::Delete,
                 }
             }
-            Statement::Insert { table_name, .. } => {
+            Statement::Insert(InsertStatement { table_name, .. }) => {
                 let mut updates = vec![];
                 let table_name = scx.resolve_item(table_name.clone())?;
                 // RETURNING cannot return zero columns, but we might be
@@ -281,11 +284,11 @@ END $$;
                     kind: MutationKind::Insert,
                 }
             }
-            Statement::Update {
+            Statement::Update(UpdateStatement {
                 table_name,
                 selection,
                 ..
-            } => {
+            }) => {
                 let mut updates = vec![];
                 let mut sql = format!("SELECT * FROM {}", table_name);
                 let table_name = scx.resolve_item(table_name.clone())?;

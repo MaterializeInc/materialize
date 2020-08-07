@@ -11,9 +11,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::visit::{self, Visit};
-use super::visit_mut::{self, VisitMut};
-use super::{Expr, Ident, ObjectName, Query, Statement};
+use crate::ast::visit::{self, Visit};
+use crate::ast::visit_mut::{self, VisitMut};
+use crate::ast::{
+    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateViewStatement, Expr,
+    Ident, ObjectName, Query, Statement,
+};
 use crate::names::FullName;
 
 /// Changes the `name` used in an item's `CREATE` statement. To complete a
@@ -22,12 +25,12 @@ use crate::names::FullName;
 pub fn create_stmt_rename(create_stmt: &mut Statement, to_item_name: String) {
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
-        Statement::CreateIndex { name, .. } => {
+        Statement::CreateIndex(CreateIndexStatement { name, .. }) => {
             *name = Some(Ident::new(to_item_name));
         }
-        Statement::CreateSink { name, .. }
-        | Statement::CreateSource { name, .. }
-        | Statement::CreateView { name, .. } => {
+        Statement::CreateSink(CreateSinkStatement { name, .. })
+        | Statement::CreateSource(CreateSourceStatement { name, .. })
+        | Statement::CreateView(CreateViewStatement { name, .. }) => {
             name.0[2] = Ident::new(to_item_name);
         }
         _ => unreachable!("Internal error: only catalog items can be renamed"),
@@ -60,14 +63,14 @@ pub fn create_stmt_rename_refs(
 
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
-        Statement::CreateIndex { on_name, .. } => {
+        Statement::CreateIndex(CreateIndexStatement { on_name, .. }) => {
             maybe_update_object_name(on_name);
         }
-        Statement::CreateSink { from, .. } => {
+        Statement::CreateSink(CreateSinkStatement { from, .. }) => {
             maybe_update_object_name(from);
         }
-        Statement::CreateSource { .. } => {}
-        Statement::CreateView { query, .. } => {
+        Statement::CreateSource(CreateSourceStatement { .. }) => {}
+        Statement::CreateView(CreateViewStatement { query, .. }) => {
             rewrite_query(from_name, to_item_name, query)?;
         }
         _ => unreachable!("Internal error: only catalog items need to update item refs"),

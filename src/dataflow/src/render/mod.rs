@@ -389,7 +389,7 @@ where
                             .as_collection(),
                     );
                     let reader_schema = match &encoding {
-                        DataEncoding::AvroOcf { reader_schema } => reader_schema,
+                        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
                         _ => unreachable!(
                             "Internal error: \
                                  Avro OCF schema should have already been resolved.\n\

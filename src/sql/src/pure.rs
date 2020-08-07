@@ -15,7 +15,9 @@ use anyhow::{bail, Context};
 use tokio::io::AsyncBufReadExt;
 
 use repr::strconv;
-use sql_parser::ast::{AvroSchema, Connector, CsrSeed, Format, Ident, Statement};
+use sql_parser::ast::{
+    AvroSchema, Connector, CreateSourceStatement, CsrSeed, Format, Ident, Statement,
+};
 
 use crate::kafka_util;
 use crate::normalize;
@@ -27,14 +29,14 @@ use crate::normalize;
 /// Note that purification is asynchronous, and may take an unboundedly long
 /// time to complete.
 pub async fn purify(mut stmt: Statement) -> Result<Statement, anyhow::Error> {
-    if let Statement::CreateSource {
+    if let Statement::CreateSource(CreateSourceStatement {
         col_names,
         connector,
         format,
         with_options,
         envelope,
         ..
-    } = &mut stmt
+    }) = &mut stmt
     {
         let with_options_map = normalize::with_options(with_options);
         let mut config_options = HashMap::new();

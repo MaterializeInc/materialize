@@ -280,17 +280,12 @@ impl DataflowDesc {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataEncoding {
     Avro(AvroEncoding),
-    Csv(CsvEncoding),
-    Regex {
-        #[serde(with = "serde_regex")]
-        regex: Regex,
-    },
+    AvroOcf(AvroOcfEncoding),
     Protobuf(ProtobufEncoding),
+    Csv(CsvEncoding),
+    Regex(RegexEncoding),
     Bytes,
     Text,
-    AvroOcf {
-        reader_schema: String,
-    },
 }
 
 impl DataEncoding {
@@ -324,7 +319,7 @@ impl DataEncoding {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             DataEncoding::Bytes => key_desc.with_nonnull_column("data", ScalarType::Bytes),
-            DataEncoding::AvroOcf { reader_schema } => {
+            DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
                 avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
                     .context("validating avro ocf reader schema")?
                     .into_iter()
@@ -359,7 +354,7 @@ impl DataEncoding {
                 let d = decode_descriptors(descriptors)?;
                 validate_descriptors(message_name, &d)?
             }
-            DataEncoding::Regex { regex } => regex
+            DataEncoding::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
                 .enumerate()
                 // The first capture is the entire matched string. This will
@@ -404,6 +399,18 @@ pub struct AvroEncoding {
     pub schema_registry_config: Option<ccsr::ClientConfig>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AvroOcfEncoding {
+    pub reader_schema: String,
+}
+
+/// Encoding in Protobuf format.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProtobufEncoding {
+    pub descriptors: Vec<u8>,
+    pub message_name: String,
+}
+
 /// Encoding in CSV format, with `n_cols` columns per row, with an optional header.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CsvEncoding {
@@ -412,11 +419,10 @@ pub struct CsvEncoding {
     pub delimiter: u8,
 }
 
-/// Encoding in Protobuf format.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ProtobufEncoding {
-    pub descriptors: Vec<u8>,
-    pub message_name: String,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegexEncoding {
+    #[serde(with = "serde_regex")]
+    pub regex: Regex,
 }
 
 /// A source of updates for a relational collection.

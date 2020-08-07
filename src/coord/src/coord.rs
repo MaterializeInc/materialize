@@ -47,7 +47,10 @@ use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker};
 use sql::ast::display::AstDisplay;
-use sql::ast::{ExplainOptions, ExplainStage, ObjectType, Statement};
+use sql::ast::{
+    CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
+    ObjectType, Statement,
+};
 use sql::catalog::Catalog as _;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::{MutationKind, Params, PeekWhen, Plan, PlanContext};
@@ -2434,11 +2437,11 @@ where
         // When these statements are routed through symbiosis, table information
         // is created and maintained locally, which is required for other statements
         // to be executed correctly.
-        if let Statement::CreateTable { .. }
-        | Statement::DropObjects {
+        if let Statement::CreateTable(CreateTableStatement { .. })
+        | Statement::DropObjects(DropObjectsStatement {
             object_type: ObjectType::Table,
             ..
-        }
+        })
         | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
@@ -2601,7 +2604,7 @@ fn index_sql(
 ) -> String {
     use sql::ast::{Expr, Ident, Value};
 
-    Statement::CreateIndex {
+    CreateIndexStatement {
         name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
         key_parts: Some(

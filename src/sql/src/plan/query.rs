@@ -108,7 +108,7 @@ pub fn plan_root_query(
 /// treated as a WHERE applied to the first column in the result set.
 pub fn plan_show_where(
     scx: &StatementContext,
-    filter: Option<&ShowStatementFilter>,
+    filter: Option<ShowStatementFilter>,
     rows: Vec<Vec<Datum>>,
     desc: &RelationDesc,
 ) -> Result<(RelationExpr, RowSetFinishing), anyhow::Error> {
