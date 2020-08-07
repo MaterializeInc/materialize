@@ -86,8 +86,10 @@ pub struct SourceConfig<'a, G> {
     /// Data encoding
     pub encoding: DataEncoding,
     /// Channel to send persistence information to persister thread
-    pub persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+    pub persistence_tx: Option<PersistenceSender>,
 }
+
+type PersistenceSender = Pin<Box<dyn Sink<WorkerPersistenceData, Error = comm::Error> + Send>>;
 
 #[derive(Clone, Serialize, Deserialize)]
 /// A record produced by a source
@@ -305,7 +307,7 @@ pub trait SourceInfo<Out> {
     /// Persist a message
     fn persist_message(
         &self,
-        _persistence_tx: &mut Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+        _persistence_tx: &mut Option<PersistenceSender>,
         _message: &SourceMessage<Out>,
         _timestamp: Timestamp,
     ) {

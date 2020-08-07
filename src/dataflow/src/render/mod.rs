@@ -100,7 +100,6 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::pin::Pin;
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -111,7 +110,6 @@ use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
-use futures::sink::{Sink, SinkExt};
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
@@ -327,16 +325,14 @@ where
                 (usize::cast_from(uid.hashed()) % scope.peers()) == scope.index()
             };
 
-            let persistence_enabled = connector.persistence_enabled();
-            let persistence_tx: Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>> =
-                if persistence_enabled && render_state.persistence_tx.is_some() {
-                    let tx = render_state.persistence_tx.as_ref().cloned().unwrap();
-                    Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
-                        |err| panic!("error enabling dataflow worker persistence: {}", err),
-                    )))
-                } else {
-                    None
-                };
+            let persistence_tx = if let (true, Some(persistence_tx)) = (
+                connector.persistence_enabled(),
+                render_state.persistence_tx.clone(),
+            ) {
+                Some(block_on(persistence_tx.connect()).expect("failed to connect persistence tx"))
+            } else {
+                None
+            };
 
             let source_config = SourceConfig {
                 name: format!("{}-{}", connector.name(), uid),

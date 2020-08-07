@@ -10,12 +10,11 @@
 use std::cmp;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::executor::block_on;
-use futures::sink::{Sink, SinkExt};
+use futures::sink::SinkExt;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::message::BorrowedMessage;
@@ -36,7 +35,8 @@ use crate::server::{
     WorkerPersistenceData,
 };
 use crate::source::{
-    ConsistencyInfo, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
+    ConsistencyInfo, PartitionMetrics, PersistenceSender, SourceConstructor, SourceInfo,
+    SourceMessage,
 };
 
 /// Contains all information necessary to ingest data from Kafka
@@ -337,7 +337,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
 
     fn persist_message(
         &self,
-        persistence_tx: &mut Option<Pin<Box<dyn Sink<WorkerPersistenceData, Error = ()>>>>,
+        persistence_tx: &mut Option<PersistenceSender>,
         message: &SourceMessage<Vec<u8>>,
         timestamp: Timestamp,
     ) {
@@ -348,6 +348,8 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 _ => unreachable!(),
             };
 
+            // TODO(rkhaitan): let's experiment with wrapping these in a
+            // Arc so we don't have to clone.
             let key = message.key.clone().unwrap_or_default();
             let payload = message.payload.clone().unwrap_or_default();
 
@@ -361,6 +363,9 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             };
 
             let mut connector = persistence_tx.as_mut();
+
+            // TODO(rkhaitan): revisit whether this architecture of blocking
+            // within a dataflow operator makes sense.
             block_on(connector.send(persistence_data)).unwrap();
         }
     }
