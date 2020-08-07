@@ -2626,6 +2626,10 @@ impl Parser {
             Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_object_name()?,
             }))
+        } else if self.parse_keywords(vec!["CREATE", "TABLE"]) {
+            Ok(Statement::ShowCreateTable(ShowCreateTableStatement {
+                table_name: self.parse_object_name()?,
+            }))
         } else if self.parse_keywords(vec!["CREATE", "SINK"]) {
             Ok(Statement::ShowCreateSink(ShowCreateSinkStatement {
                 sink_name: self.parse_object_name()?,

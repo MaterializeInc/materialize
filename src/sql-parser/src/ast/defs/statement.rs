@@ -49,6 +49,7 @@ pub enum Statement {
     ShowColumns(ShowColumnsStatement),
     ShowCreateView(ShowCreateViewStatement),
     ShowCreateSource(ShowCreateSourceStatement),
+    ShowCreateTable(ShowCreateTableStatement),
     ShowCreateSink(ShowCreateSinkStatement),
     ShowCreateIndex(ShowCreateIndexStatement),
     ShowVariable(ShowVariableStatement),
@@ -85,6 +86,7 @@ impl AstDisplay for Statement {
             Statement::ShowColumns(stmt) => f.write_node(stmt),
             Statement::ShowCreateView(stmt) => f.write_node(stmt),
             Statement::ShowCreateSource(stmt) => f.write_node(stmt),
+            Statement::ShowCreateTable(stmt) => f.write_node(stmt),
             Statement::ShowCreateSink(stmt) => f.write_node(stmt),
             Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
             Statement::ShowVariable(stmt) => f.write_node(stmt),
@@ -748,6 +750,20 @@ impl AstDisplay for ShowCreateSourceStatement {
     }
 }
 impl_display!(ShowCreateSourceStatement);
+
+/// `SHOW CREATE TABLE <table>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateTableStatement {
+    pub table_name: ObjectName,
+}
+
+impl AstDisplay for ShowCreateTableStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("SHOW CREATE TABLE ");
+        f.write_node(&self.table_name);
+    }
+}
+impl_display!(ShowCreateTableStatement);
 
 /// `SHOW CREATE SINK <sink>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
