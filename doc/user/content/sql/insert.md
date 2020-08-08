@@ -9,7 +9,7 @@ menu:
 `INSERT` inserts values into a table.
 
 {{< warning >}}
-**Note that INSERT is currently only available in the [developer](https://mtrlz.dev/) (unstable) builds**
+**INSERT is currently only available in the [developer](https://mtrlz.dev/) (unstable) builds.**
 {{< warning >}}
 
 {{< warning >}}
