@@ -9,7 +9,7 @@ menu:
 `CREATE TABLE` creates a non-streaming, in-memory data source.
 
 {{< warning >}}
-**Note that CREATE TABLE is currently only available in the [developer](https://mtrlz.dev/) (unstable) builds**
+**CREATE TABLE is currently only available in the [developer](https://mtrlz.dev/) (unstable) builds.**
 {{< /warning >}}
 
 {{< warning >}}
